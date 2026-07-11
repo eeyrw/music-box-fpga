@@ -1,10 +1,17 @@
 package synth_pkg;
+  // Shared widths keep the audio, phase, and memory-address contracts in one
+  // place. Modules import this package instead of repeating magic numbers.
   localparam int PCM_WIDTH = 16;
   localparam int PHASE_WIDTH = 32;
   localparam int ADDR_WIDTH = 32;
 
+  // Signed 16-bit PCM is the external sample format used by wave memory and by
+  // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
 
+  // One committed voice configuration. Position and increment are Q16.16 frame
+  // units: the upper 16 bits select the sample frame, and the lower 16 bits are
+  // the interpolation fraction between this frame and the next frame.
   typedef struct packed {
     logic                      enable;
     logic                      stereo;

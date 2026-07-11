@@ -63,6 +63,13 @@ sim/tb/        Self-checking SystemVerilog testbenches
 docs/          Fixed-point, memory, and register contracts
 ```
 
+Useful learning documents:
+
+- [`docs/system_design.md`](docs/system_design.md): current RTL architecture and
+  data path.
+- [`docs/simulation_design.md`](docs/simulation_design.md): self-checking tests
+  and SoundFont render flow.
+
 ## Requirements
 
 - GNU Make

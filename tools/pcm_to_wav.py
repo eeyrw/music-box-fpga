@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Wrap raw RTL-rendered stereo PCM bytes in a standard WAV container."""
+
 import argparse
 import wave
 
@@ -10,6 +12,8 @@ def main():
     parser.add_argument("--sample-rate", type=int, default=48000)
     args = parser.parse_args()
 
+    # The render testbench writes interleaved little-endian L/R signed 16-bit
+    # samples. Python's wave module only needs the container metadata.
     with open(args.pcm, "rb") as f:
         pcm = f.read()
     with wave.open(args.wav, "wb") as wav:

@@ -17,6 +17,9 @@ module voice_pipeline (
 );
   import synth_pkg::*;
 
+  // The abstract memory returns one 16-bit word per request. Stereo playback
+  // needs four requests per output sample: L(frame0), L(frame1), R(frame0),
+  // R(frame1). Mono only fetches two words and duplicates them to R.
   typedef enum logic [3:0] {
     IDLE, REQ_L0, WAIT_L0, REQ_L1, WAIT_L1,
     REQ_R0, WAIT_R0, REQ_R1, WAIT_R1, PRODUCE
@@ -36,12 +39,16 @@ module voice_pipeline (
   logic [32:0] wrapped_phase;
 
   always_comb begin
+    // Phase is unsigned Q16.16 in sample-frame units. V1 constrains phase_inc so
+    // advancing by one output sample can cross loop_end at most once.
     phase_sum = {1'b0, phase} + {1'b0, voice_config.phase_inc};
     loop_end_phase = {1'b0, voice_config.loop_end, 16'd0};
     loop_length_phase = {1'b0, (voice_config.loop_end - voice_config.loop_start), 16'd0};
     wrapped_phase = phase_sum - loop_length_phase;
   end
 
+  // Interpolation and gain are pure combinational DSP blocks. The state machine
+  // below only has to capture raw memory samples before entering PRODUCE.
   linear_interpolator interp_l (
     .sample_0(raw_l0), .sample_1(raw_l1),
     .fraction(fraction), .sample_out(interpolated_l)
@@ -64,6 +71,8 @@ module voice_pipeline (
     unique case (state)
       REQ_L0: begin
         mem_req_valid = 1'b1;
+        // Mono memory is one word per frame. Stereo memory is interleaved, so
+        // the left word for frame N lives at base + 2*N.
         mem_req_addr = voice_config.base_addr +
                        (voice_config.stereo ? {15'd0, frame_0, 1'b0} : {16'd0, frame_0});
       end
@@ -74,6 +83,7 @@ module voice_pipeline (
       end
       REQ_R0: begin
         mem_req_valid = 1'b1;
+        // Right channel follows the left channel word in stereo memory.
         mem_req_addr = voice_config.base_addr + {15'd0, frame_0, 1'b0} + 32'd1;
       end
       REQ_R1: begin
@@ -103,6 +113,8 @@ module voice_pipeline (
       sample_valid <= 1'b0;
 
       if (config_commit) begin
+        // A new committed config restarts runtime playback from phase_init and
+        // discards any partial in-flight sample fetch sequence.
         phase <= voice_config.phase_init;
         state <= IDLE;
       end else begin
@@ -110,11 +122,15 @@ module voice_pipeline (
           IDLE: begin
             if (sample_tick && voice_config.enable && config_valid &&
                 (voice_config.loop_end <= voice_config.length)) begin
+              // The integer phase selects the current frame. frame_1 is the next
+              // interpolation endpoint, wrapping to loop_start at loop_end.
               frame_0 <= phase[31:16];
               frame_1 <= (phase[31:16] + 16'd1 >= voice_config.loop_end) ?
                          voice_config.loop_start : phase[31:16] + 16'd1;
               fraction <= phase[15:0];
 
+              // Advance phase after capturing the endpoints for this output
+              // sample. loop_end is exclusive, matching the memory-format doc.
               if (phase_sum >= loop_end_phase)
                 phase <= wrapped_phase[31:0];
               else
@@ -130,6 +146,8 @@ module voice_pipeline (
             if (voice_config.stereo)
               state <= REQ_R0;
             else begin
+              // Mono waves are duplicated before independent L/R gain is
+              // applied, so the right raw endpoints mirror the left endpoints.
               raw_r0 <= raw_l0;
               raw_r1 <= mem_rsp_data;
               state <= PRODUCE;

@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Extract one SoundFont2 instrument zone into files the RTL render TB can use.
+
+This is intentionally a small SF2 reader rather than a complete synthesizer. It
+uses only the tables needed for the current single-voice RTL path: instrument
+zones, sample headers, raw sample data, loop points, and tuning.
+"""
+
 import argparse
 import json
 import math
@@ -13,6 +20,8 @@ GEN_COARSE_TUNE = 51
 GEN_SAMPLE_ID = 53
 GEN_OVERRIDING_ROOT_KEY = 58
 
+# Low 15 bits of SF2 sampleType identify whether a sample is mono or one half of
+# a linked stereo pair. The high ROM bit is ignored by sanitize_sample_type().
 SAMPLE_MONO = 1
 SAMPLE_RIGHT = 2
 SAMPLE_LEFT = 4
@@ -51,10 +60,13 @@ class SampleHeader:
 
 
 def clean_name(raw):
+    # SF2 names are fixed-width, NUL-padded ASCII strings.
     return raw.split(b"\x00", 1)[0].decode("ascii", errors="replace").strip()
 
 
 def find_chunk(data, wanted):
+    # SF2 is a RIFF file. The top level contains LIST chunks named INFO, sdta,
+    # and pdta. This helper returns the payload after the LIST type tag.
     if data[0:4] != b"RIFF" or data[8:12] != b"sfbk":
         raise ValueError("not a SoundFont2 RIFF/sfbk file")
     pos = 12
@@ -70,6 +82,8 @@ def find_chunk(data, wanted):
 
 
 def list_chunks(payload):
+    # RIFF chunks are padded to even byte boundaries; size itself excludes the
+    # optional pad byte, hence the size & 1 adjustment.
     pos = 0
     chunks = {}
     while pos + 8 <= len(payload):
@@ -82,19 +96,25 @@ def list_chunks(payload):
 
 
 def parse_instruments(chunk):
+    # inst records are 20-byte names plus the first ibag index for that
+    # instrument. The final terminal record is kept so ranges are easy to form.
     return [Instrument(clean_name(chunk[i:i + 20]), struct.unpack_from("<H", chunk, i + 20)[0])
             for i in range(0, len(chunk), 22)]
 
 
 def parse_bags(chunk):
+    # A bag points at the first generator/modulator for one instrument zone.
     return [Bag(*struct.unpack_from("<HH", chunk, i)) for i in range(0, len(chunk), 4)]
 
 
 def parse_generators(chunk):
+    # Generators are small parameter records: operator ID plus a 16-bit amount.
     return [Generator(*struct.unpack_from("<HH", chunk, i)) for i in range(0, len(chunk), 4)]
 
 
 def parse_samples(chunk):
+    # shdr records point into sdta/smpl using sample indices, not byte offsets.
+    # endLoop in SF2 is the exclusive loop endpoint, matching this RTL project.
     samples = []
     for i in range(0, len(chunk), 46):
         pitch_correction = struct.unpack_from("<b", chunk, i + 41)[0]
@@ -108,10 +128,14 @@ def parse_samples(chunk):
 
 
 def signed_amount(amount):
+    # Many generator amounts are stored as unsigned bits but interpreted as a
+    # signed 16-bit value, for example fineTune and coarseTune.
     return struct.unpack("<h", struct.pack("<H", amount))[0]
 
 
 def generators_for_zone(gens):
+    # This first version keeps the last generator value for each operator. That
+    # is sufficient for simple instruments and the MT6276.sf2 validation file.
     zone = {}
     for gen in gens:
         zone[gen.oper] = gen.amount
@@ -119,6 +143,8 @@ def generators_for_zone(gens):
 
 
 def key_range(zone):
+    # keyRange packs low key in bits [7:0] and high key in bits [15:8]. Missing
+    # keyRange means the zone applies to all MIDI keys.
     amount = zone.get(GEN_KEY_RANGE)
     if amount is None:
         return 0, 127
@@ -126,6 +152,7 @@ def key_range(zone):
 
 
 def select_instrument(instruments, instrument):
+    # The terminal EOS instrument is excluded from user-visible choices.
     usable = instruments[:-1]
     if instrument is None:
         return 0, usable[0]
@@ -144,6 +171,9 @@ def select_instrument(instruments, instrument):
 
 
 def instrument_zones(instruments, bags, generators, inst_index):
+    # Instrument zones live between this instrument's starting ibag index and the
+    # next instrument's starting ibag index. A zone without sampleID is global;
+    # its generators are inherited by later sample zones.
     start = instruments[inst_index].bag_index
     end = instruments[inst_index + 1].bag_index
     zones = []
@@ -162,6 +192,8 @@ def instrument_zones(instruments, bags, generators, inst_index):
 
 
 def select_zone(zones, key):
+    # Prefer a zone whose keyRange contains the requested key. If the instrument
+    # lacks explicit ranges, fall back to its first sample zone.
     for zone in zones:
         low, high = key_range(zone)
         if low <= key <= high:
@@ -172,15 +204,20 @@ def select_zone(zones, key):
 
 
 def sanitize_sample_type(sample_type):
+    # Bit 15 marks ROM samples in the SF2 spec. It is unrelated to channel role.
     return sample_type & 0x7fff
 
 
 def sample_pcm(smpl, header):
+    # The smpl chunk is a contiguous signed 16-bit PCM array. Header offsets are
+    # expressed in sample words, so convert to byte slices by multiplying by two.
     raw = smpl[header.start * 2:header.end * 2]
     return list(struct.unpack(f"<{len(raw) // 2}h", raw))
 
 
 def linked_pair(samples, selected):
+    # SF2 stereo samples are represented as two separate mono sample headers
+    # linked by sampleLink. The RTL wants one interleaved stereo memory image.
     sample_type = sanitize_sample_type(selected.sample_type)
     if sample_type == SAMPLE_LEFT and selected.sample_link < len(samples):
         return selected, samples[selected.sample_link]
@@ -190,11 +227,15 @@ def linked_pair(samples, selected):
 
 
 def build_wave_words(smpl, samples, selected):
+    # Return the memory words in the exact format documented by docs/memory_format.md:
+    # mono is one word per frame; stereo is left/right interleaved per frame.
     left, right = linked_pair(samples, selected)
     left_pcm = sample_pcm(smpl, left)
     stereo = right is not None and sanitize_sample_type(right.sample_type) in (SAMPLE_LEFT, SAMPLE_RIGHT)
     if stereo:
         right_pcm = sample_pcm(smpl, right)
+        # Keep both channels the same length; the shorter linked sample defines
+        # the usable stereo frame count.
         frame_count = min(len(left_pcm), len(right_pcm), 65535)
         words = []
         for i in range(frame_count):
@@ -208,18 +249,24 @@ def build_wave_words(smpl, samples, selected):
         loop_start = max(0, min(left.start_loop - left.start, frame_count - 1))
         loop_end = max(loop_start + 1, min(left.end_loop - left.start, frame_count))
     if loop_start >= loop_end or loop_end > frame_count:
+        # Some soundfonts use degenerate or missing loop points. Use the whole
+        # sample as a legal fallback so the RTL configuration remains valid.
         loop_start = 0
         loop_end = frame_count
     return words, left, right, stereo, frame_count, loop_start, loop_end
 
 
 def write_memh(path, words):
+    # $readmemh reads one hex word per line. Masking preserves two's-complement
+    # representation for negative signed PCM samples.
     with open(path, "w", encoding="ascii") as f:
         for word in words:
             f.write(f"{word & 0xffff:04x}\n")
 
 
 def write_config(path, cfg):
+    # A generated SV include keeps the render testbench simple and avoids adding
+    # JSON parsing logic to SystemVerilog.
     with open(path, "w", encoding="ascii") as f:
         f.write("// Generated by tools/sf2_extract.py\n")
         for key, value in cfg.items():
@@ -242,6 +289,9 @@ def main():
 
     with open(args.sf2, "rb") as f:
         data = f.read()
+
+    # sdta holds PCM sample data; pdta holds the instrument/sample metadata used
+    # to choose a sample and calculate playback settings.
     sdta = list_chunks(find_chunk(data, b"sdta"))
     pdta = list_chunks(find_chunk(data, b"pdta"))
     instruments = parse_instruments(pdta[b"inst"])
@@ -259,6 +309,8 @@ def main():
     sample = samples[zone[GEN_SAMPLE_ID]]
     words, left, right, stereo, length, loop_start, loop_end = build_wave_words(sdta[b"smpl"], samples, sample)
 
+    # Convert SF2 pitch metadata to the RTL's Q16.16 phase increment. A value of
+    # 0x0001_0000 means advance one source sample frame per output sample.
     root_key = zone.get(GEN_OVERRIDING_ROOT_KEY, left.original_pitch)
     if root_key == 255:
         root_key = left.original_pitch
@@ -273,6 +325,7 @@ def main():
     config_svh = os.path.join(args.out_dir, "render_config.svh")
     config_json = os.path.join(args.out_dir, "render_config.json")
     write_memh(memh, words)
+    # These localparams directly program tb_render_wavetable_core.sv.
     cfg = {
         "RENDER_MEMORY_DEPTH": len(words),
         "RENDER_SAMPLE_COUNT": sample_count,
@@ -288,6 +341,9 @@ def main():
         "RENDER_PCM": os.path.join(args.out_dir, "out.pcm"),
     }
     write_config(config_svh, cfg)
+
+    # JSON is not consumed by Verilator; it is for humans and future scripts to
+    # inspect exactly what the SF2 extraction selected.
     with open(config_json, "w", encoding="utf-8") as f:
         json.dump({
             "instrument_index": inst_index,

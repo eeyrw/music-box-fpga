@@ -14,6 +14,9 @@ module voice_register_bank (
 );
   import synth_pkg::*;
 
+  // Byte addresses for the simple 32-bit register bus. Writes update the
+  // shadow_config first; only ADDR_COMMIT copies that full shadow state into the
+  // active_config observed by the playback pipeline.
   localparam logic [15:0] ADDR_CONTROL    = 16'h0100;
   localparam logic [15:0] ADDR_BASE       = 16'h0104;
   localparam logic [15:0] ADDR_LENGTH     = 16'h0108;
@@ -31,10 +34,15 @@ module voice_register_bank (
   logic address_valid;
 
   always_comb begin
+    // A committed voice is playable only when the loop range is non-empty and
+    // fully inside the sample length. The pipeline also checks enable/sample_tick
+    // before issuing memory traffic.
     config_valid = (active_config.length != 16'd0) &&
                    (active_config.loop_start < active_config.loop_end) &&
                    (active_config.loop_end <= active_config.length);
 
+    // Reads return shadow state so software can verify pending writes before it
+    // commits them. STATUS is the exception because it describes active_config.
     address_valid = 1'b1;
     bus_rdata = 32'd0;
     unique case (bus_address)
@@ -56,6 +64,8 @@ module voice_register_bank (
       end
     endcase
 
+    // This bus is deliberately single-cycle in simulation: a valid address is
+    // ready immediately, and invalid addresses report an error on the same beat.
     bus_ready = bus_valid;
     bus_error = bus_valid && !address_valid;
   end
@@ -66,6 +76,7 @@ module voice_register_bank (
       active_config <= '0;
       commit_pulse <= 1'b0;
     end else begin
+      // commit_pulse is a one-cycle event used to reload voice runtime phase.
       commit_pulse <= 1'b0;
       if (bus_valid && bus_write && address_valid) begin
         unique case (bus_address)
@@ -82,6 +93,8 @@ module voice_register_bank (
           ADDR_GAIN_L:     shadow_config.gain_l <= $signed(bus_wdata[15:0]);
           ADDR_GAIN_R:     shadow_config.gain_r <= $signed(bus_wdata[15:0]);
           ADDR_COMMIT: begin
+            // Commit is atomic at the voice-config granularity: partially
+            // written shadow fields do not affect playback until this write.
             if (bus_wdata[0]) begin
               active_config <= shadow_config;
               commit_pulse <= 1'b1;

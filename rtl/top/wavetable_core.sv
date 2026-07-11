@@ -19,10 +19,15 @@ module wavetable_core (
   input  logic                     mem_rsp_valid,
   input  synth_pkg::pcm_t          mem_rsp_data
 );
+  // The top level intentionally stays thin: register writes create a committed
+  // voice configuration, and the voice pipeline turns sample ticks into memory
+  // requests plus output PCM samples.
   synth_pkg::voice_config_t active_config;
   logic config_valid;
   logic commit_pulse;
 
+  // Register bank owns the shadow/active commit behavior. Runtime phase is not
+  // writable through the bus; a commit only loads the configured phase_init.
   voice_register_bank registers (
     .clk,
     .rst,
@@ -38,6 +43,8 @@ module wavetable_core (
     .commit_pulse
   );
 
+  // The pipeline owns playback sequencing, interpolation, gain, and abstract
+  // memory handshaking for the active single voice.
   voice_pipeline voice (
     .clk,
     .rst,

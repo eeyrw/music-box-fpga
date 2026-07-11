@@ -1,6 +1,8 @@
 module tb_wavetable_core;
   import synth_pkg::*;
 
+  // Self-checking unit test for the current single-voice datapath. It uses tiny
+  // synthetic memories so expected interpolation and gain results are exact.
   logic clk = 1'b0;
   logic rst;
   logic bus_valid;
@@ -22,6 +24,8 @@ module tb_wavetable_core;
   pcm_t mem_rsp_data;
   int errors = 0;
 
+  // Testbench clock only; production RTL still uses one rising-edge system
+  // clock and synchronous reset.
   always #5 clk = ~clk;
 
   wavetable_core dut (.*);
@@ -37,6 +41,8 @@ module tb_wavetable_core;
   );
 
   task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
+    // The register bus is single-beat: present valid/write/address/data for one
+    // cycle, then verify the slave accepted it without an address error.
     @(negedge clk);
     bus_valid = 1'b1;
     bus_write = 1'b1;
@@ -53,6 +59,8 @@ module tb_wavetable_core;
 
   task automatic request_and_check(input integer expected_l, input integer expected_r);
     int timeout;
+    // sample_tick requests one rendered output sample. The voice pipeline needs
+    // several cycles to fetch endpoints from memory before sample_valid rises.
     @(negedge clk);
     sample_tick = 1'b1;
     @(negedge clk);
@@ -78,6 +86,8 @@ module tb_wavetable_core;
   endtask
 
   task automatic configure_mono;
+    // Four mono frames: 0, 1000, 2000, 3000. phase_init=0.5 frame and gain=0.5,
+    // so the first sample is interpolate(0,1000,0.5)*0.5 = 250.
     bus_write_word(16'h0100, 32'h0000_0001);
     bus_write_word(16'h0104, 32'd0);
     bus_write_word(16'h0108, 32'd4);
@@ -92,6 +102,8 @@ module tb_wavetable_core;
   endtask
 
   task automatic configure_stereo_loop;
+    // Stereo memory starts at word 16 and loops over frames [1,3). phase_init=2.5
+    // uses frame2 and wraps frame3's interpolation endpoint back to frame1.
     bus_write_word(16'h0100, 32'h0000_0003);
     bus_write_word(16'h0104, 32'd16);
     bus_write_word(16'h0108, 32'd4);
@@ -113,11 +125,13 @@ module tb_wavetable_core;
     bus_wdata = '0;
     sample_tick = 1'b0;
 
+    // Mono test wave: one signed word per sample frame.
     memory_model.memory[0] = 16'sd0;
     memory_model.memory[1] = 16'sd1000;
     memory_model.memory[2] = 16'sd2000;
     memory_model.memory[3] = 16'sd3000;
 
+    // Stereo test wave: left/right interleaved words per frame.
     memory_model.memory[16] = 16'sd1000;
     memory_model.memory[17] = -16'sd1000;
     memory_model.memory[18] = 16'sd2000;
@@ -130,6 +144,8 @@ module tb_wavetable_core;
     repeat (3) @(negedge clk);
     rst = 1'b0;
 
+    // Check mono interpolation, gain, and the fact that mono is duplicated to
+    // left/right before channel gains are applied.
     configure_mono();
     request_and_check(250, 250);
     request_and_check(750, 750);
@@ -138,6 +154,7 @@ module tb_wavetable_core;
     bus_write_word(16'h0104, 32'd16);
     request_and_check(1250, 1250);
 
+    // Check stereo addressing and exclusive loop wrapping.
     configure_stereo_loop();
     request_and_check(1250, -1250);
     request_and_check(1250, -1250);
