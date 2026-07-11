@@ -8,61 +8,82 @@ module voice_register_bank (
   output logic [31:0]                bus_rdata,
   output logic                       bus_ready,
   output logic                       bus_error,
-  output synth_pkg::voice_config_t   active_config,
-  output logic                       config_valid,
-  output logic                       commit_pulse
+  output synth_pkg::voice_config_t   active_config [synth_pkg::NUM_VOICES],
+  output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
+  output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse
 );
   import synth_pkg::*;
 
   // Byte addresses for the simple 32-bit register bus. Writes update the
   // shadow_config first; only ADDR_COMMIT copies that full shadow state into the
   // active_config observed by the playback pipeline.
-  localparam logic [15:0] ADDR_CONTROL    = 16'h0100;
-  localparam logic [15:0] ADDR_BASE       = 16'h0104;
-  localparam logic [15:0] ADDR_LENGTH     = 16'h0108;
-  localparam logic [15:0] ADDR_LOOP_START = 16'h010c;
-  localparam logic [15:0] ADDR_LOOP_END   = 16'h0110;
-  localparam logic [15:0] ADDR_PHASE_INIT = 16'h0114;
-  localparam logic [15:0] ADDR_PHASE_INC  = 16'h0118;
-  localparam logic [15:0] ADDR_GAIN_L     = 16'h011c;
-  localparam logic [15:0] ADDR_GAIN_R     = 16'h0120;
-  localparam logic [15:0] ADDR_COMMIT     = 16'h0124;
-  localparam logic [15:0] ADDR_STATUS     = 16'h0128;
+  localparam logic [15:0] VOICE_BASE      = 16'h0100;
+  localparam logic [15:0] VOICE_STRIDE    = 16'h0040;
+  localparam logic [15:0] VOICE_LIMIT     = 16'(NUM_VOICES * VOICE_STRIDE);
+  localparam logic [15:0] OFF_CONTROL     = 16'h0000;
+  localparam logic [15:0] OFF_BASE        = 16'h0004;
+  localparam logic [15:0] OFF_LENGTH      = 16'h0008;
+  localparam logic [15:0] OFF_LOOP_START  = 16'h000c;
+  localparam logic [15:0] OFF_LOOP_END    = 16'h0010;
+  localparam logic [15:0] OFF_PHASE_INIT  = 16'h0014;
+  localparam logic [15:0] OFF_PHASE_INC   = 16'h0018;
+  localparam logic [15:0] OFF_GAIN_L      = 16'h001c;
+  localparam logic [15:0] OFF_GAIN_R      = 16'h0020;
+  localparam logic [15:0] OFF_COMMIT      = 16'h0024;
+  localparam logic [15:0] OFF_STATUS      = 16'h0028;
+  localparam logic [15:0] OFF_ENVELOPE    = 16'h002c;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
 
-  voice_config_t shadow_config;
+  voice_config_t shadow_config [NUM_VOICES];
   logic address_valid;
+  logic voice_address;
+  logic [$clog2(NUM_VOICES)-1:0] selected_voice;
+  logic [15:0] selected_offset;
+  logic [15:0] voice_relative;
+  int i;
 
   always_comb begin
-    // A committed voice is playable only when the loop range is non-empty and
-    // fully inside the sample length. The pipeline also checks enable/sample_tick
-    // before issuing memory traffic.
-    config_valid = (active_config.length != 16'd0) &&
-                   (active_config.loop_start < active_config.loop_end) &&
-                   (active_config.loop_end <= active_config.length);
+    for (int v = 0; v < NUM_VOICES; v++) begin
+      // A committed voice is playable only when the loop range is non-empty and
+      // fully inside the sample length. The pipeline also checks enable/sample_tick
+      // before issuing memory traffic.
+      config_valid[v] = (active_config[v].length != 16'd0) &&
+                        (active_config[v].loop_start < active_config[v].loop_end) &&
+                        (active_config[v].loop_end <= active_config[v].length);
+    end
+
+    voice_relative = bus_address - VOICE_BASE;
+    selected_voice = voice_relative[7:6];
+    selected_offset = {10'd0, voice_relative[5:0]};
+    voice_address = (bus_address >= VOICE_BASE) &&
+                    (voice_relative < VOICE_LIMIT);
 
     // Reads return shadow state so software can verify pending writes before it
-    // commits them. STATUS is the exception because it describes active_config.
-    address_valid = 1'b1;
+    // commits them. STATUS and ENVELOPE_LEVEL describe active runtime state.
+    address_valid = voice_address || (bus_address == ADDR_VERSION);
     bus_rdata = 32'd0;
-    unique case (bus_address)
-      ADDR_CONTROL:    bus_rdata = {30'd0, shadow_config.stereo, shadow_config.enable};
-      ADDR_BASE:       bus_rdata = shadow_config.base_addr;
-      ADDR_LENGTH:     bus_rdata = {16'd0, shadow_config.length};
-      ADDR_LOOP_START: bus_rdata = {16'd0, shadow_config.loop_start};
-      ADDR_LOOP_END:   bus_rdata = {16'd0, shadow_config.loop_end};
-      ADDR_PHASE_INIT: bus_rdata = shadow_config.phase_init;
-      ADDR_PHASE_INC:  bus_rdata = shadow_config.phase_inc;
-      ADDR_GAIN_L:     bus_rdata = {{16{shadow_config.gain_l[15]}}, shadow_config.gain_l};
-      ADDR_GAIN_R:     bus_rdata = {{16{shadow_config.gain_r[15]}}, shadow_config.gain_r};
-      ADDR_COMMIT:     bus_rdata = 32'd0;
-      ADDR_STATUS:     bus_rdata = {31'd0, config_valid};
-      ADDR_VERSION:    bus_rdata = 32'h0001_0000;
-      default: begin
-        address_valid = 1'b0;
-        bus_rdata = 32'd0;
-      end
-    endcase
+    if (voice_address) begin
+      unique case (selected_offset)
+        OFF_CONTROL:    bus_rdata = {30'd0, shadow_config[selected_voice].stereo, shadow_config[selected_voice].enable};
+        OFF_BASE:       bus_rdata = shadow_config[selected_voice].base_addr;
+        OFF_LENGTH:     bus_rdata = {16'd0, shadow_config[selected_voice].length};
+        OFF_LOOP_START: bus_rdata = {16'd0, shadow_config[selected_voice].loop_start};
+        OFF_LOOP_END:   bus_rdata = {16'd0, shadow_config[selected_voice].loop_end};
+        OFF_PHASE_INIT: bus_rdata = shadow_config[selected_voice].phase_init;
+        OFF_PHASE_INC:  bus_rdata = shadow_config[selected_voice].phase_inc;
+        OFF_GAIN_L:     bus_rdata = {{16{shadow_config[selected_voice].gain_l[15]}}, shadow_config[selected_voice].gain_l};
+        OFF_GAIN_R:     bus_rdata = {{16{shadow_config[selected_voice].gain_r[15]}}, shadow_config[selected_voice].gain_r};
+        OFF_COMMIT:     bus_rdata = 32'd0;
+        OFF_STATUS:     bus_rdata = {31'd0, config_valid[selected_voice]};
+        OFF_ENVELOPE:   bus_rdata = {{16{active_config[selected_voice].envelope_level[15]}}, active_config[selected_voice].envelope_level};
+        default: begin
+          address_valid = 1'b0;
+          bus_rdata = 32'd0;
+        end
+      endcase
+    end else if (bus_address == ADDR_VERSION) begin
+      bus_rdata = 32'h0002_0000;
+    end
 
     // This bus is deliberately single-cycle in simulation: a valid address is
     // ready immediately, and invalid addresses report an error on the same beat.
@@ -72,32 +93,42 @@ module voice_register_bank (
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      shadow_config <= '0;
-      active_config <= '0;
-      commit_pulse <= 1'b0;
+      for (i = 0; i < NUM_VOICES; i++) begin
+        shadow_config[i] <= '0;
+        shadow_config[i].envelope_level <= 16'sh7fff;
+        active_config[i] <= '0;
+        active_config[i].envelope_level <= 16'sh7fff;
+      end
+      commit_pulse <= '0;
     end else begin
       // commit_pulse is a one-cycle event used to reload voice runtime phase.
-      commit_pulse <= 1'b0;
-      if (bus_valid && bus_write && address_valid) begin
-        unique case (bus_address)
-          ADDR_CONTROL: begin
-            shadow_config.enable <= bus_wdata[0];
-            shadow_config.stereo <= bus_wdata[1];
+      commit_pulse <= '0;
+      if (bus_valid && bus_write && voice_address) begin
+        unique case (selected_offset)
+          OFF_CONTROL: begin
+            shadow_config[selected_voice].enable <= bus_wdata[0];
+            shadow_config[selected_voice].stereo <= bus_wdata[1];
           end
-          ADDR_BASE:       shadow_config.base_addr <= bus_wdata;
-          ADDR_LENGTH:     shadow_config.length <= bus_wdata[15:0];
-          ADDR_LOOP_START: shadow_config.loop_start <= bus_wdata[15:0];
-          ADDR_LOOP_END:   shadow_config.loop_end <= bus_wdata[15:0];
-          ADDR_PHASE_INIT: shadow_config.phase_init <= bus_wdata;
-          ADDR_PHASE_INC:  shadow_config.phase_inc <= bus_wdata;
-          ADDR_GAIN_L:     shadow_config.gain_l <= $signed(bus_wdata[15:0]);
-          ADDR_GAIN_R:     shadow_config.gain_r <= $signed(bus_wdata[15:0]);
-          ADDR_COMMIT: begin
+          OFF_BASE:       shadow_config[selected_voice].base_addr <= bus_wdata;
+          OFF_LENGTH:     shadow_config[selected_voice].length <= bus_wdata[15:0];
+          OFF_LOOP_START: shadow_config[selected_voice].loop_start <= bus_wdata[15:0];
+          OFF_LOOP_END:   shadow_config[selected_voice].loop_end <= bus_wdata[15:0];
+          OFF_PHASE_INIT: shadow_config[selected_voice].phase_init <= bus_wdata;
+          OFF_PHASE_INC:  shadow_config[selected_voice].phase_inc <= bus_wdata;
+          OFF_GAIN_L:     shadow_config[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
+          OFF_GAIN_R:     shadow_config[selected_voice].gain_r <= $signed(bus_wdata[15:0]);
+          OFF_ENVELOPE: begin
+            // Envelope is runtime state owned by the MCU/control layer. Updating
+            // it must not reload phase or disturb in-flight note playback.
+            active_config[selected_voice].envelope_level <= $signed(bus_wdata[15:0]);
+          end
+          OFF_COMMIT: begin
             // Commit is atomic at the voice-config granularity: partially
             // written shadow fields do not affect playback until this write.
             if (bus_wdata[0]) begin
-              active_config <= shadow_config;
-              commit_pulse <= 1'b1;
+              active_config[selected_voice] <= shadow_config[selected_voice];
+              active_config[selected_voice].envelope_level <= active_config[selected_voice].envelope_level;
+              commit_pulse[selected_voice] <= 1'b1;
             end
           end
           default: begin

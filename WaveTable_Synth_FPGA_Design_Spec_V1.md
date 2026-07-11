@@ -78,7 +78,7 @@ MCU
 
 -   phase_accumulator
 -   voice_scheduler
--   voice_pipeline
+-   multi_voice_pipeline
 -   interpolator
 -   mixer
 

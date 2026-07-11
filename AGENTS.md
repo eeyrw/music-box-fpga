@@ -3,7 +3,7 @@
 ## Project Scope
 
 This repository contains a synthesizable SystemVerilog wavetable playback core.
-The current milestone is a single-voice simulation path. Board-specific clocks,
+The current milestone is a multi-voice simulation path. Board-specific clocks,
 SPI electrical timing, parallel NOR timing, synthesis projects, and I2S are out
 of scope until the core behavior is covered by self-checking tests.
 

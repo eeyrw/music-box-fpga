@@ -4,6 +4,7 @@ package synth_pkg;
   localparam int PCM_WIDTH = 16;
   localparam int PHASE_WIDTH = 32;
   localparam int ADDR_WIDTH = 32;
+  localparam int NUM_VOICES = 4;
 
   // Signed 16-bit PCM is the external sample format used by wave memory and by
   // the produced audio stream.
@@ -23,5 +24,6 @@ package synth_pkg;
     logic [PHASE_WIDTH-1:0]    phase_inc;
     logic signed [15:0]        gain_l;
     logic signed [15:0]        gain_r;
+    logic signed [15:0]        envelope_level;
   } voice_config_t;
 endpackage

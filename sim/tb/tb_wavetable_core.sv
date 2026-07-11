@@ -1,8 +1,8 @@
 module tb_wavetable_core;
   import synth_pkg::*;
 
-  // Self-checking unit test for the current single-voice datapath. It uses tiny
-  // synthetic memories so expected interpolation and gain results are exact.
+  // Self-checking unit test for the wavetable datapath. It uses tiny synthetic
+  // memories so expected interpolation, envelope, gain, and mix results are exact.
   logic clk = 1'b0;
   logic rst;
   logic bus_valid;
@@ -97,6 +97,7 @@ module tb_wavetable_core;
     bus_write_word(16'h0118, 32'h0001_0000);
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
+    bus_write_word(16'h012c, 32'h0000_7fff);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
   endtask
@@ -113,8 +114,34 @@ module tb_wavetable_core;
     bus_write_word(16'h0118, 32'h0001_0000);
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
+    bus_write_word(16'h012c, 32'h0000_7fff);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
+  endtask
+
+  task automatic configure_mono_slot(
+    input int voice,
+    input int base_addr,
+    input logic [31:0] phase_init,
+    input logic signed [15:0] gain,
+    input logic signed [15:0] envelope_level
+  );
+    logic [15:0] addr;
+    begin
+      addr = 16'h0100 + (voice * 16'h0040);
+      bus_write_word(addr + 16'h0000, 32'h0000_0001);
+      bus_write_word(addr + 16'h0004, base_addr[31:0]);
+      bus_write_word(addr + 16'h0008, 32'd4);
+      bus_write_word(addr + 16'h000c, 32'd0);
+      bus_write_word(addr + 16'h0010, 32'd4);
+      bus_write_word(addr + 16'h0014, phase_init);
+      bus_write_word(addr + 16'h0018, 32'h0001_0000);
+      bus_write_word(addr + 16'h001c, {{16{gain[15]}}, gain});
+      bus_write_word(addr + 16'h0020, {{16{gain[15]}}, gain});
+      bus_write_word(addr + 16'h002c, {{16{envelope_level[15]}}, envelope_level});
+      bus_write_word(addr + 16'h0024, 32'd1);
+      repeat (2) @(negedge clk);
+    end
   endtask
 
   initial begin
@@ -141,6 +168,13 @@ module tb_wavetable_core;
     memory_model.memory[22] = 16'sd4000;
     memory_model.memory[23] = -16'sd4000;
 
+    // Second mono test wave for multi-voice mixing. With gain=0.5 and
+    // envelope=0.5 each frame contributes 500 to the mix.
+    memory_model.memory[32] = 16'sd2000;
+    memory_model.memory[33] = 16'sd2000;
+    memory_model.memory[34] = 16'sd2000;
+    memory_model.memory[35] = 16'sd2000;
+
     repeat (3) @(negedge clk);
     rst = 1'b0;
 
@@ -154,14 +188,25 @@ module tb_wavetable_core;
     bus_write_word(16'h0104, 32'd16);
     request_and_check(1250, 1250);
 
+    // The MCU owns envelope progression. A runtime envelope write must affect
+    // the next rendered sample without committing or resetting voice phase.
+    bus_write_word(16'h012c, 32'h0000_4000);
+    request_and_check(375, 375);
+
     // Check stereo addressing and exclusive loop wrapping.
     configure_stereo_loop();
     request_and_check(1250, -1250);
     request_and_check(1250, -1250);
 
+    // Check that two active voice slots render in one output request and the
+    // mixer adds their current enveloped samples with saturation at the end.
+    configure_mono_slot(0, 0, 32'h0000_8000, 16'sh4000, 16'sh7fff);
+    configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
+    request_and_check(750, 750);
+
     if (errors != 0)
       $fatal(1, "FAIL: %0d errors", errors);
-    $display("PASS: single-voice wavetable core");
+    $display("PASS: multi-voice wavetable core");
     $finish;
   end
 endmodule

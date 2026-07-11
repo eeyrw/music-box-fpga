@@ -34,3 +34,17 @@ The mathematical result remains in the signed 16-bit sample range.
 Left and right gains are signed Q1.15 values. `0x0000` is silence and `0x7fff`
 is just below unity. Multiplication uses a signed 32-bit product, arithmetic
 right shift by 15, and saturation to signed 16-bit PCM.
+
+## Envelope Level
+
+Each voice has a signed Q1.15 `envelope_level` applied after channel gain and
+before mixing. Software supplies the current level at runtime; the RTL does not
+calculate an SF2 ADSR curve. Updating `envelope_level` does not reload playback
+phase. `0x7fff` means full level and is treated as a bypass to preserve exact
+samples from the gain stage.
+
+## Mixing
+
+The multi-voice renderer accumulates signed 16-bit voice outputs in a signed
+32-bit stereo accumulator. Saturation back to signed 16-bit PCM happens once, at
+the final mixed output sample.

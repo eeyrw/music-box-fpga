@@ -4,25 +4,28 @@ An open SystemVerilog wavetable synthesizer core. The project currently targets
 a hardware-independent, self-checking simulation path before SPI, parallel NOR
 Flash timing, I2S, and board integration are introduced.
 
-The current milestone implements one stereo output voice with configurable
-variable-length wavetable playback.
+The current milestone implements four stereo output voice slots with configurable
+variable-length wavetable playback and saturated mixing.
 
 ## Implemented
 
 - Synthesizable single-clock SystemVerilog RTL
-- Shadow and active voice registers with atomic commit
+- Per-voice shadow and active registers with atomic commit
 - Unsigned Q16.16 playback phase and fractional phase increments
 - Variable wave length and exclusive loop boundaries
 - Mono PCM duplication to left and right channels
 - Interleaved stereo PCM playback
 - Per-channel signed Q1.15 gain
+- Per-voice current envelope level supplied through registers
 - Linear interpolation and signed 16-bit saturated output
+- Shared multi-voice rendering pipeline and saturated stereo mixer
 - Ready/valid abstract memory interface
 - One-cycle behavioral wave-memory model
 - Self-checking SystemVerilog regression test
 
 The current core intentionally does not implement physical SPI or NOR Flash
-timing, multiple voices, a mixer, I2S output, or vendor-specific FPGA logic.
+timing, SF2 preset/modulator/velocity/filter behavior, I2S output, or
+vendor-specific FPGA logic.
 See [the design specification](WaveTable_Synth_FPGA_Design_Spec_V1.md) for the
 long-term architecture and roadmap.
 
@@ -31,15 +34,15 @@ long-term architecture and roadmap.
 ```text
 Register Bus
     |
-Shadow Registers -> Commit -> Active Voice Configuration
+Shadow Registers -> Commit -> Active Voice Configurations
                                     |
-                              Phase Generator
+                         Multi-Voice Phase/Fetch
                                     |
                          Abstract Wave Memory
                                     |
                          Linear Interpolation
                                     |
-                           Left/Right Gain
+                      Gain + Envelope + Mixer
                                     |
                   sample_valid + sample_l/sample_r
 ```
@@ -69,6 +72,10 @@ Useful learning documents:
   data path.
 - [`docs/simulation_design.md`](docs/simulation_design.md): self-checking tests
   and SoundFont render flow.
+- [`docs/audio_render_calculation.md`](docs/audio_render_calculation.md): detailed
+  MIDI-to-audio render calculations across the MCU model and RTL pipeline.
+- [`docs/performance_budget.md`](docs/performance_budget.md): cycle, memory
+  bandwidth, and pipeline direction notes for scaling toward 32 voices.
 
 ## Requirements
 
@@ -99,7 +106,7 @@ make test
 A successful regression ends with:
 
 ```text
-PASS: single-voice wavetable core
+PASS: multi-voice wavetable core
 ```
 
 Generated files are written below `build/` and are ignored by Git. Use
@@ -124,19 +131,32 @@ The flow extracts the selected SF2 instrument sample, converts linked left/right
 samples to the core's interleaved stereo memory format, runs the Verilator render
 testbench, and writes `build/render/out.wav`.
 
+Render a simple MIDI-driven score through the multi-voice core:
+
+```bash
+make render-midi SECONDS=2
+make render-midi MIDI=song.mid SECONDS=20
+```
+
+With no `MIDI` or `NOTES_JSON` argument, the render target uses a built-in short
+melody. The simulation testbench models MCU-side note allocation and Q1.15 ADSR
+envelope writes; the RTL still only handles looped wavetable playback and mixing.
+The output WAV is `build/render_midi/out.wav`.
+
 ## Current Register Interface
 
 The simulation bus is a single-beat 32-bit register interface with `valid`,
 `write`, `address`, `wdata`, `rdata`, `ready`, and `error` signals. Writes modify
-shadow state. Writing the commit register atomically replaces the active voice
-configuration. SPI will later be implemented only as a bridge to this bus.
+shadow state for one voice slot. Writing that slot's commit register atomically
+replaces the active voice configuration. SPI will later be implemented only as a
+bridge to this bus.
 
 See [the register map](docs/register_map.md) for addresses and validation rules.
 
 ## Roadmap
 
-1. Broaden single-voice boundary and backpressure verification.
-2. Add the voice scheduler and 32-voice mixer.
+1. Broaden multi-voice boundary and backpressure verification.
+2. Scale the voice scheduler and mixer toward 32 voice slots.
 3. Add I2S serialization and an I2S receiver test model.
 4. Add simplified SPI and parallel NOR Flash controllers.
 5. Introduce board-specific clocks, constraints, and synthesis projects.

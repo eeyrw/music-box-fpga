@@ -1,7 +1,10 @@
 # Simulation Design Notes
 
 This document explains how the repository verifies and renders the current
-single-voice wavetable core.
+multi-voice wavetable core.
+
+For the numeric path from MIDI events to PCM samples, see
+`docs/audio_render_calculation.md`.
 
 There are two simulation paths:
 
@@ -70,7 +73,7 @@ stereo: L/R interleaved pairs starting at word address 16
 ```
 
 Then it programs the core through the same register bus used by normal software.
-This matters because the test covers both the register bank and the voice
+This matters because the test covers both the register bank and the multi-voice
 pipeline, including commit isolation.
 
 The key helper tasks are:
@@ -80,6 +83,7 @@ The key helper tasks are:
   compares both output channels against exact integer expectations.
 - `configure_mono`: programs a mono wave with fractional phase and 0.5 gain.
 - `configure_stereo_loop`: programs stereo playback with an exclusive loop.
+- `configure_mono_slot`: programs one voice slot for multi-voice mixing checks.
 
 The test checks these behaviors:
 
@@ -89,9 +93,30 @@ The test checks these behaviors:
 - Shadow register writes do not affect active playback until commit.
 - Stereo samples are fetched from left/right interleaved memory.
 - `loop_end` is exclusive.
+- Two active voice slots render from one `sample_tick` and mix together.
+- Per-voice `envelope_level` scales the current sample before mixing.
+- Runtime `ENVELOPE_LEVEL` writes take effect without commit and without
+  reloading voice phase.
 
 The test is self-checking. A mismatch increments `errors`, and the test exits
 with `$fatal` if any check fails.
+
+## MCU Behavior In Simulation
+
+Note allocation, Note Off, and envelope generation are intentionally modeled
+outside synthesizable RTL. A testbench or simulation-only MCU model should drive
+the register bus like firmware:
+
+- Note On: allocate a voice slot, write sample/loop/tuning/gain fields and an
+  initial `ENVELOPE_LEVEL`, then write `COMMIT`.
+- Envelope update: write only `ENVELOPE_LEVEL`; this is a runtime register and
+  does not reset phase.
+- Note Off: continue writing release values to `ENVELOPE_LEVEL`.
+- Voice release complete: clear the slot's enable bit and commit that slot.
+
+The current regression implements this pattern directly with bus-write tasks.
+Future tests can factor those tasks into a reusable `mcu_model` module when the
+sequence coverage grows.
 
 ## SoundFont Render Flow
 
@@ -166,6 +191,61 @@ build/render/out.wav
 
 The WAV file contains the exact sample stream produced by the RTL simulation.
 
+## MIDI-Driven Render Flow
+
+`make render-midi` renders a short score through the same RTL core, with a
+simulation-only MCU model driving the register bus. The FPGA still sees only
+voice-slot configuration, runtime envelope writes, and sample requests.
+
+Run the built-in smoke melody:
+
+```bash
+make render-midi SECONDS=2
+```
+
+Render a standard MIDI file:
+
+```bash
+make render-midi MIDI=song.mid SECONDS=20
+```
+
+Render a compact JSON note list:
+
+```bash
+make render-midi NOTES_JSON=notes.json SECONDS=4
+```
+
+The JSON format is deliberately small:
+
+```json
+{
+  "notes": [
+    {"start": 0.0, "duration": 0.4, "note": 60, "velocity": 110},
+    {"start": 0.2, "duration": 0.4, "note": 64, "velocity": 96}
+  ]
+}
+```
+
+The MIDI preparation tool performs only simulation-side work:
+
+- Select one SF2 instrument zone and write `wave.memh`.
+- Convert MIDI or JSON events to sample timestamps.
+- Calculate each event's Q16.16 `phase_inc` from MIDI note, SF2 root key,
+  tuning, and output sample rate.
+- Generate `midi_render_config.svh` for the SystemVerilog testbench.
+
+`tb_render_midi_core.sv` models the MCU at the precision used by this FPGA
+project: four voice slots and Q1.15 runtime envelope levels. It uses a simple
+linear ADSR policy, free-voice-first allocation, and oldest-voice stealing when
+all slots are busy. On Note On it writes the selected slot's wave/loop/phase/gain
+registers and commits. On each ADSR tick it writes `ENVELOPE_LEVEL`. On Note Off
+it enters release, and when the envelope reaches zero it disables and commits the
+slot.
+
+This is intentionally not a complete MIDI synthesizer. It ignores MIDI channels,
+program changes, pedals, pitch bend, controllers, and SF2 preset/modulator/filter
+logic. Those belong in a richer MCU/control simulation, not in the FPGA core.
+
 ## Linked Stereo Samples
 
 SoundFont stereo samples are commonly stored as two linked mono sample headers,
@@ -181,7 +261,8 @@ left(0), right(0), left(1), right(1), ...
 ```
 
 If the selected sample is mono, the extractor writes mono memory and clears the
-RTL stereo bit. The voice pipeline then duplicates mono samples to both channels.
+RTL stereo bit. The multi-voice pipeline then duplicates mono samples to both
+channels.
 
 ## Tuning And Phase Increment
 
@@ -217,6 +298,11 @@ build/render/render_config.svh
 build/render/render_config.json
 build/render/out.pcm
 build/render/out.wav
+build/render_midi/wave.memh
+build/render_midi/midi_render_config.svh
+build/render_midi/midi_render_config.json
+build/render_midi/out.pcm
+build/render_midi/out.wav
 ```
 
 The checked-in SF2 is small and intentionally stored under:
@@ -233,8 +319,11 @@ and memory values in `tb_wavetable_core.sv`.
 
 For `make render-instrument`, inspect `build/render/render_config.json` first. It
 shows which instrument, sample, loop points, sample rate, and phase increment the
-extractor selected. If the WAV is silent or unexpected, the issue is often in the
-selected instrument zone or key range rather than in the RTL.
+extractor selected. For `make render-midi`, inspect
+`build/render_midi/midi_render_config.json`; it also shows the decoded note
+events. If the WAV is silent or unexpected, the issue is often in the selected
+instrument zone, event timing, note range, or envelope parameters rather than in
+the RTL.
 
 ## What This Does Not Verify Yet
 
@@ -242,9 +331,10 @@ The current simulation does not yet cover:
 
 - Memory backpressure.
 - Multi-cycle variable memory latency.
-- Multiple voices or mixing.
-- SoundFont envelopes, filters, modulators, or preset lookup.
+- More than two simultaneous active voices and mixer saturation boundaries.
+- SoundFont preset lookup, velocity mapping, modulators, ADSR calculation, or
+  filters.
 - I2S output timing.
 
-Those are good future test areas once the core grows beyond the single-voice
-playback milestone.
+Those are good future test areas as the core scales beyond the current four-slot
+simulation milestone.
