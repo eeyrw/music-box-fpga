@@ -98,6 +98,25 @@ PASS: single-voice wavetable core
 Generated files are written below `build/` and are ignored by Git. Use
 `make clean` to remove them.
 
+## Render A SoundFont Instrument
+
+The repository includes `assets/soundfonts/MT6276.sf2` for simulation rendering.
+List available instruments:
+
+```bash
+make list-instruments
+```
+
+Render one instrument through the RTL core at 48 kHz:
+
+```bash
+make render-instrument INSTRUMENT=0 KEY=60 SECONDS=1
+```
+
+The flow extracts the selected SF2 instrument sample, converts linked left/right
+samples to the core's interleaved stereo memory format, runs the Verilator render
+testbench, and writes `build/render/out.wav`.
+
 ## Current Register Interface
 
 The simulation bus is a single-beat 32-bit register interface with `valid`,
