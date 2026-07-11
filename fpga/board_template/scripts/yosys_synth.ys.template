@@ -1,0 +1,26 @@
+# Yosys synthesis template. Replace the target command with the selected FPGA
+# family flow, then run from the concrete board directory.
+
+read_verilog -sv ../../rtl/pkg/synth_pkg.sv
+read_verilog -sv ../../rtl/bus/register_bus_if.sv
+read_verilog -sv ../../rtl/bus/spi_register_bridge.sv
+read_verilog -sv ../../rtl/control/voice_register_bank.sv
+read_verilog -sv ../../rtl/memory/wave_memory_subsystem.sv
+read_verilog -sv ../../rtl/dsp/linear_interpolator.sv
+read_verilog -sv ../../rtl/dsp/gain_saturate.sv
+read_verilog -sv ../../rtl/audio/i2s_tx.sv
+read_verilog -sv ../../rtl/voice/multi_voice_pipeline.sv
+read_verilog -sv ../../rtl/top/wavetable_core.sv
+read_verilog -sv ../../rtl/top/wavetable_core_memory.sv
+read_verilog -sv ../../rtl/top/wavetable_core_spi.sv
+read_verilog -sv ../../rtl/top/wavetable_core_system.sv
+read_verilog -sv rtl/<board-name>_top.sv
+
+hierarchy -top <board_top_module>
+proc
+opt
+
+# TODO: Replace with synth_ecp5, synth_ice40, synth_gowin, synth_xilinx, etc.
+synth -top <board_top_module>
+
+stat

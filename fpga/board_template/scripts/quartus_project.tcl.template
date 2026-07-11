@@ -1,0 +1,41 @@
+# Quartus project-generation template.
+# Usage after copying to a concrete board directory:
+#   quartus_sh -t scripts/quartus_project.tcl
+
+set board_name <board-name>
+set family_name <fpga-family>
+set part_name <fpga-part-name>
+set top_name <board_top_module>
+
+project_new $board_name -overwrite
+set_global_assignment -name FAMILY $family_name
+set_global_assignment -name DEVICE $part_name
+set_global_assignment -name TOP_LEVEL_ENTITY $top_name
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/${top_name}.sv
+
+set rtl_sources {
+  ../../rtl/pkg/synth_pkg.sv
+  ../../rtl/bus/register_bus_if.sv
+  ../../rtl/bus/spi_register_bridge.sv
+  ../../rtl/control/voice_register_bank.sv
+  ../../rtl/memory/wave_memory_subsystem.sv
+  ../../rtl/dsp/linear_interpolator.sv
+  ../../rtl/dsp/gain_saturate.sv
+  ../../rtl/audio/i2s_tx.sv
+  ../../rtl/voice/multi_voice_pipeline.sv
+  ../../rtl/top/wavetable_core.sv
+  ../../rtl/top/wavetable_core_memory.sv
+  ../../rtl/top/wavetable_core_spi.sv
+  ../../rtl/top/wavetable_core_system.sv
+}
+
+foreach src $rtl_sources {
+  set_global_assignment -name SYSTEMVERILOG_FILE $src
+}
+
+set_global_assignment -name SDC_FILE constraints/${board_name}.sdc
+
+# TODO: Add pin assignments in a .qsf file or extend this script with
+# set_location_assignment and set_instance_assignment commands.
+
+project_close

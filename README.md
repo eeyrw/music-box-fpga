@@ -71,6 +71,7 @@ rtl/voice/     Playback phase and sample-fetch sequencing
 rtl/dsp/       Interpolation and gain processing
 rtl/audio/     Audio serializers and output timing blocks
 rtl/top/       Core and full-system simulation integration
+fpga/          Board-specific synthesis and bring-up templates
 sim/models/    Simulation-only behavioral models
 sim/tb/        Self-checking SystemVerilog testbenches
 docs/          Fixed-point, memory, and register contracts
@@ -86,6 +87,7 @@ Useful learning documents:
 - [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
   external line-memory interface.
 - [`docs/register_map.md`](docs/register_map.md): software-visible register map.
+- [`fpga/`](fpga/): board-specific synthesis workspace and bring-up templates.
 
 ## Requirements
 

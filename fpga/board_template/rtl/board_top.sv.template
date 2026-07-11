@@ -1,0 +1,70 @@
+// Template only. Rename to <board-name>_top.sv after selecting a board and
+// replacing the placeholder ports with real FPGA pins.
+module board_top (
+  input  logic clk_in,
+  input  logic rst_n,
+
+  input  logic spi_sclk,
+  input  logic spi_cs_n,
+  input  logic spi_mosi,
+  output logic spi_miso,
+
+  output logic i2s_bclk,
+  output logic i2s_lrclk,
+  output logic i2s_sdata,
+
+  output logic led_underrun,
+  output logic led_sample_drop
+);
+  logic clk_sys;
+  logic rst_sys;
+
+  // TODO: Replace with a board PLL/MMCM or direct clock assignment.
+  // The default system wrapper expects 49.152 MHz for 48 kHz audio.
+  assign clk_sys = clk_in;
+  assign rst_sys = !rst_n;
+
+  // TODO: Replace this stub with a real line-memory controller or a small BRAM
+  // test image. The core expects aligned line reads of signed 16-bit words.
+  logic        ext_req_valid;
+  logic        ext_req_ready;
+  logic [31:0] ext_req_addr;
+  logic        ext_rsp_valid;
+  logic [8*16-1:0] ext_rsp_data;
+
+  assign ext_req_ready = 1'b0;
+  assign ext_rsp_valid = 1'b0;
+  assign ext_rsp_data = '0;
+
+  wavetable_core_system #(
+    .LINE_WORDS(8),
+    .SYS_CLK_HZ(49_152_000),
+    .SAMPLE_RATE_HZ(48_000)
+  ) core_system (
+    .clk(clk_sys),
+    .rst(rst_sys),
+    .spi_sclk(spi_sclk),
+    .spi_cs_n(spi_cs_n),
+    .spi_mosi(spi_mosi),
+    .spi_miso(spi_miso),
+    .spi_error(),
+    .ext_req_valid(ext_req_valid),
+    .ext_req_ready(ext_req_ready),
+    .ext_req_addr(ext_req_addr),
+    .ext_rsp_valid(ext_rsp_valid),
+    .ext_rsp_data(ext_rsp_data),
+    .i2s_bclk(i2s_bclk),
+    .i2s_lrclk(i2s_lrclk),
+    .i2s_sdata(i2s_sdata),
+    .underrun_pulse(led_underrun),
+    .sample_drop_pulse(led_sample_drop),
+    .mem_debug_hit_pulse(),
+    .mem_debug_miss_pulse(),
+    .mem_debug_response_pulse(),
+    .mem_debug_response_latency()
+  );
+
+  // Keep ext_req_addr referenced until the memory controller is implemented.
+  logic unused_ext_req;
+  assign unused_ext_req = ext_req_valid ^ ext_req_addr[0];
+endmodule

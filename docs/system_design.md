@@ -146,6 +146,12 @@ SPI control, line-memory traffic, fixed 48 kHz audio ticks, and I2S output. It
 still uses idealized C++ models around the RTL. The next board-proximity tasks
 are, in priority order:
 
+Board-specific synthesis and bring-up files belong under `fpga/`. The current
+`fpga/board_template/` directory is a starting point for a concrete board
+directory; it records the required top-level wrapper, clocking, constraints,
+memory-controller, audio, asset-image, and tool-flow decisions without binding
+the generic RTL to one vendor flow.
+
 1. Add an output FIFO and deadline accounting.
    Record render latency, FIFO level, startup underrun, steady-state underrun, and
    sample drops. Fail full-system tests on steady-state underrun or any sample

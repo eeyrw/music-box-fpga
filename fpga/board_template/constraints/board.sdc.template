@@ -1,0 +1,9 @@
+# Generic SDC template for Quartus/Yosys-style flows. Replace placeholders with
+# board-specific values.
+
+create_clock -name clk_in -period <PERIOD_NS> [get_ports {clk_in}]
+
+# TODO: Add generated clocks for PLL outputs.
+# TODO: Add input/output delays for external SPI master timing.
+# TODO: Add memory-device timing constraints.
+# TODO: Add false paths only after documenting the CDC/synchronizer structure.
