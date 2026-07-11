@@ -21,9 +21,9 @@ void put_u32le(std::ofstream& f, uint32_t value) {
 }  // namespace
 
 FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
-                                     const std::string& wav_path, int sample_rate)
-    : top_(new Vwavetable_core_system), memory_(memory), wav_(wav_path, std::ios::binary),
-      sample_rate_(sample_rate) {
+                                      const std::string& wav_path, int sample_rate)
+    : top_(new Vwavetable_core_system), voice_control_(*this), memory_(memory),
+      wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
   write_wav_header(0);
 
@@ -77,28 +77,18 @@ FullSystemStats FullSystemHarness::stats() const {
 }
 
 void FullSystemHarness::set_envelope(int voice, int level) {
-  spi_write_word(voice_addr(voice, 0x2c), uint32_t(uint16_t(clamp_q15(level))));
+  voice_control_.set_envelope(voice, level);
 }
 
 void FullSystemHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  spi_write_word(voice_addr(voice, 0x00), uint32_t((r.stereo ? 2 : 0) | (enable ? 1 : 0)));
-  spi_write_word(voice_addr(voice, 0x04), r.base_addr);
-  spi_write_word(voice_addr(voice, 0x08), r.length);
-  spi_write_word(voice_addr(voice, 0x0c), r.loop_start);
-  spi_write_word(voice_addr(voice, 0x10), r.loop_end);
-  spi_write_word(voice_addr(voice, 0x14), 0);
-  spi_write_word(voice_addr(voice, 0x18), phase_inc);
-  spi_write_word(voice_addr(voice, 0x1c), uint32_t(uint16_t(r.gain_l)));
-  spi_write_word(voice_addr(voice, 0x20), uint32_t(uint16_t(r.gain_r)));
-  spi_write_word(voice_addr(voice, 0x34), uint32_t(r.loop_mode & 0x3));
-  spi_write_word(voice_addr(voice, 0x24), 1);
+  voice_control_.commit_voice(voice, enable, phase_inc, r);
 }
 
 void FullSystemHarness::release_voice(int voice, const Region& r) {
-  spi_write_word(voice_addr(voice, 0x34), uint32_t(0x100 | (r.loop_mode & 0x3)));
+  voice_control_.release_voice(voice, r);
 }
 
-void FullSystemHarness::spi_write_word(uint16_t address, uint32_t data) {
+void FullSystemHarness::write_register(uint16_t address, uint32_t data) {
   top_->spi_cs_n = 0;
   run_cycles(3);
   spi_send_byte(0x80);

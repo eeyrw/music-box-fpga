@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render_types.h"
+#include "register_control.h"
 
 #include <cstdint>
 #include <fstream>
@@ -23,7 +23,7 @@ struct FullSystemStats {
   uint64_t sequential_line_requests = 0;
 };
 
-class FullSystemHarness : public VoiceControlSink {
+class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
  public:
   FullSystemHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                     int sample_rate);
@@ -43,7 +43,7 @@ class FullSystemHarness : public VoiceControlSink {
   static constexpr int kRandomLatencyCycles = 10;
   static constexpr int kSequentialLatencyCycles = 4;
 
-  void spi_write_word(uint16_t address, uint32_t data);
+  void write_register(uint16_t address, uint32_t data) override;
   void spi_send_byte(uint8_t value);
   void spi_clock_bit(bool bit_value);
   void run_cycles(int cycles);
@@ -55,6 +55,7 @@ class FullSystemHarness : public VoiceControlSink {
   void write_pcm16(int16_t sample);
 
   Vwavetable_core_system* top_ = nullptr;
+  RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
   std::ofstream wav_;
   int sample_rate_ = 48000;

@@ -87,6 +87,8 @@ Useful learning documents:
 - [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
   external line-memory interface.
 - [`docs/register_map.md`](docs/register_map.md): software-visible register map.
+- [`docs/host_control.md`](docs/host_control.md): reusable host-side C++ control
+  boundary for future PC/CH347 SPI control.
 - [`fpga/`](fpga/): board-specific synthesis workspace and bring-up templates.
 
 ## Requirements
@@ -152,6 +154,16 @@ make render-full-system SECONDS=0.1
 make render-memory MIDI=song.mid SECONDS=20
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 ```
+
+Build the PC-side CH347 USB-to-SPI register-control tool:
+
+```bash
+make host-ch347
+```
+
+It reuses the same C++ register-control sequence as the simulation harnesses and
+loads the CH347 vendor library at runtime. See
+[`docs/host_control.md`](docs/host_control.md) for usage and integration notes.
 
 With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
 render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_core`

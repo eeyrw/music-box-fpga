@@ -38,8 +38,8 @@ MemoryProfile parse_memory_profile(const std::string& name) {
 
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                        int sample_rate, const MemoryProfile& memory_profile)
-    : top_(new Vwavetable_core_memory), memory_(memory), memory_profile_(memory_profile),
-      wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
+    : top_(new Vwavetable_core_memory), voice_control_(*this), memory_(memory),
+      memory_profile_(memory_profile), wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
   // Write a placeholder WAV header now. The final data length is not known until
   // all samples have been requested, so the destructor seeks back and rewrites
@@ -75,7 +75,7 @@ void RtlHarness::reset() {
   tick();
 }
 
-void RtlHarness::bus_write_word(uint16_t address, uint32_t data) {
+void RtlHarness::write_register(uint16_t address, uint32_t data) {
   // The register bus is a single-cycle valid/write transaction in this harness.
   // The RTL is expected to accept writes immediately; any error is fatal because
   // continuing would produce a WAV that no longer represents the intended setup.
@@ -93,32 +93,15 @@ void RtlHarness::bus_write_word(uint16_t address, uint32_t data) {
 }
 
 void RtlHarness::set_envelope(int voice, int level) {
-  // Offset 0x2c is the runtime envelope register. It is intentionally separate
-  // from commit_voice so ADSR updates do not reload phase or reconfigure loops.
-  bus_write_word(voice_addr(voice, 0x2c), uint32_t(uint16_t(clamp_q15(level))));
+  voice_control_.set_envelope(voice, level);
 }
 
 void RtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  // Program the shadow registers for one voice, then write COMMIT at offset 0x24.
-  // This mirrors the documented firmware contract: all voice configuration
-  // becomes active atomically, and phase reload happens exactly once on commit.
-  bus_write_word(voice_addr(voice, 0x00), uint32_t((r.stereo ? 2 : 0) | (enable ? 1 : 0)));
-  bus_write_word(voice_addr(voice, 0x04), r.base_addr);
-  bus_write_word(voice_addr(voice, 0x08), r.length);
-  bus_write_word(voice_addr(voice, 0x0c), r.loop_start);
-  bus_write_word(voice_addr(voice, 0x10), r.loop_end);
-  bus_write_word(voice_addr(voice, 0x14), 0);
-  bus_write_word(voice_addr(voice, 0x18), phase_inc);
-  bus_write_word(voice_addr(voice, 0x1c), uint32_t(uint16_t(r.gain_l)));
-  bus_write_word(voice_addr(voice, 0x20), uint32_t(uint16_t(r.gain_r)));
-  bus_write_word(voice_addr(voice, 0x34), uint32_t(r.loop_mode & 0x3));
-  bus_write_word(voice_addr(voice, 0x24), 1);
+  voice_control_.commit_voice(voice, enable, phase_inc, r);
 }
 
 void RtlHarness::release_voice(int voice, const Region& r) {
-  // Bit 8 asks the RTL to leave its loop when loop-until-release mode is active.
-  // The MCU envelope still controls the audible release and eventual disable.
-  bus_write_word(voice_addr(voice, 0x34), uint32_t(0x100 | (r.loop_mode & 0x3)));
+  voice_control_.release_voice(voice, r);
 }
 
 void RtlHarness::request_sample(int produced) {

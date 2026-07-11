@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render_types.h"
+#include "register_control.h"
 
 #include <cstdint>
 #include <fstream>
@@ -39,7 +39,7 @@ MemoryProfile parse_memory_profile(const std::string& name);
 // Thin Verilator-side driver for wavetable_core. It owns the top module, models
 // the external wave-memory slave, writes the generated stereo PCM stream as a
 // WAV file, and exposes firmware-like helpers for voice register writes.
-class RtlHarness : public VoiceControlSink {
+class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
              int sample_rate, const MemoryProfile& memory_profile);
@@ -58,13 +58,14 @@ class RtlHarness : public VoiceControlSink {
  private:
   static constexpr int kLineWords = 8;
 
-  void bus_write_word(uint16_t address, uint32_t data);
+  void write_register(uint16_t address, uint32_t data) override;
   void tick();
   void service_external_memory();
   void write_wav_header(uint32_t data_bytes);
   void write_pcm16(int16_t sample);
 
   Vwavetable_core_memory* top_ = nullptr;
+  RegisterVoiceControl voice_control_;
   // Shared wave-memory image. Mono regions are stored one int16_t per frame;
   // stereo regions are interleaved left/right exactly as the RTL expects.
   const std::vector<int16_t>& memory_;

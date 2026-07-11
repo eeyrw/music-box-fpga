@@ -44,7 +44,7 @@ MEMORY_SIM_SOURCES := \
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
-.PHONY: all lint test list-instruments render-instrument render-quick render-memory render-full-system clean
+.PHONY: all lint test host-ch347 list-instruments render-instrument render-quick render-memory render-full-system clean
 
 all: test
 
@@ -63,6 +63,10 @@ test:
 		sim/harness/midi_parser.cpp sim/harness/midi_parser_test.cpp \
 		-o $(BUILD_DIR)/midi_parser_test
 	$(BUILD_DIR)/midi_parser_test
+	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+		sim/harness/register_control.cpp sim/harness/register_control_test.cpp \
+		-o $(BUILD_DIR)/register_control_test
+	$(BUILD_DIR)/register_control_test
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
@@ -80,6 +84,13 @@ test:
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
+
+host-ch347:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -I. \
+		host/ch347_control_main.cpp host/ch347_transport.cpp \
+		sim/harness/register_control.cpp \
+		-o $(BUILD_DIR)/ch347_control -ldl
 
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.
@@ -109,6 +120,7 @@ render-quick:
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_quick_main.cpp) \
 		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/register_control.cpp) \
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/reference_synth.cpp) \
@@ -129,6 +141,7 @@ render-memory:
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_memory_main.cpp) \
 		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/register_control.cpp) \
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/rtl_harness.cpp) \
@@ -148,6 +161,7 @@ render-full-system:
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_full_system_main.cpp) \
 		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/register_control.cpp) \
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/full_system_harness.cpp) \

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render_types.h"
+#include "register_control.h"
 
 #include <cstdint>
 #include <utility>
@@ -10,7 +10,7 @@ class Vwavetable_core;
 
 namespace render {
 
-class QuickRtlHarness : public VoiceControlSink {
+class QuickRtlHarness : public VoiceControlSink, private RegisterWriteSink {
  public:
   explicit QuickRtlHarness(const std::vector<int16_t>& memory);
   ~QuickRtlHarness();
@@ -22,11 +22,12 @@ class QuickRtlHarness : public VoiceControlSink {
   std::pair<int16_t, int16_t> request_sample(int produced);
 
  private:
-  void bus_write_word(uint16_t address, uint32_t data);
+  void write_register(uint16_t address, uint32_t data) override;
   void tick();
   int16_t read_word(uint32_t address) const;
 
   Vwavetable_core* top_ = nullptr;
+  RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
   bool rsp_valid_ = false;
   int16_t rsp_data_ = 0;

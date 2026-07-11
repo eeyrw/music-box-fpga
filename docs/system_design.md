@@ -110,6 +110,13 @@ simulation model owns:
 - MIDI controller policy,
 - asset loading into wave memory.
 
+The current C++ render harness keeps this policy in reusable host-side code.
+`McuModel` owns voice allocation and envelope stepping, while
+`RegisterVoiceControl` converts voice operations into register writes through a
+small `RegisterWriteSink` interface. A PC tool using CH347 USB-to-SPI should
+reuse that policy layer and provide only the hardware-backed register transport.
+See `docs/host_control.md` for the intended split.
+
 The hardware contract is register-level:
 
 - Note On writes wave address, length, loop range, phase increment, gains,
