@@ -79,13 +79,13 @@ docs/          Fixed-point, memory, and register contracts
 Useful learning documents:
 
 - [`docs/system_design.md`](docs/system_design.md): current RTL architecture and
-  data path.
+  board-level backlog.
 - [`docs/simulation_design.md`](docs/simulation_design.md): self-checking tests
-  and SoundFont render flow.
-- [`docs/audio_render_calculation.md`](docs/audio_render_calculation.md): detailed
-  MIDI-to-audio render calculations across the MCU model and RTL pipeline.
-- [`docs/performance_budget.md`](docs/performance_budget.md): cycle, memory
-  bandwidth, and pipeline direction notes for scaling toward 32 voices.
+  SoundFont render flows, and MIDI/SF2 render calculations.
+- [`docs/fixed_point.md`](docs/fixed_point.md): fixed-point arithmetic contracts.
+- [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
+  external line-memory interface.
+- [`docs/register_map.md`](docs/register_map.md): software-visible register map.
 
 ## Requirements
 

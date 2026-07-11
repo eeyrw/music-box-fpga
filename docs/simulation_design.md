@@ -3,8 +3,7 @@
 This document explains how the repository verifies and renders the current
 multi-voice wavetable core.
 
-For the numeric path from MIDI events to PCM samples, see
-`docs/audio_render_calculation.md`.
+For stable fixed-point arithmetic rules, see `docs/fixed_point.md`.
 
 There are five simulation intents:
 
@@ -276,6 +275,19 @@ reported before the first programmed sample is available; sample drops indicate
 the core produced a frame when the I2S transmitter could not accept it and should
 be treated as an integration bug.
 
+Current full-system limitations are intentional:
+
+- The SPI master is a C++ test harness model, not RTL intended for synthesis.
+- The storage side is still a C++ line-memory model, not a parallel NOR, SPI
+  Flash, SDRAM, or DDR controller.
+- The wrapper has one fixed 49.152 MHz clock and does not yet model board PLLs,
+  clock-domain crossings, codec MCLK, or reset sequencing.
+- I2S RX exists only in the C++ harness and focused testbench; the synthesizable
+  audio path is transmit-only.
+- Full-system runs are smoke/integration tests today. Longer high-polyphony
+  stress tests and exact I2S-decoded PCM comparisons against `render-quick` are
+  tracked in `docs/system_design.md`.
+
 ## C++ Memory-Profile Render Flow
 
 `make render-memory` renders a short score through `wavetable_core_memory`, which
@@ -325,6 +337,68 @@ read-only timing profiles are `ddr`, `sdram`, and `parallel-nor`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
+
+## MIDI/SF2 Render Calculation
+
+The C++ harnesses share the same preparation and MCU policy code in
+`sim/harness/render_support.cpp`.
+
+Event timing:
+
+```text
+event_sample = round(event_time_seconds * output_sample_rate)
+```
+
+Before output frame `N` is requested, the MCU model handles every MIDI event with
+`event_sample <= N`. A Note On at sample `N` is therefore audible in the output
+requested for sample `N`, subject to the RTL pipeline latency of that harness.
+
+Pitch calculation:
+
+```text
+phase_inc = round(source_sample_rate / output_sample_rate
+                  * 2^((midi_key - root_key + tuning_cents / 100) / 12)
+                  * 65536)
+```
+
+`root_key`, tuning, and sample rate come from the selected SF2 instrument zone and
+sample header. The RTL receives only the resulting unsigned Q16.16 `PHASE_INC`.
+
+Voice allocation is MCU-side policy:
+
+- Prefer the first silent slot.
+- If all 32 slots are active, steal the oldest allocated slot.
+- Runtime envelope level is set before committing a new Note On voice so phase is
+  loaded exactly once.
+- Repeated Note On events for the same channel/note can occupy multiple slots;
+  Note Off releases all matching active slots.
+
+The current envelope model converts SF2 volume-envelope generators into linear
+Q1.15 attack, decay, sustain, and release steps. It runs every
+`adsr_tick_ms` milliseconds, defaulting to 5 ms. This is intentionally simpler
+than the full SF2 envelope curve, but it exercises the hardware contract: runtime
+`ENVELOPE_LEVEL` writes update active gain without commit and without reloading
+phase.
+
+The normal Note On register sequence is:
+
+```text
+ENVELOPE_LEVEL = 0
+CONTROL        = enable + mono/stereo
+BASE_ADDR      = selected memory word address
+LENGTH         = sample frames
+LOOP_START     = first loop frame
+LOOP_END       = exclusive loop end
+PHASE_INIT     = 0
+PHASE_INC      = generated Q16.16 increment
+GAIN_L/R       = selected Q1.15 channel gains
+PLAYBACK_MODE  = no loop / continuous / loop-until-release
+COMMIT         = 1
+```
+
+At Note Off, loop-until-release samples receive `PLAYBACK_MODE.released = 1`.
+The MCU model then continues release envelope writes and eventually disables and
+commits the slot when the envelope reaches zero.
 
 `sim/harness/render_support.cpp` models the MCU at the precision used by this FPGA
 project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
@@ -405,30 +479,6 @@ If the selected sample is mono, the extractor writes mono memory and clears the
 RTL stereo bit. The multi-voice pipeline then duplicates mono samples to both
 channels.
 
-## Tuning And Phase Increment
-
-The extractor converts SoundFont tuning metadata to Q16.16 `phase_inc`.
-
-Conceptually:
-
-```text
-phase_inc = source_sample_rate / output_sample_rate
-          * pitch_ratio
-          * 65536
-```
-
-The pitch ratio comes from:
-
-```text
-requested MIDI key
-root key or originalPitch
-pitchCorrection
-fineTune
-coarseTune
-```
-
-The default output sample rate is 48000 Hz.
-
 ## Generated Files
 
 All render outputs are under `build/`, which is ignored by Git:
@@ -439,8 +489,13 @@ build/render/render_config.svh
 build/render/render_config.json
 build/render/out.pcm
 build/render/out.wav
+build/render_quick/quick_render_config.json
 build/render_memory/midi_render_config.json
 build/render_memory/out.wav
+build/render_memory/memory_stats.json
+build/render_full_system/full_system_render_config.json
+build/render_full_system/full_system_stats.json
+build/render_full_system/out.wav
 ```
 
 The checked-in SF2 is small and intentionally stored under:
