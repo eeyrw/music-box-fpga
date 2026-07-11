@@ -1,0 +1,150 @@
+module tb_wavetable_core;
+  import synth_pkg::*;
+
+  logic clk = 1'b0;
+  logic rst;
+  logic bus_valid;
+  logic bus_write;
+  logic [15:0] bus_address;
+  logic [31:0] bus_wdata;
+  logic [31:0] bus_rdata;
+  logic bus_ready;
+  logic bus_error;
+  logic sample_tick;
+  logic sample_valid;
+  pcm_t sample_l;
+  pcm_t sample_r;
+  logic busy;
+  logic mem_req_valid;
+  logic [31:0] mem_req_addr;
+  logic mem_req_ready;
+  logic mem_rsp_valid;
+  pcm_t mem_rsp_data;
+  int errors = 0;
+
+  always #5 clk = ~clk;
+
+  wavetable_core dut (.*);
+
+  wave_memory_model #(.DEPTH(256)) memory_model (
+    .clk,
+    .rst,
+    .req_valid(mem_req_valid),
+    .req_ready(mem_req_ready),
+    .req_addr(mem_req_addr),
+    .rsp_valid(mem_rsp_valid),
+    .rsp_data(mem_rsp_data)
+  );
+
+  task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
+    @(negedge clk);
+    bus_valid = 1'b1;
+    bus_write = 1'b1;
+    bus_address = address;
+    bus_wdata = data;
+    @(negedge clk);
+    if (!bus_ready || bus_error) begin
+      $error("bus write failed at 0x%04x", address);
+      errors++;
+    end
+    bus_valid = 1'b0;
+    bus_write = 1'b0;
+  endtask
+
+  task automatic request_and_check(input integer expected_l, input integer expected_r);
+    int timeout;
+    @(negedge clk);
+    sample_tick = 1'b1;
+    @(negedge clk);
+    sample_tick = 1'b0;
+    timeout = 0;
+    while (!sample_valid && timeout < 30) begin
+      @(negedge clk);
+      timeout++;
+    end
+    if (!sample_valid) begin
+      $error("sample response timed out");
+      errors++;
+    end else begin
+      if ($signed(sample_l) !== expected_l) begin
+        $error("left sample got %0d expected %0d", $signed(sample_l), expected_l);
+        errors++;
+      end
+      if ($signed(sample_r) !== expected_r) begin
+        $error("right sample got %0d expected %0d", $signed(sample_r), expected_r);
+        errors++;
+      end
+    end
+  endtask
+
+  task automatic configure_mono;
+    bus_write_word(16'h0100, 32'h0000_0001);
+    bus_write_word(16'h0104, 32'd0);
+    bus_write_word(16'h0108, 32'd4);
+    bus_write_word(16'h010c, 32'd0);
+    bus_write_word(16'h0110, 32'd4);
+    bus_write_word(16'h0114, 32'h0000_8000);
+    bus_write_word(16'h0118, 32'h0001_0000);
+    bus_write_word(16'h011c, 32'h0000_4000);
+    bus_write_word(16'h0120, 32'h0000_4000);
+    bus_write_word(16'h0124, 32'd1);
+    repeat (2) @(negedge clk);
+  endtask
+
+  task automatic configure_stereo_loop;
+    bus_write_word(16'h0100, 32'h0000_0003);
+    bus_write_word(16'h0104, 32'd16);
+    bus_write_word(16'h0108, 32'd4);
+    bus_write_word(16'h010c, 32'd1);
+    bus_write_word(16'h0110, 32'd3);
+    bus_write_word(16'h0114, 32'h0002_8000);
+    bus_write_word(16'h0118, 32'h0001_0000);
+    bus_write_word(16'h011c, 32'h0000_4000);
+    bus_write_word(16'h0120, 32'h0000_4000);
+    bus_write_word(16'h0124, 32'd1);
+    repeat (2) @(negedge clk);
+  endtask
+
+  initial begin
+    rst = 1'b1;
+    bus_valid = 1'b0;
+    bus_write = 1'b0;
+    bus_address = '0;
+    bus_wdata = '0;
+    sample_tick = 1'b0;
+
+    memory_model.memory[0] = 16'sd0;
+    memory_model.memory[1] = 16'sd1000;
+    memory_model.memory[2] = 16'sd2000;
+    memory_model.memory[3] = 16'sd3000;
+
+    memory_model.memory[16] = 16'sd1000;
+    memory_model.memory[17] = -16'sd1000;
+    memory_model.memory[18] = 16'sd2000;
+    memory_model.memory[19] = -16'sd2000;
+    memory_model.memory[20] = 16'sd3000;
+    memory_model.memory[21] = -16'sd3000;
+    memory_model.memory[22] = 16'sd4000;
+    memory_model.memory[23] = -16'sd4000;
+
+    repeat (3) @(negedge clk);
+    rst = 1'b0;
+
+    configure_mono();
+    request_and_check(250, 250);
+    request_and_check(750, 750);
+
+    // A shadow-only base-address write must not disturb active playback.
+    bus_write_word(16'h0104, 32'd16);
+    request_and_check(1250, 1250);
+
+    configure_stereo_loop();
+    request_and_check(1250, -1250);
+    request_and_check(1250, -1250);
+
+    if (errors != 0)
+      $fatal(1, "FAIL: %0d errors", errors);
+    $display("PASS: single-voice wavetable core");
+    $finish;
+  end
+endmodule

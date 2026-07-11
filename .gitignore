@@ -1,0 +1,46 @@
+# Verilator and simulation output
+build/
+obj_dir/
+*.vcd
+*.fst
+*.lxt
+*.lxt2
+*.wlf
+*.vvp
+*.log
+
+# FPGA tool output
+.Xil/
+*.jou
+*.str
+*.dcp
+*.bit
+*.bin
+*.mcs
+*.rpt
+*.runs/
+*.cache/
+*.gen/
+*.hw/
+*.ip_user_files/
+incremental_db/
+db/
+output_files/
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
