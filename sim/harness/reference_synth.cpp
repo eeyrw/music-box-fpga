@@ -1,0 +1,103 @@
+#include "reference_synth.h"
+
+#include <algorithm>
+
+namespace render {
+
+ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory)
+    : memory_(memory), voices_(kNumVoices) {}
+
+void ReferenceSynth::set_envelope(int voice, int level) {
+  voices_.at(voice).envelope = int16_t(clamp_q15(level));
+}
+
+void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
+  VoiceConfig& v = voices_.at(voice);
+  v.enable = enable != 0;
+  v.valid = r.length != 0 && (r.loop_mode == 0 || (r.loop_start < r.loop_end && r.loop_end <= r.length));
+  v.stereo = r.stereo;
+  v.released = false;
+  v.base_addr = r.base_addr;
+  v.length = uint16_t(r.length);
+  v.loop_start = uint16_t(r.loop_start);
+  v.loop_end = uint16_t(r.loop_end);
+  v.phase = 0;
+  v.phase_inc = phase_inc;
+  v.gain_l = int16_t(r.gain_l);
+  v.gain_r = int16_t(r.gain_r);
+  v.loop_mode = r.loop_mode;
+}
+
+void ReferenceSynth::release_voice(int voice, const Region& region) {
+  VoiceConfig& v = voices_.at(voice);
+  v.loop_mode = region.loop_mode;
+  v.released = true;
+}
+
+std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
+  int32_t accum_l = 0;
+  int32_t accum_r = 0;
+
+  for (VoiceConfig& v : voices_) {
+    bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
+    bool voice_done = (v.loop_mode == 0 || !loop_active) && ((v.phase >> 16) >= v.length);
+    if (!v.enable || !v.valid || voice_done) continue;
+
+    uint16_t frame_0 = uint16_t(v.phase >> 16);
+    uint16_t frame_1 = 0;
+    if (loop_active) {
+      frame_1 = (uint16_t(frame_0 + 1) >= v.loop_end) ? v.loop_start : uint16_t(frame_0 + 1);
+    } else {
+      frame_1 = (uint16_t(frame_0 + 1) >= v.length) ? frame_0 : uint16_t(frame_0 + 1);
+    }
+    uint16_t fraction = uint16_t(v.phase & 0xffffu);
+
+    uint64_t phase_sum = uint64_t(v.phase) + uint64_t(v.phase_inc);
+    uint64_t loop_end_phase = uint64_t(v.loop_end) << 16;
+    uint32_t loop_length_phase = uint32_t(v.loop_end - v.loop_start) << 16;
+    if (loop_active && phase_sum >= loop_end_phase)
+      v.phase = uint32_t(phase_sum) - loop_length_phase;
+    else
+      v.phase = uint32_t(phase_sum);
+
+    int16_t raw_l0 = read_word(v.base_addr + (v.stereo ? uint32_t(frame_0) * 2u : uint32_t(frame_0)));
+    int16_t raw_l1 = read_word(v.base_addr + (v.stereo ? uint32_t(frame_1) * 2u : uint32_t(frame_1)));
+    int16_t raw_r0 = v.stereo ? read_word(v.base_addr + uint32_t(frame_0) * 2u + 1u) : raw_l0;
+    int16_t raw_r1 = v.stereo ? read_word(v.base_addr + uint32_t(frame_1) * 2u + 1u) : raw_l1;
+
+    int16_t interp_l = interpolate(raw_l0, raw_l1, fraction);
+    int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);
+    int16_t gained_l = apply_gain(interp_l, v.gain_l);
+    int16_t gained_r = apply_gain(interp_r, v.gain_r);
+    int16_t env_l = v.envelope == int16_t(0x7fff) ? gained_l : apply_gain(gained_l, v.envelope);
+    int16_t env_r = v.envelope == int16_t(0x7fff) ? gained_r : apply_gain(gained_r, v.envelope);
+    accum_l += env_l;
+    accum_r += env_r;
+  }
+
+  return {saturate(accum_l), saturate(accum_r)};
+}
+
+int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint16_t fraction) {
+  int32_t difference = int32_t(sample_1) - int32_t(sample_0);
+  int64_t product = int64_t(difference) * int64_t(fraction);
+  int32_t scaled_difference = int32_t(product >> 16);
+  return saturate(int32_t(sample_0) + scaled_difference);
+}
+
+int16_t ReferenceSynth::apply_gain(int16_t sample, int16_t gain) {
+  int32_t product = int32_t(sample) * int32_t(gain);
+  return saturate(product >> 15);
+}
+
+int16_t ReferenceSynth::saturate(int32_t value) {
+  if (value > 32767) return int16_t(0x7fff);
+  if (value < -32768) return int16_t(0x8000);
+  return int16_t(value);
+}
+
+int16_t ReferenceSynth::read_word(uint32_t address) const {
+  return address < memory_.size() ? memory_[address] : 0;
+}
+
+}  // namespace render

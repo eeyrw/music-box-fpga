@@ -1,8 +1,9 @@
 # Music Box FPGA
 
 An open SystemVerilog wavetable synthesizer core. The project currently targets
-a hardware-independent, self-checking simulation path before SPI, parallel NOR
-Flash timing, I2S, and board integration are introduced.
+self-checking simulation paths for the core datapath, memory subsystem, SPI
+register transport, and I2S output before board-specific timing and synthesis are
+introduced.
 
 The current milestone implements 32 stereo output voice slots with configurable
 variable-length wavetable playback, simple loop modes, one-pole per-voice
@@ -23,13 +24,15 @@ filtering, and saturated mixing.
 - Linear interpolation and signed 16-bit saturated output
 - Shared multi-voice rendering pipeline and saturated stereo mixer
 - Ready/valid abstract memory interface
+- Minimal line-cache memory subsystem and external line-read interface
+- SPI register bridge for simulation-friendly control transport
+- I2S transmitter for fixed 48 kHz stereo output
 - One-cycle behavioral wave-memory model
 - Self-checking SystemVerilog regression test
 
-The current core intentionally does not implement physical SPI or NOR Flash
-timing, SF2 preset/modulator/velocity behavior, filter coefficient calculation,
-I2S output, or
-vendor-specific FPGA logic.
+The current core intentionally does not implement board-level SPI electrical
+timing, physical NOR Flash timing, complete SF2 preset/modulator/velocity
+behavior, filter coefficient calculation, or vendor-specific FPGA logic.
 See [the design specification](WaveTable_Synth_FPGA_Design_Spec_V1.md) for the
 long-term architecture and roadmap.
 
@@ -49,6 +52,8 @@ Shadow Registers -> Commit -> Active Voice Configurations
                          LPF + Gain + Envelope + Mixer
                                     |
                   sample_valid + sample_l/sample_r
+                                     |
+                                  I2S TX
 ```
 
 PCM data is signed 16-bit. Playback phase uses unsigned Q16.16 sample-frame
@@ -64,7 +69,8 @@ rtl/bus/       Register-bus protocol declarations
 rtl/control/   Shadow and active control registers
 rtl/voice/     Playback phase and sample-fetch sequencing
 rtl/dsp/       Interpolation and gain processing
-rtl/top/       Hardware-independent core integration
+rtl/audio/     Audio serializers and output timing blocks
+rtl/top/       Core and full-system simulation integration
 sim/models/    Simulation-only behavioral models
 sim/tb/        Self-checking SystemVerilog testbenches
 docs/          Fixed-point, memory, and register contracts
@@ -135,22 +141,35 @@ The flow extracts the selected SF2 instrument sample, converts linked left/right
 samples to the core's interleaved stereo memory format, runs the Verilator render
 testbench, and writes `build/render/out.wav`.
 
-Render a simple MIDI-driven score through the multi-voice core:
+Render a simple MIDI-driven score through one of the C++ harnesses:
 
 ```bash
-make render-midi SECONDS=2
-make render-midi MIDI=song.mid SECONDS=20
-make render-midi SECONDS=1 MEMORY_PROFILE=sdram
+make render-quick SECONDS=1
+make render-memory SECONDS=2
+make render-full-system SECONDS=0.1
+make render-memory MIDI=song.mid SECONDS=20
+make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 ```
 
-With no `MIDI` argument, the C++ render harness uses a built-in short melody. It
-parses SF2 and MIDI at runtime, models MCU-side note allocation and Q1.15 ADSR
-envelope writes, and drives the RTL through the register interface. The render
-uses `wavetable_core_memory`, so wave reads pass through the line-cache memory
-subsystem before the C++ external line-memory model responds. The output WAV is
-`build/render_midi/out.wav`, and memory hit/miss/latency counters are written to
-`build/render_midi/memory_stats.json`. `MEMORY_PROFILE` selects a read-only
-external memory timing model: `ddr`, `sdram`, or `parallel-nor`.
+With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
+render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_core`
+with a direct word-memory model and compares every RTL output sample against a C++
+fixed-point reference implementation. It does not write a WAV file.
+
+`make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
+runtime, models MCU-side note allocation and Q1.15 ADSR envelope writes, and
+drives `wavetable_core_memory` through the register interface. Wave reads pass
+through the line-cache memory subsystem before the C++ external line-memory model
+responds. The output WAV is `build/render_memory/out.wav`, and memory
+hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
+`MEMORY_PROFILE` selects a read-only external memory timing model: `ddr`, `sdram`,
+or `parallel-nor`.
+
+`make render-full-system` is the pin-level integration path. The C++ harness uses
+an SPI master model to program the top-level SPI pins, serves the external line
+memory interface as a storage model, decodes the I2S output pins, and writes
+`build/render_full_system/out.wav` from that I2S receiver. The current full-system
+wrapper uses a fixed 49.152 MHz system clock and 48 kHz audio rate.
 
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.
@@ -169,8 +188,8 @@ See [the register map](docs/register_map.md) for addresses and validation rules.
 ## Roadmap
 
 1. Broaden multi-voice backpressure and memory-latency verification.
-2. Add I2S serialization and an I2S receiver test model.
-3. Add a parallel NOR Flash controller and board-level SPI timing integration.
+2. Replace the C++ storage model with concrete board-memory controller models.
+3. Add parallel NOR Flash and board-level SPI timing integration.
 4. Introduce board-specific clocks, constraints, and synthesis projects.
 
 Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing

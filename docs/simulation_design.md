@@ -6,12 +6,17 @@ multi-voice wavetable core.
 For the numeric path from MIDI events to PCM samples, see
 `docs/audio_render_calculation.md`.
 
-There are two primary simulation paths:
+There are five simulation intents:
 
 - A self-checking regression using tiny synthetic sample data.
-- A C++ SoundFont/MIDI render harness that produces a playable WAV file.
+- A fast C++ reference-vs-RTL SoundFont/MIDI comparison path.
+- A C++ SoundFont/MIDI memory-profile render harness that produces a playable WAV
+  file.
+- A pin-level full-system render harness whose WAV output is decoded from I2S.
+- Focused peripheral tests such as SPI register transport, wave-memory subsystem,
+  and I2S serialization.
 
-Both paths use Verilator and the same synthesizable RTL sources.
+All RTL paths use Verilator and the same synthesizable RTL sources.
 
 ## Source Groups
 
@@ -41,9 +46,11 @@ sim/tb/tb_render_wavetable_core.sv
 
 ## Behavioral Memory Model
 
-`sim/models/wave_memory_model.sv` is the shared simulation memory.
+`sim/models/line_memory_model.sv` is the shared external line-memory simulation
+model for SystemVerilog tests.
 
-It contains an array of signed 16-bit words:
+It contains an array of signed 16-bit words and returns packed memory lines to
+`wave_memory_subsystem`:
 
 ```systemverilog
 synth_pkg::pcm_t memory [0:DEPTH-1];
@@ -55,7 +62,7 @@ The model always accepts requests:
 req_ready = 1
 ```
 
-It returns response data one clock after `req_valid`. This is simple enough for
+It returns response data after the configured latency. This is simple enough for
 unit tests while still forcing the RTL to use a real request/response protocol
 instead of assuming asynchronous array reads.
 
@@ -192,9 +199,86 @@ build/render/out.wav
 
 The WAV file contains the exact sample stream produced by the RTL simulation.
 
-## C++ MIDI-Driven Render Flow
+## C++ Quick RTL/Reference Flow
 
-`make render-midi` renders a short score through `wavetable_core_memory`, which
+`make render-quick` is the fast SF2/MIDI algorithm-verification path. It parses
+the same SF2 and MIDI inputs as the render harness, runs the shared MCU policy
+model, and drives two backends from the same control writes:
+
+- `ReferenceSynth`: a C++ fixed-point model of the current wavetable playback,
+  interpolation, Q1.15 gain/envelope, loop, and saturation rules.
+- `QuickRtlHarness`: a Verilated `wavetable_core` instance with a direct one-word
+  memory response model.
+
+This path intentionally skips SPI, I2S, `wave_memory_subsystem`, external storage
+profiles, and WAV output. Its job is to answer one question quickly: does the RTL
+core produce the same integer PCM stream as the project reference algorithm?
+
+Run the built-in smoke melody:
+
+```bash
+make render-quick SECONDS=1
+```
+
+Render a standard MIDI file through the same quick comparison:
+
+```bash
+make render-quick MIDI=song.mid SECONDS=20
+```
+
+The run writes the selected region summary to:
+
+```text
+build/render_quick/quick_render_config.json
+```
+
+Any sample mismatch reports the first few differing frames and exits nonzero.
+The current comparison is exact; it does not allow tolerance windows.
+
+## C++ Full-System I2S Render Flow
+
+`make render-full-system` renders through `wavetable_core_system`, a pin-level RTL
+wrapper that combines:
+
+- `spi_register_bridge` for control writes.
+- `wavetable_core_memory` and `wave_memory_subsystem` for the audio core and line
+  memory interface.
+- A fixed 49.152 MHz / 48 kHz sample-tick generator.
+- `i2s_tx` for serial audio output.
+
+The C++ harness does not read internal PCM signals. It interacts only with the
+top-level pins:
+
+- A C++ SPI master bit-bangs `spi_sclk`, `spi_cs_n`, and `spi_mosi` to program
+  voice registers.
+- A C++ storage model responds to `ext_req_valid`, `ext_req_addr`, and
+  `ext_rsp_data` on the external line-memory interface.
+- A C++ I2S receiver decodes `i2s_bclk`, `i2s_lrclk`, and `i2s_sdata`; the output
+  WAV is written from this decoded stream.
+
+Run a short full-system smoke render:
+
+```bash
+make render-full-system SECONDS=0.1
+```
+
+The run writes:
+
+```text
+build/render_full_system/out.wav
+build/render_full_system/full_system_render_config.json
+build/render_full_system/full_system_stats.json
+```
+
+This path currently supports only `SAMPLE_RATE=48000`, matching the fixed
+49.152 MHz system clock and 48 kHz audio wrapper. A small startup underrun can be
+reported before the first programmed sample is available; sample drops indicate
+the core produced a frame when the I2S transmitter could not accept it and should
+be treated as an integration bug.
+
+## C++ Memory-Profile Render Flow
+
+`make render-memory` renders a short score through `wavetable_core_memory`, which
 wraps the core with `wave_memory_subsystem`. The C++ harness parses SF2 and MIDI
 at runtime, models the MCU-side policy, drives the register bus, serves the
 external line-read memory interface, and writes the WAV file directly. The FPGA
@@ -204,14 +288,14 @@ responses, and sample requests.
 Run the built-in smoke melody:
 
 ```bash
-make render-midi SECONDS=2
+make render-memory SECONDS=2
 ```
 
 Render a standard MIDI file:
 
 ```bash
-make render-midi MIDI=song.mid SECONDS=20
-make render-midi MIDI=song.mid SECONDS=20 MEMORY_PROFILE=parallel-nor
+make render-memory MIDI=song.mid SECONDS=20
+make render-memory MIDI=song.mid SECONDS=20 MEMORY_PROFILE=parallel-nor
 ```
 
 The C++ harness performs only simulation-side work:
@@ -227,10 +311,10 @@ The C++ harness performs only simulation-side work:
 - Drive `wavetable_core_memory` through its public Verilated ports, including the
   external line-memory request/response interface.
 
-Each `make render-midi` run writes memory subsystem counters to:
+Each `make render-memory` run writes memory subsystem counters to:
 
 ```text
-build/render_midi/memory_stats.json
+build/render_memory/memory_stats.json
 ```
 
 The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
@@ -242,14 +326,16 @@ read-only timing profiles are `ddr`, `sdram`, and `parallel-nor`.
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
 
-`sim/harness/render_midi_main.cpp` models the MCU at the precision used by this
-FPGA project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
+`sim/harness/render_support.cpp` models the MCU at the precision used by this FPGA
+project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
 volume-envelope step values, free-voice-first allocation, and oldest-voice
 stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes
 `ENVELOPE_LEVEL`. On Note Off it matches channel plus note, sets the runtime
 released flag for loop-until-release samples, and when the envelope reaches zero
-it disables and commits the slot.
+it disables and commits the slot. `render-quick` and `render-memory` share this MCU
+model so algorithm comparisons and memory-profile renders use the same control
+policy.
 
 Some MIDI files begin with silence before their first Note On. Events exactly at
 the render endpoint are outside the produced sample range, so if `SECONDS` ends
@@ -353,8 +439,8 @@ build/render/render_config.svh
 build/render/render_config.json
 build/render/out.pcm
 build/render/out.wav
-build/render_midi/midi_render_config.json
-build/render_midi/out.wav
+build/render_memory/midi_render_config.json
+build/render_memory/out.wav
 ```
 
 The checked-in SF2 is small and intentionally stored under:
@@ -371,22 +457,22 @@ and memory values in `tb_wavetable_core.sv`.
 
 For `make render-instrument`, inspect `build/render/render_config.json` first. It
 shows which instrument, sample, loop points, sample rate, and phase increment the
-extractor selected. For `make render-midi`, inspect
-`build/render_midi/midi_render_config.json`; it also shows the decoded note
+extractor selected. For `make render-memory`, inspect
+`build/render_memory/midi_render_config.json`; it also shows the decoded note
 events. If the WAV is silent or unexpected, the issue is often in the selected
 instrument zone, event timing, note range, or envelope parameters rather than in
 the RTL.
 
 ## What This Does Not Verify Yet
 
-The current simulation does not yet cover:
+The current simulation still does not cover:
 
-- Memory backpressure.
-- Multi-cycle variable memory latency.
-- More than two simultaneous active voices and mixer saturation boundaries.
-- SoundFont preset lookup, velocity mapping, modulators, ADSR calculation, or
-  filters.
-- I2S output timing.
+- A concrete board-memory controller or physical Flash command protocol.
+- Long full-system MIDI runs at high polyphony.
+- Output FIFO sizing and sustained underrun policy beyond startup behavior.
+- More exhaustive mixer saturation boundaries.
+- Complete SF2 velocity curves, modulators, controller policy, envelope curves,
+  and filter coefficient calculation.
 
-Those are good future test areas as the core scales beyond the current four-slot
-simulation milestone.
+Those are good future test areas as the 32-voice core moves toward board-level
+integration.

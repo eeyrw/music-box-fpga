@@ -15,7 +15,7 @@ struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
   std::string midi;
   std::string instrument;
-  std::string out_dir = "build/render_midi";
+  std::string out_dir = "build/render_memory";
   std::string memory_profile = "ddr";
   int key = 60;
   double seconds = 2.0;
@@ -57,6 +57,14 @@ struct Region {
   int attack_step = kQ15Full;
   int decay_step = kQ15Full;
   int release_step = kQ15Full;
+};
+
+class VoiceControlSink {
+ public:
+  virtual ~VoiceControlSink() = default;
+  virtual void set_envelope(int voice, int level) = 0;
+  virtual void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) = 0;
+  virtual void release_voice(int voice, const Region& region) = 0;
 };
 
 struct VoiceState {

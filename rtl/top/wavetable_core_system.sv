@@ -1,0 +1,130 @@
+module wavetable_core_system #(
+  parameter int LINE_WORDS = 8,
+  parameter int SYS_CLK_HZ = 49_152_000,
+  parameter int SAMPLE_RATE_HZ = 48_000
+) (
+  input  logic                     clk,
+  input  logic                     rst,
+  input  logic                     spi_sclk,
+  input  logic                     spi_cs_n,
+  input  logic                     spi_mosi,
+  output logic                     spi_miso,
+  output logic                     spi_error,
+  output logic                     ext_req_valid,
+  input  logic                     ext_req_ready,
+  output logic [31:0]              ext_req_addr,
+  input  logic                     ext_rsp_valid,
+  input  logic [LINE_WORDS*16-1:0] ext_rsp_data,
+  output logic                     i2s_bclk,
+  output logic                     i2s_lrclk,
+  output logic                     i2s_sdata,
+  output logic                     underrun_pulse,
+  output logic                     sample_drop_pulse,
+  output logic                     mem_debug_hit_pulse,
+  output logic                     mem_debug_miss_pulse,
+  output logic                     mem_debug_response_pulse,
+  output logic [15:0]              mem_debug_response_latency
+);
+  localparam int SAMPLE_TICK_CYCLES = SYS_CLK_HZ / SAMPLE_RATE_HZ;
+  localparam int SAMPLE_TICK_WIDTH = $clog2(SAMPLE_TICK_CYCLES);
+  localparam logic [SAMPLE_TICK_WIDTH-1:0] SAMPLE_TICK_LAST = SAMPLE_TICK_WIDTH'(SAMPLE_TICK_CYCLES - 1);
+
+  logic [SAMPLE_TICK_WIDTH-1:0] sample_tick_count;
+  logic sample_tick;
+  logic bus_valid;
+  logic bus_write;
+  logic [15:0] bus_address;
+  logic [31:0] bus_wdata;
+  logic [31:0] bus_rdata;
+  logic bus_ready;
+  logic bus_error;
+  logic core_sample_valid;
+  synth_pkg::pcm_t core_sample_l;
+  synth_pkg::pcm_t core_sample_r;
+/* verilator lint_off UNUSEDSIGNAL */
+  logic core_busy;
+/* verilator lint_on UNUSEDSIGNAL */
+  logic i2s_sample_ready;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      sample_tick_count <= '0;
+      sample_tick <= 1'b0;
+    end else begin
+      sample_tick <= 1'b0;
+      if (sample_tick_count == SAMPLE_TICK_LAST) begin
+        sample_tick_count <= '0;
+        sample_tick <= 1'b1;
+      end else begin
+        sample_tick_count <= sample_tick_count + 1'b1;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (rst)
+      sample_drop_pulse <= 1'b0;
+    else
+      sample_drop_pulse <= core_sample_valid && !i2s_sample_ready;
+  end
+
+  spi_register_bridge spi_bridge (
+    .clk,
+    .rst,
+    .spi_sclk,
+    .spi_cs_n,
+    .spi_mosi,
+    .spi_miso,
+    .spi_error,
+    .bus_valid,
+    .bus_write,
+    .bus_address,
+    .bus_wdata,
+    .bus_rdata,
+    .bus_ready,
+    .bus_error
+  );
+
+  wavetable_core_memory #(.LINE_WORDS(LINE_WORDS)) core (
+    .clk,
+    .rst,
+    .bus_valid,
+    .bus_write,
+    .bus_address,
+    .bus_wdata,
+    .bus_rdata,
+    .bus_ready,
+    .bus_error,
+    .sample_tick,
+    .sample_valid(core_sample_valid),
+    .sample_l(core_sample_l),
+    .sample_r(core_sample_r),
+    .busy(core_busy),
+    .ext_req_valid,
+    .ext_req_ready,
+    .ext_req_addr,
+    .ext_rsp_valid,
+    .ext_rsp_data,
+    .mem_debug_hit_pulse,
+    .mem_debug_miss_pulse,
+    .mem_debug_response_pulse,
+    .mem_debug_response_latency
+  );
+
+  i2s_tx #(
+    .SYS_CLK_HZ(SYS_CLK_HZ),
+    .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ)
+  ) audio_tx (
+    .clk,
+    .rst,
+    .sample_valid(core_sample_valid && i2s_sample_ready),
+    .sample_ready(i2s_sample_ready),
+    .sample_l(core_sample_l),
+    .sample_r(core_sample_r),
+    .underrun_pulse,
+    .i2s_bclk,
+    .i2s_lrclk,
+    .i2s_sdata
+  );
+
+endmodule

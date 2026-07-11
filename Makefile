@@ -11,7 +11,9 @@ SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 MIDI ?=
 MEMORY_PROFILE ?= ddr
-RENDER_MIDI_OUT_DIR ?= $(BUILD_DIR)/render_midi
+RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
+RENDER_QUICK_OUT_DIR ?= $(BUILD_DIR)/render_quick
+RENDER_FULL_SYSTEM_OUT_DIR ?= $(BUILD_DIR)/render_full_system
 
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
@@ -21,10 +23,12 @@ RTL_SOURCES := \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
+	rtl/audio/i2s_tx.sv \
 	rtl/voice/multi_voice_pipeline.sv \
 	rtl/top/wavetable_core.sv \
 	rtl/top/wavetable_core_memory.sv \
-	rtl/top/wavetable_core_spi.sv
+	rtl/top/wavetable_core_spi.sv \
+	rtl/top/wavetable_core_system.sv
 
 SIM_SOURCES := \
 	sim/models/line_memory_model.sv \
@@ -37,7 +41,10 @@ MEMORY_SIM_SOURCES := \
 	sim/models/line_memory_model.sv \
 	sim/tb/tb_wave_memory_subsystem.sv
 
-.PHONY: all lint test list-instruments render-instrument render-midi clean
+I2S_SIM_SOURCES := \
+	sim/tb/tb_i2s_tx.sv
+
+.PHONY: all lint test list-instruments render-instrument render-quick render-memory render-full-system clean
 
 all: test
 
@@ -46,7 +53,9 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core $(RTL_SOURCES)
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_spi $(RTL_SOURCES)
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_memory $(RTL_SOURCES)
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_system $(RTL_SOURCES)
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module i2s_tx $(RTL_SOURCES)
 
 test:
 	mkdir -p $(BUILD_DIR)
@@ -67,6 +76,10 @@ test:
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
 		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
+	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
+		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
+	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
 
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.
@@ -88,24 +101,62 @@ render-instrument:
 	python3 tools/pcm_to_wav.py --pcm $(BUILD_DIR)/render/out.pcm \
 		--wav $(BUILD_DIR)/render/out.wav --sample-rate $(SAMPLE_RATE)
 
-render-midi:
-	# Build and run the C++ MIDI/SF2 harness against wavetable_core.
-	mkdir -p $(RENDER_MIDI_OUT_DIR)
-	rm -f $(RENDER_MIDI_OUT_DIR)/out.pcm
+render-quick:
+	# Build and run the fast C++ reference-vs-RTL harness against wavetable_core.
+	mkdir -p $(RENDER_QUICK_OUT_DIR)
 	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_midi_cpp_obj_dir --top-module wavetable_core_memory \
+		--Mdir $(BUILD_DIR)/render_quick_cpp_obj_dir --top-module wavetable_core \
 		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/render_midi_main.cpp) \
+		$(abspath sim/harness/render_quick_main.cpp) \
+		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/midi_parser.cpp) \
+		$(abspath sim/harness/sf2_loader.cpp) \
+		$(abspath sim/harness/reference_synth.cpp) \
+		$(abspath sim/harness/quick_rtl_harness.cpp) \
+		--build -CFLAGS "-std=c++17"
+	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_core --sf2 "$(SF2)" \
+		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
+		$(if $(MIDI),--midi "$(MIDI)",) \
+		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--out-dir $(RENDER_QUICK_OUT_DIR)
+
+render-memory:
+	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_core_memory.
+	mkdir -p $(RENDER_MEMORY_OUT_DIR)
+	rm -f $(RENDER_MEMORY_OUT_DIR)/out.pcm
+	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_core_memory \
+		$(RTL_SOURCES) --exe \
+		$(abspath sim/harness/render_memory_main.cpp) \
+		$(abspath sim/harness/render_support.cpp) \
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/rtl_harness.cpp) \
 		--build -CFLAGS "-std=c++17"
-	$(BUILD_DIR)/render_midi_cpp_obj_dir/Vwavetable_core_memory --sf2 "$(SF2)" \
+	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_core_memory --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--out-dir $(RENDER_MIDI_OUT_DIR)
+		--out-dir $(RENDER_MEMORY_OUT_DIR)
+
+render-full-system:
+	# Build and run the pin-level full-system harness. WAV output is captured from I2S RX.
+	mkdir -p $(RENDER_FULL_SYSTEM_OUT_DIR)
+	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_core_system \
+		$(RTL_SOURCES) --exe \
+		$(abspath sim/harness/render_full_system_main.cpp) \
+		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/midi_parser.cpp) \
+		$(abspath sim/harness/sf2_loader.cpp) \
+		$(abspath sim/harness/full_system_harness.cpp) \
+		--build -CFLAGS "-std=c++17"
+	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_core_system --sf2 "$(SF2)" \
+		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
+		$(if $(MIDI),--midi "$(MIDI)",) \
+		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--out-dir $(RENDER_FULL_SYSTEM_OUT_DIR)
 
 clean:
 	rm -rf $(BUILD_DIR)

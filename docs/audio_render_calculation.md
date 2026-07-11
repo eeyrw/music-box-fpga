@@ -20,13 +20,13 @@ already calculated per-voice one-pole LPF coefficient.
 
 ## Render Inputs
 
-`make render-midi` uses `sim/harness/render_midi_main.cpp` to parse the SF2 and
+`make render-memory` uses `sim/harness/render_memory_main.cpp` to parse the SF2 and
 MIDI inputs at runtime. The wave memory image is held in C++ memory and served to
 the RTL through the ready/valid memory port. It writes render artifacts for
 inspection:
 
 ```text
-build/render_midi/midi_render_config.json
+build/render_memory/midi_render_config.json
 ```
 
 The in-memory wave image contains signed 16-bit PCM words in the documented
@@ -198,7 +198,7 @@ LOOP_START     first loop frame
 LOOP_END       exclusive loop end frame
 PHASE_INIT     usually 0 for a new note
 PHASE_INC      generated per MIDI note
-GAIN_L/R       channel gains, currently 0x4000 by default in render-midi
+GAIN_L/R       channel gains, currently 0x4000 by default in render-memory
 PLAYBACK_MODE  sampleModes-derived loop behavior
 COMMIT         1
 ```

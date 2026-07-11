@@ -1,0 +1,93 @@
+#include "midi_parser.h"
+#include "render_support.h"
+#include "rtl_harness.h"
+#include "sf2_loader.h"
+
+#include <verilated.h>
+
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+
+namespace render {
+namespace {
+
+void write_memory_stats(const std::string& path, const MemoryStats& stats) {
+  std::ofstream f(path);
+  if (!f) throw std::runtime_error("failed to open " + path);
+  uint64_t requests = stats.hits + stats.misses;
+  double hit_rate = requests == 0 ? 0.0 : (double(stats.hits) / double(requests));
+  double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
+  f << "{\n"
+    << "  \"profile\": \"" << stats.profile << "\",\n"
+    << "  \"line_words\": " << stats.line_words << ",\n"
+    << "  \"random_latency_cycles\": " << stats.random_latency_cycles << ",\n"
+    << "  \"sequential_latency_cycles\": " << stats.sequential_latency_cycles << ",\n"
+    << "  \"ready_gap_cycles\": " << stats.ready_gap_cycles << ",\n"
+    << "  \"hits\": " << stats.hits << ",\n"
+    << "  \"misses\": " << stats.misses << ",\n"
+    << "  \"hit_rate\": " << hit_rate << ",\n"
+    << "  \"external_line_requests\": " << stats.external_line_requests << ",\n"
+    << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
+    << "  \"responses\": " << stats.responses << ",\n"
+    << "  \"avg_response_latency_cycles\": " << avg_latency << ",\n"
+    << "  \"max_response_latency_cycles\": " << stats.response_latency_max << "\n"
+    << "}\n";
+}
+
+}  // namespace
+}  // namespace render
+
+int main(int argc, char** argv) {
+  try {
+    Verilated::commandArgs(argc, argv);
+    render::Args args = render::parse_args(argc, argv);
+    int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
+    int adsr_tick_samples = std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
+
+    render::Sf2Data sf2 = render::load_sf2(args.sf2);
+    std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
+                                                              : render::parse_midi(args.midi);
+    std::vector<int16_t> wave_memory;
+    std::vector<render::Region> regions;
+    render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
+
+    std::string wav_path = args.out_dir + "/out.wav";
+    render::write_summary(args.out_dir + "/midi_render_config.json", regions, args.sample_rate,
+                          sample_count, int(events.size()));
+
+    render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
+    render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);
+    rtl.reset();
+    render::McuModel mcu(rtl, regions);
+
+    size_t event_index = 0;
+    int next_adsr_sample = 0;
+    for (int produced = 0; produced < sample_count; ++produced) {
+      while (event_index < events.size() && events[event_index].sample <= produced) {
+        mcu.handle_event(events[event_index++]);
+      }
+      while (produced >= next_adsr_sample) {
+        mcu.envelope_tick();
+        next_adsr_sample += adsr_tick_samples;
+      }
+      rtl.request_sample(produced);
+    }
+
+    if (rtl.nonzero_output_words() == 0) {
+      throw std::runtime_error("render produced all-zero PCM; increase SECONDS if the MIDI starts later, or inspect event/region mapping");
+    }
+
+    std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
+    std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
+              << " nonzero_output_words=" << rtl.nonzero_output_words() << "\n";
+    render::write_memory_stats(args.out_dir + "/memory_stats.json", rtl.memory_stats());
+    rtl.print_memory_stats();
+    return 0;
+  } catch (const std::exception& e) {
+    std::cerr << "render-memory failed: " << e.what() << "\n";
+    return 1;
+  }
+}

@@ -85,7 +85,7 @@ The real-SF2 smoke run `make render-instrument SECONDS=1 KEY=60` used
 
 The focused tests assert hit/miss behavior through debug pulses, external request
 counts, and exact PCM output. The C++ MIDI render path records aggregate counters
-for real render traffic in `build/render_midi/memory_stats.json`, including total
+for real render traffic in `build/render_memory/memory_stats.json`, including total
 hits, total misses, hit rate, external line requests, average response latency,
 and maximum response latency.
 
@@ -96,12 +96,12 @@ profiles are not full DDR, SDRAM, or NOR controllers; they approximate line-read
 latency, faster sequential line access, and request backpressure while preserving
 the same RTL memory-subsystem interface.
 
-`make render-midi` accepts `MEMORY_PROFILE`:
+`make render-memory` accepts `MEMORY_PROFILE`:
 
 ```bash
-make render-midi SECONDS=1 MEMORY_PROFILE=ddr
-make render-midi SECONDS=1 MEMORY_PROFILE=sdram
-make render-midi SECONDS=1 MEMORY_PROFILE=parallel-nor
+make render-memory SECONDS=1 MEMORY_PROFILE=ddr
+make render-memory SECONDS=1 MEMORY_PROFILE=sdram
+make render-memory SECONDS=1 MEMORY_PROFILE=parallel-nor
 ```
 
 Current C++ render profiles:

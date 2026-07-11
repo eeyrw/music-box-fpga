@@ -39,16 +39,16 @@ MemoryProfile parse_memory_profile(const std::string& name);
 // Thin Verilator-side driver for wavetable_core. It owns the top module, models
 // the external wave-memory slave, writes the generated stereo PCM stream as a
 // WAV file, and exposes firmware-like helpers for voice register writes.
-class RtlHarness {
+class RtlHarness : public VoiceControlSink {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
              int sample_rate, const MemoryProfile& memory_profile);
   ~RtlHarness();
 
   void reset();
-  void set_envelope(int voice, int level);
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region);
-  void release_voice(int voice, const Region& region);
+  void set_envelope(int voice, int level) override;
+  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
+  void release_voice(int voice, const Region& region) override;
   void request_sample(int produced);
 
   int nonzero_output_words() const { return nonzero_output_words_; }

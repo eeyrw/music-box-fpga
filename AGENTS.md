@@ -3,9 +3,11 @@
 ## Project Scope
 
 This repository contains a synthesizable SystemVerilog wavetable playback core.
-The current milestone is a multi-voice simulation path. Board-specific clocks,
-SPI electrical timing, parallel NOR timing, synthesis projects, and I2S are out
-of scope until the core behavior is covered by self-checking tests.
+The current milestone is a multi-voice simulation path with focused SPI, memory,
+and I2S interface coverage. Board-specific clocks, SPI electrical timing,
+parallel NOR timing, I2S clock-domain integration, synthesis projects, and FPGA
+constraints remain out of scope until the generic core behavior is covered by
+self-checking tests.
 
 Read these documents before changing interfaces:
 
@@ -22,6 +24,7 @@ Read these documents before changing interfaces:
 - `rtl/control`: register decoding and shadow/active control state.
 - `rtl/voice`: phase and sample-fetch sequencing.
 - `rtl/dsp`: stateless or streaming fixed-point signal processing.
+- `rtl/audio`: audio serializers and output timing blocks.
 - `sim/models`: behavioral models that must never appear in synthesis sources.
 - `sim/tb`: self-checking SystemVerilog testbenches.
 - `docs`: stable external contracts and design decisions.

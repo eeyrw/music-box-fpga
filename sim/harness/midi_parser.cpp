@@ -186,7 +186,7 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
 }
 
 std::vector<NoteEvent> default_melody() {
-  // This fallback is used when render-midi is run without a MIDI file. The times
+  // This fallback is used when a render target is run without a MIDI file. The times
   // are already seconds, so they bypass the MIDI tempo conversion path.
   std::vector<int> notes{60, 64, 67, 72, 67, 64, 60};
   std::vector<NoteEvent> events;
