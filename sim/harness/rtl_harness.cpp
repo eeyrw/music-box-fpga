@@ -15,6 +15,7 @@ std::string hex16(uint16_t v) {
 }
 
 void put_u16le(std::ofstream& f, uint16_t value) {
+  // WAV files are little-endian regardless of host byte order.
   char b[2] = {char(value & 0xff), char((value >> 8) & 0xff)};
   f.write(b, 2);
 }
@@ -30,6 +31,9 @@ void put_u32le(std::ofstream& f, uint32_t value) {
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path, int sample_rate)
     : top_(new Vwavetable_core), memory_(memory), wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
+  // Write a placeholder WAV header now. The final data length is not known until
+  // all samples have been requested, so the destructor seeks back and rewrites
+  // the header with the completed byte count.
   write_wav_header(0);
 
   top_->clk = 0;
@@ -54,12 +58,17 @@ RtlHarness::~RtlHarness() {
 }
 
 void RtlHarness::reset() {
+  // Keep reset asserted for a few clocks so all sequential RTL state sees it,
+  // then release reset and tick once more before any bus transaction.
   for (int i = 0; i < 3; ++i) tick();
   top_->rst = 0;
   tick();
 }
 
 void RtlHarness::bus_write_word(uint16_t address, uint32_t data) {
+  // The register bus is a single-cycle valid/write transaction in this harness.
+  // The RTL is expected to accept writes immediately; any error is fatal because
+  // continuing would produce a WAV that no longer represents the intended setup.
   top_->bus_valid = 1;
   top_->bus_write = 1;
   top_->bus_address = address;
@@ -74,10 +83,15 @@ void RtlHarness::bus_write_word(uint16_t address, uint32_t data) {
 }
 
 void RtlHarness::set_envelope(int voice, int level) {
+  // Offset 0x2c is the runtime envelope register. It is intentionally separate
+  // from commit_voice so ADSR updates do not reload phase or reconfigure loops.
   bus_write_word(voice_addr(voice, 0x2c), uint32_t(uint16_t(clamp_q15(level))));
 }
 
 void RtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
+  // Program the shadow registers for one voice, then write COMMIT at offset 0x24.
+  // This mirrors the documented firmware contract: all voice configuration
+  // becomes active atomically, and phase reload happens exactly once on commit.
   bus_write_word(voice_addr(voice, 0x00), uint32_t((r.stereo ? 2 : 0) | (enable ? 1 : 0)));
   bus_write_word(voice_addr(voice, 0x04), r.base_addr);
   bus_write_word(voice_addr(voice, 0x08), r.length);
@@ -92,10 +106,15 @@ void RtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const R
 }
 
 void RtlHarness::release_voice(int voice, const Region& r) {
+  // Bit 8 asks the RTL to leave its loop when loop-until-release mode is active.
+  // The MCU envelope still controls the audible release and eventual disable.
   bus_write_word(voice_addr(voice, 0x34), uint32_t(0x100 | (r.loop_mode & 0x3)));
 }
 
 void RtlHarness::request_sample(int produced) {
+  // One call corresponds to one stereo output frame. sample_tick is pulsed for a
+  // clock, then the harness waits for sample_valid while continuing to service
+  // the memory ready/valid interface inside tick().
   top_->sample_tick = 1;
   tick();
   top_->sample_tick = 0;
@@ -113,6 +132,9 @@ void RtlHarness::request_sample(int produced) {
 }
 
 void RtlHarness::tick() {
+  // Model one full clock cycle and a one-cycle-latency memory slave. The RTL sees
+  // mem_req_ready high every cycle. A request sampled before this rising edge is
+  // returned as mem_rsp_valid/data on the next call to tick().
   top_->clk = 0;
   top_->mem_req_ready = 1;
   top_->eval();
@@ -136,6 +158,9 @@ void RtlHarness::tick() {
 }
 
 void RtlHarness::write_wav_header(uint32_t data_bytes) {
+  // 16-bit stereo PCM WAV: two channels, 2 bytes per channel, no compression.
+  // data_bytes is the number of PCM payload bytes already written after the
+  // header, not the number of sample frames.
   wav_.write("RIFF", 4);
   put_u32le(wav_, 36 + data_bytes);
   wav_.write("WAVEfmt ", 8);
@@ -151,6 +176,9 @@ void RtlHarness::write_wav_header(uint32_t data_bytes) {
 }
 
 void RtlHarness::write_pcm16(int16_t sample) {
+  // Track whether the render produced any nonzero words. That catches missing
+  // event windows, bad SoundFont region selection, and broken RTL plumbing before
+  // a silent WAV is mistaken for a successful render.
   if (sample != 0) ++nonzero_output_words_;
   put_u16le(wav_, uint16_t(sample));
   data_bytes_ += 2;

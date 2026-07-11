@@ -33,6 +33,9 @@ constexpr int SAMPLE_LEFT = 4;
 
 using Zone = std::map<int, int>;
 
+// Locate one top-level LIST chunk inside the RIFF/sfbk container. SoundFont2
+// keeps sample PCM under LIST sdta and preset/instrument metadata under LIST
+// pdta; the harness loads only those two sections.
 std::vector<uint8_t> find_list_chunk(const std::vector<uint8_t>& data, const char wanted[4]) {
   if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0 ||
       std::memcmp(data.data() + 8, "sfbk", 4) != 0) {
@@ -54,6 +57,8 @@ std::vector<uint8_t> find_list_chunk(const std::vector<uint8_t>& data, const cha
 }
 
 std::map<std::string, std::vector<uint8_t>> list_chunks(const std::vector<uint8_t>& payload) {
+  // Return child chunks by four-character ID. RIFF chunks are padded to an even
+  // byte count, so pos advances by size plus the low padding bit.
   std::map<std::string, std::vector<uint8_t>> chunks;
   size_t pos = 0;
   while (pos + 8 <= payload.size()) {
@@ -67,10 +72,14 @@ std::map<std::string, std::vector<uint8_t>> list_chunks(const std::vector<uint8_
 }
 
 int signed_amount(int amount) {
+  // SF2 generator amounts are stored as unsigned 16-bit fields even when the
+  // generator meaning is signed. Reinterpret the low 16 bits as int16_t.
   return int16_t(uint16_t(amount));
 }
 
 int sanitize_sample_type(int sample_type) {
+  // The high bit marks ROM samples in the SF2 spec. This harness only cares
+  // whether the sample is mono, left, or right, so mask off non-type flags.
   return sample_type & 0x7fff;
 }
 
@@ -127,6 +136,9 @@ std::vector<SampleHeader> parse_samples(const std::vector<uint8_t>& c) {
 }
 
 Zone generators_for_zone(const std::vector<Generator>& gens, int start, int end) {
+  // Convert the flat generator list referenced by a bag range into a lookup map.
+  // Later duplicate operators replace earlier ones, matching the "last value in
+  // the zone wins" behavior used by the rest of the loader.
   Zone zone;
   for (int i = start; i < end; ++i) zone[gens.at(i).oper] = gens.at(i).amount;
   return zone;
@@ -160,8 +172,12 @@ std::vector<Zone> instrument_zones(const Sf2Data& sf2, int inst_index) {
                                  sf2.instrument_bags.at(bag).gen_index,
                                  sf2.instrument_bags.at(bag + 1).gen_index);
     if (!z.count(GEN_SAMPLE_ID)) {
+      // An instrument bag without sampleID is a global instrument zone. It
+      // supplies defaults inherited by later sample zones in this instrument.
       for (const auto& kv : z) global[kv.first] = kv.second;
     } else {
+      // A local sample zone overrides any matching global generator. The merged
+      // result is what Note On region selection consumes.
       Zone merged = global;
       for (const auto& kv : z) merged[kv.first] = kv.second;
       zones.push_back(merged);
@@ -180,6 +196,8 @@ std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
                                  sf2.preset_bags.at(bag).gen_index,
                                  sf2.preset_bags.at(bag + 1).gen_index);
     if (!z.count(GEN_INSTRUMENT)) {
+      // Same pattern as instruments: a preset bag without instrument is a global
+      // preset zone and contributes defaults to subsequent instrument zones.
       for (const auto& kv : z) global[kv.first] = kv.second;
     } else {
       Zone merged = global;
@@ -191,6 +209,9 @@ std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
 }
 
 Zone select_zone_for_velocity(const std::vector<Zone>& zones, int key, int velocity) {
+  // Prefer an exact key+velocity match. If velocity splits are missing or odd,
+  // fall back to a key-only match, then to the first zone. This keeps rendering
+  // useful for imperfect SoundFonts while still honoring normal splits.
   for (const auto& z : zones) if (zone_matches(z, key, velocity)) return z;
   for (const auto& z : zones) {
     auto kr = key_range(z);
@@ -201,6 +222,9 @@ Zone select_zone_for_velocity(const std::vector<Zone>& zones, int key, int veloc
 }
 
 int select_preset(const Sf2Data& sf2, int program, int bank) {
+  // SF2 phdr has a terminal sentinel record, so usable excludes the final entry.
+  // Try the exact bank/program first, fall back to bank 0 for files without the
+  // requested bank, then General MIDI program 0 as a last musical default.
   int usable = std::max(0, int(sf2.presets.size()) - 1);
   for (int i = 0; i < usable; ++i) {
     if (sf2.presets[i].preset == program && sf2.presets[i].bank == bank) return i;
@@ -218,6 +242,9 @@ int select_preset(const Sf2Data& sf2, int program, int bank) {
 }
 
 uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample, int output_sample_rate) {
+  // Convert SF2 pitch metadata into the RTL Q16.16 phase increment. One integer
+  // phase unit is 1/65536 of a source sample frame; 0x00010000 advances by one
+  // source frame per output frame.
   int root_key = zone.count(GEN_OVERRIDING_ROOT_KEY) ? zone.at(GEN_OVERRIDING_ROOT_KEY)
                                                      : sample.original_pitch;
   if (root_key == 255) root_key = sample.original_pitch;
@@ -233,6 +260,9 @@ uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample
 }
 
 std::pair<int, int> pan_gains(const Zone& zone) {
+  // The RTL has independent signed Q1.15 gains per channel. The render harness
+  // uses a conservative base gain of 0x4000, applies SF2 pan as a simple linear
+  // balance, then applies initial attenuation in centibels.
   int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
   pan = std::max(-500, std::min(500, pan));
   int left = pan < 0 ? int(std::round(0x4000 * double(500 - pan) / 500.0)) : 0x4000;
@@ -247,24 +277,35 @@ std::pair<int, int> pan_gains(const Zone& zone) {
 }
 
 double timecents_to_seconds(int value, bool present, int default_timecents) {
+  // SF2 envelope times use timecents: seconds = 2^(timecents / 1200). The spec's
+  // very negative values represent zero-time stages, which become immediate in
+  // the software envelope model.
   int tc = present ? signed_amount(value) : default_timecents;
   if (tc <= -12000) return 0.0;
   return std::min(100.0, std::pow(2.0, double(tc) / 1200.0));
 }
 
 int centibels_to_level(int cb) {
+  // Sustain is attenuation from full scale in centibels. Convert that to the
+  // software envelope's Q1.15 level range.
   if (cb <= 0) return kQ15Full;
   int level = int(std::round(kQ15Full * std::pow(10.0, -double(cb) / 200.0)));
   return std::max(0, std::min(kQ15Full, level));
 }
 
 int envelope_step(double seconds, int tick_samples, int sample_rate) {
+  // The MCU model updates envelopes only once per control tick. Convert a stage
+  // duration in seconds to a per-tick Q1.15 increment/decrement that reaches the
+  // target in approximately that duration.
   int ticks = std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
   return std::max(1, std::min(kQ15Full, int(std::round(double(kQ15Full) / ticks))));
 }
 
 void volume_envelope(const Zone& zone, int tick_samples, int sample_rate,
                      int& sustain, int& attack, int& decay, int& release) {
+  // Gather the subset of SF2 volume-envelope generators currently modeled by
+  // the harness. Hold is not modeled yet; attack, decay, sustain, and release
+  // are enough to exercise runtime envelope register writes.
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_VOL_ENV) ? zone.at(GEN_ATTACK_VOL_ENV) : 0,
                                   zone.count(GEN_ATTACK_VOL_ENV), -12000);
   double d = timecents_to_seconds(zone.count(GEN_DECAY_VOL_ENV) ? zone.at(GEN_DECAY_VOL_ENV) : 0,
@@ -278,6 +319,8 @@ void volume_envelope(const Zone& zone, int tick_samples, int sample_rate,
 }
 
 int loop_mode_from_zone(const Zone& zone) {
+  // SF2 sampleModes 1 means continuous loop and 3 means loop until note release.
+  // Those map directly to the small loop-mode field implemented by the RTL.
   int sample_modes = (zone.count(GEN_SAMPLE_MODES) ? zone.at(GEN_SAMPLE_MODES) : 0) & 0x3;
   if (sample_modes == 1) return 1;
   if (sample_modes == 3) return 2;
@@ -285,6 +328,9 @@ int loop_mode_from_zone(const Zone& zone) {
 }
 
 std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
+  // Stereo SF2 samples are normally stored as two mono sample headers linked to
+  // each other. Return indexes in left,right order so build_wave_words can pack
+  // the RTL memory image deterministically.
   const auto& s = sf2.samples.at(selected);
   int t = sanitize_sample_type(s.sample_type);
   if (t == SAMPLE_LEFT && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) return {selected, s.sample_link};
@@ -293,6 +339,9 @@ std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
 }
 
 std::vector<int16_t> sample_pcm(const Sf2Data& sf2, const SampleHeader& h) {
+  // SampleHeader offsets are word indexes into the smpl chunk. Clamp corrupt or
+  // out-of-range values to the loaded PCM array so malformed SF2 data fails
+  // softly where possible.
   uint32_t start = std::min<uint32_t>(h.start, sf2.smpl.size());
   uint32_t end = std::min<uint32_t>(h.end, sf2.smpl.size());
   if (end < start) end = start;
@@ -300,6 +349,10 @@ std::vector<int16_t> sample_pcm(const Sf2Data& sf2, const SampleHeader& h) {
 }
 
 std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, Region& region) {
+  // Build the exact wave-memory words consumed by wavetable_core and fill the
+  // region metadata that will later be committed into a voice slot. The RTL uses
+  // frame indexes for length and loop points; stereo consumes two memory words
+  // per frame while mono consumes one.
   auto rel = [](uint32_t value, uint32_t base) -> uint32_t { return value > base ? value - base : 0; };
   auto pair = linked_pair(sf2, selected_sample);
   const auto& left = sf2.samples.at(pair.first);
@@ -321,6 +374,8 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, R
     region.stereo = true;
     region.sample_right = right.name;
     region.length = frames;
+    // SF2 loop end points are absolute sample positions. Convert to frame-local
+    // indexes and keep the RTL contract that loop_end is exclusive.
     region.loop_start = std::min<uint32_t>({rel(left.start_loop, left.start), rel(right.start_loop, right.start), frames ? frames - 1 : 0});
     region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>({rel(left.end_loop, left.start), rel(right.end_loop, right.start), frames}));
     return words;
@@ -342,6 +397,9 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, R
 }  // namespace
 
 Sf2Data load_sf2(const std::string& path) {
+  // Load the raw SF2 tables into simple vectors. The loader keeps the original
+  // bag/generator indexes because zone expansion needs sentinel records and
+  // adjacent bag ranges exactly as encoded in pdta.
   auto data = read_file(path);
   auto sdta = list_chunks(find_list_chunk(data, "sdta"));
   auto pdta = list_chunks(find_list_chunk(data, "pdta"));
@@ -359,6 +417,9 @@ Sf2Data load_sf2(const std::string& path) {
 }
 
 int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
+  // Forced-instrument mode accepts either a numeric instrument index or a
+  // case-insensitive substring of the instrument name. The terminal sentinel is
+  // excluded from the searchable range.
   int usable = std::max(0, int(sf2.instruments.size()) - 1);
   if (instrument.empty()) return 0;
   char* end = nullptr;
@@ -375,8 +436,12 @@ int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
 }
 
 Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                              int velocity, int sample_rate, int tick_samples,
-                              std::vector<int16_t>& memory) {
+                               int velocity, int sample_rate, int tick_samples,
+                               std::vector<int16_t>& memory) {
+  // Full MIDI mode starts at the channel program/bank, selects a preset zone,
+  // follows that zone to an instrument, then merges preset and instrument
+  // generators. Instrument generators override preset defaults for the final
+  // playable sample region.
   int preset_idx = select_preset(sf2, program, bank);
   Zone pzone = select_zone_for_velocity(preset_zones(sf2, preset_idx), key, velocity);
   int inst_idx = pzone.at(GEN_INSTRUMENT);
@@ -392,6 +457,8 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
   r.preset = sf2.presets.at(preset_idx).name;
   r.instrument = sf2.instruments.at(inst_idx).name;
   r.base_addr = uint32_t(memory.size());
+  // Append this region's PCM words to one shared memory image. base_addr records
+  // where the RTL voice should start fetching for this region.
   auto words = build_wave_words(sf2, sample_id, r);
   const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
   r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
@@ -405,8 +472,11 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
 }
 
 Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                  int velocity, int sample_rate, int tick_samples,
-                                  std::vector<int16_t>& memory) {
+                                   int velocity, int sample_rate, int tick_samples,
+                                   std::vector<int16_t>& memory) {
+  // Forced-instrument mode skips preset lookup. This is useful for debugging a
+  // specific SF2 instrument because MIDI program and bank messages cannot change
+  // the selected sample set.
   Zone zone = select_zone_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
   int sample_id = zone.at(GEN_SAMPLE_ID);
   Region r;

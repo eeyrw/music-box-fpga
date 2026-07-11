@@ -242,12 +242,49 @@ at or before the first note event, the harness reports that no MIDI events fall
 inside the requested render window. It also fails an all-zero PCM render instead
 of reporting success; use a longer render window for those files.
 
-This is intentionally not a complete MIDI synthesizer. It handles MIDI channel
-program changes and bank select only far enough to choose an SF2 preset for each
-Note On. It still ignores pedals, pitch bend, most controllers, drum-note maps,
-SF2 modulators, volume-envelope delay/hold, and key-number envelope scaling. SF2
-filter coefficient calculation also belongs in a richer MCU/control simulation;
-the FPGA core only consumes an already calculated one-pole LPF alpha.
+This is intentionally not a complete MIDI/SoundFont synthesizer. The current
+harness is a sample-region extractor plus a simplified MCU policy model. Its
+purpose is to choose plausible SF2 samples, program the RTL voice slots, and
+exercise wavetable playback through realistic register and memory traffic.
+
+Current SF2 support:
+
+- RIFF/sfbk container parsing for `sdta/smpl` and `pdta`.
+- `phdr`, `inst`, `pbag`, `ibag`, `pgen`, `igen`, and `shdr` table parsing.
+- MIDI program and bank-select lookup into SF2 presets.
+- Preset-zone and instrument-zone selection by key range and velocity range.
+- Global-zone plus local-zone merging for presets and instruments.
+- Mono samples and common linked-stereo samples. Linked stereo is repacked into
+  the RTL memory format `left0, right0, left1, right1, ...`.
+- Sample header `start`, `end`, `startLoop`, `endLoop`, `sampleRate`,
+  `originalPitch`, and `pitchCorrection` fields.
+- `overridingRootKey`, `fineTune`, and `coarseTune` generators for Q16.16
+  `phase_inc` calculation.
+- `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
+- Volume-envelope `attackVolEnv`, `decayVolEnv`, `sustainVolEnv`, and
+  `releaseVolEnv` generators, converted to software ADSR tick steps.
+- `sampleModes` values for no loop, continuous loop, and loop-until-release.
+
+Known SF2/MIDI gaps to implement later:
+
+- `pmod` and `imod` modulators are not modeled.
+- Filter generators and filter coefficient calculation are not modeled.
+- LFOs, modulation envelope, pitch envelope, reverb send, and chorus send are not
+  modeled.
+- Volume-envelope delay, hold, and key-number envelope scaling are not modeled.
+- Sample-address offset generators such as start/end offsets and loop offsets are
+  not modeled.
+- `sm24` 24-bit sample extension is not loaded; only 16-bit `smpl` data is used.
+- Envelope curves are simplified to linear Q1.15 control ticks, not full SF2
+  curve behavior.
+- Velocity is used for zone selection and Note On peak level only; complete SF2
+  velocity-to-volume and velocity-to-modulator behavior is not implemented.
+- Generator combination is simplified as later values overriding earlier values;
+  the full SF2 add/override rules are not implemented for every generator type.
+- Channel 10 percussion currently falls back to bank 0 and does not implement a
+  complete drum-bank or drum-note map policy.
+- Pitch bend, sustain pedal, expression, volume, pan controllers, and most other
+  real-time MIDI controller behavior are not modeled.
 
 ## Linked Stereo Samples
 

@@ -282,3 +282,10 @@ one instrument zone, then uses the existing wavetable playback hardware to rende
 audio. Loop points, frequency step (`phase_inc`), and current envelope level are
 hardware inputs; higher-level SoundFont behavior stays on the software/control
 side.
+
+For board migration, the C++ harness model must be replaced with a fixed-rate
+real-time system: a board-clock-derived `sample_tick`, a real wave-memory
+controller or cache, an audio output interface such as I2S, and a defined
+MCU/soft-core/host control plane for MIDI, SF2, voice allocation, and envelope
+updates. The detailed migration checklist is tracked in
+`docs/performance_budget.md` under FPGA Porting Checklist.

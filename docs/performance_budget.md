@@ -265,3 +265,85 @@ For 32 voices, the main question is not only `NUM_VOICES = 32`. The real design
 question is whether the memory system and renderer can deliver all needed sample
 fetches inside one audio sample period. If not, the next architectural work is a
 pipelined scheduler plus wave cache/prefetch, not more register slots.
+
+## FPGA Porting Checklist
+
+The C++ MIDI render harness is an offline, demand-driven model: it requests one
+audio frame with `sample_tick`, advances the Verilator clock until
+`sample_valid`, and then writes that frame into a WAV file. A board design must
+instead be a fixed-rate real-time system. One output frame must be available
+every `1 / sample_rate_hz` seconds regardless of temporary memory or control-side
+delays.
+
+Clock and sample-rate generation:
+
+- Add a real `sample_tick` generator from the board/system clock.
+- If `sys_clk_hz` is not an integer multiple of the target sample rate, use a
+  fractional accumulator/NCO tick generator and document the long-term rate
+  error and jitter.
+- Keep the relation explicit: `cycles_per_sample = sys_clk_hz / sample_rate_hz`.
+  The current C++ harness does not model this divider.
+
+Real-time deadline:
+
+- Measure worst-case `sample_valid - sample_tick` latency with maximum active
+  voices, mono and stereo waves, and realistic memory latency.
+- Decide the underrun policy if the renderer misses the audio deadline. Options
+  include holding the previous sample, outputting zero, dropping lower-priority
+  voices, or using a deeper output FIFO.
+- Treat sample-rate changes as a full timing-budget change because they affect
+  both the deadline and `phase_inc` calculation.
+
+Wave memory:
+
+- Replace the one-cycle simulation memory model with the chosen board memory
+  interface.
+- Account for command overhead, bus turnaround, cache misses, arbitration, and
+  burst alignment, not only raw payload bandwidth.
+- Add a wave cache or prefetch layer before high-latency or serial storage such
+  as SPI Flash.
+- Preserve the RTL ready/valid ordering contract or add tags/FIFOs if responses
+  can return out of order.
+
+Audio output:
+
+- Replace WAV-file writing with the board output path, such as I2S, PWM, or an
+  external DAC interface.
+- Add clock-domain handling if the audio serializer uses clocks derived from a
+  different PLL or clock enable.
+- Add an output FIFO so the audio interface consumes samples at a fixed cadence
+  even when render latency varies slightly.
+- Define startup, reset, mute, and underrun behavior to avoid pops and clicks.
+
+Control plane:
+
+- Decide whether MIDI parsing, SF2 region lookup, voice allocation, and ADSR stay
+  on an external MCU/host, move to a soft core, or move partly into RTL.
+- If ADSR remains software-driven, budget the per-control-tick register writes
+  for all active voices.
+- If ADSR moves into RTL, update the register map and tests so runtime envelope
+  behavior has a hardware contract.
+- Account for Note On programming latency: several voice registers must be
+  written before the commit register can atomically activate the slot.
+- Consider a timestamped event queue if MCU or bus latency makes sample-accurate
+  event timing unreliable.
+
+SoundFont and MIDI assets:
+
+- Do not rely on runtime `.sf2` parsing in FPGA fabric. Preprocess SF2 assets
+  into a flash/memory image plus region metadata tables, or have the MCU load
+  those tables before playback.
+- Keep the documented wave-memory format: mono one word per frame, stereo
+  interleaved left/right words, and exclusive `loop_end` frame indexes.
+- Track the SF2/MIDI behavior gaps listed in `docs/simulation_design.md`; those
+  gaps become user-visible playback limitations on hardware.
+
+Verification before board bring-up:
+
+- Add tests for a real `sample_tick` generator, including non-integer clock-rate
+  ratios if supported.
+- Add memory-latency stress tests and output-FIFO underrun tests.
+- Add render latency counters or assertions that fail when the pipeline exceeds
+  the configured cycles-per-sample budget.
+- Run long MIDI/SF2 renders that stress high polyphony, stereo samples, loop
+  boundaries, release tails, positive/negative PCM extremes, and mixer saturation.

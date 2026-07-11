@@ -152,6 +152,12 @@ step = round(0x7fff / max(1, seconds / adsr_tick_seconds))
 `delayVolEnv`, `holdVolEnv`, and key-number envelope scaling generators are not
 yet modeled.
 
+Other SoundFont behavior intentionally remains outside the current calculation:
+modulators, LFOs, modulation/pitch envelopes, filters, reverb/chorus sends,
+sample-offset generators, `sm24` 24-bit sample data, and full velocity/controller
+response. See `docs/simulation_design.md` for the current SF2 support matrix and
+the backlog of missing behaviors.
+
 The MCU model applies the state machine:
 
 ```text

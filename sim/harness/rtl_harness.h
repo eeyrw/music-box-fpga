@@ -11,6 +11,9 @@ class Vwavetable_core;
 
 namespace render {
 
+// Thin Verilator-side driver for wavetable_core. It owns the top module, models
+// the external wave-memory slave, writes the generated stereo PCM stream as a
+// WAV file, and exposes firmware-like helpers for voice register writes.
 class RtlHarness {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path, int sample_rate);
@@ -31,9 +34,12 @@ class RtlHarness {
   void write_pcm16(int16_t sample);
 
   Vwavetable_core* top_ = nullptr;
+  // Shared wave-memory image. Mono regions are stored one int16_t per frame;
+  // stereo regions are interleaved left/right exactly as the RTL expects.
   const std::vector<int16_t>& memory_;
   std::ofstream wav_;
   int sample_rate_ = 48000;
+  // Latched response for the one-cycle memory model implemented in tick().
   bool pending_valid_ = false;
   uint16_t pending_data_ = 0;
   uint32_t data_bytes_ = 0;

@@ -15,6 +15,9 @@
 namespace render {
 namespace {
 
+// Parse only the command-line switches used by the simulation render target.
+// The harness is intentionally not a general CLI framework; Makefile defaults
+// provide the common values and these options override them for experiments.
 Args parse_args(int argc, char** argv) {
   Args args;
   for (int i = 1; i < argc; ++i) {
@@ -38,6 +41,9 @@ Args parse_args(int argc, char** argv) {
 
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events) {
+  // The JSON file is a debugging aid for the generated WAV. It records the exact
+  // regions chosen from the SoundFont and the phase increments written to RTL so
+  // pitch, loop, and sample-selection issues can be inspected without waveforms.
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   f << "{\n  \"output_sample_rate\": " << sample_rate
@@ -58,9 +64,13 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
 }
 
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
-                                int adsr_tick_samples, std::vector<NoteEvent>& events,
-                                std::vector<Region>& regions,
-                                std::vector<int16_t>& wave_memory) {
+                                 int adsr_tick_samples, std::vector<NoteEvent>& events,
+                                 std::vector<Region>& regions,
+                                 std::vector<int16_t>& wave_memory) {
+  // At this point events are in seconds, either from parse_midi or from the
+  // built-in fallback melody. Keep only events that can affect the requested WAV
+  // window; region extraction below only needs samples referenced by those Note
+  // On events.
   double render_seconds = double(sample_count) / double(args.sample_rate);
   events.erase(std::remove_if(events.begin(), events.end(), [&](const NoteEvent& e) {
                  return e.time_seconds >= render_seconds;
@@ -85,6 +95,8 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 
     // Region identity includes velocity because SF2 instrument zones can be
     // velocity-split. Channel 10 percussion currently falls back to bank 0.
+    // The cache avoids appending duplicate sample data to wave_memory when many
+    // Note On events use the same preset/bank/key/velocity zone.
     std::array<int, 4> region_key = {forced_inst >= 0 ? forced_inst : program, bank, key, velocity};
     auto it = region_by_key.find(region_key);
     if (it == region_by_key.end()) {
@@ -105,6 +117,9 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   }
 
   for (auto& e : events) {
+    // The RTL is driven one output frame at a time, so seconds are rounded to the
+    // closest sample boundary. Clamping allows an event exactly at the render end
+    // to be sorted consistently even though it will not be handled by the loop.
     e.sample = std::max(0, std::min(sample_count, int(std::round(e.time_seconds * args.sample_rate))));
   }
   std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
@@ -119,11 +134,17 @@ class McuModel {
   McuModel(RtlHarness& rtl, const std::vector<Region>& regions) : rtl_(rtl), regions_(regions) {}
 
   void handle_event(const NoteEvent& event) {
+    // MIDI event dispatch stays outside RTL. The hardware only sees register
+    // writes that configure or release voice slots, matching the intended MCU
+    // integration model.
     if (event.on) note_on(event);
     else note_off(event.channel, event.note);
   }
 
   void envelope_tick() {
+    // Envelope state is intentionally modeled in software here. Every control
+    // tick updates only the runtime envelope register, so pitch/loop state and
+    // phase position are not disturbed while a voice is sounding.
     for (int v = 0; v < kNumVoices; ++v) {
       int next = voices_[v].level;
       if (voices_[v].state == ENV_ATTACK) {
@@ -156,6 +177,8 @@ class McuModel {
 
  private:
   void note_off(int channel, int note) {
+    // Multiple slots can legally contain the same MIDI note because of repeated
+    // Note On events before Note Off. Release all matching active slots.
     for (int v = 0; v < kNumVoices; ++v) {
       if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel && voices_[v].note == (note & 0x7f)) {
         voices_[v].state = ENV_RELEASE;
@@ -171,6 +194,9 @@ class McuModel {
     }
 
     int slot = first_free_or_oldest_slot();
+    // A small wrapping stamp is enough for voice stealing because only 32 slots
+    // exist. The comparison in first_free_or_oldest_slot treats the counter as a
+    // modulo-256 age value.
     alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
     if (alloc_stamp_ == 0) alloc_stamp_ = 1;
 
@@ -191,6 +217,9 @@ class McuModel {
   }
 
   int first_free_or_oldest_slot() const {
+    // Prefer a silent slot so releases can ring out naturally. If all slots are
+    // active, steal the oldest allocation; this keeps dense MIDI files bounded to
+    // the fixed RTL voice count.
     for (int v = 0; v < kNumVoices; ++v) {
       if (voices_[v].state == ENV_SILENT) return v;
     }
@@ -218,6 +247,9 @@ int main(int argc, char** argv) {
     int adsr_tick_samples = std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
 
     render::Sf2Data sf2 = render::load_sf2(args.sf2);
+    // The software side does all expensive parsing and policy decisions before
+    // the sample loop. The loop itself only performs event dispatch, occasional
+    // envelope writes, memory responses, and one RTL sample request per frame.
     std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
                                                               : render::parse_midi(args.midi);
     std::vector<int16_t> wave_memory;
@@ -234,9 +266,15 @@ int main(int argc, char** argv) {
     size_t event_index = 0;
     int next_adsr_sample = 0;
     for (int produced = 0; produced < sample_count; ++produced) {
+      // Handle all events scheduled at or before this output frame before
+      // asserting sample_tick. A Note On at sample N is therefore audible in the
+      // RTL output requested for sample N.
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
+      // The control envelope advances on a coarser software tick. The while loop
+      // catches up if adsr_tick_samples is ever set to 1 or if future changes add
+      // variable-sized render steps.
       while (produced >= next_adsr_sample) {
         mcu.envelope_tick();
         next_adsr_sample += adsr_tick_samples;

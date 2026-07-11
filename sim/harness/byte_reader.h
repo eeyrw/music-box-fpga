@@ -10,6 +10,9 @@
 
 namespace render {
 
+// Small checked readers for the binary file formats used by the harness. MIDI
+// headers are big-endian, RIFF/SF2/WAV chunks are little-endian, so both byte
+// orders are provided explicitly instead of relying on host layout.
 inline uint16_t read_u16le(const std::vector<uint8_t>& d, size_t p) {
   if (p + 2 > d.size()) throw std::runtime_error("truncated u16le");
   return uint16_t(d[p]) | (uint16_t(d[p + 1]) << 8);

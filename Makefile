@@ -33,6 +33,11 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core $(RTL_SOURCES)
 
 test:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+		sim/harness/midi_parser.cpp sim/harness/midi_parser_test.cpp \
+		-o $(BUILD_DIR)/midi_parser_test
+	$(BUILD_DIR)/midi_parser_test
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
