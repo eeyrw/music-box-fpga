@@ -275,7 +275,7 @@ mixer, but it does not implement:
 - Output filter characteristics.
 - I2S serialization.
 - External Flash timing.
-- SPI register transport.
+- Board-level SPI timing integration.
 
 The SoundFont render flow extracts sample data and loop/tuning information for
 one instrument zone, then uses the existing wavetable playback hardware to render

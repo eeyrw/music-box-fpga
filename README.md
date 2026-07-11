@@ -156,8 +156,9 @@ Python-generated SystemVerilog MIDI render flow has been removed.
 The simulation bus is a single-beat 32-bit register interface with `valid`,
 `write`, `address`, `wdata`, `rdata`, `ready`, and `error` signals. Writes modify
 shadow state for one voice slot. Writing that slot's commit register atomically
-replaces the active voice configuration. SPI will later be implemented only as a
-bridge to this bus.
+replaces the active voice configuration. `spi_register_bridge` provides a simple
+SPI transport for this bus using an 8-bit command, 16-bit byte address, and
+32-bit data phase; `wavetable_core_spi` wraps the core with those SPI pins.
 
 See [the register map](docs/register_map.md) for addresses and validation rules.
 
@@ -165,7 +166,7 @@ See [the register map](docs/register_map.md) for addresses and validation rules.
 
 1. Broaden multi-voice backpressure and memory-latency verification.
 2. Add I2S serialization and an I2S receiver test model.
-3. Add simplified SPI and parallel NOR Flash controllers.
+3. Add a parallel NOR Flash controller and board-level SPI timing integration.
 4. Introduce board-specific clocks, constraints, and synthesis projects.
 
 Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing

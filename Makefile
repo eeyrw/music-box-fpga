@@ -14,15 +14,20 @@ MIDI ?=
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
 	rtl/bus/register_bus_if.sv \
+	rtl/bus/spi_register_bridge.sv \
 	rtl/control/voice_register_bank.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/voice/multi_voice_pipeline.sv \
-	rtl/top/wavetable_core.sv
+	rtl/top/wavetable_core.sv \
+	rtl/top/wavetable_core_spi.sv
 
 SIM_SOURCES := \
 	sim/models/wave_memory_model.sv \
 	sim/tb/tb_wavetable_core.sv
+
+SPI_SIM_SOURCES := \
+	sim/tb/tb_spi_register_bridge.sv
 
 .PHONY: all lint test list-instruments render-instrument render-midi clean
 
@@ -31,6 +36,7 @@ all: test
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core $(RTL_SOURCES)
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_spi $(RTL_SOURCES)
 
 test:
 	mkdir -p $(BUILD_DIR)
@@ -43,6 +49,10 @@ test:
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
 		$(RTL_SOURCES) $(SIM_SOURCES)
 	$(BUILD_DIR)/obj_dir/V$(TOP)
+	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
+		$(RTL_SOURCES) $(SPI_SIM_SOURCES)
+	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
 
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.

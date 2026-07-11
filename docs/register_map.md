@@ -5,6 +5,14 @@ single-beat and 32-bit aligned. Most voice writes update shadow registers. Reads
 return shadow registers except for status, envelope, and identification
 registers.
 
+`spi_register_bridge` exposes this same register bus through a simple 56-bit SPI
+frame: 8-bit command, 16-bit byte address, then 32-bit data phase. Command bit 7
+selects write when set and read when clear; command bits 6:0 are reserved. Read
+data is shifted out most-significant bit first during the data phase. The SPI
+master must leave enough system-clock cycles between the address phase and read
+data phase for the bridge to complete the internal register-bus access. This is
+a simulation-friendly transport, not a board timing contract.
+
 The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
 uses `0x0100 + N * 0x40` plus the offsets below.
 
