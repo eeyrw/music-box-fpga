@@ -4,19 +4,22 @@ An open SystemVerilog wavetable synthesizer core. The project currently targets
 a hardware-independent, self-checking simulation path before SPI, parallel NOR
 Flash timing, I2S, and board integration are introduced.
 
-The current milestone implements four stereo output voice slots with configurable
-variable-length wavetable playback and saturated mixing.
+The current milestone implements 32 stereo output voice slots with configurable
+variable-length wavetable playback, simple loop modes, one-pole per-voice
+filtering, and saturated mixing.
 
 ## Implemented
 
 - Synthesizable single-clock SystemVerilog RTL
 - Per-voice shadow and active registers with atomic commit
 - Unsigned Q16.16 playback phase and fractional phase increments
-- Variable wave length and exclusive loop boundaries
+- Runtime phase-increment updates for pitch control without phase reload
+- Variable wave length, exclusive loop boundaries, and no-loop/loop/release-loop modes
 - Mono PCM duplication to left and right channels
 - Interleaved stereo PCM playback
 - Per-channel signed Q1.15 gain
 - Per-voice current envelope level supplied through registers
+- Per-voice one-pole low-pass filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
 - Shared multi-voice rendering pipeline and saturated stereo mixer
 - Ready/valid abstract memory interface
@@ -24,7 +27,8 @@ variable-length wavetable playback and saturated mixing.
 - Self-checking SystemVerilog regression test
 
 The current core intentionally does not implement physical SPI or NOR Flash
-timing, SF2 preset/modulator/velocity/filter behavior, I2S output, or
+timing, SF2 preset/modulator/velocity behavior, filter coefficient calculation,
+I2S output, or
 vendor-specific FPGA logic.
 See [the design specification](WaveTable_Synth_FPGA_Design_Spec_V1.md) for the
 long-term architecture and roadmap.
@@ -42,7 +46,7 @@ Shadow Registers -> Commit -> Active Voice Configurations
                                     |
                          Linear Interpolation
                                     |
-                      Gain + Envelope + Mixer
+                         LPF + Gain + Envelope + Mixer
                                     |
                   sample_valid + sample_l/sample_r
 ```
@@ -140,7 +144,8 @@ make render-midi MIDI=song.mid SECONDS=20
 
 With no `MIDI` or `NOTES_JSON` argument, the render target uses a built-in short
 melody. The simulation testbench models MCU-side note allocation and Q1.15 ADSR
-envelope writes; the RTL still only handles looped wavetable playback and mixing.
+envelope writes; the RTL handles wavetable playback, loop modes, optional LPF,
+and mixing.
 The output WAV is `build/render_midi/out.wav`.
 
 ## Current Register Interface
@@ -155,11 +160,10 @@ See [the register map](docs/register_map.md) for addresses and validation rules.
 
 ## Roadmap
 
-1. Broaden multi-voice boundary and backpressure verification.
-2. Scale the voice scheduler and mixer toward 32 voice slots.
-3. Add I2S serialization and an I2S receiver test model.
-4. Add simplified SPI and parallel NOR Flash controllers.
-5. Introduce board-specific clocks, constraints, and synthesis projects.
+1. Broaden multi-voice backpressure and memory-latency verification.
+2. Add I2S serialization and an I2S receiver test model.
+3. Add simplified SPI and parallel NOR Flash controllers.
+4. Introduce board-specific clocks, constraints, and synthesis projects.
 
 Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing
 RTL interfaces or numeric behavior.

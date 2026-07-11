@@ -23,6 +23,7 @@ module tb_wavetable_core;
   logic mem_rsp_valid;
   pcm_t mem_rsp_data;
   int errors = 0;
+  int last_latency_cycles = 0;
 
   // Testbench clock only; production RTL still uses one rising-edge system
   // clock and synchronous reset.
@@ -57,6 +58,23 @@ module tb_wavetable_core;
     bus_write = 1'b0;
   endtask
 
+  task automatic bus_read_word(input logic [15:0] address, input logic [31:0] expected);
+    @(negedge clk);
+    bus_valid = 1'b1;
+    bus_write = 1'b0;
+    bus_address = address;
+    bus_wdata = '0;
+    @(negedge clk);
+    if (!bus_ready || bus_error) begin
+      $error("bus read failed at 0x%04x", address);
+      errors++;
+    end else if (bus_rdata !== expected) begin
+      $error("bus read 0x%04x got 0x%08x expected 0x%08x", address, bus_rdata, expected);
+      errors++;
+    end
+    bus_valid = 1'b0;
+  endtask
+
   task automatic request_and_check(input integer expected_l, input integer expected_r);
     int timeout;
     // sample_tick requests one rendered output sample. The voice pipeline needs
@@ -66,10 +84,11 @@ module tb_wavetable_core;
     @(negedge clk);
     sample_tick = 1'b0;
     timeout = 0;
-    while (!sample_valid && timeout < 30) begin
+    while (!sample_valid && timeout < 500) begin
       @(negedge clk);
       timeout++;
     end
+    last_latency_cycles = timeout;
     if (!sample_valid) begin
       $error("sample response timed out");
       errors++;
@@ -98,6 +117,8 @@ module tb_wavetable_core;
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
+    bus_write_word(16'h0134, 32'h0000_0001);
+    bus_write_word(16'h0138, 32'h0000_ffff);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
   endtask
@@ -115,6 +136,8 @@ module tb_wavetable_core;
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
+    bus_write_word(16'h0134, 32'h0000_0001);
+    bus_write_word(16'h0138, 32'h0000_ffff);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
   endtask
@@ -139,7 +162,38 @@ module tb_wavetable_core;
       bus_write_word(addr + 16'h001c, {{16{gain[15]}}, gain});
       bus_write_word(addr + 16'h0020, {{16{gain[15]}}, gain});
       bus_write_word(addr + 16'h002c, {{16{envelope_level[15]}}, envelope_level});
+      bus_write_word(addr + 16'h0034, 32'h0000_0001);
+      bus_write_word(addr + 16'h0038, 32'h0000_ffff);
       bus_write_word(addr + 16'h0024, 32'd1);
+      repeat (2) @(negedge clk);
+    end
+  endtask
+
+  task automatic configure_voice0_basic(
+    input int base_addr,
+    input int length,
+    input int loop_start,
+    input int loop_end,
+    input logic [31:0] phase_init,
+    input logic [31:0] phase_inc,
+    input logic [1:0] loop_mode,
+    input logic filter_enable,
+    input logic [15:0] filter_alpha
+  );
+    begin
+      bus_write_word(16'h0100, 32'h0000_0001);
+      bus_write_word(16'h0104, base_addr[31:0]);
+      bus_write_word(16'h0108, length[31:0]);
+      bus_write_word(16'h010c, loop_start[31:0]);
+      bus_write_word(16'h0110, loop_end[31:0]);
+      bus_write_word(16'h0114, phase_init);
+      bus_write_word(16'h0118, phase_inc);
+      bus_write_word(16'h011c, 32'h0000_7fff);
+      bus_write_word(16'h0120, 32'h0000_7fff);
+      bus_write_word(16'h012c, 32'h0000_7fff);
+      bus_write_word(16'h0134, {23'd0, 1'b0, 6'd0, loop_mode});
+      bus_write_word(16'h0138, {15'd0, filter_enable, filter_alpha});
+      bus_write_word(16'h0124, 32'd1);
       repeat (2) @(negedge clk);
     end
   endtask
@@ -175,6 +229,9 @@ module tb_wavetable_core;
     memory_model.memory[34] = 16'sd2000;
     memory_model.memory[35] = 16'sd2000;
 
+    for (int a = 36; a < 68; a++)
+      memory_model.memory[a] = 16'sd2000;
+
     repeat (3) @(negedge clk);
     rst = 1'b0;
 
@@ -198,11 +255,52 @@ module tb_wavetable_core;
     request_and_check(1250, -1250);
     request_and_check(1250, -1250);
 
+    // Runtime PHASE_INC writes retune playback without reloading phase.
+    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS, 1'b0, 16'hffff);
+    request_and_check(0, 0);
+    bus_write_word(16'h0130, 32'h0002_0000);
+    request_and_check(999, 999);
+    request_and_check(2999, 2999);
+
+    // No-loop voices stop contributing once phase reaches the sample length.
+    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_NONE, 1'b0, 16'hffff);
+    request_and_check(0, 0);
+    request_and_check(999, 999);
+    request_and_check(0, 0);
+
+    // Loop-until-release wraps while held, then plays through to sample end.
+    configure_voice0_basic(0, 4, 1, 3, 32'h0002_0000, 32'h0001_0000, LOOP_MODE_UNTIL_RELEASE, 1'b0, 16'hffff);
+    request_and_check(1999, 1999);
+    request_and_check(999, 999);
+    bus_write_word(16'h0134, 32'h0000_0102);
+    request_and_check(1999, 1999);
+    request_and_check(2999, 2999);
+    request_and_check(0, 0);
+
+    // One-pole LPF is applied after interpolation and before channel gain.
+    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS, 1'b1, 16'h8000);
+    request_and_check(999, 999);
+    request_and_check(1499, 1499);
+
+    // Register decode must reach the expanded 32nd voice slot.
+    bus_write_word(16'h08c4, 32'h0000_0020);
+    bus_read_word(16'h08c4, 32'h0000_0020);
+
     // Check that two active voice slots render in one output request and the
     // mixer adds their current enveloped samples with saturation at the end.
     configure_mono_slot(0, 0, 32'h0000_8000, 16'sh4000, 16'sh7fff);
     configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
     request_and_check(750, 750);
+
+    // All 32 voice slots can be addressed and mixed. Each contributes 15 after
+    // Q1.15 gain scaling, for a total of 480.
+    for (int v = 0; v < NUM_VOICES; v++)
+      configure_mono_slot(v, 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
+    request_and_check(480, 480);
+    if (last_latency_cycles > 300) begin
+      $error("32-voice mono render latency got %0d cycles expected <= 300", last_latency_cycles);
+      errors++;
+    end
 
     if (errors != 0)
       $fatal(1, "FAIL: %0d errors", errors);

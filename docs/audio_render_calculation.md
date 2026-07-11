@@ -6,15 +6,17 @@ fixed-point conversions happen.
 
 The current path is intentionally limited:
 
-- One selected SF2 instrument sample is loaded into wave memory.
+- The MIDI preparation step maps Note On events to SF2 preset/instrument sample
+  regions and loads the used sample regions into wave memory.
 - MIDI or JSON note events are decoded by simulation software.
-- A simulation-only MCU model performs voice allocation, Note On, Note Off, and a
-  simple linear ADSR envelope.
+- A simulation-only MCU model performs voice allocation, Note On, Note Off, and
+  SF2 volume-envelope stepping from generated per-region control values.
 - The RTL core performs looped wavetable playback, interpolation, gain,
   runtime-envelope multiplication, and saturated stereo mixing.
 
 The RTL does not implement MIDI parsing, SF2 preset lookup, velocity curves,
-modulators, filters, or ADSR policy.
+modulators, filter coefficient calculation, or ADSR policy. It can consume an
+already calculated per-voice one-pole LPF coefficient.
 
 ## Render Inputs
 
@@ -36,14 +38,10 @@ right words.
 ```text
 MIDI_SAMPLE_COUNT
 MIDI_MEMORY_DEPTH
-MIDI_STEREO
-MIDI_BASE_ADDR
-MIDI_LENGTH
-MIDI_LOOP_START
-MIDI_LOOP_END
-MIDI_GAIN_L / MIDI_GAIN_R
+MIDI_REGION_COUNT
 MIDI_ADSR_*_STEP
 MIDI_EVENT_* arrays
+MIDI_REGION_* arrays
 ```
 
 ## Event Timing
@@ -90,10 +88,12 @@ The simulation MCU model tracks one small state record per FPGA voice slot:
 
 ```text
 voice_note
+voice_channel    MIDI channel that owns the slot
+voice_region     generated SF2 sample region index
 voice_state       SILENT / ATTACK / DECAY / SUSTAIN / RELEASE
 voice_level       current Q1.15 envelope level
 voice_target      velocity-scaled peak Q1.15 level
-voice_sustain     sustain Q1.15 level
+voice_sustain     SF2 sustain level scaled by velocity
 voice_stamp       allocation timestamp
 ```
 
@@ -111,10 +111,11 @@ On Note On:
 On Note Off:
 
 ```text
-1. Find every non-SILENT slot matching the MIDI note.
+1. Find every non-SILENT slot matching the MIDI channel and note.
 2. Change each matching slot to RELEASE.
-3. Continue updating ENVELOPE_LEVEL until it reaches zero.
-4. Disable and commit the slot when release completes.
+3. Write the runtime released flag so loop-until-release samples can play through.
+4. Continue updating ENVELOPE_LEVEL until it reaches zero.
+5. Disable and commit the slot when release completes.
 ```
 
 This mirrors the firmware boundary: Note On/Off policy is outside the FPGA, but
@@ -122,15 +123,15 @@ the FPGA sees the exact register writes that firmware would issue.
 
 ## Envelope Calculation
 
-The render testbench uses a simple linear Q1.15 ADSR model. It is deliberately
-matched to this FPGA project's precision rather than the older 8051 engine's
-8-bit envelope table.
+The render testbench uses a linear Q1.15 implementation of the SF2 volume
+envelope generators. It consumes per-region attack, decay, sustain, and release
+values generated from the selected SF2 preset/instrument region.
 
 Velocity maps linearly to peak level:
 
 ```text
 voice_target = round(velocity * 0x7fff / 127)
-voice_sustain = voice_target * 100 / 128
+voice_sustain = voice_target * sf2_sustain_level / 0x7fff
 ```
 
 The ADSR update runs every `MIDI_ADSR_TICK_SAMPLES` output samples. With the
@@ -140,13 +141,17 @@ default 48 kHz output rate and 5 ms control tick:
 MIDI_ADSR_TICK_SAMPLES = round(48000 * 0.005) = 240
 ```
 
-The preparation tool converts stage durations to Q1.15 step sizes:
+The preparation tool converts SF2 timecents and sustain centibels to Q1.15 step
+sizes and levels:
 
 ```text
-attack_step  = round(0x7fff / (attack_ms  / adsr_tick_ms))
-decay_step   = round(0x7fff / (decay_ms   / adsr_tick_ms))
-release_step = round(0x7fff / (release_ms / adsr_tick_ms))
+seconds = 2^(timecents / 1200)
+sustain_level = round(0x7fff * 10^(-sustain_centibels / 200))
+step = round(0x7fff / max(1, seconds / adsr_tick_seconds))
 ```
+
+`delayVolEnv`, `holdVolEnv`, and key-number envelope scaling generators are not
+yet modeled.
 
 The MCU model applies the state machine:
 
@@ -189,6 +194,7 @@ LOOP_END       exclusive loop end frame
 PHASE_INIT     usually 0 for a new note
 PHASE_INC      generated per MIDI note
 GAIN_L/R       channel gains, currently 0x4000 by default in render-midi
+PLAYBACK_MODE  sampleModes-derived loop behavior
 COMMIT         1
 ```
 

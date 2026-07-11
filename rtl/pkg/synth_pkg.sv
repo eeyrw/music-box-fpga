@@ -4,7 +4,11 @@ package synth_pkg;
   localparam int PCM_WIDTH = 16;
   localparam int PHASE_WIDTH = 32;
   localparam int ADDR_WIDTH = 32;
-  localparam int NUM_VOICES = 4;
+  localparam int NUM_VOICES = 32;
+
+  localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
+  localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;
+  localparam logic [1:0] LOOP_MODE_UNTIL_RELEASE = 2'd2;
 
   // Signed 16-bit PCM is the external sample format used by wave memory and by
   // the produced audio stream.
@@ -25,5 +29,9 @@ package synth_pkg;
     logic signed [15:0]        gain_l;
     logic signed [15:0]        gain_r;
     logic signed [15:0]        envelope_level;
+    logic [1:0]                loop_mode;
+    logic                      released;
+    logic                      filter_enable;
+    logic [15:0]               filter_alpha;
   } voice_config_t;
 endpackage

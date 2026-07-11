@@ -56,9 +56,20 @@ package code. A DSP primitive must not depend on a voice controller.
 - Stereo samples are interleaved left then right in memory.
 - Register writes update shadow state only. A commit copies the complete shadow
   configuration to active state atomically.
-- Runtime phase is never writable through the register bus.
+- Runtime phase position is never writable through the register bus. Runtime
+  `PHASE_INC` updates are allowed through the documented pitch-control register
+  and must not reload phase.
 - Memory requests and responses use ready/valid handshakes. Do not rely on a
   behavioral array being asynchronously readable.
+
+## Planned Tasks
+
+- Move the real MIDI/SF2 render harness from generated SystemVerilog includes to
+  a C++ Verilator executable. The C++ harness should parse SF2 and MIDI at
+  runtime, model MCU-side preset selection, voice allocation, envelopes,
+  controller policy, wave memory, and WAV output, then drive `wavetable_core`
+  through its register and memory ports. Keep the existing SystemVerilog
+  self-checking tests for small exact RTL regressions.
 
 ## Verification Rules
 

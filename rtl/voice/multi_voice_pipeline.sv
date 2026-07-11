@@ -28,11 +28,15 @@ module multi_voice_pipeline (
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
   logic [PHASE_WIDTH-1:0] phase [NUM_VOICES];
+  pcm_t filter_state_l [NUM_VOICES];
+  pcm_t filter_state_r [NUM_VOICES];
   logic [15:0] frame_0;
   logic [15:0] frame_1;
   logic [15:0] fraction;
   pcm_t raw_l0, raw_l1, raw_r0, raw_r1;
   pcm_t interpolated_l, interpolated_r;
+  pcm_t filtered_l, filtered_r;
+  pcm_t gain_input_l, gain_input_r;
   pcm_t gained_l, gained_r;
   pcm_t envelope_scaled_l, envelope_scaled_r;
   pcm_t enveloped_l, enveloped_r;
@@ -44,15 +48,49 @@ module multi_voice_pipeline (
   logic [32:0] loop_end_phase;
   logic [31:0] loop_length_phase;
   logic [31:0] wrapped_phase;
+  logic loop_active;
+  logic voice_done;
   logic current_enable;
   logic current_stereo;
   logic [ADDR_WIDTH-1:0] current_base_addr;
+  logic [15:0] current_length;
   logic [15:0] current_loop_start;
   logic [15:0] current_loop_end;
   logic [PHASE_WIDTH-1:0] current_phase_inc;
   logic signed [15:0] current_gain_l;
   logic signed [15:0] current_gain_r;
   logic signed [15:0] current_envelope_level;
+  logic [1:0] current_loop_mode;
+  logic current_released;
+  logic current_filter_enable;
+  logic [15:0] current_filter_alpha;
+
+  function automatic pcm_t one_pole_lpf(
+    input pcm_t previous,
+    input pcm_t sample,
+    input logic [15:0] alpha
+  );
+    logic signed [16:0] difference;
+    logic signed [33:0] product;
+/* verilator lint_off UNUSEDSIGNAL */
+    logic signed [33:0] shifted_product;
+/* verilator lint_on UNUSEDSIGNAL */
+    logic signed [17:0] delta;
+    logic signed [18:0] next_value;
+    begin
+      difference = $signed(sample) - $signed(previous);
+      product = $signed({{17{difference[16]}}, difference}) * $signed({1'b0, alpha});
+      shifted_product = product >>> 16;
+      delta = shifted_product[17:0];
+      next_value = $signed({{3{previous[15]}}, previous}) + $signed({delta[17], delta});
+      if (next_value > 19'sd32767)
+        one_pole_lpf = 16'sh7fff;
+      else if (next_value < -19'sd32768)
+        one_pole_lpf = 16'sh8000;
+      else
+        one_pole_lpf = next_value[15:0];
+    end
+  endfunction
 
   function automatic pcm_t saturate_pcm(input logic signed [31:0] value);
     if (value > 32'sd32767)
@@ -66,20 +104,33 @@ module multi_voice_pipeline (
   assign current_enable = voice_config[voice_index].enable;
   assign current_stereo = voice_config[voice_index].stereo;
   assign current_base_addr = voice_config[voice_index].base_addr;
+  assign current_length = voice_config[voice_index].length;
   assign current_loop_start = voice_config[voice_index].loop_start;
   assign current_loop_end = voice_config[voice_index].loop_end;
   assign current_phase_inc = voice_config[voice_index].phase_inc;
   assign current_gain_l = voice_config[voice_index].gain_l;
   assign current_gain_r = voice_config[voice_index].gain_r;
   assign current_envelope_level = voice_config[voice_index].envelope_level;
+  assign current_loop_mode = voice_config[voice_index].loop_mode;
+  assign current_released = voice_config[voice_index].released;
+  assign current_filter_enable = voice_config[voice_index].filter_enable;
+  assign current_filter_alpha = voice_config[voice_index].filter_alpha;
 
   always_comb begin
     phase_sum = {1'b0, phase[voice_index]} + {1'b0, current_phase_inc};
     loop_end_phase = {1'b0, current_loop_end, 16'd0};
     loop_length_phase = {(current_loop_end - current_loop_start), 16'd0};
     wrapped_phase = phase_sum[31:0] - loop_length_phase;
+    loop_active = (current_loop_mode == LOOP_MODE_CONTINUOUS) ||
+                  ((current_loop_mode == LOOP_MODE_UNTIL_RELEASE) && !current_released);
+    voice_done = (current_loop_mode == LOOP_MODE_NONE || !loop_active) &&
+                 (phase[voice_index][31:16] >= current_length);
     next_accum_l = accum_l + $signed({{16{enveloped_l[15]}}, enveloped_l});
     next_accum_r = accum_r + $signed({{16{enveloped_r[15]}}, enveloped_r});
+    filtered_l = one_pole_lpf(filter_state_l[voice_index], interpolated_l, current_filter_alpha);
+    filtered_r = one_pole_lpf(filter_state_r[voice_index], interpolated_r, current_filter_alpha);
+    gain_input_l = current_filter_enable ? filtered_l : interpolated_l;
+    gain_input_r = current_filter_enable ? filtered_r : interpolated_r;
   end
 
   linear_interpolator interp_l (
@@ -91,10 +142,10 @@ module multi_voice_pipeline (
     .fraction(fraction), .sample_out(interpolated_r)
   );
   gain_saturate gain_l_inst (
-    .sample_in(interpolated_l), .gain(current_gain_l), .sample_out(gained_l)
+    .sample_in(gain_input_l), .gain(current_gain_l), .sample_out(gained_l)
   );
   gain_saturate gain_r_inst (
-    .sample_in(interpolated_r), .gain(current_gain_r), .sample_out(gained_r)
+    .sample_in(gain_input_r), .gain(current_gain_r), .sample_out(gained_r)
   );
   gain_saturate envelope_l_inst (
     .sample_in(gained_l), .gain(current_envelope_level), .sample_out(envelope_scaled_l)
@@ -150,14 +201,20 @@ module multi_voice_pipeline (
       sample_valid <= 1'b0;
       sample_l <= '0;
       sample_r <= '0;
-      for (int v = 0; v < NUM_VOICES; v++)
+      for (int v = 0; v < NUM_VOICES; v++) begin
         phase[v] <= 32'd0;
+        filter_state_l[v] <= '0;
+        filter_state_r[v] <= '0;
+      end
     end else begin
       sample_valid <= 1'b0;
 
       for (int v = 0; v < NUM_VOICES; v++) begin
-        if (config_commit[v])
+        if (config_commit[v]) begin
           phase[v] <= voice_config[v].phase_init;
+          filter_state_l[v] <= '0;
+          filter_state_r[v] <= '0;
+        end
       end
 
       unique case (state)
@@ -170,17 +227,21 @@ module multi_voice_pipeline (
           end
         end
         START_VOICE: begin
-          if (!current_enable || !config_valid[voice_index]) begin
+          if (!current_enable || !config_valid[voice_index] || voice_done) begin
             if (voice_index == LAST_VOICE)
               state <= FINISH;
             else
               voice_index <= voice_index + 1'b1;
           end else begin
             frame_0 <= phase[voice_index][31:16];
-            frame_1 <= (phase[voice_index][31:16] + 16'd1 >= current_loop_end) ?
-                       current_loop_start : phase[voice_index][31:16] + 16'd1;
+            if (loop_active)
+              frame_1 <= (phase[voice_index][31:16] + 16'd1 >= current_loop_end) ?
+                         current_loop_start : phase[voice_index][31:16] + 16'd1;
+            else
+              frame_1 <= (phase[voice_index][31:16] + 16'd1 >= current_length) ?
+                         phase[voice_index][31:16] : phase[voice_index][31:16] + 16'd1;
             fraction <= phase[voice_index][15:0];
-            if (phase_sum >= loop_end_phase)
+            if (loop_active && phase_sum >= loop_end_phase)
               phase[voice_index] <= wrapped_phase;
             else
               phase[voice_index] <= phase_sum[31:0];
@@ -205,6 +266,10 @@ module multi_voice_pipeline (
         REQ_R1:  if (mem_req_ready) state <= WAIT_R1;
         WAIT_R1: if (mem_rsp_valid) begin raw_r1 <= mem_rsp_data; state <= ACCUMULATE; end
         ACCUMULATE: begin
+          if (current_filter_enable) begin
+            filter_state_l[voice_index] <= filtered_l;
+            filter_state_r[voice_index] <= filtered_r;
+          end
           accum_l <= next_accum_l;
           accum_r <= next_accum_r;
           if (voice_index == LAST_VOICE)

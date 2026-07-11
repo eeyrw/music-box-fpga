@@ -28,6 +28,7 @@ It uses one shared datapath:
 - One pair of interpolators.
 - One pair of gain multipliers.
 - One pair of envelope multipliers.
+- One pair of one-pole low-pass filter calculations.
 - One stereo mixer accumulator.
 
 This is efficient in area and easy to verify, but it is not a CPU-style pipeline.
@@ -154,7 +155,7 @@ Pipeline registers would also improve timing closure by splitting long
 combinational paths:
 
 ```text
-sample fetch -> interpolation multiply -> gain multiply -> envelope multiply -> accumulator
+sample fetch -> interpolation multiply -> filter multiply -> gain multiply -> envelope multiply -> accumulator
 ```
 
 The current implementation leaves these operations close together because the
@@ -231,14 +232,15 @@ Key design choices:
 - Keep runtime phase per voice in the renderer.
 - Use a scheduler that emits one voice job per cycle or per small fixed number of
   cycles.
-- Add pipeline registers around interpolation, gain, and envelope multiplication.
+- Add pipeline registers around interpolation, filter, gain, and envelope multiplication.
 - Add a wave cache or prefetch layer before external Flash.
 - Add an output FIFO so I2S consumes samples at a fixed rate even if render
   latency varies slightly.
 
 ## Minimal Next Step
 
-Before rewriting the renderer, measure the current sequential design under
+The current RTL sets `NUM_VOICES = 32` while retaining the sequential renderer.
+Before rewriting the renderer, measure the current design under
 simulation with a simple cycle counter:
 
 ```text

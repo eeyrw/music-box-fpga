@@ -5,7 +5,7 @@ single-beat and 32-bit aligned. Most voice writes update shadow registers. Reads
 return shadow registers except for status, envelope, and identification
 registers.
 
-The core exposes four voice slots. Slot 0 keeps the original base address. Slot N
+The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
 uses `0x0100 + N * 0x40` plus the offsets below.
 
 | Offset | Name | Description |
@@ -22,11 +22,26 @@ uses `0x0100 + N * 0x40` plus the offsets below.
 | `0x24` | COMMIT | write bit 0 as one to atomically activate this voice slot |
 | `0x28` | STATUS | bit 0 configuration valid for this voice slot |
 | `0x2c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
+| `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q16.16 phase increment |
+| `0x34` | PLAYBACK_MODE | bits 1:0 loop mode, bit 8 released runtime flag |
+| `0x38` | FILTER_CONTROL | bit 16 enable, bits 15:0 one-pole LPF alpha Q0.16 |
 | `0x3000` | VERSION | design version, currently `0x0002_0000` |
 
-A configuration is valid when `length != 0`, `loop_start < loop_end`, and
-`loop_end <= length`. Invalid active configurations do not produce memory
-requests or audio samples.
+A configuration is valid when `length != 0`. Looping modes additionally require
+`loop_start < loop_end` and `loop_end <= length`. Invalid active configurations
+do not produce memory requests or audio samples.
+
+`PLAYBACK_MODE.loop_mode` values are:
+
+| Value | Name | Behavior |
+| --- | --- | --- |
+| `0` | no loop | play through `length`, then stop contributing |
+| `1` | continuous loop | wrap from exclusive `loop_end` to `loop_start` |
+| `2` | loop until release | loop while `released == 0`, then play through to `length` |
+
+`PLAYBACK_MODE.released` is runtime state. Writes update the active released flag
+immediately and do not reload phase. A commit clears the active released flag so a
+reused voice starts in the held state.
 
 `ENVELOPE_LEVEL` is runtime state supplied by the MCU/control model. Writes update
 the active value immediately, without requiring `COMMIT` and without reloading
@@ -42,7 +57,15 @@ Later envelope updates write only `ENVELOPE_LEVEL`. A Note Off is represented by
 `ENVELOPE_LEVEL` through its release curve; when it reaches zero, software can
 clear `CONTROL.enable` and commit the slot to free it.
 
+`PHASE_INC_RUNTIME` writes update the active phase increment immediately without
+copying shadow registers and without reloading runtime phase. Use this path for
+pitch bend or low-rate vibrato control.
+
+`FILTER_CONTROL` configures the per-voice one-pole low-pass filter. Writes update
+both shadow and active filter settings without reloading phase. The filter state
+is cleared on commit. `filter_enable = 0` bypasses the filter.
+
 The RTL does not implement SF2 preset selection, velocity mapping, modulators, or
-filters. A value of `0x7fff` is treated as full level and bypasses the extra
-multiply so existing full-scale voice gains are not attenuated by one
-least-significant bit.
+filter coefficient calculation. A value of `0x7fff` is treated as full envelope
+level and bypasses the extra envelope multiply so existing full-scale voice gains
+are not attenuated by one least-significant bit.

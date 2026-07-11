@@ -9,8 +9,6 @@ module tb_render_midi_core;
   localparam int ENV_SUSTAIN = 3;
   localparam int ENV_RELEASE = 4;
   localparam int Q15_FULL = 32'd32767;
-  localparam int SUSTAIN_NUM = 100;
-  localparam int SUSTAIN_DEN = 128;
 
   logic clk = 1'b0;
   logic rst;
@@ -39,6 +37,8 @@ module tb_render_midi_core;
   int next_adsr_sample;
   int alloc_stamp;
   int voice_note [NUM_VOICES];
+  int voice_channel [NUM_VOICES];
+  int voice_region [NUM_VOICES];
   int voice_state [NUM_VOICES];
   int voice_level [NUM_VOICES];
   int voice_target [NUM_VOICES];
@@ -109,32 +109,49 @@ module tb_render_midi_core;
     end
   endtask
 
-  task automatic commit_voice(input int voice, input int enable, input int phase_inc);
-    bus_write_word(voice_addr(voice, 32'h0000_0000), (MIDI_STEREO != 0) ? {30'd0, 1'b1, (enable != 0)} : {31'd0, (enable != 0)});
-    bus_write_word(voice_addr(voice, 32'h0000_0004), MIDI_BASE_ADDR);
-    bus_write_word(voice_addr(voice, 32'h0000_0008), MIDI_LENGTH);
-    bus_write_word(voice_addr(voice, 32'h0000_000c), MIDI_LOOP_START);
-    bus_write_word(voice_addr(voice, 32'h0000_0010), MIDI_LOOP_END);
+  task automatic commit_voice(input int voice, input int enable, input int phase_inc, input int region);
+    int safe_region;
+    begin
+    safe_region = (region >= 0 && region < MIDI_REGION_COUNT) ? region : 0;
+    bus_write_word(voice_addr(voice, 32'h0000_0000), (MIDI_REGION_STEREO[safe_region] != 0) ? {30'd0, 1'b1, (enable != 0)} : {31'd0, (enable != 0)});
+    bus_write_word(voice_addr(voice, 32'h0000_0004), MIDI_REGION_BASE_ADDR[safe_region]);
+    bus_write_word(voice_addr(voice, 32'h0000_0008), MIDI_REGION_LENGTH[safe_region]);
+    bus_write_word(voice_addr(voice, 32'h0000_000c), MIDI_REGION_LOOP_START[safe_region]);
+    bus_write_word(voice_addr(voice, 32'h0000_0010), MIDI_REGION_LOOP_END[safe_region]);
     bus_write_word(voice_addr(voice, 32'h0000_0014), 32'h0000_0000);
     bus_write_word(voice_addr(voice, 32'h0000_0018), phase_inc[31:0]);
-    bus_write_word(voice_addr(voice, 32'h0000_001c), MIDI_GAIN_L);
-    bus_write_word(voice_addr(voice, 32'h0000_0020), MIDI_GAIN_R);
+    bus_write_word(voice_addr(voice, 32'h0000_001c), MIDI_REGION_GAIN_L[safe_region]);
+    bus_write_word(voice_addr(voice, 32'h0000_0020), MIDI_REGION_GAIN_R[safe_region]);
+    bus_write_word(voice_addr(voice, 32'h0000_0034), MIDI_REGION_LOOP_MODE[safe_region]);
     bus_write_word(voice_addr(voice, 32'h0000_0024), 32'd1);
-  endtask
-
-  task automatic note_off(input int note);
-    for (int v = 0; v < NUM_VOICES; v++) begin
-      if (voice_state[v] != ENV_SILENT && voice_note[v] == (note & 32'h0000_007f))
-        voice_state[v] = ENV_RELEASE;
     end
   endtask
 
-  task automatic note_on(input int note, input int velocity, input int phase_inc);
+  task automatic release_voice(input int voice);
+    int region;
+    begin
+      region = voice_region[voice];
+      if (region < 0 || region >= MIDI_REGION_COUNT)
+        region = 0;
+      bus_write_word(voice_addr(voice, 32'h0000_0034), {23'd0, 1'b1, 6'd0, MIDI_REGION_LOOP_MODE[region][1:0]});
+    end
+  endtask
+
+  task automatic note_off(input int channel, input int note);
+    for (int v = 0; v < NUM_VOICES; v++) begin
+      if (voice_state[v] != ENV_SILENT && voice_channel[v] == channel && voice_note[v] == (note & 32'h0000_007f)) begin
+        voice_state[v] = ENV_RELEASE;
+        release_voice(v);
+      end
+    end
+  endtask
+
+  task automatic note_on(input int channel, input int note, input int velocity, input int phase_inc, input int region);
     int idx;
     int best;
     begin
       if (velocity == 0) begin
-        note_off(note);
+        note_off(channel, note);
       end else begin
         idx = -1;
         for (int v = 0; v < NUM_VOICES; v++) begin
@@ -155,13 +172,15 @@ module tb_render_midi_core;
           alloc_stamp = 1;
 
         voice_note[idx] = note & 32'h0000_007f;
+        voice_channel[idx] = channel;
+        voice_region[idx] = region;
         voice_state[idx] = ENV_ATTACK;
         voice_level[idx] = 0;
         voice_target[idx] = velocity_target(velocity);
-        voice_sustain[idx] = (voice_target[idx] * SUSTAIN_NUM) / SUSTAIN_DEN;
+        voice_sustain[idx] = (voice_target[idx] * MIDI_REGION_SUSTAIN_LEVEL[region]) / Q15_FULL;
         voice_stamp[idx] = alloc_stamp;
         set_envelope(idx, 0);
-        commit_voice(idx, 1, phase_inc);
+        commit_voice(idx, 1, phase_inc, region);
       end
     end
   endtask
@@ -172,23 +191,23 @@ module tb_render_midi_core;
       for (int v = 0; v < NUM_VOICES; v++) begin
         next_level = voice_level[v];
         if (voice_state[v] == ENV_ATTACK) begin
-          next_level = voice_level[v] + MIDI_ADSR_ATTACK_STEP;
+          next_level = voice_level[v] + MIDI_REGION_ATTACK_STEP[voice_region[v]];
           if (next_level >= voice_target[v]) begin
             next_level = voice_target[v];
             voice_state[v] = ENV_DECAY;
           end
         end else if (voice_state[v] == ENV_DECAY) begin
-          next_level = voice_level[v] - MIDI_ADSR_DECAY_STEP;
+          next_level = voice_level[v] - MIDI_REGION_DECAY_STEP[voice_region[v]];
           if (next_level <= voice_sustain[v]) begin
             next_level = voice_sustain[v];
             voice_state[v] = ENV_SUSTAIN;
           end
         end else if (voice_state[v] == ENV_RELEASE) begin
-          next_level = voice_level[v] - MIDI_ADSR_RELEASE_STEP;
+          next_level = voice_level[v] - MIDI_REGION_RELEASE_STEP[voice_region[v]];
           if (next_level <= 0) begin
             next_level = 0;
             voice_state[v] = ENV_SILENT;
-            commit_voice(v, 0, 0);
+            commit_voice(v, 0, 0, 0);
           end
         end
 
@@ -203,9 +222,9 @@ module tb_render_midi_core;
   task automatic process_events;
     while (event_index < MIDI_EVENT_COUNT && MIDI_EVENT_SAMPLE[event_index] <= produced) begin
       if (MIDI_EVENT_ON[event_index] != 0)
-        note_on(MIDI_EVENT_KEY[event_index], MIDI_EVENT_VELOCITY[event_index], MIDI_EVENT_PHASE_INC[event_index]);
+        note_on(MIDI_EVENT_CHANNEL[event_index], MIDI_EVENT_KEY[event_index], MIDI_EVENT_VELOCITY[event_index], MIDI_EVENT_PHASE_INC[event_index], MIDI_EVENT_REGION[event_index]);
       else
-        note_off(MIDI_EVENT_KEY[event_index]);
+        note_off(MIDI_EVENT_CHANNEL[event_index], MIDI_EVENT_KEY[event_index]);
       event_index++;
     end
   endtask
@@ -226,7 +245,7 @@ module tb_render_midi_core;
       @(negedge clk);
       sample_tick = 1'b0;
       timeout = 0;
-      while (!sample_valid && timeout < 160) begin
+      while (!sample_valid && timeout < 600) begin
         @(negedge clk);
         timeout++;
       end
@@ -251,6 +270,8 @@ module tb_render_midi_core;
     alloc_stamp = 0;
     for (int v = 0; v < NUM_VOICES; v++) begin
       voice_note[v] = 0;
+      voice_channel[v] = 0;
+      voice_region[v] = 0;
       voice_state[v] = ENV_SILENT;
       voice_level[v] = 0;
       voice_target[v] = 0;

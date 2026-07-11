@@ -228,23 +228,31 @@ The JSON format is deliberately small:
 
 The MIDI preparation tool performs only simulation-side work:
 
-- Select one SF2 instrument zone and write `wave.memh`.
 - Convert MIDI or JSON events to sample timestamps.
+- Track MIDI channel program and bank-select state for Note On events.
+- Map each event to an SF2 preset, instrument zone, and sample region, then
+  append the selected sample data into one generated `wave.memh` image.
 - Calculate each event's Q16.16 `phase_inc` from MIDI note, SF2 root key,
   tuning, and output sample rate.
+- Convert SF2 volume envelope attack, decay, sustain, release, and sampleModes
+  into per-region control values used by the SystemVerilog MCU model.
 - Generate `midi_render_config.svh` for the SystemVerilog testbench.
 
 `tb_render_midi_core.sv` models the MCU at the precision used by this FPGA
-project: four voice slots and Q1.15 runtime envelope levels. It uses a simple
-linear ADSR policy, free-voice-first allocation, and oldest-voice stealing when
-all slots are busy. On Note On it writes the selected slot's wave/loop/phase/gain
-registers and commits. On each ADSR tick it writes `ENVELOPE_LEVEL`. On Note Off
-it enters release, and when the envelope reaches zero it disables and commits the
-slot.
+project: 32 voice slots and Q1.15 runtime envelope levels. It uses the generated
+SF2 volume-envelope step values, free-voice-first allocation, and oldest-voice
+stealing when all slots are busy. On Note On it writes the selected slot's
+wave/loop/phase/gain registers and commits. On each ADSR tick it writes
+`ENVELOPE_LEVEL`. On Note Off it matches channel plus note, sets the runtime
+released flag for loop-until-release samples, and when the envelope reaches zero
+it disables and commits the slot.
 
-This is intentionally not a complete MIDI synthesizer. It ignores MIDI channels,
-program changes, pedals, pitch bend, controllers, and SF2 preset/modulator/filter
-logic. Those belong in a richer MCU/control simulation, not in the FPGA core.
+This is intentionally not a complete MIDI synthesizer. It handles MIDI channel
+program changes and bank select only far enough to choose an SF2 preset for each
+Note On. It still ignores pedals, pitch bend, most controllers, drum-note maps,
+SF2 modulators, volume-envelope delay/hold, and key-number envelope scaling. SF2
+filter coefficient calculation also belongs in a richer MCU/control simulation;
+the FPGA core only consumes an already calculated one-pole LPF alpha.
 
 ## Linked Stereo Samples
 

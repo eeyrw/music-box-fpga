@@ -32,12 +32,17 @@ module voice_register_bank (
   localparam logic [15:0] OFF_COMMIT      = 16'h0024;
   localparam logic [15:0] OFF_STATUS      = 16'h0028;
   localparam logic [15:0] OFF_ENVELOPE    = 16'h002c;
+  localparam logic [15:0] OFF_PHASE_RT    = 16'h0030;
+  localparam logic [15:0] OFF_PLAYBACK    = 16'h0034;
+  localparam logic [15:0] OFF_FILTER      = 16'h0038;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
+
+  localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
 
   voice_config_t shadow_config [NUM_VOICES];
   logic address_valid;
   logic voice_address;
-  logic [$clog2(NUM_VOICES)-1:0] selected_voice;
+  logic [VOICE_INDEX_WIDTH-1:0] selected_voice;
   logic [15:0] selected_offset;
   logic [15:0] voice_relative;
   int i;
@@ -48,12 +53,13 @@ module voice_register_bank (
       // fully inside the sample length. The pipeline also checks enable/sample_tick
       // before issuing memory traffic.
       config_valid[v] = (active_config[v].length != 16'd0) &&
-                        (active_config[v].loop_start < active_config[v].loop_end) &&
-                        (active_config[v].loop_end <= active_config[v].length);
+                        ((active_config[v].loop_mode == LOOP_MODE_NONE) ||
+                         ((active_config[v].loop_start < active_config[v].loop_end) &&
+                          (active_config[v].loop_end <= active_config[v].length)));
     end
 
     voice_relative = bus_address - VOICE_BASE;
-    selected_voice = voice_relative[7:6];
+    selected_voice = voice_relative[6 +: VOICE_INDEX_WIDTH];
     selected_offset = {10'd0, voice_relative[5:0]};
     voice_address = (bus_address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
@@ -76,6 +82,9 @@ module voice_register_bank (
         OFF_COMMIT:     bus_rdata = 32'd0;
         OFF_STATUS:     bus_rdata = {31'd0, config_valid[selected_voice]};
         OFF_ENVELOPE:   bus_rdata = {{16{active_config[selected_voice].envelope_level[15]}}, active_config[selected_voice].envelope_level};
+        OFF_PHASE_RT:   bus_rdata = active_config[selected_voice].phase_inc;
+        OFF_PLAYBACK:   bus_rdata = {23'd0, active_config[selected_voice].released, 6'd0, shadow_config[selected_voice].loop_mode};
+        OFF_FILTER:     bus_rdata = {15'd0, shadow_config[selected_voice].filter_enable, shadow_config[selected_voice].filter_alpha};
         default: begin
           address_valid = 1'b0;
           bus_rdata = 32'd0;
@@ -96,8 +105,12 @@ module voice_register_bank (
       for (i = 0; i < NUM_VOICES; i++) begin
         shadow_config[i] <= '0;
         shadow_config[i].envelope_level <= 16'sh7fff;
+        shadow_config[i].loop_mode <= LOOP_MODE_CONTINUOUS;
+        shadow_config[i].filter_alpha <= 16'hffff;
         active_config[i] <= '0;
         active_config[i].envelope_level <= 16'sh7fff;
+        active_config[i].loop_mode <= LOOP_MODE_CONTINUOUS;
+        active_config[i].filter_alpha <= 16'hffff;
       end
       commit_pulse <= '0;
     end else begin
@@ -128,8 +141,22 @@ module voice_register_bank (
             if (bus_wdata[0]) begin
               active_config[selected_voice] <= shadow_config[selected_voice];
               active_config[selected_voice].envelope_level <= active_config[selected_voice].envelope_level;
+              active_config[selected_voice].released <= 1'b0;
               commit_pulse[selected_voice] <= 1'b1;
             end
+          end
+          OFF_PHASE_RT: begin
+            active_config[selected_voice].phase_inc <= bus_wdata;
+          end
+          OFF_PLAYBACK: begin
+            shadow_config[selected_voice].loop_mode <= bus_wdata[1:0];
+            active_config[selected_voice].released <= bus_wdata[8];
+          end
+          OFF_FILTER: begin
+            shadow_config[selected_voice].filter_enable <= bus_wdata[16];
+            shadow_config[selected_voice].filter_alpha <= bus_wdata[15:0];
+            active_config[selected_voice].filter_enable <= bus_wdata[16];
+            active_config[selected_voice].filter_alpha <= bus_wdata[15:0];
           end
           default: begin
           end

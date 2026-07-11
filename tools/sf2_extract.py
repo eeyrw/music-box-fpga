@@ -15,9 +15,22 @@ from dataclasses import dataclass
 
 
 GEN_KEY_RANGE = 43
+GEN_VEL_RANGE = 44
+GEN_PAN = 17
+GEN_DELAY_VOL_ENV = 33
+GEN_ATTACK_VOL_ENV = 34
+GEN_HOLD_VOL_ENV = 35
+GEN_DECAY_VOL_ENV = 36
+GEN_SUSTAIN_VOL_ENV = 37
+GEN_RELEASE_VOL_ENV = 38
+GEN_KEYNUM_TO_VOL_ENV_HOLD = 39
+GEN_KEYNUM_TO_VOL_ENV_DECAY = 40
+GEN_INSTRUMENT = 41
+GEN_INITIAL_ATTENUATION = 48
 GEN_FINE_TUNE = 52
 GEN_COARSE_TUNE = 51
 GEN_SAMPLE_ID = 53
+GEN_SAMPLE_MODES = 54
 GEN_OVERRIDING_ROOT_KEY = 58
 
 # Low 15 bits of SF2 sampleType identify whether a sample is mono or one half of
@@ -25,6 +38,14 @@ GEN_OVERRIDING_ROOT_KEY = 58
 SAMPLE_MONO = 1
 SAMPLE_RIGHT = 2
 SAMPLE_LEFT = 4
+
+
+@dataclass
+class Preset:
+    name: str
+    preset: int
+    bank: int
+    bag_index: int
 
 
 @dataclass
@@ -102,6 +123,13 @@ def parse_instruments(chunk):
             for i in range(0, len(chunk), 22)]
 
 
+def parse_presets(chunk):
+    # phdr records include name, preset/program number, bank, and first pbag index.
+    # The terminal EOP preset is kept for range construction.
+    return [Preset(clean_name(chunk[i:i + 20]), *struct.unpack_from("<HHH", chunk, i + 20))
+            for i in range(0, len(chunk), 38)]
+
+
 def parse_bags(chunk):
     # A bag points at the first generator/modulator for one instrument zone.
     return [Bag(*struct.unpack_from("<HH", chunk, i)) for i in range(0, len(chunk), 4)]
@@ -151,6 +179,36 @@ def key_range(zone):
     return amount & 0xff, (amount >> 8) & 0xff
 
 
+def vel_range(zone):
+    amount = zone.get(GEN_VEL_RANGE)
+    if amount is None:
+        return 0, 127
+    return amount & 0xff, (amount >> 8) & 0xff
+
+
+def zone_matches(zone, key, velocity=100):
+    key_low, key_high = key_range(zone)
+    vel_low, vel_high = vel_range(zone)
+    return key_low <= key <= key_high and vel_low <= velocity <= vel_high
+
+
+def select_preset(presets, program, bank=0):
+    usable = presets[:-1]
+    for index, preset in enumerate(usable):
+        if preset.preset == program and preset.bank == bank:
+            return index, preset
+    if bank != 0:
+        for index, preset in enumerate(usable):
+            if preset.preset == program and preset.bank == 0:
+                return index, preset
+    for index, preset in enumerate(usable):
+        if preset.preset == 0 and preset.bank == 0:
+            return index, preset
+    if usable:
+        return 0, usable[0]
+    raise ValueError("soundfont has no presets")
+
+
 def select_instrument(instruments, instrument):
     # The terminal EOS instrument is excluded from user-visible choices.
     usable = instruments[:-1]
@@ -191,6 +249,24 @@ def instrument_zones(instruments, bags, generators, inst_index):
     return zones
 
 
+def preset_zones(presets, bags, generators, preset_index):
+    start = presets[preset_index].bag_index
+    end = presets[preset_index + 1].bag_index
+    zones = []
+    global_zone = {}
+    for bag_index in range(start, end):
+      gen_start = bags[bag_index].gen_index
+      gen_end = bags[bag_index + 1].gen_index
+      zone = generators_for_zone(generators[gen_start:gen_end])
+      if GEN_INSTRUMENT not in zone:
+          global_zone.update(zone)
+      else:
+          merged = dict(global_zone)
+          merged.update(zone)
+          zones.append(merged)
+    return zones
+
+
 def select_zone(zones, key):
     # Prefer a zone whose keyRange contains the requested key. If the instrument
     # lacks explicit ranges, fall back to its first sample zone.
@@ -201,6 +277,27 @@ def select_zone(zones, key):
     if zones:
         return zones[0]
     raise ValueError("instrument has no sample zones")
+
+
+def select_zone_for_velocity(zones, key, velocity):
+    for zone in zones:
+        if zone_matches(zone, key, velocity):
+            return zone
+    return select_zone(zones, key)
+
+
+def select_preset_region(presets, instruments, preset_bags, preset_generators,
+                         instrument_bags, instrument_generators, program, bank,
+                         key, velocity):
+    preset_index, preset = select_preset(presets, program, bank)
+    pzones = preset_zones(presets, preset_bags, preset_generators, preset_index)
+    pzone = select_zone_for_velocity(pzones, key, velocity)
+    inst_index = pzone[GEN_INSTRUMENT]
+    izones = instrument_zones(instruments, instrument_bags, instrument_generators, inst_index)
+    izone = select_zone_for_velocity(izones, key, velocity)
+    merged = dict(pzone)
+    merged.update(izone)
+    return preset_index, preset, inst_index, instruments[inst_index], merged
 
 
 def sanitize_sample_type(sample_type):

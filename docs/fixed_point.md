@@ -14,9 +14,11 @@ fraction. For example, `0x0001_8000` identifies the point halfway between frame
 1 and frame 2.
 
 At each accepted sample request, the current phase is rendered and then
-`phase_inc` is added. If the result reaches the exclusive loop end, the loop
-length is subtracted once. V1 therefore requires the increment to be smaller
-than one loop length.
+`phase_inc` is added. In continuous loop mode, or loop-until-release before the
+released flag is set, reaching the exclusive loop end subtracts the loop length
+once. V1 therefore requires the increment to be smaller than one loop length for
+looping playback. No-loop playback and released loop-until-release playback stop
+contributing once phase reaches `length`.
 
 ## Interpolation
 
@@ -42,6 +44,21 @@ before mixing. Software supplies the current level at runtime; the RTL does not
 calculate an SF2 ADSR curve. Updating `envelope_level` does not reload playback
 phase. `0x7fff` means full level and is treated as a bypass to preserve exact
 samples from the gain stage.
+
+## One-Pole Low-Pass Filter
+
+Each voice can enable a one-pole low-pass filter after interpolation and before
+channel gain. The filter coefficient `filter_alpha` is unsigned Q0.16:
+
+```text
+difference = interpolated_sample - previous_filter_output
+filtered = previous_filter_output + ((difference * filter_alpha) >>> 16)
+```
+
+`0x0000` holds the previous filter output. `0xffff` approaches the unfiltered
+sample in one step with one least-significant bit of fixed-point loss. Disabling
+the filter bypasses this stage. Filter state is per voice and per channel, and is
+cleared on commit.
 
 ## Mixing
 
