@@ -12,3 +12,4 @@ not as golden audio references.
 | `percussion_multichannel.mid` | Multi-channel file with channel-10 percussion events. |
 | `dense_many_notes.mid` | Dense arrangement with many simultaneous notes and programs. |
 | `long_single_channel.mid` | Longer single-channel piece for duration and event scheduling checks. |
+| `hedwigs_theme_finished.mid` | Multi-instrument arrangement that stresses wave-memory locality and cache miss behavior. |

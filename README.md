@@ -140,13 +140,17 @@ Render a simple MIDI-driven score through the multi-voice core:
 ```bash
 make render-midi SECONDS=2
 make render-midi MIDI=song.mid SECONDS=20
+make render-midi SECONDS=1 MEMORY_PROFILE=sdram
 ```
 
 With no `MIDI` argument, the C++ render harness uses a built-in short melody. It
 parses SF2 and MIDI at runtime, models MCU-side note allocation and Q1.15 ADSR
-envelope writes, and drives `wavetable_core` through the register and memory
-ports. The RTL handles wavetable playback, loop modes, optional LPF, and mixing.
-The output WAV is `build/render_midi/out.wav`.
+envelope writes, and drives the RTL through the register interface. The render
+uses `wavetable_core_memory`, so wave reads pass through the line-cache memory
+subsystem before the C++ external line-memory model responds. The output WAV is
+`build/render_midi/out.wav`, and memory hit/miss/latency counters are written to
+`build/render_midi/memory_stats.json`. `MEMORY_PROFILE` selects a read-only
+external memory timing model: `ddr`, `sdram`, or `parallel-nor`.
 
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.

@@ -33,6 +33,7 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--seconds") args.seconds = std::stod(need("--seconds"));
     else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
     else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
+    else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);
   }
@@ -61,6 +62,29 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << (i + 1 < regions.size() ? "," : "") << "\n";
   }
   f << "  ]\n}\n";
+}
+
+void write_memory_stats(const std::string& path, const MemoryStats& stats) {
+  std::ofstream f(path);
+  if (!f) throw std::runtime_error("failed to open " + path);
+  uint64_t requests = stats.hits + stats.misses;
+  double hit_rate = requests == 0 ? 0.0 : (double(stats.hits) / double(requests));
+  double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
+  f << "{\n"
+    << "  \"profile\": \"" << stats.profile << "\",\n"
+    << "  \"line_words\": " << stats.line_words << ",\n"
+    << "  \"random_latency_cycles\": " << stats.random_latency_cycles << ",\n"
+    << "  \"sequential_latency_cycles\": " << stats.sequential_latency_cycles << ",\n"
+    << "  \"ready_gap_cycles\": " << stats.ready_gap_cycles << ",\n"
+    << "  \"hits\": " << stats.hits << ",\n"
+    << "  \"misses\": " << stats.misses << ",\n"
+    << "  \"hit_rate\": " << hit_rate << ",\n"
+    << "  \"external_line_requests\": " << stats.external_line_requests << ",\n"
+    << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
+    << "  \"responses\": " << stats.responses << ",\n"
+    << "  \"avg_response_latency_cycles\": " << avg_latency << ",\n"
+    << "  \"max_response_latency_cycles\": " << stats.response_latency_max << "\n"
+    << "}\n";
 }
 
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
@@ -259,7 +283,8 @@ int main(int argc, char** argv) {
     std::string wav_path = args.out_dir + "/out.wav";
     render::write_summary(args.out_dir + "/midi_render_config.json", regions, args.sample_rate, sample_count, int(events.size()));
 
-    render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate);
+    render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
+    render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);
     rtl.reset();
     render::McuModel mcu(rtl, regions);
 
@@ -289,6 +314,8 @@ int main(int argc, char** argv) {
     std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
     std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
               << " nonzero_output_words=" << rtl.nonzero_output_words() << "\n";
+    render::write_memory_stats(args.out_dir + "/memory_stats.json", rtl.memory_stats());
+    rtl.print_memory_stats();
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "render-midi failed: " << e.what() << "\n";

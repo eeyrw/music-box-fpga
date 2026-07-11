@@ -16,6 +16,7 @@ struct Args {
   std::string midi;
   std::string instrument;
   std::string out_dir = "build/render_midi";
+  std::string memory_profile = "ddr";
   int key = 60;
   double seconds = 2.0;
   int sample_rate = 48000;

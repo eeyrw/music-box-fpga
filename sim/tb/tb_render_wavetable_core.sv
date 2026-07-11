@@ -26,6 +26,15 @@ module tb_render_wavetable_core;
   logic mem_req_ready;
   logic mem_rsp_valid;
   pcm_t mem_rsp_data;
+  logic ext_req_valid;
+  logic ext_req_ready;
+  logic [31:0] ext_req_addr;
+  logic ext_rsp_valid;
+  logic [8*16-1:0] ext_rsp_data;
+  logic mem_debug_hit_pulse;
+  logic mem_debug_miss_pulse;
+  logic mem_debug_response_pulse;
+  logic [15:0] mem_debug_response_latency;
   logic unused_status;
   int pcm_fd;
   int produced;
@@ -36,18 +45,39 @@ module tb_render_wavetable_core;
 
   // Keep Verilator from warning about observed-but-unused status outputs. The
   // render harness does not need to inspect read data or busy status.
-  assign unused_status = |bus_rdata | busy;
+  assign unused_status = |bus_rdata | busy | mem_debug_hit_pulse |
+                         mem_debug_miss_pulse | mem_debug_response_pulse |
+                         (|mem_debug_response_latency);
 
   wavetable_core dut (.*);
 
-  wave_memory_model #(.DEPTH(RENDER_MEMORY_DEPTH)) memory_model (
+  wave_memory_subsystem #(.LINE_WORDS(8)) memory_subsystem (
     .clk,
     .rst,
-    .req_valid(mem_req_valid),
-    .req_ready(mem_req_ready),
-    .req_addr(mem_req_addr),
-    .rsp_valid(mem_rsp_valid),
-    .rsp_data(mem_rsp_data)
+    .core_req_valid(mem_req_valid),
+    .core_req_ready(mem_req_ready),
+    .core_req_addr(mem_req_addr),
+    .core_rsp_valid(mem_rsp_valid),
+    .core_rsp_data(mem_rsp_data),
+    .ext_req_valid,
+    .ext_req_ready,
+    .ext_req_addr,
+    .ext_rsp_valid,
+    .ext_rsp_data,
+    .debug_hit_pulse(mem_debug_hit_pulse),
+    .debug_miss_pulse(mem_debug_miss_pulse),
+    .debug_response_pulse(mem_debug_response_pulse),
+    .debug_response_latency(mem_debug_response_latency)
+  );
+
+  line_memory_model #(.DEPTH(RENDER_MEMORY_DEPTH), .LINE_WORDS(8), .LATENCY(4)) memory_model (
+    .clk,
+    .rst,
+    .req_valid(ext_req_valid),
+    .req_ready(ext_req_ready),
+    .req_addr(ext_req_addr),
+    .rsp_valid(ext_rsp_valid),
+    .rsp_data(ext_rsp_data)
   );
 
   task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);

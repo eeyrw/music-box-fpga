@@ -30,3 +30,101 @@ The core issues one 32-bit word-address request at a time. A request transfers
 when `mem_req_valid && mem_req_ready`. A response transfers when
 `mem_rsp_valid`; responses must arrive in request order. The initial simulation
 model accepts every request and returns its signed 16-bit value one cycle later.
+
+## Minimal Line Memory Subsystem
+
+`rtl/memory/wave_memory_subsystem.sv` adapts the core's one-word read interface
+to a wider external line-read interface suitable for an SDRAM/DDR controller
+wrapper or a burst-capable memory model. It contains one cached line and supports
+one outstanding core request:
+
+- Core side: `core_req_valid`, `core_req_ready`, `core_req_addr`,
+  `core_rsp_valid`, and `core_rsp_data` match the existing 16-bit word-addressed
+  wavetable read contract.
+- External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
+  aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
+  on `ext_rsp_data`, with word 0 in bits `[15:0]`.
+- A same-line hit returns from the cached line without another external request.
+  A miss backpressures the core request port until the external line response is
+  received and the requested word is returned.
+
+This block does not implement DDR/SDRAM electrical timing, refresh, arbitration,
+or clock-domain crossing. Those belong in a board memory controller connected to
+the external line-read side.
+
+## Memory Subsystem Test Baseline
+
+The current regression path exercises `wave_memory_subsystem` in both a focused
+unit test and the normal synthesis render path:
+
+- `tb_wave_memory_subsystem` checks one line miss, one same-line hit, and one
+  second-line miss with `LINE_WORDS = 8` and `line_memory_model LATENCY = 4`.
+- `tb_wavetable_core` routes the full multi-voice self-checking datapath through
+  `wavetable_core -> wave_memory_subsystem -> line_memory_model`.
+- `tb_render_wavetable_core` uses the same memory path for SF2-derived render
+  runs.
+
+Observed focused-test behavior:
+
+- Read `addr = 3`: first access to line `[0,7]`, cache miss, one external line
+  request.
+- Read `addr = 6`: same line `[0,7]`, cache hit, no additional external request.
+- Read `addr = 12`: first access to line `[8,15]`, cache miss, second external
+  line request.
+
+With the current model parameters, a cache hit returns with much lower latency
+than a miss because no external line request is issued. During a miss, the
+core-side request port is backpressured because the minimal subsystem supports
+only one outstanding core request. The exact response-latency counter is exposed
+through `debug_response_pulse` and `debug_response_latency` so simulation harnesses
+can record the observed latency for each request.
+
+The real-SF2 smoke run `make render-instrument SECONDS=1 KEY=60` used
+`assets/soundfonts/MT6276.sf2`, selected the `Vibes` instrument sample
+`vibes52`, rendered 48,000 stereo samples, and passed with this memory path.
+
+The focused tests assert hit/miss behavior through debug pulses, external request
+counts, and exact PCM output. The C++ MIDI render path records aggregate counters
+for real render traffic in `build/render_midi/memory_stats.json`, including total
+hits, total misses, hit rate, external line requests, average response latency,
+and maximum response latency.
+
+## External Memory Profiles
+
+The simulation models only read behavior for board-memory candidates. These
+profiles are not full DDR, SDRAM, or NOR controllers; they approximate line-read
+latency, faster sequential line access, and request backpressure while preserving
+the same RTL memory-subsystem interface.
+
+`make render-midi` accepts `MEMORY_PROFILE`:
+
+```bash
+make render-midi SECONDS=1 MEMORY_PROFILE=ddr
+make render-midi SECONDS=1 MEMORY_PROFILE=sdram
+make render-midi SECONDS=1 MEMORY_PROFILE=parallel-nor
+```
+
+Current C++ render profiles:
+
+| Profile | Random line latency | Sequential line latency | Ready gap |
+| --- | ---: | ---: | ---: |
+| `ddr` | 10 cycles | 4 cycles | 0 cycles |
+| `sdram` | 16 cycles | 8 cycles | 1 cycle |
+| `parallel-nor` | 28 cycles | 14 cycles | 3 cycles |
+
+Using the built-in one-second MIDI smoke render against
+`assets/soundfonts/MT6276.sf2`, all three profiles produced the same audible
+render result and the same cache request mix: 85,278 hits, 50,562 misses, 50,562
+external line requests, 8,490 sequential line requests, 135,840 responses, and a
+62.78% hit rate. The latency counters changed by profile:
+
+| Profile | Avg response latency | Max response latency |
+| --- | ---: | ---: |
+| `ddr` | 4.09 cycles | 12 cycles |
+| `sdram` | 6.20 cycles | 18 cycles |
+| `parallel-nor` | 10.29 cycles | 30 cycles |
+
+The SystemVerilog `line_memory_model` exposes matching parameters for focused
+tests: `RANDOM_LATENCY`, `SEQUENTIAL_LATENCY`, and `READY_GAP`. Its legacy
+`LATENCY` parameter remains as the default for all three values when a test does
+not need a specific memory profile.

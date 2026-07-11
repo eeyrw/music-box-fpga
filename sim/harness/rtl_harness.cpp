@@ -1,8 +1,9 @@
 #include "rtl_harness.h"
 
-#include "Vwavetable_core.h"
+#include "Vwavetable_core_memory.h"
 
 #include <cstdio>
+#include <iostream>
 #include <stdexcept>
 
 namespace render {
@@ -28,8 +29,17 @@ void put_u32le(std::ofstream& f, uint32_t value) {
 
 }  // namespace
 
-RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path, int sample_rate)
-    : top_(new Vwavetable_core), memory_(memory), wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
+MemoryProfile parse_memory_profile(const std::string& name) {
+  if (name == "ddr") return MemoryProfile{"ddr", 10, 4, 0};
+  if (name == "sdram") return MemoryProfile{"sdram", 16, 8, 1};
+  if (name == "parallel-nor" || name == "nor") return MemoryProfile{"parallel-nor", 28, 14, 3};
+  throw std::runtime_error("unknown memory profile: " + name + " (expected ddr, sdram, or parallel-nor)");
+}
+
+RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
+                       int sample_rate, const MemoryProfile& memory_profile)
+    : top_(new Vwavetable_core_memory), memory_(memory), memory_profile_(memory_profile),
+      wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
   // Write a placeholder WAV header now. The final data length is not known until
   // all samples have been requested, so the destructor seeks back and rewrites
@@ -43,9 +53,9 @@ RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wa
   top_->bus_address = 0;
   top_->bus_wdata = 0;
   top_->sample_tick = 0;
-  top_->mem_req_ready = 1;
-  top_->mem_rsp_valid = 0;
-  top_->mem_rsp_data = 0;
+  top_->ext_req_ready = 1;
+  top_->ext_rsp_valid = 0;
+  for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
 }
 
 RtlHarness::~RtlHarness() {
@@ -132,29 +142,98 @@ void RtlHarness::request_sample(int produced) {
 }
 
 void RtlHarness::tick() {
-  // Model one full clock cycle and a one-cycle-latency memory slave. The RTL sees
-  // mem_req_ready high every cycle. A request sampled before this rising edge is
-  // returned as mem_rsp_valid/data on the next call to tick().
+  // Model one full clock cycle. The RTL memory subsystem converts core word
+  // reads into external line reads; the C++ harness services that external side
+  // with a fixed-latency line memory model.
   top_->clk = 0;
-  top_->mem_req_ready = 1;
+  service_external_memory();
   top_->eval();
-
-  // The behavioral memory is a one-cycle ready/valid slave. Capture the request
-  // before the rising edge, then present its response on the next simulated tick.
-  bool next_pending_valid = top_->mem_req_valid;
-  uint16_t next_pending_data = 0;
-  if (top_->mem_req_valid && top_->mem_req_addr < memory_.size()) {
-    next_pending_data = uint16_t(memory_[top_->mem_req_addr]);
-  }
-  top_->mem_rsp_valid = pending_valid_ ? 1 : 0;
-  top_->mem_rsp_data = pending_data_;
 
   top_->clk = 1;
   top_->eval();
-  pending_valid_ = next_pending_valid;
-  pending_data_ = next_pending_data;
+
+  if (top_->mem_debug_hit_pulse) ++memory_hits_;
+  if (top_->mem_debug_miss_pulse) ++memory_misses_;
+  if (top_->mem_debug_response_pulse) {
+    ++memory_responses_;
+    uint16_t latency = top_->mem_debug_response_latency;
+    response_latency_sum_ += latency;
+    if (latency > response_latency_max_) response_latency_max_ = latency;
+  }
+
   top_->clk = 0;
   top_->eval();
+}
+
+void RtlHarness::service_external_memory() {
+  top_->ext_req_ready = (!line_pending_ && ready_gap_countdown_ == 0) ? 1 : 0;
+  top_->ext_rsp_valid = 0;
+
+  if (line_pending_) {
+    if (line_countdown_ == 0) {
+      for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
+      for (int w = 0; w < kLineWords; ++w) {
+        uint32_t addr = line_pending_addr_ + uint32_t(w);
+        uint16_t value = addr < memory_.size() ? uint16_t(memory_[addr]) : 0;
+        int bit = w * 16;
+        top_->ext_rsp_data[bit / 32] |= uint32_t(value) << (bit % 32);
+      }
+      top_->ext_rsp_valid = 1;
+      line_pending_ = false;
+      ready_gap_countdown_ = memory_profile_.ready_gap_cycles;
+    } else {
+      --line_countdown_;
+    }
+  } else if (ready_gap_countdown_ > 0) {
+    --ready_gap_countdown_;
+  } else if (top_->ext_req_valid) {
+    bool sequential = have_last_line_addr_ && (top_->ext_req_addr == last_line_addr_ + uint32_t(kLineWords));
+    line_pending_ = true;
+    line_pending_addr_ = top_->ext_req_addr;
+    line_countdown_ = sequential ? memory_profile_.sequential_latency_cycles
+                                 : memory_profile_.random_latency_cycles;
+    have_last_line_addr_ = true;
+    last_line_addr_ = top_->ext_req_addr;
+    ++external_line_requests_;
+    if (sequential) ++sequential_line_requests_;
+  }
+}
+
+void RtlHarness::print_memory_stats() const {
+  MemoryStats stats = memory_stats();
+  uint64_t requests = stats.hits + stats.misses;
+  double hit_rate = requests == 0 ? 0.0 : (100.0 * double(memory_hits_) / double(requests));
+  double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
+  std::cout << "memory_subsystem hits=" << stats.hits
+            << " misses=" << stats.misses
+            << " hit_rate=" << hit_rate << "%"
+            << " profile=" << stats.profile
+            << " external_line_requests=" << stats.external_line_requests
+            << " sequential_line_requests=" << stats.sequential_line_requests
+            << " responses=" << stats.responses
+            << " avg_response_latency_cycles=" << avg_latency
+            << " max_response_latency_cycles=" << stats.response_latency_max
+            << " line_words=" << stats.line_words
+            << " random_latency_cycles=" << stats.random_latency_cycles
+            << " sequential_latency_cycles=" << stats.sequential_latency_cycles
+            << " ready_gap_cycles=" << stats.ready_gap_cycles << "\n";
+}
+
+MemoryStats RtlHarness::memory_stats() const {
+  MemoryStats stats;
+  stats.profile = memory_profile_.name;
+  stats.hits = memory_hits_;
+  stats.misses = memory_misses_;
+  stats.responses = memory_responses_;
+  stats.external_line_requests = external_line_requests_;
+  stats.sequential_line_requests = sequential_line_requests_;
+  stats.response_latency_sum = response_latency_sum_;
+  stats.response_latency_max = response_latency_max_;
+  stats.line_words = kLineWords;
+  stats.random_latency_cycles = memory_profile_.random_latency_cycles;
+  stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;
+  stats.ready_gap_cycles = memory_profile_.ready_gap_cycles;
+  return stats;
 }
 
 void RtlHarness::write_wav_header(uint32_t data_bytes) {

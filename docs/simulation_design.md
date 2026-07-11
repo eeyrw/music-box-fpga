@@ -194,11 +194,12 @@ The WAV file contains the exact sample stream produced by the RTL simulation.
 
 ## C++ MIDI-Driven Render Flow
 
-`make render-midi` renders a short score through the same RTL core. The C++
-harness parses SF2 and MIDI at runtime, models the MCU-side policy, drives the
-register bus, serves the wave-memory ready/valid interface, and writes the WAV
-file directly. The FPGA still sees only voice-slot configuration, runtime
-envelope writes, wave-memory responses, and sample requests.
+`make render-midi` renders a short score through `wavetable_core_memory`, which
+wraps the core with `wave_memory_subsystem`. The C++ harness parses SF2 and MIDI
+at runtime, models the MCU-side policy, drives the register bus, serves the
+external line-read memory interface, and writes the WAV file directly. The FPGA
+still sees only voice-slot configuration, runtime envelope writes, memory line
+responses, and sample requests.
 
 Run the built-in smoke melody:
 
@@ -210,6 +211,7 @@ Render a standard MIDI file:
 
 ```bash
 make render-midi MIDI=song.mid SECONDS=20
+make render-midi MIDI=song.mid SECONDS=20 MEMORY_PROFILE=parallel-nor
 ```
 
 The C++ harness performs only simulation-side work:
@@ -222,7 +224,20 @@ The C++ harness performs only simulation-side work:
   tuning, and output sample rate.
 - Convert SF2 volume envelope attack, decay, sustain, release, and sampleModes
   into per-region control values used by the C++ MCU model.
-- Drive `wavetable_core` directly through its public Verilated ports.
+- Drive `wavetable_core_memory` through its public Verilated ports, including the
+  external line-memory request/response interface.
+
+Each `make render-midi` run writes memory subsystem counters to:
+
+```text
+build/render_midi/memory_stats.json
+```
+
+The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
+`sequential_latency_cycles`, `ready_gap_cycles`, `hits`, `misses`, `hit_rate`,
+`external_line_requests`, `sequential_line_requests`, `responses`,
+`avg_response_latency_cycles`, and `max_response_latency_cycles`. The supported
+read-only timing profiles are `ddr`, `sdram`, and `parallel-nor`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
