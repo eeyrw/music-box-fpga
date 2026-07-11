@@ -142,11 +142,14 @@ make render-midi SECONDS=2
 make render-midi MIDI=song.mid SECONDS=20
 ```
 
-With no `MIDI` or `NOTES_JSON` argument, the render target uses a built-in short
-melody. The simulation testbench models MCU-side note allocation and Q1.15 ADSR
-envelope writes; the RTL handles wavetable playback, loop modes, optional LPF,
-and mixing.
+With no `MIDI` argument, the C++ render harness uses a built-in short melody. It
+parses SF2 and MIDI at runtime, models MCU-side note allocation and Q1.15 ADSR
+envelope writes, and drives `wavetable_core` through the register and memory
+ports. The RTL handles wavetable playback, loop modes, optional LPF, and mixing.
 The output WAV is `build/render_midi/out.wav`.
+
+Representative MIDI smoke-test inputs live under `assets/midi/`. The older
+Python-generated SystemVerilog MIDI render flow has been removed.
 
 ## Current Register Interface
 

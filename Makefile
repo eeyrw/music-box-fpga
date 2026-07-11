@@ -10,10 +10,6 @@ KEY ?= 60
 SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 MIDI ?=
-NOTES_JSON ?=
-ATTACK_MS ?= 100
-DECAY_MS ?= 200
-RELEASE_MS ?= 240
 
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
@@ -64,23 +60,22 @@ render-instrument:
 		--wav $(BUILD_DIR)/render/out.wav --sample-rate $(SAMPLE_RATE)
 
 render-midi:
-	# 1. Prepare one SF2 wave plus MIDI/note events for the MCU-style render TB.
-	python3 tools/midi_render_prepare.py --sf2 "$(SF2)" \
+	# Build and run the C++ MIDI/SF2 harness against wavetable_core.
+	mkdir -p $(BUILD_DIR)/render_midi
+	rm -f $(BUILD_DIR)/render_midi/out.pcm
+	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_midi_cpp_obj_dir --top-module wavetable_core \
+		$(RTL_SOURCES) --exe \
+		$(abspath sim/harness/render_midi_main.cpp) \
+		$(abspath sim/harness/midi_parser.cpp) \
+		$(abspath sim/harness/sf2_loader.cpp) \
+		$(abspath sim/harness/rtl_harness.cpp) \
+		--build -CFLAGS "-std=c++17"
+	$(BUILD_DIR)/render_midi_cpp_obj_dir/Vwavetable_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
-		$(if $(NOTES_JSON),--notes-json "$(NOTES_JSON)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--attack-ms $(ATTACK_MS) --decay-ms $(DECAY_MS) --release-ms $(RELEASE_MS) \
 		--out-dir $(BUILD_DIR)/render_midi
-	# 2. Build and execute the MIDI-driven render testbench.
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
-		-I$(BUILD_DIR)/render_midi --Mdir $(BUILD_DIR)/render_midi_obj_dir \
-		--top-module tb_render_midi_core \
-		$(RTL_SOURCES) sim/models/wave_memory_model.sv sim/tb/tb_render_midi_core.sv
-	$(BUILD_DIR)/render_midi_obj_dir/Vtb_render_midi_core
-	# 3. Convert the raw stereo PCM stream into a playable WAV file.
-	python3 tools/pcm_to_wav.py --pcm $(BUILD_DIR)/render_midi/out.pcm \
-		--wav $(BUILD_DIR)/render_midi/out.wav --sample-rate $(SAMPLE_RATE)
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -8,7 +8,7 @@ The current path is intentionally limited:
 
 - The MIDI preparation step maps Note On events to SF2 preset/instrument sample
   regions and loads the used sample regions into wave memory.
-- MIDI or JSON note events are decoded by simulation software.
+- MIDI events are decoded by simulation software.
 - A simulation-only MCU model performs voice allocation, Note On, Note Off, and
   SF2 volume-envelope stepping from generated per-region control values.
 - The RTL core performs looped wavetable playback, interpolation, gain,
@@ -20,35 +20,34 @@ already calculated per-voice one-pole LPF coefficient.
 
 ## Render Inputs
 
-`make render-midi` uses `tools/midi_render_prepare.py` to generate:
+`make render-midi` uses `sim/harness/render_midi_main.cpp` to parse the SF2 and
+MIDI inputs at runtime. The wave memory image is held in C++ memory and served to
+the RTL through the ready/valid memory port. It writes render artifacts for
+inspection:
 
 ```text
-build/render_midi/wave.memh
-build/render_midi/midi_render_config.svh
 build/render_midi/midi_render_config.json
 ```
 
-`wave.memh` contains signed 16-bit PCM words in the documented wave-memory
-format. Mono waves use one word per frame. Stereo waves use interleaved left then
-right words.
+The in-memory wave image contains signed 16-bit PCM words in the documented
+wave-memory format. Mono waves use one word per frame. Stereo waves use
+interleaved left then right words.
 
-`midi_render_config.svh` contains localparams consumed by
-`sim/tb/tb_render_midi_core.sv`:
+The C++ harness keeps the event and region data in memory:
 
 ```text
 MIDI_SAMPLE_COUNT
 MIDI_MEMORY_DEPTH
 MIDI_REGION_COUNT
 MIDI_ADSR_*_STEP
-MIDI_EVENT_* arrays
-MIDI_REGION_* arrays
+event records
+region records
 ```
 
 ## Event Timing
 
-For a standard MIDI file, the preparation tool reads tempo events and converts
-MIDI ticks to seconds. For JSON note lists, `start` and `duration` are already in
-seconds.
+For a standard MIDI file, the C++ harness reads tempo events and converts MIDI
+ticks to seconds.
 
 Each event time is converted to an output sample index:
 
@@ -64,7 +63,7 @@ all events whose `event_sample <= produced_sample_count`.
 Playback phase uses unsigned Q16.16 sample-frame units. A phase increment of
 `0x0001_0000` advances one source frame for each output sample.
 
-The preparation tool calculates one `phase_inc` per note event:
+The C++ harness calculates one `phase_inc` per note event:
 
 ```text
 cents = (midi_note - root_key) * 100
@@ -141,7 +140,7 @@ default 48 kHz output rate and 5 ms control tick:
 MIDI_ADSR_TICK_SAMPLES = round(48000 * 0.005) = 240
 ```
 
-The preparation tool converts SF2 timecents and sustain centibels to Q1.15 step
+The C++ harness converts SF2 timecents and sustain centibels to Q1.15 step
 sizes and levels:
 
 ```text
@@ -317,8 +316,8 @@ sample_r = clamp(mix_r, -32768, 32767)
 sample_valid = 1 for one cycle
 ```
 
-The render testbench writes each output frame as little-endian stereo PCM. The
-Python `pcm_to_wav.py` tool wraps those bytes in a WAV container.
+The C++ render harness writes each output frame as little-endian stereo PCM inside
+the final WAV container.
 
 ## Worked Example
 

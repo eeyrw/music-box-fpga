@@ -6,10 +6,10 @@ multi-voice wavetable core.
 For the numeric path from MIDI events to PCM samples, see
 `docs/audio_render_calculation.md`.
 
-There are two simulation paths:
+There are two primary simulation paths:
 
 - A self-checking regression using tiny synthetic sample data.
-- A SoundFont render harness that produces a playable WAV file.
+- A C++ SoundFont/MIDI render harness that produces a playable WAV file.
 
 Both paths use Verilator and the same synthesizable RTL sources.
 
@@ -32,7 +32,8 @@ lint target.
 sim/tb/tb_wavetable_core.sv
 ```
 
-`make render-instrument` builds the SoundFont render testbench:
+`make render-instrument` builds the legacy single-instrument SoundFont render
+testbench:
 
 ```text
 sim/tb/tb_render_wavetable_core.sv
@@ -191,11 +192,13 @@ build/render/out.wav
 
 The WAV file contains the exact sample stream produced by the RTL simulation.
 
-## MIDI-Driven Render Flow
+## C++ MIDI-Driven Render Flow
 
-`make render-midi` renders a short score through the same RTL core, with a
-simulation-only MCU model driving the register bus. The FPGA still sees only
-voice-slot configuration, runtime envelope writes, and sample requests.
+`make render-midi` renders a short score through the same RTL core. The C++
+harness parses SF2 and MIDI at runtime, models the MCU-side policy, drives the
+register bus, serves the wave-memory ready/valid interface, and writes the WAV
+file directly. The FPGA still sees only voice-slot configuration, runtime
+envelope writes, wave-memory responses, and sample requests.
 
 Run the built-in smoke melody:
 
@@ -209,43 +212,35 @@ Render a standard MIDI file:
 make render-midi MIDI=song.mid SECONDS=20
 ```
 
-Render a compact JSON note list:
+The C++ harness performs only simulation-side work:
 
-```bash
-make render-midi NOTES_JSON=notes.json SECONDS=4
-```
-
-The JSON format is deliberately small:
-
-```json
-{
-  "notes": [
-    {"start": 0.0, "duration": 0.4, "note": 60, "velocity": 110},
-    {"start": 0.2, "duration": 0.4, "note": 64, "velocity": 96}
-  ]
-}
-```
-
-The MIDI preparation tool performs only simulation-side work:
-
-- Convert MIDI or JSON events to sample timestamps.
+- Convert MIDI events to sample timestamps.
 - Track MIDI channel program and bank-select state for Note On events.
 - Map each event to an SF2 preset, instrument zone, and sample region, then
-  append the selected sample data into one generated `wave.memh` image.
+  append the selected sample data into one C++ wave-memory image.
 - Calculate each event's Q16.16 `phase_inc` from MIDI note, SF2 root key,
   tuning, and output sample rate.
 - Convert SF2 volume envelope attack, decay, sustain, release, and sampleModes
-  into per-region control values used by the SystemVerilog MCU model.
-- Generate `midi_render_config.svh` for the SystemVerilog testbench.
+  into per-region control values used by the C++ MCU model.
+- Drive `wavetable_core` directly through its public Verilated ports.
 
-`tb_render_midi_core.sv` models the MCU at the precision used by this FPGA
-project: 32 voice slots and Q1.15 runtime envelope levels. It uses the generated
-SF2 volume-envelope step values, free-voice-first allocation, and oldest-voice
+The C++ path intentionally reads standard MIDI files directly; no intermediate
+event file or generated MIDI SystemVerilog include is part of the current flow.
+
+`sim/harness/render_midi_main.cpp` models the MCU at the precision used by this
+FPGA project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
+volume-envelope step values, free-voice-first allocation, and oldest-voice
 stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes
 `ENVELOPE_LEVEL`. On Note Off it matches channel plus note, sets the runtime
 released flag for loop-until-release samples, and when the envelope reaches zero
 it disables and commits the slot.
+
+Some MIDI files begin with silence before their first Note On. Events exactly at
+the render endpoint are outside the produced sample range, so if `SECONDS` ends
+at or before the first note event, the harness reports that no MIDI events fall
+inside the requested render window. It also fails an all-zero PCM render instead
+of reporting success; use a longer render window for those files.
 
 This is intentionally not a complete MIDI synthesizer. It handles MIDI channel
 program changes and bank select only far enough to choose an SF2 preset for each
@@ -306,10 +301,7 @@ build/render/render_config.svh
 build/render/render_config.json
 build/render/out.pcm
 build/render/out.wav
-build/render_midi/wave.memh
-build/render_midi/midi_render_config.svh
 build/render_midi/midi_render_config.json
-build/render_midi/out.pcm
 build/render_midi/out.wav
 ```
 
