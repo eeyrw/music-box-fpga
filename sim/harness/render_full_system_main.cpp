@@ -29,7 +29,15 @@ void write_full_system_stats(const std::string& path, const FullSystemStats& sta
     << "  \"memory_misses\": " << stats.memory_misses << ",\n"
     << "  \"memory_responses\": " << stats.memory_responses << ",\n"
     << "  \"external_line_requests\": " << stats.external_line_requests << ",\n"
-    << "  \"sequential_line_requests\": " << stats.sequential_line_requests << "\n"
+    << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
+    << "  \"register_writes_total\": " << stats.register_writes.total << ",\n"
+    << "  \"register_writes_envelope\": " << stats.register_writes.envelope << ",\n"
+    << "  \"register_writes_gain_runtime\": " << stats.register_writes.gain_runtime << ",\n"
+    << "  \"register_writes_phase_inc_runtime\": " << stats.register_writes.phase_inc_runtime << ",\n"
+    << "  \"register_writes_filter\": " << stats.register_writes.filter << ",\n"
+    << "  \"register_writes_commit\": " << stats.register_writes.commit << ",\n"
+    << "  \"register_writes_release\": " << stats.register_writes.release << ",\n"
+    << "  \"register_writes_config\": " << stats.register_writes.config << "\n"
     << "}\n";
 }
 
@@ -90,7 +98,9 @@ int main(int argc, char** argv) {
               << " render_deadline_misses=" << stats.render_deadline_misses
               << " max_render_latency_cycles=" << stats.max_render_latency_cycles
               << " memory_hits=" << stats.memory_hits
-              << " memory_misses=" << stats.memory_misses << "\n";
+              << " memory_misses=" << stats.memory_misses
+              << " register_writes=" << stats.register_writes.total
+              << " filter_writes=" << stats.register_writes.filter << "\n";
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "render-full-system failed: " << e.what() << "\n";

@@ -25,6 +25,7 @@ struct MemoryStats {
   int random_latency_cycles = 0;
   int sequential_latency_cycles = 0;
   int ready_gap_cycles = 0;
+  RegisterWriteStats register_writes;
 };
 
 struct MemoryProfile {
@@ -90,6 +91,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint64_t sequential_line_requests_ = 0;
   uint64_t response_latency_sum_ = 0;
   uint16_t response_latency_max_ = 0;
+  RegisterWriteStats register_write_stats_;
 };
 
 }  // namespace render

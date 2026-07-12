@@ -38,6 +38,7 @@ class QuickRtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint32_t max_filtered_voices() const { return max_filtered_voices_; }
   uint64_t stereo_voice_sum() const { return stereo_voice_sum_; }
   uint32_t max_stereo_voices() const { return max_stereo_voices_; }
+  const RegisterWriteStats& register_write_stats() const { return register_write_stats_; }
 
  private:
   struct VoiceMirror {
@@ -75,6 +76,7 @@ class QuickRtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint32_t max_filtered_voices_ = 0;
   uint64_t stereo_voice_sum_ = 0;
   uint32_t max_stereo_voices_ = 0;
+  RegisterWriteStats register_write_stats_;
 };
 
 }  // namespace render

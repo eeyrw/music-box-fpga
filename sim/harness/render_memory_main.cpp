@@ -33,7 +33,15 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats) {
     << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
     << "  \"responses\": " << stats.responses << ",\n"
     << "  \"avg_response_latency_cycles\": " << avg_latency << ",\n"
-    << "  \"max_response_latency_cycles\": " << stats.response_latency_max << "\n"
+    << "  \"max_response_latency_cycles\": " << stats.response_latency_max << ",\n"
+    << "  \"register_writes_total\": " << stats.register_writes.total << ",\n"
+    << "  \"register_writes_envelope\": " << stats.register_writes.envelope << ",\n"
+    << "  \"register_writes_gain_runtime\": " << stats.register_writes.gain_runtime << ",\n"
+    << "  \"register_writes_phase_inc_runtime\": " << stats.register_writes.phase_inc_runtime << ",\n"
+    << "  \"register_writes_filter\": " << stats.register_writes.filter << ",\n"
+    << "  \"register_writes_commit\": " << stats.register_writes.commit << ",\n"
+    << "  \"register_writes_release\": " << stats.register_writes.release << ",\n"
+    << "  \"register_writes_config\": " << stats.register_writes.config << "\n"
     << "}\n";
 }
 
@@ -80,10 +88,13 @@ int main(int argc, char** argv) {
       throw std::runtime_error("render produced all-zero PCM; increase SECONDS if the MIDI starts later, or inspect event/region mapping");
     }
 
+    render::MemoryStats stats = rtl.memory_stats();
     std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
     std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
-              << " nonzero_output_words=" << rtl.nonzero_output_words() << "\n";
-    render::write_memory_stats(args.out_dir + "/memory_stats.json", rtl.memory_stats());
+              << " nonzero_output_words=" << rtl.nonzero_output_words()
+              << " register_writes=" << stats.register_writes.total
+              << " filter_writes=" << stats.register_writes.filter << "\n";
+    render::write_memory_stats(args.out_dir + "/memory_stats.json", stats);
     rtl.print_memory_stats();
     return 0;
   } catch (const std::exception& e) {

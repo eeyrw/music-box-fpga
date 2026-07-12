@@ -108,6 +108,7 @@ std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
 }
 
 void QuickRtlHarness::write_register(uint16_t address, uint32_t data) {
+  note_register_write(register_write_stats_, address);
   top_->bus_valid = 1;
   top_->bus_write = 1;
   top_->bus_address = address;

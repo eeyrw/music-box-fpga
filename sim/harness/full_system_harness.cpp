@@ -75,6 +75,7 @@ FullSystemStats FullSystemHarness::stats() const {
   s.memory_responses = memory_responses_;
   s.external_line_requests = external_line_requests_;
   s.sequential_line_requests = sequential_line_requests_;
+  s.register_writes = register_write_stats_;
   return s;
 }
 
@@ -103,6 +104,7 @@ void FullSystemHarness::release_voice(int voice, const Region& r) {
 }
 
 void FullSystemHarness::write_register(uint16_t address, uint32_t data) {
+  note_register_write(register_write_stats_, address);
   top_->spi_cs_n = 0;
   run_cycles(3);
   spi_send_byte(0x80);

@@ -143,6 +143,17 @@ struct FilterConfig {
   int a2 = 0;
 };
 
+struct RegisterWriteStats {
+  uint64_t total = 0;
+  uint64_t envelope = 0;
+  uint64_t gain_runtime = 0;
+  uint64_t phase_inc_runtime = 0;
+  uint64_t filter = 0;
+  uint64_t commit = 0;
+  uint64_t release = 0;
+  uint64_t config = 0;
+};
+
 class VoiceControlSink {
  public:
   virtual ~VoiceControlSink() = default;
@@ -205,6 +216,40 @@ inline int velocity_target(int velocity) {
 
 inline uint16_t voice_addr(int voice, int offset) {
   return uint16_t(kVoiceBase + voice * kVoiceStride + offset);
+}
+
+inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
+  ++stats.total;
+  if (address < kVoiceBase) return;
+  int offset = int((address - kVoiceBase) % kVoiceStride);
+  switch (offset) {
+    case kRegEnvelopeLevel:
+      ++stats.envelope;
+      break;
+    case kRegGainRuntime:
+      ++stats.gain_runtime;
+      break;
+    case kRegPhaseIncRuntime:
+      ++stats.phase_inc_runtime;
+      break;
+    case kRegFilterControl:
+    case kRegFilterB0:
+    case kRegFilterB1:
+    case kRegFilterB2:
+    case kRegFilterA1:
+    case kRegFilterA2:
+      ++stats.filter;
+      break;
+    case kRegCommit:
+      ++stats.commit;
+      break;
+    case kRegReleaseControl:
+      ++stats.release;
+      break;
+    default:
+      ++stats.config;
+      break;
+  }
 }
 
 }  // namespace render

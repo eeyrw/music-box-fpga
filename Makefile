@@ -17,6 +17,8 @@ MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
 RENDER_QUICK_OUT_DIR ?= $(BUILD_DIR)/render_quick
 RENDER_FULL_SYSTEM_OUT_DIR ?= $(BUILD_DIR)/render_full_system
+RENDER_OPT_FAST ?= -O3
+RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
@@ -138,7 +140,9 @@ render-quick:
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/reference_synth.cpp) \
 		$(abspath sim/harness/quick_rtl_harness.cpp) \
-		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+	$(MAKE) -C $(BUILD_DIR)/render_quick_cpp_obj_dir -f Vwavetable_core.mk \
+		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
@@ -158,7 +162,9 @@ render-memory:
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/rtl_harness.cpp) \
-		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+	$(MAKE) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_core_memory.mk \
+		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_core_memory --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
@@ -178,7 +184,9 @@ render-full-system:
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/full_system_harness.cpp) \
-		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+	$(MAKE) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_core_system.mk \
+		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_core_system --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \

@@ -87,6 +87,7 @@ void RtlHarness::reset() {
 }
 
 void RtlHarness::write_register(uint16_t address, uint32_t data) {
+  note_register_write(register_write_stats_, address);
   // The register bus is a single-cycle valid/write transaction in this harness.
   // The RTL is expected to accept writes immediately; any error is fatal because
   // continuing would produce a WAV that no longer represents the intended setup.
@@ -245,6 +246,7 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;
   stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;
   stats.ready_gap_cycles = memory_profile_.ready_gap_cycles;
+  stats.register_writes = register_write_stats_;
   return stats;
 }
 

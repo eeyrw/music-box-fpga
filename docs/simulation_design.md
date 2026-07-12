@@ -17,6 +17,12 @@ There are five simulation intents:
 
 All RTL paths use Verilator and the same synthesizable RTL sources.
 
+The C++ render harnesses (`render-quick`, `render-memory`, and
+`render-full-system`) build their Verilated fast paths with project-level
+`RENDER_OPT_FAST=-O3` and `RENDER_OPT_GLOBAL=-O3` by default. These variables are
+Makefile overrides, not global Verilator configuration; use `make render-quick
+RENDER_OPT_FAST=-Os` to compare against Verilator's size-optimized default.
+
 ## Source Groups
 
 The `Makefile` separates files into two groups:
@@ -209,9 +215,11 @@ model, and drives two backends from the same control writes:
 - `QuickRtlHarness`: a Verilated `wavetable_core` instance with a direct one-word
   memory response model.
 
-This path intentionally skips SPI, I2S, `wave_memory_subsystem`, external storage
-profiles, and WAV output. Its job is to answer one question quickly: does the RTL
-core produce the same integer PCM stream as the project reference algorithm?
+This path intentionally skips SPI, I2S, `wave_memory_subsystem`, and external
+storage profiles. Its primary job is to answer one question quickly: does the RTL
+core produce the same integer PCM stream as the project reference algorithm? It
+also writes the matched RTL PCM stream as a WAV so real MIDI renders can be
+auditioned without using the slower memory or full-system harnesses.
 
 Run the built-in smoke melody:
 
@@ -225,11 +233,18 @@ Render a standard MIDI file through the same quick comparison:
 make render-quick MIDI=song.mid SECONDS=20
 ```
 
-The run writes the selected region summary to:
+The run writes the selected region summary and RTL WAV output to:
 
 ```text
 build/render_quick/quick_render_config.json
+build/render_quick/out.wav
 ```
+
+The summary includes aggregate RTL render counters and MCU-control traffic:
+`register_writes_total`, `register_writes_envelope`,
+`register_writes_gain_runtime`, `register_writes_phase_inc_runtime`,
+`register_writes_filter`, `register_writes_commit`,
+`register_writes_release`, and `register_writes_config`.
 
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
@@ -295,6 +310,11 @@ build/render_full_system/full_system_render_config.json
 build/render_full_system/full_system_stats.json
 ```
 
+`full_system_stats.json` records I2S/audio integration counters, memory hit/miss
+counters, and the same register-write breakdown used by `render-quick`. The
+register counters are useful for separating pin-level SPI control overhead from
+audio rendering and memory traffic.
+
 This path currently supports only `SAMPLE_RATE=48000`, matching the fixed
 49.152 MHz system clock and 48 kHz audio wrapper. A small startup underrun can be
 reported before the first programmed sample is available; sample drops indicate
@@ -358,8 +378,9 @@ build/render_memory/memory_stats.json
 The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 `sequential_latency_cycles`, `ready_gap_cycles`, `hits`, `misses`, `hit_rate`,
 `external_line_requests`, `sequential_line_requests`, `responses`,
-`avg_response_latency_cycles`, and `max_response_latency_cycles`. The supported
-read-only timing profiles are `ddr`, `sdram`, and `parallel-nor`.
+`avg_response_latency_cycles`, `max_response_latency_cycles`, and the same
+register-write breakdown used by `render-quick`. The supported read-only timing
+profiles are `ddr`, `sdram`, and `parallel-nor`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.

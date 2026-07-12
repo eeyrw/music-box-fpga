@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -59,6 +60,58 @@ int abs_diff(int16_t a, int16_t b) {
   return std::abs(int(a) - int(b));
 }
 
+void put_u16le(std::ofstream& f, uint16_t value) {
+  char b[2] = {char(value & 0xff), char((value >> 8) & 0xff)};
+  f.write(b, 2);
+}
+
+void put_u32le(std::ofstream& f, uint32_t value) {
+  char b[4] = {char(value & 0xff), char((value >> 8) & 0xff),
+               char((value >> 16) & 0xff), char((value >> 24) & 0xff)};
+  f.write(b, 4);
+}
+
+class WavWriter {
+ public:
+  WavWriter(const std::string& path, int sample_rate) : f_(path, std::ios::binary), sample_rate_(sample_rate) {
+    if (!f_) throw std::runtime_error("failed to open " + path);
+    write_header(0);
+  }
+
+  ~WavWriter() {
+    if (f_) {
+      f_.seekp(0);
+      write_header(data_bytes_);
+    }
+  }
+
+  void write_stereo(int16_t left, int16_t right) {
+    put_u16le(f_, uint16_t(left));
+    put_u16le(f_, uint16_t(right));
+    data_bytes_ += 4;
+  }
+
+ private:
+  void write_header(uint32_t data_bytes) {
+    f_.write("RIFF", 4);
+    put_u32le(f_, 36 + data_bytes);
+    f_.write("WAVEfmt ", 8);
+    put_u32le(f_, 16);
+    put_u16le(f_, 1);
+    put_u16le(f_, 2);
+    put_u32le(f_, uint32_t(sample_rate_));
+    put_u32le(f_, uint32_t(sample_rate_ * 2 * 2));
+    put_u16le(f_, 4);
+    put_u16le(f_, 16);
+    f_.write("data", 4);
+    put_u32le(f_, data_bytes);
+  }
+
+  std::ofstream f_;
+  int sample_rate_ = 48000;
+  uint32_t data_bytes_ = 0;
+};
+
 }  // namespace
 }  // namespace render
 
@@ -87,6 +140,8 @@ int main(int argc, char** argv) {
     int max_diff_l = 0;
     int max_diff_r = 0;
     int nonzero_words = 0;
+    std::string wav_path = args.out_dir + "/out.wav";
+    render::WavWriter wav(wav_path, args.sample_rate);
 
     for (int produced = 0; produced < sample_count; ++produced) {
       while (event_index < events.size() && events[event_index].sample <= produced) {
@@ -99,6 +154,7 @@ int main(int argc, char** argv) {
 
       auto ref = reference.render_sample();
       auto got = rtl.request_sample(produced);
+      wav.write_stereo(got.first, got.second);
       if (got.first != 0) ++nonzero_words;
       if (got.second != 0) ++nonzero_words;
 
@@ -131,6 +187,7 @@ int main(int argc, char** argv) {
     };
 
     std::ostringstream stats;
+    const auto& reg = rtl.register_write_stats();
     stats << "  \"rtl_total_cycles\": " << rtl.total_cycles()
           << ",\n  \"rtl_total_memory_reads\": " << rtl.total_memory_reads()
           << ",\n  \"rtl_render_cycles_sum\": " << rtl.render_cycles_sum()
@@ -146,7 +203,16 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_avg_filtered_voices\": " << avg(rtl.filtered_voice_sum())
           << ",\n  \"rtl_max_filtered_voices\": " << rtl.max_filtered_voices()
           << ",\n  \"rtl_avg_stereo_voices\": " << avg(rtl.stereo_voice_sum())
-          << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices();
+          << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices()
+          << ",\n  \"register_writes_total\": " << reg.total
+          << ",\n  \"register_writes_envelope\": " << reg.envelope
+          << ",\n  \"register_writes_gain_runtime\": " << reg.gain_runtime
+          << ",\n  \"register_writes_phase_inc_runtime\": " << reg.phase_inc_runtime
+          << ",\n  \"register_writes_filter\": " << reg.filter
+          << ",\n  \"register_writes_commit\": " << reg.commit
+          << ",\n  \"register_writes_release\": " << reg.release
+          << ",\n  \"register_writes_config\": " << reg.config
+          << ",\n  \"wav_path\": \"" << wav_path << "\"";
     render::write_summary(args.out_dir + "/quick_render_config.json", regions, args.sample_rate,
                           sample_count, int(events.size()), stats.str());
 
@@ -161,7 +227,10 @@ int main(int argc, char** argv) {
               << " rtl_avg_memory_reads=" << avg(rtl.render_memory_reads_sum())
               << " rtl_max_memory_reads=" << rtl.max_render_memory_reads()
               << " rtl_max_enabled_voices=" << rtl.max_enabled_voices()
-              << " rtl_max_filtered_voices=" << rtl.max_filtered_voices() << "\n";
+              << " rtl_max_filtered_voices=" << rtl.max_filtered_voices()
+              << " register_writes=" << reg.total
+              << " filter_writes=" << reg.filter
+              << " wav=" << wav_path << "\n";
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "render-quick failed: " << e.what() << "\n";

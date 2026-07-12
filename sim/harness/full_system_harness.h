@@ -23,6 +23,7 @@ struct FullSystemStats {
   uint64_t memory_responses = 0;
   uint64_t external_line_requests = 0;
   uint64_t sequential_line_requests = 0;
+  RegisterWriteStats register_writes;
 };
 
 class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
@@ -86,6 +87,7 @@ class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
   uint64_t memory_responses_ = 0;
   uint64_t external_line_requests_ = 0;
   uint64_t sequential_line_requests_ = 0;
+  RegisterWriteStats register_write_stats_;
 };
 
 }  // namespace render
