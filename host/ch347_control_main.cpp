@@ -27,7 +27,6 @@ struct SetEnvelope {
 
 struct ReleaseVoice {
   int voice = 0;
-  int loop_mode = 0;
 };
 
 struct CommitVoice {
@@ -124,7 +123,7 @@ void print_usage(const char* argv0) {
       << "  --gain-l Q1_15          Default 0x4000\n"
       << "  --gain-r Q1_15          Default 0x4000\n"
       << "\nOther operations:\n"
-      << "  --release VOICE MODE    Set PLAYBACK_MODE released bit with loop mode\n";
+      << "  --release VOICE         Set RELEASE_CONTROL.released\n";
 }
 
 Args parse_args(int argc, char** argv) {
@@ -188,7 +187,6 @@ Args parse_args(int argc, char** argv) {
       flush_commit();
       ReleaseVoice release;
       release.voice = parse_int(need_arg(argc, argv, i, "--release voice"), "voice");
-      release.loop_mode = parse_int(need_arg(argc, argv, i, "--release loop-mode"), "loop-mode");
       Action action;
       action.type = Action::ReleaseAction;
       action.release = release;
@@ -273,7 +271,6 @@ int main(int argc, char** argv) {
       } else if (action.type == Action::ReleaseAction) {
         validate_voice(action.release.voice);
         render::Region r;
-        r.loop_mode = action.release.loop_mode;
         voice_control.release_voice(action.release.voice, r);
       }
     }

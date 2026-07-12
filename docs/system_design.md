@@ -18,6 +18,8 @@ vendor memory IP, and FPGA constraints.
 Implemented RTL pieces:
 
 - 32 committed voice slots with shadow/active register state.
+- Separate per-voice configuration state and runtime control state, with runtime
+  updates sampled at output-frame boundaries.
 - Unsigned Q16.16 playback phase and runtime phase-increment updates.
 - Mono and interleaved stereo sample playback.
 - Loop modes: no loop, continuous loop, and loop-until-release.
@@ -64,9 +66,10 @@ constraint or PLL specification.
 ## Rendering Pipeline
 
 `multi_voice_pipeline` is a time-multiplexed renderer. On each `sample_tick`, it
-scans voice slots in index order, skips disabled or invalid slots, fetches the
-needed interpolation endpoints, processes one voice through the shared DSP path,
-and accumulates into a signed 32-bit stereo mixer.
+snapshots the active voice configuration and runtime control state, scans voice
+slots in index order, skips disabled or invalid slots, fetches the needed
+interpolation endpoints, processes one voice through the shared DSP path, and
+accumulates into a signed 32-bit stereo mixer.
 
 The core state sequence is:
 
@@ -132,8 +135,10 @@ items.
 The hardware contract is register-level:
 
 - Note On writes wave address, length, loop range, phase increment, gains,
-  runtime envelope, playback mode, then commits the slot.
+  runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
+- Runtime gain, pitch, release, and filter updates do not reload phase and become
+  visible on the next output-frame render snapshot.
 - Note Off for loop-until-release samples writes the runtime released flag and
   then continues envelope release updates.
 - When release reaches zero, software clears `CONTROL.enable` and commits the

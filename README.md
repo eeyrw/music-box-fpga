@@ -194,11 +194,12 @@ Python-generated SystemVerilog MIDI render flow has been removed.
 ## Current Register Interface
 
 The simulation bus is a single-beat 32-bit register interface with `valid`,
-`write`, `address`, `wdata`, `rdata`, `ready`, and `error` signals. Writes modify
-shadow state for one voice slot. Writing that slot's commit register atomically
-replaces the active voice configuration. `spi_register_bridge` provides a simple
-SPI transport for this bus using an 8-bit command, 16-bit byte address, and
-32-bit data phase; `wavetable_core_spi` wraps the core with those SPI pins.
+`write`, `address`, `wdata`, `rdata`, `ready`, and `error` signals. Configuration
+writes modify shadow state for one voice slot. Writing that slot's commit
+register atomically replaces the active voice configuration. Runtime writes such
+as envelope, gain, pitch, and release do not require commit and are sampled at
+output-frame render boundaries. `spi_register_bridge` provides a simple SPI
+transport for this bus using an 8-bit command, 16-bit byte address, and 32-bit
 
 See [the register map](docs/register_map.md) for addresses and validation rules.
 

@@ -14,8 +14,9 @@ saturates the mixed result to signed 16-bit PCM.
 
 The external module interface did not change:
 
-- Register/configuration state still arrives through `voice_config`,
-  `config_valid`, and `config_commit`.
+- Committed configuration still arrives through `voice_config`, `config_valid`,
+  and `config_commit`; runtime controls arrive separately through
+  `voice_runtime`.
 - Wave memory still uses the existing one-request-at-a-time ready/valid read
   interface.
 - `sample_valid` still marks the completed mixed stereo output sample.
@@ -129,10 +130,12 @@ samples into the right-channel raw registers.
 
 ## Config Snapshot
 
-`START_VOICE` still reads `voice_config[voice_index]` to decide whether a voice is
-enabled, whether it is valid, whether it is done, and which phase/frame addresses
-should be rendered. Once a voice is accepted, the fields needed by later stages
-are copied into local `current_*` registers:
+At the start of each output sample render, the pipeline snapshots
+`voice_config`, `voice_runtime`, and `config_valid` into frame-local arrays.
+`START_VOICE` reads that snapshot to decide whether a voice is enabled, whether
+it is valid, whether it is done, and which phase/frame addresses should be
+rendered. Once a voice is accepted, the fields needed by later stages are copied
+into local `current_*` registers:
 
 - stereo/mono mode
 - wave base address
@@ -142,15 +145,19 @@ are copied into local `current_*` registers:
 - filter coefficients
 
 Memory request address generation and all DSP stages use these snapshot
-registers. They no longer depend on live `voice_config[voice_index]` reads after
-the voice leaves `START_VOICE`.
+registers. They no longer depend on live `voice_config` or `voice_runtime` reads
+after the sample render has started. SPI or register-bus writes that arrive while
+one output sample is being rendered therefore affect the next output sample
+render rather than a partially scanned set of voices.
 
-This does not change the external commit contract. Register writes still update
-shadow state, commits still atomically copy shadow state to active state, and a
-commit still reloads phase and clears filter state. The snapshot only defines the
-per-voice render context for the in-flight voice. It is a prerequisite for a
-future token pipeline where `voice_index` may advance before the previous voice
-has completed all compute stages.
+This does not change the external commit contract for configuration registers.
+Configuration writes still update shadow state, commits still atomically copy
+shadow state to active configuration, and a commit still reloads phase and clears
+filter state at a render-safe idle boundary. Runtime writes such as envelope,
+gain, pitch, release, and runtime filter updates do not reload phase. The
+snapshot defines the per-voice render context for the in-flight output sample. It
+is a prerequisite for a future token pipeline where `voice_index` may advance
+before the previous voice has completed all compute stages.
 
 ## Filter State Handling
 

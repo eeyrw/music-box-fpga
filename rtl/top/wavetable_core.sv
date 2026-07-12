@@ -20,6 +20,7 @@ module wavetable_core (
   input  synth_pkg::pcm_t          mem_rsp_data
 );
   synth_pkg::voice_config_t active_config [synth_pkg::NUM_VOICES];
+  synth_pkg::voice_runtime_t runtime_state [synth_pkg::NUM_VOICES];
   logic [synth_pkg::NUM_VOICES-1:0] config_valid;
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
 
@@ -34,6 +35,7 @@ module wavetable_core (
     .bus_ready,
     .bus_error,
     .active_config,
+    .runtime_state,
     .config_valid,
     .commit_pulse
   );
@@ -42,6 +44,7 @@ module wavetable_core (
     .clk,
     .rst,
     .voice_config(active_config),
+    .voice_runtime(runtime_state),
     .config_valid,
     .config_commit(commit_pulse),
     .sample_tick,

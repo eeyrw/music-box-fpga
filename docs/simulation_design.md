@@ -410,8 +410,8 @@ The current envelope model converts SF2 volume-envelope generators into linear
 Q1.15 attack, decay, sustain, and release steps. It runs every
 `adsr_tick_ms` milliseconds, defaulting to 5 ms. This is intentionally simpler
 than the full SF2 envelope curve, but it exercises the hardware contract: runtime
-`ENVELOPE_LEVEL` writes update active gain without commit and without reloading
-phase.
+`ENVELOPE_LEVEL` writes update runtime amplitude without commit and without
+reloading phase.
 
 The normal Note On register sequence is:
 
@@ -425,11 +425,11 @@ LOOP_END       = exclusive loop end
 PHASE_INIT     = 0
 PHASE_INC      = generated Q16.16 increment
 GAIN_L/R       = selected Q1.15 channel gains
-PLAYBACK_MODE  = no loop / continuous / loop-until-release
+LOOP_MODE      = no loop / continuous / loop-until-release
 COMMIT         = 1
 ```
 
-At Note Off, loop-until-release samples receive `PLAYBACK_MODE.released = 1`.
+At Note Off, loop-until-release samples receive `RELEASE_CONTROL.released = 1`.
 The MCU model then continues release envelope writes and eventually disables and
 commits the slot when the envelope reaches zero.
 

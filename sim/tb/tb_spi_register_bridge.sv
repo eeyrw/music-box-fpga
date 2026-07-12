@@ -16,6 +16,7 @@ module tb_spi_register_bridge;
   logic bus_ready;
   logic bus_error;
   voice_config_t active_config [NUM_VOICES];
+  voice_runtime_t runtime_state [NUM_VOICES];
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
   int errors = 0;
@@ -50,6 +51,7 @@ module tb_spi_register_bridge;
     .bus_ready,
     .bus_error,
     .active_config,
+    .runtime_state,
     .config_valid,
     .commit_pulse
   );
@@ -133,7 +135,7 @@ module tb_spi_register_bridge;
       errors++;
     end
     expect_read(16'h0104, 32'h1234_5678);
-    expect_read(16'h3000, 32'h0002_0000);
+    expect_read(16'h3000, 32'h0003_0000);
 
     spi_write_word(16'h0108, 32'h0000_0004);
     spi_write_word(16'h0134, 32'h0000_0000);

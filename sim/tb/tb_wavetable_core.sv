@@ -242,7 +242,7 @@ module tb_wavetable_core;
       bus_write_word(16'h011c, 32'h0000_7fff);
       bus_write_word(16'h0120, 32'h0000_7fff);
       bus_write_word(16'h012c, 32'h0000_7fff);
-      bus_write_word(16'h0134, {23'd0, 1'b0, 6'd0, loop_mode});
+      bus_write_word(16'h0134, {30'd0, loop_mode});
       bus_write_word(16'h0138, {31'd0, filter_enable});
       bus_write_word(16'h013c, filter_b0);
       bus_write_word(16'h0140, filter_b1);
@@ -304,10 +304,12 @@ module tb_wavetable_core;
     // The MCU owns envelope progression. A runtime envelope write must affect
     // the next rendered sample without committing or resetting voice phase.
     bus_write_word(16'h012c, 32'h0000_4000);
+    bus_read_word(16'h012c, 32'h0000_4000);
     request_and_check(375, 375);
 
     // Runtime stereo gain writes affect both active channels atomically without a commit.
     bus_write_word(16'h0150, 32'h2000_2000);
+    bus_read_word(16'h0150, 32'h2000_2000);
     request_and_check(62, 62);
 
     // Check stereo addressing and exclusive loop wrapping.
@@ -320,6 +322,7 @@ module tb_wavetable_core;
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
     bus_write_word(16'h0130, 32'h0002_0000);
+    bus_read_word(16'h0130, 32'h0002_0000);
     request_and_check(999, 999);
     request_and_check(2999, 2999);
 
@@ -335,7 +338,8 @@ module tb_wavetable_core;
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(1999, 1999);
     request_and_check(999, 999);
-    bus_write_word(16'h0134, 32'h0000_0102);
+    bus_write_word(16'h0154, 32'h0000_0001);
+    bus_read_word(16'h0154, 32'h0000_0001);
     request_and_check(1999, 1999);
     request_and_check(2999, 2999);
     request_and_check(0, 0);

@@ -16,6 +16,28 @@ constexpr int kQ15Full = 32767;
 constexpr uint16_t kVoiceBase = 0x0100;
 constexpr uint16_t kVoiceStride = 0x0080;
 
+constexpr int kRegControl = 0x00;
+constexpr int kRegBaseAddr = 0x04;
+constexpr int kRegLength = 0x08;
+constexpr int kRegLoopStart = 0x0c;
+constexpr int kRegLoopEnd = 0x10;
+constexpr int kRegPhaseInit = 0x14;
+constexpr int kRegPhaseInc = 0x18;
+constexpr int kRegGainL = 0x1c;
+constexpr int kRegGainR = 0x20;
+constexpr int kRegCommit = 0x24;
+constexpr int kRegEnvelopeLevel = 0x2c;
+constexpr int kRegPhaseIncRuntime = 0x30;
+constexpr int kRegLoopMode = 0x34;
+constexpr int kRegFilterControl = 0x38;
+constexpr int kRegFilterB0 = 0x3c;
+constexpr int kRegFilterB1 = 0x40;
+constexpr int kRegFilterB2 = 0x44;
+constexpr int kRegFilterA1 = 0x48;
+constexpr int kRegFilterA2 = 0x4c;
+constexpr int kRegGainRuntime = 0x50;
+constexpr int kRegReleaseControl = 0x54;
+
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
   std::string midi;

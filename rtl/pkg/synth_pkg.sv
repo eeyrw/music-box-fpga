@@ -18,9 +18,8 @@ package synth_pkg;
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
 
-  // One committed voice configuration. Position and increment are Q16.16 frame
-  // units: the upper 16 bits select the sample frame, and the lower 16 bits are
-  // the interpolation fraction between this frame and the next frame.
+  // One committed voice configuration. These fields describe the sample region
+  // and initial playback state that must become visible atomically on COMMIT.
   typedef struct packed {
     logic                      enable;
     logic                      stereo;
@@ -32,9 +31,7 @@ package synth_pkg;
     logic [PHASE_WIDTH-1:0]    phase_inc;
     logic signed [15:0]        gain_l;
     logic signed [15:0]        gain_r;
-    logic signed [15:0]        envelope_level;
     logic [1:0]                loop_mode;
-    logic                      released;
     logic                      filter_enable;
     logic signed [31:0]        filter_b0;
     logic signed [31:0]        filter_b1;
@@ -42,4 +39,20 @@ package synth_pkg;
     logic signed [31:0]        filter_a1;
     logic signed [31:0]        filter_a2;
   } voice_config_t;
+
+  // Runtime control state. These fields may be updated while a voice is playing
+  // and do not reload phase. The renderer snapshots them at output-frame start.
+  typedef struct packed {
+    logic [PHASE_WIDTH-1:0]    phase_inc;
+    logic signed [15:0]        gain_l;
+    logic signed [15:0]        gain_r;
+    logic signed [15:0]        envelope_level;
+    logic                      released;
+    logic                      filter_enable;
+    logic signed [31:0]        filter_b0;
+    logic signed [31:0]        filter_b1;
+    logic signed [31:0]        filter_b2;
+    logic signed [31:0]        filter_a1;
+    logic signed [31:0]        filter_a2;
+  } voice_runtime_t;
 endpackage
