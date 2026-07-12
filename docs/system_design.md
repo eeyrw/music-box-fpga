@@ -177,29 +177,40 @@ the generic RTL to one vendor flow.
    misses, I2S underruns, and sample drops. Next, fail longer full-system stress
    tests on steady-state deadline misses, underruns, or sample drops.
 
-2. Replace the C++ storage model with concrete DDR3 controller models.
+2. Design a wavetable-optimized memory subsystem.
+   The current `wave_memory_subsystem` is a minimal single-line cache. A later
+   revision should exploit the predictable per-voice Q16.16 phase stride with
+   per-voice small line caches, demand-priority fills, and low-priority prefetch
+   for the next interpolated frame or loop-wrapped frame. This likely requires
+   adding a voice identifier to the core memory-request interface, or otherwise
+   moving the cache closer to `multi_voice_pipeline` so the memory subsystem can
+   preserve locality across interleaved voices. Use `render-memory` hit/miss,
+   response-latency, render-latency, and deadline-miss counters to compare this
+   against the current one-line baseline.
+
+3. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a
    Xilinx MIG wrapper. Model burst alignment, calibration delay, cache misses,
    prefetch, and request backpressure before relying on hardware timing.
 
-3. Split board clocks and reset sequencing.
+4. Split board clocks and reset sequencing.
    Separate system/control, memory, and audio clocks where the board requires it,
    then add CDC or asynchronous FIFOs at each boundary.
 
-4. Harden SPI timing assumptions.
+5. Harden SPI timing assumptions.
    Define the supported SPI mode, SCLK-to-system-clock timing limits, CS
    setup/hold, read turnaround timing, and any board wrapper synchronizers.
 
-5. Extend the audio interface.
+6. Extend the audio interface.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-6. Define the asset-loading contract.
+7. Define the asset-loading contract.
    Runtime `.sf2` parsing is simulation-only. Define a preprocessed flash image,
    region metadata tables, preset selection policy, controller handling, and how
    the MCU loads or streams those assets before programming voices.
 
-7. Strengthen full-system pass/fail checks.
+8. Strengthen full-system pass/fail checks.
    Compare I2S-decoded PCM against the `render-quick` reference on short exact
    cases, record SPI transaction counts and memory stall cycles, and run longer
    high-polyphony stress cases.

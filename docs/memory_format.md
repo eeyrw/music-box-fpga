@@ -128,3 +128,35 @@ The SystemVerilog `line_memory_model` exposes matching parameters for focused
 tests: `RANDOM_LATENCY`, `SEQUENTIAL_LATENCY`, and `READY_GAP`. Its legacy
 `LATENCY` parameter remains as the default for all three values when a test does
 not need a specific memory profile.
+
+## Future Wavetable-Optimized Memory Subsystem
+
+The current subsystem is intentionally small and generic. It is not optimized for
+the access pattern of a polyphonic wavetable synthesizer, where each active voice
+walks through one sample region with a predictable Q16.16 phase stride while the
+renderer interleaves requests from many voices.
+
+A later memory subsystem should evaluate these improvements:
+
+- Per-voice two-line or small set-associative caches so one voice's locality is
+  not immediately evicted by another voice's region.
+- Stride-aware prefetch using `phase_inc` to fetch the line containing the next
+  interpolated frame, including loop-wrap cases.
+- Demand-priority scheduling so real sample reads always outrank speculative
+  prefetches.
+- Larger burst lines, such as 16 or 32 words, when the selected board memory
+  controller benefits from longer aligned reads.
+- Optional multi-request tracking so cache fills and prefetches can overlap with
+  sequential voice rendering.
+
+The likely interface change is to carry `voice_id` with each core memory request,
+or to move the optimized cache into/near `multi_voice_pipeline` where the current
+voice index, phase, loop range, and stereo mode are already visible. Any such
+change must update the RTL interface documentation and add focused tests for hit,
+miss, prefetch, loop-boundary, mono/stereo, and backpressure behavior.
+
+Use `render-memory` counters as the comparison baseline: hit rate, external line
+requests, average and maximum response latency, full render latency, deadline
+misses, and output underruns. A representative stress case is a layered stereo
+piano MIDI render, which currently stresses the one-line cache with many
+interleaved region streams.

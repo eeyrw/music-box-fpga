@@ -27,6 +27,17 @@ void put_u32le(std::ofstream& f, uint32_t value) {
   f.write(b, 4);
 }
 
+int sample_timeout_cycles(const MemoryProfile& profile) {
+  // The core renders voices serially. A worst-case stereo voice can issue four
+  // word reads, and each word read may miss the line cache when many regions are
+  // active. Keep this bound tied to the selected external-memory profile instead
+  // of using a fixed value that only fits small smoke renders.
+  constexpr int kReadsPerStereoVoice = 4;
+  constexpr int kPipelineSlackPerRead = 8;
+  return 64 + kNumVoices * kReadsPerStereoVoice *
+                  (profile.random_latency_cycles + profile.ready_gap_cycles + kPipelineSlackPerRead);
+}
+
 }  // namespace
 
 MemoryProfile parse_memory_profile(const std::string& name) {
@@ -113,12 +124,18 @@ void RtlHarness::request_sample(int produced) {
   top_->sample_tick = 0;
 
   int timeout = 0;
-  while (!top_->sample_valid && timeout < 600) {
+  const int timeout_limit = sample_timeout_cycles(memory_profile_);
+  while (!top_->sample_valid && timeout < timeout_limit) {
     tick();
     ++timeout;
   }
   if (!top_->sample_valid) {
-    throw std::runtime_error("sample response timed out at output sample " + std::to_string(produced));
+    throw std::runtime_error("sample response timed out at output sample " + std::to_string(produced) +
+                             " after " + std::to_string(timeout_limit) + " cycles" +
+                             " busy=" + std::to_string(int(top_->busy)) +
+                             " ext_req_valid=" + std::to_string(int(top_->ext_req_valid)) +
+                             " ext_req_ready=" + std::to_string(int(top_->ext_req_ready)) +
+                             " ext_rsp_valid=" + std::to_string(int(top_->ext_rsp_valid)));
   }
   write_pcm16(int16_t(top_->sample_l));
   write_pcm16(int16_t(top_->sample_r));
