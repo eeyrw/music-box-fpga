@@ -402,7 +402,6 @@ std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
 std::vector<Zone> matching_zones_for_velocity(const std::vector<Zone>& zones, int key, int velocity) {
   std::vector<Zone> out;
   for (const auto& z : zones) if (zone_matches(z, key, velocity)) out.push_back(z);
-  if (out.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");
   return out;
 }
 
@@ -742,8 +741,8 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
 }
 
 std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                                            int velocity, int sample_rate, int tick_samples,
-                                            std::vector<int16_t>& memory) {
+                                             int velocity, int sample_rate, int tick_samples,
+                                             std::vector<int16_t>& memory) {
   // Full MIDI mode starts at the channel program/bank, selects a preset zone,
   // follows that zone to an instrument, then merges preset and instrument
   // generators. Instrument generators override preset defaults for the final
@@ -777,6 +776,7 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       regions.push_back(r);
     }
   }
+  if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");
   return regions;
 }
 
@@ -787,8 +787,8 @@ Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
 }
 
 std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                                int velocity, int sample_rate, int tick_samples,
-                                                std::vector<int16_t>& memory) {
+                                                 int velocity, int sample_rate, int tick_samples,
+                                                 std::vector<int16_t>& memory) {
   // Forced-instrument mode skips preset lookup. This is useful for debugging a
   // specific SF2 instrument because MIDI program and bank messages cannot change
   // the selected sample set.
@@ -814,6 +814,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     memory.insert(memory.end(), words.begin(), words.end());
     regions.push_back(r);
   }
+  if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");
   return regions;
 }
 

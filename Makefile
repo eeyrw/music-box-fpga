@@ -72,6 +72,11 @@ test:
 		sim/harness/sf2_loader.cpp sim/harness/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
+	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+		sim/harness/render_support.cpp sim/harness/sf2_loader.cpp \
+		sim/harness/midi_parser.cpp sim/harness/render_support_test.cpp \
+		-o $(BUILD_DIR)/render_support_test
+	$(BUILD_DIR)/render_support_test
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \

@@ -10,6 +10,16 @@
 #include <stdexcept>
 
 namespace render {
+namespace {
+
+constexpr int kMidiDrumChannel = 9;
+constexpr int kSf2PercussionBank = 128;
+
+bool is_no_matching_zone_error(const std::runtime_error& e) {
+  return std::string(e.what()) == "no SF2 zone matches key/velocity";
+}
+
+}  // namespace
 
 Args parse_args(int argc, char** argv) {
   Args args;
@@ -79,6 +89,7 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   std::map<std::array<int, 4>, std::vector<int>> region_by_key;
   int forced_inst = args.instrument.empty() ? -1 : select_instrument(sf2, args.instrument);
   std::vector<NoteEvent> expanded_events;
+  int playable_note_ons = 0;
 
   for (auto& e : events) {
     if (!e.on) {
@@ -88,13 +99,18 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
     int key = std::max(0, std::min(127, e.note));
     int velocity = std::max(1, std::min(127, e.velocity));
     int program = std::max(0, std::min(127, e.program));
-    int bank = e.channel == 9 ? 0 : std::max(0, std::min(16383, e.bank));
+    int bank = e.channel == kMidiDrumChannel ? kSf2PercussionBank : std::max(0, std::min(16383, e.bank));
     std::array<int, 4> region_key = {forced_inst >= 0 ? forced_inst : program, bank, key, velocity};
     auto it = region_by_key.find(region_key);
     if (it == region_by_key.end()) {
-      std::vector<Region> made = forced_inst >= 0
-        ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory)
-        : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory);
+      std::vector<Region> made;
+      try {
+        made = forced_inst >= 0
+          ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory)
+          : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory);
+      } catch (const std::runtime_error& ex) {
+        if (!is_no_matching_zone_error(ex)) throw;
+      }
       std::vector<int> indices;
       for (auto& r : made) {
         indices.push_back(int(regions.size()));
@@ -103,14 +119,20 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
       region_by_key[region_key] = indices;
       it = region_by_key.find(region_key);
     }
+    if (it->second.empty()) continue;
     for (int idx : it->second) {
       NoteEvent layered = e;
       layered.region = idx;
       layered.phase_inc = regions[layered.region].phase_inc;
       expanded_events.push_back(layered);
+      ++playable_note_ons;
     }
   }
   events.swap(expanded_events);
+
+  if (playable_note_ons == 0) {
+    throw std::runtime_error("no playable MIDI note-on events matched the selected SF2 regions");
+  }
 
   if (std::none_of(wave_memory.begin(), wave_memory.end(), [](int16_t v) { return v != 0; })) {
     throw std::runtime_error("selected SF2 regions produced an all-zero wave memory image");

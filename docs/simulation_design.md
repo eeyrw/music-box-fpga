@@ -364,6 +364,13 @@ read-only timing profiles are `ddr`, `sdram`, and `parallel-nor`.
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
 
+`sim/harness/render_support_test.cpp` is the focused regression for the shared
+render-preparation policy. It builds a small synthetic SF2 with a melodic preset,
+a bank-128 drum preset, and an intentionally nonmatching extra layer. The test
+checks that channel-10 Note On events select the percussion bank, that a playable
+layer survives when another layer misses the key range, and that a fully unmapped
+Note On is silenced instead of aborting the render.
+
 ## MIDI/SF2 Render Calculation
 
 The C++ harnesses share the same preparation and MCU policy code in
@@ -458,6 +465,7 @@ Current SF2 support:
   consistency checks for `phdr`, `pbag`, `pmod`, `pgen`, `inst`, `ibag`, `imod`,
   `igen`, and `shdr`.
 - MIDI program and bank-select lookup into SF2 presets.
+- General MIDI channel-10 percussion lookup into SF2 percussion bank 128.
 - Preset-zone and instrument-zone selection by key range and velocity range.
 - Global-zone plus local-zone merging for presets and instruments, with
   instrument-level generators treated as absolute and preset-level value
@@ -480,6 +488,37 @@ Current SF2 support:
 - `exclusiveClass` for MCU-side mutual exclusion within a MIDI channel.
 - Multiple overlapping matching preset/instrument zones for layered Note On
   playback.
+- Standard MIDI renders silence Note On events whose selected preset/instrument
+  has no matching key/velocity region, while still treating all-zero renders as
+  failures.
+
+Channel-10 percussion and unmapped-zone behavior deserve a precise note because
+they are easy to confuse with corrupt SoundFont data. MIDI note numbers are always
+encoded in the range 0 through 127, but the SF2 format does not require every
+preset to define a playable region for every one of those keys. A General MIDI
+compatible SoundFont usually covers the musically useful range for each melodic
+preset, and drum presets usually cover the standard drum-note range, but both are
+implemented through ordinary SF2 key/velocity ranges. Missing coverage for an
+extreme key, an unused velocity layer, or a nonstandard drum note is legal SF2
+data; a player should normally silence that one Note On rather than fail the
+entire song.
+
+The `MS_Basic.sf2` investigation exposed a more specific loader bug. The failing
+Beethoven MIDI did not require a completely absent region in the first 10 seconds.
+Instead, `Grand Piano` selected multiple preset layers for the same Note On. Some
+layers resolved to playable instrument zones, while another layer resolved to an
+instrument such as `Piano MF-high` whose local key ranges covered only high notes
+around 88 through 108. The old loader called the matching helper once per selected
+layer and threw `no SF2 zone matches key/velocity` as soon as any one layer had no
+instrument-zone match, even when other layers for the same Note On were valid.
+The current policy skips only the nonmatching layer, keeps all matching layers,
+and reports an error only if no playable region remains for a direct extraction or
+if a standard MIDI render contains no playable Note On events at all.
+
+For percussion, MIDI channel 10 is channel index 9 in the parser. The render
+policy maps that channel to SF2 bank 128, then uses normal preset, key-range, and
+velocity-range selection. This implements the common General MIDI/SoundFont drum
+bank convention without inventing a separate drum-note table in the harness.
 
 Known SF2/MIDI gaps to implement later are listed below. These are gaps against
 the SoundFont 2.04 specification, not necessarily blockers for RTL wavetable-core
@@ -538,9 +577,9 @@ MIDI and controller-policy gaps:
 - Velocity is used for zone selection and Note On peak level only. The current
   peak level is a simple linear mapping, not the SF2 default velocity-to-volume
   concave attenuation curve.
-- Channel 10 percussion currently falls back to bank 0 and does not implement the
-  General MIDI percussion bank convention, drum-note maps, or preset-specific
-  percussion policy.
+- Channel 10 percussion uses the General MIDI/SF2 convention of bank 128 and then
+  relies on normal SF2 key-range selection for drum-note maps. More advanced
+  preset-specific percussion policy is not modeled.
 - Pitch bend, sustain pedal, sostenuto, soft pedal, expression, volume, pan,
   aftertouch, modulation wheel, RPN, NRPN, All Sound Off, and All Notes Off are
   not modeled as SF2/MIDI controller behavior. Some RTL hooks exist, such as
@@ -559,9 +598,9 @@ Stereo and region-selection gaps:
 - If multiple preset or instrument zones overlap the same key and velocity, the
   harness triggers each matching region as a separate RTL voice. This exercises
   layered playback, subject to the current 32-voice allocation policy.
-- Zone selection currently treats lack of a key/velocity match as an error for the
-  selected preset or instrument. That is useful for regression visibility, but a
-  production player may choose to silence only that note while continuing playback.
+- Direct region extraction still treats lack of a key/velocity match as an error
+  for the selected preset or instrument. Standard MIDI render preparation instead
+  silences only the unmapped Note On and continues playback.
 
 RTL integration gaps implied by complete SF2 support:
 
