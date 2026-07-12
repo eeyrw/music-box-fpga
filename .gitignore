@@ -13,6 +13,7 @@ obj_dir/
 .Xil/
 *.jou
 *.str
+*.xpr
 *.dcp
 *.bit
 *.bin
@@ -26,6 +27,8 @@ obj_dir/
 incremental_db/
 db/
 output_files/
+fpga/smart_artix/music-box-fpga.srcs/
+fpga/smart_artix/DDRPIN.ucf
 
 # Python tooling
 __pycache__/

@@ -4,11 +4,21 @@
 #   vivado -mode batch -source scripts/vivado_synth.tcl
 
 set board_name smart_artix
-set part_name <xc7a50t-package-speed>
+set part_name xc7a50tfgg484-2
 set top_name smart_artix_top
+set ip_root music-box-fpga.srcs/sources_1/ip
+set clk_wiz_xci $ip_root/clk_wiz_0/clk_wiz_0.xci
+set mig_xci $ip_root/mig_7series_0/mig_7series_0.xci
 
 create_project $board_name build/vivado -part $part_name -force
-set_property target_language SystemVerilog [current_project]
+set_property target_language Verilog [current_project]
+
+foreach ip [list $clk_wiz_xci $mig_xci] {
+  if {[file exists $ip]} {
+    read_ip $ip
+    generate_target all [get_files $ip]
+  }
+}
 
 foreach src [split [read [open filelist.f r]] "\n"] {
   set src [string trim $src]

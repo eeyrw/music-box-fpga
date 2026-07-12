@@ -7,8 +7,10 @@ files belong under `fpga/`.
 
 ## Fixed Board Assumptions
 
-- FPGA family target: Xilinx Artix-7, currently planned as `XC7A50T`.
+- FPGA target: Xilinx Artix-7 `XC7A50T-2FGG484I`.
+- Vivado 2018.3 part name: `xc7a50tfgg484-2`.
 - Development board: Smart Artix minimum system board.
+- Board oscillator: `50 MHz`.
 - External wave memory: one Micron `MT41K256M16TW` DDR3 device.
 - DDR3 organization: `256M x 16-bit`, total capacity `512 MB`.
 - DDR3 connection: 16-bit data bus connected to FPGA `BANK34`.
@@ -17,10 +19,9 @@ files belong under `fpga/`.
 - Audio codec: simple I2S codec with no register initialization and no MCLK
   requirement.
 
-The exact FPGA package, speed grade, board revision, input oscillator frequency,
-I/O standards, DDR3 clock rate, SPI voltage, and I2S codec timing limits still
-need to be recorded from the board documentation or schematic before constraints
-are finalized.
+The board revision, I/O standards, DDR3 clock rate, SPI voltage, non-DDR pin
+locations, and I2S codec timing limits still need to be recorded from the board
+documentation or schematic before constraints are finalized.
 
 ## System Boundary
 
@@ -97,8 +98,8 @@ is better owned by an MCU or soft core than by the wavetable datapath RTL.
 1. Add board documentation and a `fpga/smart_artix/` project skeleton.
 2. Verify the generic core with output FIFO, deadline counters, and underrun
    checks in simulation.
-3. Synthesize the core for `XC7A50T` without DDR3 attached to measure LUT, FF,
-   BRAM, DSP, and timing margins.
+3. Synthesize the core for `XC7A50T-2FGG484I` without DDR3 attached to measure
+   LUT, FF, BRAM, DSP, and timing margins.
 4. Generate a MIG configuration for `MT41K256M16TW` and connect a read-only DDR3
    line-reader adapter to `wave_memory_subsystem`.
 5. Play a small known wave image from DDR3 through I2S.
@@ -109,3 +110,58 @@ stubbed so the first synthesis pass can measure core resource use before MIG and
 board constraints are added. The skeleton includes a first `smart_artix_ddr3_line_reader`
 adapter for the 7-series MIG native read interface; it assumes a 128-bit MIG app
 read data beat returns one `LINE_WORDS = 8` PCM-word line.
+
+## Vivado 2018.3 Snapshot
+
+Vivado 2018.3 is installed under `/opt/Xilinx/Vivado/2018.3` on the local
+development machine. The Smart Artix batch flow is in
+`fpga/smart_artix/scripts/vivado_synth.tcl` and currently runs synthesis for
+`smart_artix_top` with `xc7a50tfgg484-2`.
+
+The current XDC uses temporary legal package pins and `LVCMOS33` so Vivado can
+exercise the flow. These pins are not schematic-verified and must be replaced
+before any hardware connection. DDR3 pins remain owned by the future MIG-generated
+XDC.
+
+Latest post-synthesis result with the temporary `49.152 MHz` constraint:
+
+```text
+Vivado result: 0 errors, 0 critical warnings
+Slice LUTs: 21538 / 32600, 66.07%
+Slice registers: 45477 / 65200, 69.75%
+DSP48E1: 26 / 120, 21.67%
+Block RAM tiles: 0 / 75, 0.00%
+Timing WNS: -0.725 ns at 49.152 MHz
+```
+
+This timing result is a useful early warning, not a final board result. The next
+timing work is to run implementation after real pins and clocking are known, then
+pipeline the voice pipeline multiply/accumulation path if the violation remains.
+
+## MIG Clocking Note
+
+Generated IP currently exists under
+`fpga/smart_artix/music-box-fpga.srcs/sources_1/ip/`. Only the source-level IP
+configuration files are intended for version control: the Clocking Wizard `.xci`,
+the MIG `.xci`, and the MIG `.prj` referenced by that `.xci`. `clk_wiz_0`
+converts the board `50 MHz` oscillator to `200 MHz`. The latest generated
+`mig_7series_0` native app interface is `128` bits wide with a `29` bit app
+address, so the Smart Artix top uses `LINE_WORDS = 8` for one complete cache line
+per MIG read beat.
+
+The generated MIG project currently records `InputClkFreq = 333.333 MHz`,
+`TimePeriod = 3000 ps`, and `PHYRatio = 2:1`. The latest MIG wrapper exposes only
+`sys_clk_i`, with no separate `clk_ref_i`; the current top feeds the available
+`200 MHz` clock to `sys_clk_i`. Before hardware DDR3 bring-up, confirm that this
+is the intended MIG input clock, regenerate the clock wizard for `333.333 MHz`,
+or regenerate MIG for a `200 MHz` input clock if that mode is valid for the
+selected DDR3 rate.
+
+The current Vivado batch synthesis passes with the generated MIG and clock wizard
+connected: `0 errors`, `0 critical warnings`, and `205 warnings`. Most warnings
+come from generated Vivado IP and early board-level timing gaps; they are not yet
+filtered because the clocking and real external timing constraints are unsettled.
+Post-synthesis utilization is about `26695 / 32600` LUTs, `49965 / 65200`
+registers, and `26 / 120` DSPs. Timing is not yet clean, with
+`WNS = -11.098 ns` and `WHS = -1.329 ns`; treat that as a clocking/configuration
+issue until the MIG input frequency and final clock plan are confirmed.

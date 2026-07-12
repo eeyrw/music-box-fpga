@@ -2,6 +2,21 @@ module smart_artix_top (
   input  logic clk_in,
   input  logic rst_n,
 
+  inout  wire  [15:0] ddr3_dq,
+  inout  wire  [1:0]  ddr3_dqs_n,
+  inout  wire  [1:0]  ddr3_dqs_p,
+  output logic [14:0] ddr3_addr,
+  output logic [2:0]  ddr3_ba,
+  output logic        ddr3_ras_n,
+  output logic        ddr3_cas_n,
+  output logic        ddr3_we_n,
+  output logic        ddr3_reset_n,
+  output logic [0:0]  ddr3_ck_p,
+  output logic [0:0]  ddr3_ck_n,
+  output logic [0:0]  ddr3_cke,
+  output logic [1:0]  ddr3_dm,
+  output logic [0:0]  ddr3_odt,
+
   input  logic spi_sclk,
   input  logic spi_cs_n,
   input  logic spi_mosi,
@@ -18,18 +33,20 @@ module smart_artix_top (
 );
   localparam int LINE_WORDS = 8;
   localparam int OUTPUT_FIFO_DEPTH = 8;
-  localparam int MIG_ADDR_WIDTH = 28;
+  localparam int MIG_ADDR_WIDTH = 29;
   localparam int MIG_DATA_WIDTH = LINE_WORDS * 16;
-  localparam int SYS_CLK_HZ = 49_152_000;
+  localparam int SYS_CLK_HZ = 166_666_667;
   localparam int SAMPLE_RATE_HZ = 48_000;
 
   logic clk_sys;
   logic rst_sys;
+  logic clk_mig_sys;
 
-  // Replace this direct assignment with an MMCM/PLL once the board oscillator is
-  // confirmed. wavetable_core_system assumes SYS_CLK_HZ for audio tick timing.
-  assign clk_sys = clk_in;
-  assign rst_sys = !rst_n;
+  clk_wiz_0 board_clk_wiz (
+    .clk_out1(clk_mig_sys),
+    .resetn(rst_n),
+    .clk_in1(clk_in)
+  );
 
   logic                     ext_req_valid;
   logic                     ext_req_ready;
@@ -53,26 +70,56 @@ module smart_artix_top (
   logic [MIG_DATA_WIDTH-1:0] mig_app_rd_data;
   logic                     mig_app_rd_data_valid;
   logic                     mig_app_rd_data_end;
+  logic                     mig_app_wdf_rdy;
+  logic                     mig_app_sr_active;
+  logic                     mig_app_ref_ack;
+  logic                     mig_app_zq_ack;
+  logic [11:0]              mig_device_temp;
+  logic                     mig_ui_clk;
+  logic                     mig_ui_clk_sync_rst;
 
-  // Replace this read-path stub with the generated MIG DDR3 controller once
-  // Vivado is available. The stub lets the board wrapper lint and simulate
-  // without vendor IP.
-  smart_artix_mig_stub #(
-    .ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .DATA_WIDTH(MIG_DATA_WIDTH),
-    .INIT_CALIB_CYCLES(16),
-    .READ_LATENCY_CYCLES(6)
-  ) mig_stub (
-    .clk(clk_sys),
-    .rst(rst_sys),
-    .init_calib_complete(mig_init_calib_complete),
+  assign clk_sys = mig_ui_clk;
+  assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
+
+  mig_7series_0 mig_ddr3 (
+    .ddr3_dq(ddr3_dq),
+    .ddr3_dqs_n(ddr3_dqs_n),
+    .ddr3_dqs_p(ddr3_dqs_p),
+    .ddr3_addr(ddr3_addr),
+    .ddr3_ba(ddr3_ba),
+    .ddr3_ras_n(ddr3_ras_n),
+    .ddr3_cas_n(ddr3_cas_n),
+    .ddr3_we_n(ddr3_we_n),
+    .ddr3_reset_n(ddr3_reset_n),
+    .ddr3_ck_p(ddr3_ck_p),
+    .ddr3_ck_n(ddr3_ck_n),
+    .ddr3_cke(ddr3_cke),
+    .ddr3_dm(ddr3_dm),
+    .ddr3_odt(ddr3_odt),
+    .sys_clk_i(clk_mig_sys),
     .app_addr(mig_app_addr),
     .app_cmd(mig_app_cmd),
     .app_en(mig_app_en),
-    .app_rdy(mig_app_rdy),
+    .app_wdf_data('0),
+    .app_wdf_end(1'b0),
+    .app_wdf_mask('1),
+    .app_wdf_wren(1'b0),
     .app_rd_data(mig_app_rd_data),
+    .app_rd_data_end(mig_app_rd_data_end),
     .app_rd_data_valid(mig_app_rd_data_valid),
-    .app_rd_data_end(mig_app_rd_data_end)
+    .app_rdy(mig_app_rdy),
+    .app_wdf_rdy(mig_app_wdf_rdy),
+    .app_sr_req(1'b0),
+    .app_ref_req(1'b0),
+    .app_zq_req(1'b0),
+    .app_sr_active(mig_app_sr_active),
+    .app_ref_ack(mig_app_ref_ack),
+    .app_zq_ack(mig_app_zq_ack),
+    .ui_clk(mig_ui_clk),
+    .ui_clk_sync_rst(mig_ui_clk_sync_rst),
+    .init_calib_complete(mig_init_calib_complete),
+    .device_temp(mig_device_temp),
+    .sys_rst(rst_n)
   );
 
   smart_artix_ddr3_line_reader #(
@@ -140,5 +187,6 @@ module smart_artix_top (
   assign unused_debug = ext_req_valid ^ (^ext_req_addr) ^ (^output_fifo_level)
       ^ (^render_latency_cycles) ^ mem_debug_hit_pulse ^ mem_debug_miss_pulse
       ^ mem_debug_response_pulse ^ (^mem_debug_response_latency) ^ (^mig_app_addr)
-      ^ (^mig_app_cmd) ^ mig_app_en;
+      ^ (^mig_app_cmd) ^ mig_app_en ^ mig_app_wdf_rdy ^ mig_app_sr_active
+      ^ mig_app_ref_ack ^ mig_app_zq_ack ^ (^mig_device_temp);
 endmodule
