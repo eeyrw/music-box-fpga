@@ -31,6 +31,7 @@ void RegisterVoiceControl::set_filter(int voice, const FilterConfig& filter) {
 void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   registers_.write_register(voice_addr(voice, kRegControl), uint32_t((r.stereo ? 2 : 0) | (enable ? 1 : 0)));
   registers_.write_register(voice_addr(voice, kRegBaseAddr), r.base_addr);
+  registers_.write_register(voice_addr(voice, kRegBaseAddrR), r.base_addr_r);
   registers_.write_register(voice_addr(voice, kRegLength), r.length);
   registers_.write_register(voice_addr(voice, kRegLoopStart), r.loop_start);
   registers_.write_register(voice_addr(voice, kRegLoopEnd), r.loop_end);

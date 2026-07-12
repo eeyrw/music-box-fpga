@@ -102,6 +102,30 @@ def find_chunk(data, wanted):
     raise ValueError(f"missing LIST {wanted.decode('ascii')}")
 
 
+def list_chunks_with_offsets(data, wanted):
+    if data[0:4] != b"RIFF" or data[8:12] != b"sfbk":
+        raise ValueError("not a SoundFont2 RIFF/sfbk file")
+    pos = 12
+    end = len(data)
+    while pos + 8 <= end:
+        chunk_id = data[pos:pos + 4]
+        size = struct.unpack_from("<I", data, pos + 4)[0]
+        payload = pos + 8
+        if chunk_id == b"LIST" and data[payload:payload + 4] == wanted:
+            chunks = {}
+            child = payload + 4
+            list_end = payload + size
+            while child + 8 <= list_end:
+                child_id = data[child:child + 4]
+                child_size = struct.unpack_from("<I", data, child + 4)[0]
+                child_payload = child + 8
+                chunks[child_id] = (data[child_payload:child_payload + child_size], child_payload)
+                child = child_payload + child_size + (child_size & 1)
+            return chunks
+        pos = payload + size + (size & 1)
+    raise ValueError(f"missing LIST {wanted.decode('ascii')}")
+
+
 def list_chunks(payload):
     # RIFF chunks are padded to even byte boundaries; size itself excludes the
     # optional pad byte, hence the size & 1 adjustment.
@@ -305,16 +329,10 @@ def sanitize_sample_type(sample_type):
     return sample_type & 0x7fff
 
 
-def sample_pcm(smpl, header):
-    # The smpl chunk is a contiguous signed 16-bit PCM array. Header offsets are
-    # expressed in sample words, so convert to byte slices by multiplying by two.
-    raw = smpl[header.start * 2:header.end * 2]
-    return list(struct.unpack(f"<{len(raw) // 2}h", raw))
-
-
 def linked_pair(samples, selected):
     # SF2 stereo samples are represented as two separate mono sample headers
-    # linked by sampleLink. The RTL wants one interleaved stereo memory image.
+    # linked by sampleLink. The RTL consumes independent absolute left/right
+    # base addresses into the complete SF2 file image.
     sample_type = sanitize_sample_type(selected.sample_type)
     if sample_type == SAMPLE_LEFT and selected.sample_link < len(samples):
         return selected, samples[selected.sample_link]
@@ -323,34 +341,33 @@ def linked_pair(samples, selected):
     return selected, None
 
 
-def build_wave_words(smpl, samples, selected):
-    # Return the memory words in the exact format documented by docs/memory_format.md:
-    # mono is one word per frame; stereo is left/right interleaved per frame.
+def region_addresses(samples, selected, smpl_word_offset):
     left, right = linked_pair(samples, selected)
-    left_pcm = sample_pcm(smpl, left)
     stereo = right is not None and sanitize_sample_type(right.sample_type) in (SAMPLE_LEFT, SAMPLE_RIGHT)
     if stereo:
-        right_pcm = sample_pcm(smpl, right)
-        # Keep both channels the same length; the shorter linked sample defines
-        # the usable stereo frame count.
-        frame_count = min(len(left_pcm), len(right_pcm), 65535)
-        words = []
-        for i in range(frame_count):
-            words.append(left_pcm[i])
-            words.append(right_pcm[i])
+        frame_count = min(left.end - left.start, right.end - right.start, 65535)
         loop_start = max(0, min(left.start_loop - left.start, right.start_loop - right.start, frame_count - 1))
         loop_end = max(loop_start + 1, min(left.end_loop - left.start, right.end_loop - right.start, frame_count))
+        base_addr_r = smpl_word_offset + right.start
     else:
-        frame_count = min(len(left_pcm), 65535)
-        words = left_pcm[:frame_count]
+        frame_count = min(left.end - left.start, 65535)
         loop_start = max(0, min(left.start_loop - left.start, frame_count - 1))
         loop_end = max(loop_start + 1, min(left.end_loop - left.start, frame_count))
+        base_addr_r = smpl_word_offset + left.start
     if loop_start >= loop_end or loop_end > frame_count:
         # Some soundfonts use degenerate or missing loop points. Use the whole
         # sample as a legal fallback so the RTL configuration remains valid.
         loop_start = 0
         loop_end = frame_count
-    return words, left, right, stereo, frame_count, loop_start, loop_end
+    return left, right, stereo, smpl_word_offset + left.start, base_addr_r, frame_count, loop_start, loop_end
+
+
+def file_words(data):
+    words = []
+    for i in range(0, len(data), 2):
+        hi = data[i + 1] if i + 1 < len(data) else 0
+        words.append(data[i] | (hi << 8))
+    return words
 
 
 def write_memh(path, words):
@@ -390,6 +407,7 @@ def main():
     # sdta holds PCM sample data; pdta holds the instrument/sample metadata used
     # to choose a sample and calculate playback settings.
     sdta = list_chunks(find_chunk(data, b"sdta"))
+    sdta_offsets = list_chunks_with_offsets(data, b"sdta")
     pdta = list_chunks(find_chunk(data, b"pdta"))
     instruments = parse_instruments(pdta[b"inst"])
     bags = parse_bags(pdta[b"ibag"])
@@ -404,7 +422,12 @@ def main():
     inst_index, inst = select_instrument(instruments, args.instrument)
     zone = select_zone(instrument_zones(instruments, bags, generators, inst_index), args.key)
     sample = samples[zone[GEN_SAMPLE_ID]]
-    words, left, right, stereo, length, loop_start, loop_end = build_wave_words(sdta[b"smpl"], samples, sample)
+    _, smpl_payload = sdta_offsets[b"smpl"]
+    if smpl_payload & 1:
+        raise ValueError("smpl payload is not word aligned")
+    smpl_word_offset = smpl_payload // 2
+    left, right, stereo, base_addr, base_addr_r, length, loop_start, loop_end = region_addresses(
+        samples, sample, smpl_word_offset)
 
     # Convert SF2 pitch metadata to the RTL's Q16.16 phase increment. A value of
     # 0x0001_0000 means advance one source sample frame per output sample.
@@ -421,13 +444,15 @@ def main():
     memh = os.path.join(args.out_dir, "wave.memh")
     config_svh = os.path.join(args.out_dir, "render_config.svh")
     config_json = os.path.join(args.out_dir, "render_config.json")
+    words = file_words(data)
     write_memh(memh, words)
     # These localparams directly program tb_render_wavetable_core.sv.
     cfg = {
         "RENDER_MEMORY_DEPTH": len(words),
         "RENDER_SAMPLE_COUNT": sample_count,
         "RENDER_STEREO": 1 if stereo else 0,
-        "RENDER_BASE_ADDR": 0,
+        "RENDER_BASE_ADDR": base_addr,
+        "RENDER_BASE_ADDR_R": base_addr_r,
         "RENDER_LENGTH": length,
         "RENDER_LOOP_START": loop_start,
         "RENDER_LOOP_END": loop_end,
@@ -449,6 +474,8 @@ def main():
             "sample_left": left.name,
             "sample_right": right.name if right else None,
             "stereo": stereo,
+            "base_addr": base_addr,
+            "base_addr_r": base_addr_r,
             "length": length,
             "loop_start": loop_start,
             "loop_end": loop_end,

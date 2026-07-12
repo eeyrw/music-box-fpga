@@ -120,10 +120,10 @@ if stereo == 0:
   r0 = l0
   r1 = l1
 else:
-  l0 = mem[base_addr + 2*frame_0]
-  l1 = mem[base_addr + 2*frame_1]
-  r0 = mem[base_addr + 2*frame_0 + 1]
-  r1 = mem[base_addr + 2*frame_1 + 1]
+  l0 = mem[base_addr + frame_0]
+  l1 = mem[base_addr + frame_1]
+  r0 = mem[base_addr_r + frame_0]
+  r1 = mem[base_addr_r + frame_1]
 ```
 
 Interpolation is applied independently per channel:

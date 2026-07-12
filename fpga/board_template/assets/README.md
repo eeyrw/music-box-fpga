@@ -6,7 +6,7 @@ be loaded into the selected wave memory before playback.
 
 Expected artifacts may include:
 
-- Raw signed 16-bit PCM wave-memory image, interleaved left/right for stereo.
+- Raw signed 16-bit PCM wave-memory image, with independent left/right base addresses for stereo.
 - Metadata tables for sample base address, length, loop range, channel mode, and
   default gain/filter parameters.
 - Optional firmware tables for MIDI program/bank/preset lookup.

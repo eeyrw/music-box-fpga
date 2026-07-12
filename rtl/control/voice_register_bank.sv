@@ -44,6 +44,7 @@ module voice_register_bank (
   localparam logic [15:0] OFF_FILTER_A2   = 16'h004c;
   localparam logic [15:0] OFF_GAIN_RT     = 16'h0050;
   localparam logic [15:0] OFF_RELEASE     = 16'h0054;
+  localparam logic [15:0] OFF_BASE_R      = 16'h0058;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
@@ -100,13 +101,14 @@ module voice_register_bank (
         OFF_FILTER_A2:   bus_rdata = shadow_config[selected_voice].filter_a2;
         OFF_GAIN_RT:     bus_rdata = {runtime_state[selected_voice].gain_r, runtime_state[selected_voice].gain_l};
         OFF_RELEASE:     bus_rdata = {31'd0, runtime_state[selected_voice].released};
+        OFF_BASE_R:      bus_rdata = shadow_config[selected_voice].base_addr_r;
         default: begin
           address_valid = 1'b0;
           bus_rdata = 32'd0;
         end
       endcase
     end else if (bus_address == ADDR_VERSION) begin
-      bus_rdata = 32'h0003_0000;
+      bus_rdata = 32'h0004_0000;
     end
 
     // This bus is deliberately single-cycle in simulation: a valid address is
@@ -151,6 +153,7 @@ module voice_register_bank (
             shadow_config[selected_voice].stereo <= bus_wdata[1];
           end
           OFF_BASE:       shadow_config[selected_voice].base_addr <= bus_wdata;
+          OFF_BASE_R:     shadow_config[selected_voice].base_addr_r <= bus_wdata;
           OFF_LENGTH:     shadow_config[selected_voice].length <= bus_wdata[15:0];
           OFF_LOOP_START: shadow_config[selected_voice].loop_start <= bus_wdata[15:0];
           OFF_LOOP_END:   shadow_config[selected_voice].loop_end <= bus_wdata[15:0];

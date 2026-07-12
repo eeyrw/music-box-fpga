@@ -230,7 +230,7 @@ int main() {
     if (sf2.ifil != "2.4" || sf2.isng != "EMU8000" || sf2.inam != "Unit Test SF2") {
       throw std::runtime_error("INFO metadata was not parsed correctly");
     }
-    std::vector<int16_t> memory;
+    std::vector<int16_t> memory = sf2.file_words;
     render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
     int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * 65536.0));
     int expected_gain = int(std::round(0x4000 * std::pow(10.0, -100.0 / 200.0)));
@@ -238,9 +238,12 @@ int main() {
     expect_equal(preset.gain_l, expected_gain, "preset additive pan left gain");
     expect_equal(preset.gain_r, expected_gain, "preset additive pan right gain");
     expect_equal(int(preset.length), 58, "sample address offsets length");
+    expect_equal(int(preset.base_addr), int(sf2.smpl_word_offset + 2), "absolute smpl base address");
+    expect_equal(int(preset.base_addr_r), int(preset.base_addr), "mono right base mirrors left base");
     expect_equal(int(preset.loop_start), 7, "sample startloop offset");
     expect_equal(int(preset.loop_end), 37, "sample endloop offset");
-    expect_equal(memory.at(0), -659, "sm24 rounded sample merge");
+    expect_equal(sf2.smpl.at(2), -659, "sm24 rounded sample merge");
+    expect_equal(int(memory.size()), int(sf2.file_words.size()), "region build does not repack wave memory");
     if (!preset.filter_enable || preset.filter_b0 <= 0 || preset.filter_b1 <= 0 || preset.filter_b2 <= 0) {
       throw std::runtime_error("SF2 filter generators did not produce enabled biquad feed-forward coefficients");
     }

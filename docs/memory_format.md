@@ -1,7 +1,10 @@
 # Wave Memory Format
 
-Addresses identify 16-bit words. A voice configuration gives `base_addr` in
-words and gives `length`, `loop_start`, and `loop_end` in sample frames.
+Addresses identify 16-bit words in the external wave-memory image. For SF2-backed
+flows, word address zero is the first 16-bit word of the complete SF2 file image;
+sample addresses therefore include the `smpl` chunk payload offset. A voice
+configuration gives `base_addr` and `base_addr_r` in words and gives `length`,
+`loop_start`, and `loop_end` in sample frames.
 
 ## Mono
 
@@ -12,17 +15,21 @@ base_addr + n
 ```
 
 The fetched sample is used for both channels before channel gain is applied.
+`base_addr_r` is ignored for mono playback.
 
 ## Stereo
 
-When `stereo` is set, channels are interleaved left first:
+When `stereo` is set, left and right channels use independent absolute base
+addresses:
 
 ```text
-left(n)  = base_addr + 2*n
-right(n) = base_addr + 2*n + 1
+left(n)  = base_addr + n
+right(n) = base_addr_r + n
 ```
 
-Interpolation operates independently on each channel.
+This matches normal SF2 linked-stereo storage, where left and right samples are
+separate sample headers linked by `sampleLink`. Interpolation operates
+independently on each channel.
 
 ## Abstract Memory Handshake
 

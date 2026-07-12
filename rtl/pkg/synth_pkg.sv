@@ -24,6 +24,7 @@ package synth_pkg;
     logic                      enable;
     logic                      stereo;
     logic [ADDR_WIDTH-1:0]     base_addr;
+    logic [ADDR_WIDTH-1:0]     base_addr_r;
     logic [15:0]               length;
     logic [15:0]               loop_start;
     logic [15:0]               loop_end;

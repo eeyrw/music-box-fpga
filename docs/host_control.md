@@ -64,6 +64,9 @@ build/ch347_control --dry-run \
   --phase-inc 0x00010000 --gain-l 0x4000 --gain-r 0x4000
 ```
 
+For stereo regions, pass `--base` for the left sample and `--base-r` for the
+right sample.
+
 `Ch347RegisterTransport::write_register` emits the SPI frame documented in
 `docs/register_map.md`:
 

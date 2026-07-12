@@ -223,7 +223,7 @@ int main() {
     events.push_back(all_notes_off);
 
     std::vector<render::Region> regions;
-    std::vector<int16_t> wave_memory;
+    std::vector<int16_t> wave_memory = sf2.file_words;
     render::prepare_events_and_regions(args, sf2, 48000, 480, events, regions, wave_memory);
 
     if (regions.size() != 2) throw std::runtime_error("expected one melodic region and one playable drum region");

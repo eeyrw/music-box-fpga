@@ -82,7 +82,8 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << ", \"bank\": " << r.bank << ", \"preset\": \"" << r.preset
       << "\", \"instrument\": \"" << r.instrument << "\", \"sample_left\": \""
       << r.sample_left << "\", \"stereo\": " << (r.stereo ? "true" : "false")
-      << ", \"base_addr\": " << r.base_addr << ", \"length\": " << r.length
+      << ", \"base_addr\": " << r.base_addr
+      << ", \"base_addr_r\": " << r.base_addr_r << ", \"length\": " << r.length
       << ", \"loop_start\": " << r.loop_start << ", \"loop_end\": " << r.loop_end
       << ", \"phase_inc\": " << r.phase_inc
       << ", \"filter_enable\": " << (r.filter_enable ? "true" : "false")
@@ -161,8 +162,12 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
     throw std::runtime_error("no playable MIDI note-on events matched the selected SF2 regions");
   }
 
-  if (std::none_of(wave_memory.begin(), wave_memory.end(), [](int16_t v) { return v != 0; })) {
-    throw std::runtime_error("selected SF2 regions produced an all-zero wave memory image");
+  for (const auto& r : regions) {
+    uint32_t last_l = r.base_addr + (r.length ? r.length - 1 : 0);
+    uint32_t last_r = r.base_addr_r + (r.length ? r.length - 1 : 0);
+    if (r.length != 0 && (last_l >= wave_memory.size() || (r.stereo && last_r >= wave_memory.size()))) {
+      throw std::runtime_error("selected SF2 region points outside the wave memory image");
+    }
   }
 
   for (auto& e : events) {

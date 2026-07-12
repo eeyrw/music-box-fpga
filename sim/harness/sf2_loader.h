@@ -27,7 +27,9 @@ struct SampleHeader {
 };
 
 struct Sf2Data {
+  std::vector<int16_t> file_words;
   std::vector<int16_t> smpl;
+  uint32_t smpl_word_offset = 0;
   std::string ifil;
   std::string isng;
   std::string inam;

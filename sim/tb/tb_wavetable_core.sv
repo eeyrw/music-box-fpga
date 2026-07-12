@@ -161,10 +161,12 @@ module tb_wavetable_core;
   endtask
 
   task automatic configure_stereo_loop;
-    // Stereo memory starts at word 16 and loops over frames [1,3). phase_init=2.5
-    // uses frame2 and wraps frame3's interpolation endpoint back to frame1.
+    // Stereo memory uses independent absolute left/right bases and loops over
+    // frames [1,3). phase_init=2.5 uses frame2 and wraps frame3's interpolation
+    // endpoint back to frame1.
     bus_write_word(16'h0100, 32'h0000_0003);
     bus_write_word(16'h0104, 32'd16);
+    bus_write_word(16'h0158, 32'd24);
     bus_write_word(16'h0108, 32'd4);
     bus_write_word(16'h010c, 32'd1);
     bus_write_word(16'h0110, 32'd3);
@@ -268,15 +270,15 @@ module tb_wavetable_core;
     memory_model.memory[2] = 16'sd2000;
     memory_model.memory[3] = 16'sd3000;
 
-    // Stereo test wave: left/right interleaved words per frame.
+    // Stereo test wave: independent absolute left and right sample regions.
     memory_model.memory[16] = 16'sd1000;
-    memory_model.memory[17] = -16'sd1000;
-    memory_model.memory[18] = 16'sd2000;
-    memory_model.memory[19] = -16'sd2000;
-    memory_model.memory[20] = 16'sd3000;
-    memory_model.memory[21] = -16'sd3000;
-    memory_model.memory[22] = 16'sd4000;
-    memory_model.memory[23] = -16'sd4000;
+    memory_model.memory[17] = 16'sd2000;
+    memory_model.memory[18] = 16'sd3000;
+    memory_model.memory[19] = 16'sd4000;
+    memory_model.memory[24] = -16'sd1000;
+    memory_model.memory[25] = -16'sd2000;
+    memory_model.memory[26] = -16'sd3000;
+    memory_model.memory[27] = -16'sd4000;
 
     // Second mono test wave for multi-voice mixing. With gain=0.5 and
     // envelope=0.5 each frame contributes 500 to the mix.

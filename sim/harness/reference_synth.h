@@ -27,6 +27,7 @@ class ReferenceSynth : public VoiceControlSink {
     bool stereo = false;
     bool released = false;
     uint32_t base_addr = 0;
+    uint32_t base_addr_r = 0;
     uint16_t length = 0;
     uint16_t loop_start = 0;
     uint16_t loop_end = 0;

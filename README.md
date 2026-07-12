@@ -58,7 +58,7 @@ Shadow Registers -> Commit -> Active Voice Configurations
 
 PCM data is signed 16-bit. Playback phase uses unsigned Q16.16 sample-frame
 units, and channel gains use signed Q1.15. Mono waves contain one word per frame;
-stereo waves are interleaved left then right. Detailed contracts are documented
+stereo waves use independent absolute left/right base addresses. Detailed contracts are documented
 in [`docs/`](docs/).
 
 ## Repository Layout
@@ -144,9 +144,9 @@ Render one instrument through the RTL core at 48 kHz:
 make render-instrument INSTRUMENT=0 KEY=60 SECONDS=1
 ```
 
-The flow extracts the selected SF2 instrument sample, converts linked left/right
-samples to the core's interleaved stereo memory format, runs the Verilator render
-testbench, and writes `build/render/out.wav`.
+The flow maps the selected SF2 instrument sample to absolute addresses in the
+full SF2 file image, runs the Verilator render testbench, and writes
+`build/render/out.wav`.
 
 Render a simple MIDI-driven score through one of the C++ harnesses:
 

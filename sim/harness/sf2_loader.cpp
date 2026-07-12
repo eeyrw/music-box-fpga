@@ -70,6 +70,22 @@ constexpr int SAMPLE_ROM_FLAG = 0x8000;
 
 using Zone = std::map<int, int>;
 
+struct ChunkRef {
+  std::vector<uint8_t> data;
+  size_t payload_offset = 0;
+};
+
+std::vector<int16_t> file_words_from_bytes(const std::vector<uint8_t>& data) {
+  std::vector<int16_t> words;
+  words.reserve((data.size() + 1) / 2);
+  for (size_t i = 0; i < data.size(); i += 2) {
+    uint16_t lo = data[i];
+    uint16_t hi = (i + 1 < data.size()) ? uint16_t(data[i + 1]) : 0;
+    words.push_back(int16_t(lo | (hi << 8)));
+  }
+  return words;
+}
+
 // Locate one top-level LIST chunk inside the RIFF/sfbk container. SoundFont2
 // keeps sample PCM under LIST sdta and preset/instrument metadata under LIST
 // pdta; the harness loads only those two sections.
@@ -127,6 +143,37 @@ std::map<std::string, std::vector<uint8_t>> list_chunks(const std::vector<uint8_
     pos = start + size + (size & 1u);
   }
   return chunks;
+}
+
+std::map<std::string, ChunkRef> list_chunk_refs(const std::vector<uint8_t>& data, const char wanted[4]) {
+  if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0 ||
+      std::memcmp(data.data() + 8, "sfbk", 4) != 0) {
+    throw std::runtime_error("not a SoundFont2 RIFF/sfbk file");
+  }
+
+  size_t pos = 12;
+  while (pos + 8 <= data.size()) {
+    uint32_t size = read_u32le(data, pos + 4);
+    size_t payload = pos + 8;
+    if (payload + size > data.size()) throw std::runtime_error("truncated RIFF chunk");
+    if (std::memcmp(data.data() + pos, "LIST", 4) == 0 && size >= 4 &&
+        std::memcmp(data.data() + payload, wanted, 4) == 0) {
+      std::map<std::string, ChunkRef> chunks;
+      size_t child = payload + 4;
+      size_t end = payload + size;
+      while (child + 8 <= end) {
+        std::string id(reinterpret_cast<const char*>(data.data() + child), 4);
+        uint32_t child_size = read_u32le(data, child + 4);
+        size_t child_payload = child + 8;
+        if (child_payload + child_size > end) throw std::runtime_error("truncated LIST child chunk");
+        chunks[id] = {slice(data, child_payload, child_size), child_payload};
+        child = child_payload + child_size + (child_size & 1u);
+      }
+      return chunks;
+    }
+    pos = payload + size + (size & 1u);
+  }
+  throw std::runtime_error(std::string("missing LIST ") + std::string(wanted, 4));
 }
 
 const std::vector<uint8_t>& require_chunk(const std::map<std::string, std::vector<uint8_t>>& chunks,
@@ -701,51 +748,35 @@ SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone
   return w;
 }
 
-std::vector<int16_t> sample_pcm(const Sf2Data& sf2, const SampleWindow& w) {
-  // SampleHeader offsets are word indexes into the smpl chunk. Clamp corrupt or
-  // out-of-range values to the loaded PCM array so malformed SF2 data fails
-  // softly where possible.
-  return std::vector<int16_t>(sf2.smpl.begin() + w.start, sf2.smpl.begin() + w.end);
-}
-
-std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, const Zone& zone, Region& region) {
-  // Build the exact wave-memory words consumed by wavetable_core and fill the
-  // region metadata that will later be committed into a voice slot. The RTL uses
-  // frame indexes for length and loop points; stereo consumes two memory words
-  // per frame while mono consumes one.
+void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& zone, Region& region) {
+  // The external wave memory is a word-addressed image of the complete SF2 file.
+  // SampleHeader positions are word indexes into smpl, so add the smpl payload's
+  // file word offset and keep loop points relative to the selected playback window.
   auto rel = [](uint32_t value, uint32_t base) -> uint32_t { return value > base ? value - base : 0; };
   auto pair = linked_pair(sf2, selected_sample);
   const auto& left = sf2.samples.at(pair.first);
   SampleWindow left_window = sample_window(sf2, left, zone);
-  std::vector<int16_t> left_pcm = sample_pcm(sf2, left_window);
   region.sample_left = left.name;
+  region.base_addr = sf2.smpl_word_offset + left_window.start;
 
-  // SF2 stereo is usually two linked mono sample headers. Convert that pair to
-  // the RTL memory contract: left0, right0, left1, right1, ...
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
     const auto& right = sf2.samples.at(pair.second);
     SampleWindow right_window = sample_window(sf2, right, zone);
-    std::vector<int16_t> right_pcm = sample_pcm(sf2, right_window);
-    uint32_t frames = std::min<uint32_t>({uint32_t(left_pcm.size()), uint32_t(right_pcm.size()), 65535u});
-    std::vector<int16_t> words;
-    words.reserve(size_t(frames) * 2);
-    for (uint32_t i = 0; i < frames; ++i) {
-      words.push_back(left_pcm[i]);
-      words.push_back(right_pcm[i]);
-    }
+    uint32_t frames = std::min<uint32_t>({left_window.end - left_window.start,
+                                          right_window.end - right_window.start,
+                                          65535u});
     region.stereo = true;
     region.sample_right = right.name;
+    region.base_addr_r = sf2.smpl_word_offset + right_window.start;
     region.length = frames;
-    // SF2 loop end points are absolute sample positions. Convert to frame-local
-    // indexes and keep the RTL contract that loop_end is exclusive.
     region.loop_start = std::min<uint32_t>({rel(left_window.start_loop, left_window.start), rel(right_window.start_loop, right_window.start), frames ? frames - 1 : 0});
     region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>({rel(left_window.end_loop, left_window.start), rel(right_window.end_loop, right_window.start), frames}));
-    return words;
+    return;
   }
 
-  uint32_t frames = std::min<uint32_t>(uint32_t(left_pcm.size()), 65535u);
-  std::vector<int16_t> words(left_pcm.begin(), left_pcm.begin() + frames);
+  uint32_t frames = std::min<uint32_t>(left_window.end - left_window.start, 65535u);
   region.stereo = false;
+  region.base_addr_r = region.base_addr;
   region.length = frames;
   region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
   region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames));
@@ -753,7 +784,6 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, c
     region.loop_start = 0;
     region.loop_end = frames;
   }
-  return words;
 }
 
 }  // namespace
@@ -763,12 +793,18 @@ Sf2Data load_sf2(const std::string& path) {
   // bag/generator indexes because zone expansion needs sentinel records and
   // adjacent bag ranges exactly as encoded in pdta.
   auto data = read_file(path);
+  auto sdta_refs = list_chunk_refs(data, "sdta");
   std::vector<uint8_t> info_payload;
   std::map<std::string, std::vector<uint8_t>> info;
   if (find_list_chunk_optional(data, "INFO", info_payload)) info = list_chunks(info_payload);
   auto sdta = list_chunks(find_list_chunk(data, "sdta"));
   auto pdta = list_chunks(find_list_chunk(data, "pdta"));
   Sf2Data sf2;
+  sf2.file_words = file_words_from_bytes(data);
+  auto smpl_ref = sdta_refs.find("smpl");
+  if (smpl_ref == sdta_refs.end()) throw std::runtime_error("missing SF2 chunk smpl");
+  if ((smpl_ref->second.payload_offset & 1u) != 0) throw std::runtime_error("SF2 smpl payload is not word aligned");
+  sf2.smpl_word_offset = uint32_t(smpl_ref->second.payload_offset / 2);
   sf2.ifil = version_chunk(info, "ifil");
   sf2.isng = text_chunk(info, "isng");
   sf2.inam = text_chunk(info, "INAM");
@@ -822,8 +858,9 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
 }
 
 std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                                             int velocity, int sample_rate, int tick_samples,
-                                             std::vector<int16_t>& memory) {
+                                              int velocity, int sample_rate, int tick_samples,
+                                              std::vector<int16_t>& memory) {
+  (void)memory;
   // Full MIDI mode starts at the channel program/bank, selects a preset zone,
   // follows that zone to an instrument, then merges preset and instrument
   // generators. Instrument generators override preset defaults for the final
@@ -842,8 +879,7 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       r.bank = bank;
       r.preset = sf2.presets.at(preset_idx).name;
       r.instrument = sf2.instruments.at(inst_idx).name;
-      r.base_addr = uint32_t(memory.size());
-      auto words = build_wave_words(sf2, sample_id, zone, r);
+      fill_region_addresses(sf2, sample_id, zone, r);
       const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
       r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
       auto gains = pan_gains(zone);
@@ -855,7 +891,6 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       volume_envelope(zone, key, tick_samples, sample_rate, r);
       modulation_generators(zone, key, tick_samples, sample_rate, r);
       filter_coefficients(zone, sample_rate, r);
-      memory.insert(memory.end(), words.begin(), words.end());
       regions.push_back(r);
     }
   }
@@ -870,8 +905,9 @@ Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
 }
 
 std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                                 int velocity, int sample_rate, int tick_samples,
-                                                 std::vector<int16_t>& memory) {
+                                                  int velocity, int sample_rate, int tick_samples,
+                                                  std::vector<int16_t>& memory) {
+  (void)memory;
   // Forced-instrument mode skips preset lookup. This is useful for debugging a
   // specific SF2 instrument because MIDI program and bank messages cannot change
   // the selected sample set.
@@ -883,8 +919,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     r.output_sample_rate = sample_rate;
     r.instrument = sf2.instruments.at(inst_idx).name;
     r.preset = r.instrument;
-    r.base_addr = uint32_t(memory.size());
-    auto words = build_wave_words(sf2, sample_id, zone, r);
+    fill_region_addresses(sf2, sample_id, zone, r);
     const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
     r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
     auto gains = pan_gains(zone);
@@ -896,7 +931,6 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     volume_envelope(zone, key, tick_samples, sample_rate, r);
     modulation_generators(zone, key, tick_samples, sample_rate, r);
     filter_coefficients(zone, sample_rate, r);
-    memory.insert(memory.end(), words.begin(), words.end());
     regions.push_back(r);
   }
   if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");

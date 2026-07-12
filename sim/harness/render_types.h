@@ -37,6 +37,7 @@ constexpr int kRegFilterA1 = 0x48;
 constexpr int kRegFilterA2 = 0x4c;
 constexpr int kRegGainRuntime = 0x50;
 constexpr int kRegReleaseControl = 0x54;
+constexpr int kRegBaseAddrR = 0x58;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
@@ -86,6 +87,7 @@ struct Region {
   std::string sample_right;
   bool stereo = false;
   uint32_t base_addr = 0;
+  uint32_t base_addr_r = 0;
   uint32_t length = 0;
   uint32_t loop_start = 0;
   uint32_t loop_end = 0;

@@ -5,6 +5,10 @@ module tb_render_wavetable_core;
   // phase increment, and output paths for this render run.
 `include "render_config.svh"
 
+`ifndef RENDER_BASE_ADDR_R
+`define RENDER_BASE_ADDR_R RENDER_BASE_ADDR
+`endif
+
   // Unlike tb_wavetable_core, this testbench is not a strict unit test. It is a
   // render harness: drive the RTL for N samples and dump its exact PCM output.
   logic clk = 1'b0;
@@ -150,6 +154,7 @@ module tb_render_wavetable_core;
     // then commit atomically with ADDR_COMMIT.
     bus_write_word(16'h0100, (RENDER_STEREO != 0) ? 32'h0000_0003 : 32'h0000_0001);
     bus_write_word(16'h0104, RENDER_BASE_ADDR);
+    bus_write_word(16'h0158, `RENDER_BASE_ADDR_R);
     bus_write_word(16'h0108, RENDER_LENGTH);
     bus_write_word(16'h010c, RENDER_LOOP_START);
     bus_write_word(16'h0110, RENDER_LOOP_END);

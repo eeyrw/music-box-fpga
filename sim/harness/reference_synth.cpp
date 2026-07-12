@@ -38,6 +38,7 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.stereo = r.stereo;
   v.released = false;
   v.base_addr = r.base_addr;
+  v.base_addr_r = r.base_addr_r;
   v.length = uint16_t(r.length);
   v.loop_start = uint16_t(r.loop_start);
   v.loop_end = uint16_t(r.loop_end);
@@ -90,10 +91,10 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     else
       v.phase = uint32_t(phase_sum);
 
-    int16_t raw_l0 = read_word(v.base_addr + (v.stereo ? uint32_t(frame_0) * 2u : uint32_t(frame_0)));
-    int16_t raw_l1 = read_word(v.base_addr + (v.stereo ? uint32_t(frame_1) * 2u : uint32_t(frame_1)));
-    int16_t raw_r0 = v.stereo ? read_word(v.base_addr + uint32_t(frame_0) * 2u + 1u) : raw_l0;
-    int16_t raw_r1 = v.stereo ? read_word(v.base_addr + uint32_t(frame_1) * 2u + 1u) : raw_l1;
+    int16_t raw_l0 = read_word(v.base_addr + uint32_t(frame_0));
+    int16_t raw_l1 = read_word(v.base_addr + uint32_t(frame_1));
+    int16_t raw_r0 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_0)) : raw_l0;
+    int16_t raw_r1 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_1)) : raw_l1;
 
     int16_t interp_l = interpolate(raw_l0, raw_l1, fraction);
     int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);

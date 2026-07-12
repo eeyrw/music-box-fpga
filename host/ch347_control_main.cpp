@@ -114,7 +114,8 @@ void print_usage(const char* argv0) {
       << "\nVoice options for --commit-voice:\n"
       << "  --enable 0|1            Default 1\n"
       << "  --stereo 0|1            Default 0\n"
-      << "  --base ADDR             Wave-memory base word address\n"
+      << "  --base ADDR             Left/mono wave-memory base word address\n"
+      << "  --base-r ADDR           Right-channel wave-memory base word address\n"
       << "  --length FRAMES         Sample-frame length\n"
       << "  --loop-start FRAME      Default 0\n"
       << "  --loop-end FRAME        Default length\n"
@@ -205,6 +206,9 @@ Args parse_args(int argc, char** argv) {
     } else if (a == "--base") {
       have_commit = true;
       current_commit.region.base_addr = parse_u32(need_arg(argc, argv, i, "--base"), "base");
+    } else if (a == "--base-r") {
+      have_commit = true;
+      current_commit.region.base_addr_r = parse_u32(need_arg(argc, argv, i, "--base-r"), "base-r");
     } else if (a == "--length") {
       have_commit = true;
       current_commit.region.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");

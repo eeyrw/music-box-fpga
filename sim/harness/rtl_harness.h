@@ -69,8 +69,8 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
 
   Vwavetable_core_memory* top_ = nullptr;
   RegisterVoiceControl voice_control_;
-  // Shared wave-memory image. Mono regions are stored one int16_t per frame;
-  // stereo regions are interleaved left/right exactly as the RTL expects.
+  // Shared wave-memory image. For SF2-backed renders this is the complete file
+  // image, with regions pointing at absolute sample words inside smpl.
   const std::vector<int16_t>& memory_;
   MemoryProfile memory_profile_;
   std::ofstream wav_;

@@ -70,6 +70,7 @@ module multi_voice_pipeline (
   logic cfg_enable;
   logic cfg_stereo;
   logic [ADDR_WIDTH-1:0] cfg_base_addr;
+  logic [ADDR_WIDTH-1:0] cfg_base_addr_r;
   logic [15:0] cfg_length;
   logic [15:0] cfg_loop_start;
   logic [15:0] cfg_loop_end;
@@ -87,6 +88,7 @@ module multi_voice_pipeline (
   logic signed [31:0] cfg_filter_a2;
   logic current_stereo;
   logic [ADDR_WIDTH-1:0] current_base_addr;
+  logic [ADDR_WIDTH-1:0] current_base_addr_r;
   logic signed [15:0] current_gain_l;
   logic signed [15:0] current_gain_r;
   logic signed [15:0] current_envelope_level;
@@ -163,6 +165,7 @@ module multi_voice_pipeline (
   assign cfg_enable = frame_config[voice_index].enable;
   assign cfg_stereo = frame_config[voice_index].stereo;
   assign cfg_base_addr = frame_config[voice_index].base_addr;
+  assign cfg_base_addr_r = frame_config[voice_index].base_addr_r;
   assign cfg_length = frame_config[voice_index].length;
   assign cfg_loop_start = frame_config[voice_index].loop_start;
   assign cfg_loop_end = frame_config[voice_index].loop_end;
@@ -237,21 +240,19 @@ module multi_voice_pipeline (
     unique case (state)
       REQ_L0: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr +
-                       (current_stereo ? {15'd0, frame_0, 1'b0} : {16'd0, frame_0});
+        mem_req_addr = current_base_addr + {16'd0, frame_0};
       end
       REQ_L1: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr +
-                       (current_stereo ? {15'd0, frame_1, 1'b0} : {16'd0, frame_1});
+        mem_req_addr = current_base_addr + {16'd0, frame_1};
       end
       REQ_R0: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {15'd0, frame_0, 1'b0} + 32'd1;
+        mem_req_addr = current_base_addr_r + {16'd0, frame_0};
       end
       REQ_R1: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {15'd0, frame_1, 1'b0} + 32'd1;
+        mem_req_addr = current_base_addr_r + {16'd0, frame_1};
       end
       default: begin
       end
@@ -267,6 +268,7 @@ module multi_voice_pipeline (
       fraction <= 16'd0;
       current_stereo <= 1'b0;
       current_base_addr <= '0;
+      current_base_addr_r <= '0;
       current_gain_l <= '0;
       current_gain_r <= '0;
       current_envelope_level <= '0;
@@ -345,6 +347,7 @@ module multi_voice_pipeline (
           end else begin
             current_stereo <= cfg_stereo;
             current_base_addr <= cfg_base_addr;
+            current_base_addr_r <= cfg_base_addr_r;
             current_gain_l <= cfg_gain_l;
             current_gain_r <= cfg_gain_r;
             current_envelope_level <= cfg_envelope_level;

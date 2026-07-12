@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     render::Sf2Data sf2 = render::load_sf2(args.sf2);
     std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
                                                               : render::parse_midi(args.midi);
-    std::vector<int16_t> wave_memory;
+    std::vector<int16_t> wave_memory = sf2.file_words;
     std::vector<render::Region> regions;
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
     render::ReferenceSynth reference(wave_memory);

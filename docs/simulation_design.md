@@ -76,7 +76,7 @@ It manually fills the memory model with small values:
 
 ```text
 mono:   0, 1000, 2000, 3000
-stereo: L/R interleaved pairs starting at word address 16
+stereo: left region starts at word address 16, right region starts at word address 24
 ```
 
 Then it programs the core through the same register bus used by normal software.
@@ -98,7 +98,7 @@ The test checks these behaviors:
 - Fractional Q16.16 phase drives linear interpolation.
 - Q1.15 gain scales the interpolated sample.
 - Shadow register writes do not affect active playback until commit.
-- Stereo samples are fetched from left/right interleaved memory.
+- Stereo samples are fetched from independent absolute left/right memory regions.
 - `loop_end` is exclusive.
 - Two active voice slots render from one `sample_tick` and mix together.
 - Per-voice `envelope_level` scales the current sample before mixing.
@@ -418,7 +418,8 @@ The normal Note On register sequence is:
 ```text
 ENVELOPE_LEVEL = 0
 CONTROL        = enable + mono/stereo
-BASE_ADDR      = selected memory word address
+BASE_ADDR      = selected left/mono memory word address
+BASE_ADDR_R    = selected right memory word address for stereo
 LENGTH         = sample frames
 LOOP_START     = first loop frame
 LOOP_END       = exclusive loop end
@@ -470,8 +471,8 @@ Current SF2 support:
 - Global-zone plus local-zone merging for presets and instruments, with
   instrument-level generators treated as absolute and preset-level value
   generators treated as additive where supported.
-- Mono samples and common linked-stereo samples. Linked stereo is repacked into
-  the RTL memory format `left0, right0, left1, right1, ...`.
+- Mono samples and common linked-stereo samples. Linked stereo keeps separate
+  left/right absolute sample addresses.
 - Sample header `start`, `end`, `startLoop`, `endLoop`, `sampleRate`,
   `originalPitch`, and `pitchCorrection` fields.
 - Sample-address offset generators `startAddrsOffset`, `endAddrsOffset`,
@@ -602,7 +603,7 @@ MIDI and controller-policy gaps:
 
 Stereo and region-selection gaps:
 
-- Linked stereo is repacked as one interleaved RTL region using one selected zone's
+- Linked stereo is addressed as separate left/right regions using one selected zone's
   generators. The SF2 spec expects left/right sample headers in a stereo pair to
   play synchronously, with pitch controlled by the right sample's generators and
   non-pitch generators applied normally. Complex SoundFonts with separate left
@@ -630,7 +631,7 @@ RTL integration gaps implied by complete SF2 support:
   effects path, wet/dry mixing, and delay memory that are outside the current dry
   stereo wavetable core.
 - Complex linked-stereo SoundFonts with separate left/right zones remain a known
-  limitation. The current renderer handles common linked stereo repacking; strict
+  limitation. The current renderer handles common linked stereo addressing; strict
   paired-zone semantics are deferred.
 - Higher polyphony for heavily layered SF2 presets remains a pipeline and memory
   bandwidth optimization item. The current harness can trigger overlapping zones,
@@ -639,7 +640,8 @@ RTL integration gaps implied by complete SF2 support:
 ## Linked Stereo Samples
 
 SoundFont stereo samples are commonly stored as two linked mono sample headers,
-not as one interleaved sample. The extractor handles this before simulation.
+not as one interleaved sample. The extractor now preserves that layout by writing
+separate left and right base addresses.
 
 If the selected sample is a left sample, `sampleLink` points to the right sample.
 If the selected sample is a right sample, `sampleLink` points to the left sample.

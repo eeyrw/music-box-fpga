@@ -30,7 +30,7 @@ register_addr    = voice_base(slot) + offset
 | Offset | Name | Description |
 | --- | --- | --- |
 | `0x00` | CONTROL | bit 0 enable, bit 1 stereo |
-| `0x04` | BASE_ADDR | 16-bit-word memory address |
+| `0x04` | BASE_ADDR | left/mono 16-bit-word memory address |
 | `0x08` | LENGTH | number of sample frames |
 | `0x0c` | LOOP_START | first loop frame |
 | `0x10` | LOOP_END | exclusive loop end frame |
@@ -51,7 +51,8 @@ register_addr    = voice_base(slot) + offset
 | `0x4c` | FILTER_A2 | signed Q4.28 `a2` |
 | `0x50` | GAIN_RUNTIME | bits 15:0 left Q1.15, bits 31:16 right Q1.15 |
 | `0x54` | RELEASE_CONTROL | bit 0 released runtime flag |
-| `0x3000` | VERSION | design version, currently `0x0003_0000` |
+| `0x58` | BASE_ADDR_R | right-channel 16-bit-word memory address |
+| `0x3000` | VERSION | design version, currently `0x0004_0000` |
 
 A configuration is valid when `length != 0`. Looping modes additionally require
 `loop_start < loop_end` and `loop_end <= length`. Invalid active configurations
@@ -65,9 +66,9 @@ do not produce memory requests or audio samples.
 | `1` | continuous loop | wrap from exclusive `loop_end` to `loop_start` |
 | `2` | loop until release | loop while `released == 0`, then play through to `length` |
 
-Configuration registers are `CONTROL`, `BASE_ADDR`, `LENGTH`, `LOOP_START`,
-`LOOP_END`, `PHASE_INIT`, `PHASE_INC`, `GAIN_L`, `GAIN_R`, `LOOP_MODE`, and the
-filter registers. Reads from these addresses return the shadow
+Configuration registers are `CONTROL`, `BASE_ADDR`, `BASE_ADDR_R`, `LENGTH`,
+`LOOP_START`, `LOOP_END`, `PHASE_INIT`, `PHASE_INC`, `GAIN_L`, `GAIN_R`,
+`LOOP_MODE`, and the filter registers. Reads from these addresses return the shadow
 configuration, so software can inspect pending writes before commit.
 
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
@@ -130,28 +131,29 @@ Minimal mono no-loop Note On for `slot`:
 | ---: | --- | --- |
 | 1 | `voice_base(slot) + 0x2c` `ENVELOPE_LEVEL` | initial Q1.15 level, commonly `0x0000_7fff` |
 | 2 | `voice_base(slot) + 0x00` `CONTROL` | bit 0 `enable = 1`, bit 1 `stereo = 0` |
-| 3 | `voice_base(slot) + 0x04` `BASE_ADDR` | first wave-memory word |
-| 4 | `voice_base(slot) + 0x08` `LENGTH` | sample-frame count |
-| 5 | `voice_base(slot) + 0x0c` `LOOP_START` | `0` for no-loop voices |
-| 6 | `voice_base(slot) + 0x10` `LOOP_END` | `0` for no-loop voices |
-| 7 | `voice_base(slot) + 0x14` `PHASE_INIT` | usually `0x0000_0000` |
-| 8 | `voice_base(slot) + 0x18` `PHASE_INC` | Q16.16 playback increment |
-| 9 | `voice_base(slot) + 0x1c` `GAIN_L` | signed Q1.15 initial left gain |
-| 10 | `voice_base(slot) + 0x20` `GAIN_R` | signed Q1.15 initial right gain |
-| 11 | `voice_base(slot) + 0x34` `LOOP_MODE` | `0` no loop |
-| 12 | `voice_base(slot) + 0x38` `FILTER_CONTROL` | `0` to bypass filter |
-| 13 | `voice_base(slot) + 0x3c` `FILTER_B0` | `0x1000_0000` unity, harmless when bypassed |
-| 14 | `voice_base(slot) + 0x40` `FILTER_B1` | `0` |
-| 15 | `voice_base(slot) + 0x44` `FILTER_B2` | `0` |
-| 16 | `voice_base(slot) + 0x48` `FILTER_A1` | `0` |
-| 17 | `voice_base(slot) + 0x4c` `FILTER_A2` | `0` |
-| 18 | `voice_base(slot) + 0x24` `COMMIT` | `1` |
+| 3 | `voice_base(slot) + 0x04` `BASE_ADDR` | first left/mono wave-memory word |
+| 4 | `voice_base(slot) + 0x58` `BASE_ADDR_R` | ignored for mono; commonly mirror `BASE_ADDR` |
+| 5 | `voice_base(slot) + 0x08` `LENGTH` | sample-frame count |
+| 6 | `voice_base(slot) + 0x0c` `LOOP_START` | `0` for no-loop voices |
+| 7 | `voice_base(slot) + 0x10` `LOOP_END` | `0` for no-loop voices |
+| 8 | `voice_base(slot) + 0x14` `PHASE_INIT` | usually `0x0000_0000` |
+| 9 | `voice_base(slot) + 0x18` `PHASE_INC` | Q16.16 playback increment |
+| 10 | `voice_base(slot) + 0x1c` `GAIN_L` | signed Q1.15 initial left gain |
+| 11 | `voice_base(slot) + 0x20` `GAIN_R` | signed Q1.15 initial right gain |
+| 12 | `voice_base(slot) + 0x34` `LOOP_MODE` | `0` no loop |
+| 13 | `voice_base(slot) + 0x38` `FILTER_CONTROL` | `0` to bypass filter |
+| 14 | `voice_base(slot) + 0x3c` `FILTER_B0` | `0x1000_0000` unity, harmless when bypassed |
+| 15 | `voice_base(slot) + 0x40` `FILTER_B1` | `0` |
+| 16 | `voice_base(slot) + 0x44` `FILTER_B2` | `0` |
+| 17 | `voice_base(slot) + 0x48` `FILTER_A1` | `0` |
+| 18 | `voice_base(slot) + 0x4c` `FILTER_A2` | `0` |
+| 19 | `voice_base(slot) + 0x24` `COMMIT` | `1` |
 
-For stereo playback, write `CONTROL.stereo = 1`; `BASE_ADDR`, `LENGTH`, loop
-points, and phase are still measured in sample frames, while memory stores words
-as left/right interleaved pairs. For continuous loop or loop-until-release, write
-valid `LOOP_START`, exclusive `LOOP_END`, and `LOOP_MODE = 1` or `2` before
-`COMMIT`.
+For stereo playback, write `CONTROL.stereo = 1`; `BASE_ADDR` names the first left
+sample word and `BASE_ADDR_R` names the first right sample word. `LENGTH`, loop
+points, and phase are still measured in sample frames. For continuous loop or
+loop-until-release, write valid `LOOP_START`, exclusive `LOOP_END`, and
+`LOOP_MODE = 1` or `2` before `COMMIT`.
 
 ### Envelope Update
 
