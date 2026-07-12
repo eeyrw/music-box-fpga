@@ -5,6 +5,7 @@ module voice_register_bank (
   input  logic                       bus_write,
   input  logic [15:0]                bus_address,
   input  logic [31:0]                bus_wdata,
+  input  logic                       frame_boundary,
   output logic [31:0]                bus_rdata,
   output logic                       bus_ready,
   output logic                       bus_error,
@@ -16,9 +17,9 @@ module voice_register_bank (
   import synth_pkg::*;
 
   // Byte addresses for the simple 32-bit register bus. Configuration writes
-  // update shadow_config first; only OFF_COMMIT copies that state into the
-  // active_config observed by the playback pipeline. Runtime registers update
-  // runtime_state and never reload phase.
+  // update shadow_config first; only OFF_COMMIT stages that state for the next
+  // frame boundary. Runtime registers are also staged so the renderer observes
+  // one coherent control snapshot per output frame.
   localparam logic [15:0] VOICE_BASE      = 16'h0100;
   localparam logic [15:0] VOICE_STRIDE    = 16'h0080;
   localparam logic [15:0] VOICE_LIMIT     = 16'(NUM_VOICES * VOICE_STRIDE);
@@ -50,6 +51,8 @@ module voice_register_bank (
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
 
   voice_config_t shadow_config [NUM_VOICES];
+  voice_runtime_t pending_runtime_state [NUM_VOICES];
+  logic [NUM_VOICES-1:0] pending_commit;
   logic address_valid;
   logic voice_address;
   logic [VOICE_INDEX_WIDTH-1:0] selected_voice;
@@ -73,8 +76,8 @@ module voice_register_bank (
     voice_address = (bus_address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
 
-    // Reads return shadow state so software can verify pending writes before it
-    // commits them. STATUS and ENVELOPE_LEVEL describe active runtime state.
+    // Reads return shadow/staged state so software can verify pending writes
+    // before they become visible to the renderer at the next frame boundary.
     address_valid = voice_address || (bus_address == ADDR_VERSION);
     bus_rdata = 32'd0;
     if (voice_address) begin
@@ -90,8 +93,8 @@ module voice_register_bank (
         OFF_GAIN_R:     bus_rdata = {{16{shadow_config[selected_voice].gain_r[15]}}, shadow_config[selected_voice].gain_r};
         OFF_COMMIT:     bus_rdata = 32'd0;
         OFF_STATUS:     bus_rdata = {31'd0, config_valid[selected_voice]};
-        OFF_ENVELOPE:   bus_rdata = {{16{runtime_state[selected_voice].envelope_level[15]}}, runtime_state[selected_voice].envelope_level};
-        OFF_PHASE_RT:   bus_rdata = runtime_state[selected_voice].phase_inc;
+        OFF_ENVELOPE:   bus_rdata = {{16{pending_runtime_state[selected_voice].envelope_level[15]}}, pending_runtime_state[selected_voice].envelope_level};
+        OFF_PHASE_RT:   bus_rdata = pending_runtime_state[selected_voice].phase_inc;
         OFF_LOOP_MODE:  bus_rdata = {30'd0, shadow_config[selected_voice].loop_mode};
         OFF_FILTER_CTL:  bus_rdata = {31'd0, shadow_config[selected_voice].filter_enable};
         OFF_FILTER_B0:   bus_rdata = shadow_config[selected_voice].filter_b0;
@@ -99,8 +102,8 @@ module voice_register_bank (
         OFF_FILTER_B2:   bus_rdata = shadow_config[selected_voice].filter_b2;
         OFF_FILTER_A1:   bus_rdata = shadow_config[selected_voice].filter_a1;
         OFF_FILTER_A2:   bus_rdata = shadow_config[selected_voice].filter_a2;
-        OFF_GAIN_RT:     bus_rdata = {runtime_state[selected_voice].gain_r, runtime_state[selected_voice].gain_l};
-        OFF_RELEASE:     bus_rdata = {31'd0, runtime_state[selected_voice].released};
+        OFF_GAIN_RT:     bus_rdata = {pending_runtime_state[selected_voice].gain_r, pending_runtime_state[selected_voice].gain_l};
+        OFF_RELEASE:     bus_rdata = {31'd0, pending_runtime_state[selected_voice].released};
         OFF_BASE_R:      bus_rdata = shadow_config[selected_voice].base_addr_r;
         default: begin
           address_valid = 1'b0;
@@ -141,11 +144,28 @@ module voice_register_bank (
         runtime_state[i].filter_b2 <= 32'sh0000_0000;
         runtime_state[i].filter_a1 <= 32'sh0000_0000;
         runtime_state[i].filter_a2 <= 32'sh0000_0000;
+        pending_runtime_state[i] <= '0;
+        pending_runtime_state[i].envelope_level <= 16'sh7fff;
+        pending_runtime_state[i].filter_b0 <= 32'sh1000_0000;
+        pending_runtime_state[i].filter_b1 <= 32'sh0000_0000;
+        pending_runtime_state[i].filter_b2 <= 32'sh0000_0000;
+        pending_runtime_state[i].filter_a1 <= 32'sh0000_0000;
+        pending_runtime_state[i].filter_a2 <= 32'sh0000_0000;
       end
       commit_pulse <= '0;
+      pending_commit <= '0;
     end else begin
-      // commit_pulse is a one-cycle event used to reload voice runtime phase.
-      commit_pulse <= '0;
+      commit_pulse <= pending_commit;
+
+      if (frame_boundary) begin
+        for (int v = 0; v < NUM_VOICES; v++) begin
+          if (pending_commit[v])
+            active_config[v] <= shadow_config[v];
+          runtime_state[v] <= pending_runtime_state[v];
+        end
+        pending_commit <= '0;
+      end
+
       if (bus_valid && bus_write && voice_address) begin
         unique case (selected_offset)
           OFF_CONTROL: begin
@@ -164,47 +184,46 @@ module voice_register_bank (
           OFF_ENVELOPE: begin
             // Envelope is runtime state owned by the MCU/control layer. Updating
             // it must not reload phase or disturb in-flight note playback.
-            runtime_state[selected_voice].envelope_level <= $signed(bus_wdata[15:0]);
+            pending_runtime_state[selected_voice].envelope_level <= $signed(bus_wdata[15:0]);
           end
           OFF_COMMIT: begin
             // Commit is atomic at the voice-config granularity: partially
             // written shadow fields do not affect playback until this write.
             if (bus_wdata[0]) begin
-              active_config[selected_voice] <= shadow_config[selected_voice];
-              runtime_state[selected_voice].phase_inc <= shadow_config[selected_voice].phase_inc;
-              runtime_state[selected_voice].gain_l <= shadow_config[selected_voice].gain_l;
-              runtime_state[selected_voice].gain_r <= shadow_config[selected_voice].gain_r;
-              runtime_state[selected_voice].released <= 1'b0;
-              runtime_state[selected_voice].filter_enable <= shadow_config[selected_voice].filter_enable;
-              runtime_state[selected_voice].filter_b0 <= shadow_config[selected_voice].filter_b0;
-              runtime_state[selected_voice].filter_b1 <= shadow_config[selected_voice].filter_b1;
-              runtime_state[selected_voice].filter_b2 <= shadow_config[selected_voice].filter_b2;
-              runtime_state[selected_voice].filter_a1 <= shadow_config[selected_voice].filter_a1;
-              runtime_state[selected_voice].filter_a2 <= shadow_config[selected_voice].filter_a2;
-              commit_pulse[selected_voice] <= 1'b1;
+              pending_runtime_state[selected_voice].phase_inc <= shadow_config[selected_voice].phase_inc;
+              pending_runtime_state[selected_voice].gain_l <= shadow_config[selected_voice].gain_l;
+              pending_runtime_state[selected_voice].gain_r <= shadow_config[selected_voice].gain_r;
+              pending_runtime_state[selected_voice].released <= 1'b0;
+              pending_runtime_state[selected_voice].filter_enable <= shadow_config[selected_voice].filter_enable;
+              pending_runtime_state[selected_voice].filter_b0 <= shadow_config[selected_voice].filter_b0;
+              pending_runtime_state[selected_voice].filter_b1 <= shadow_config[selected_voice].filter_b1;
+              pending_runtime_state[selected_voice].filter_b2 <= shadow_config[selected_voice].filter_b2;
+              pending_runtime_state[selected_voice].filter_a1 <= shadow_config[selected_voice].filter_a1;
+              pending_runtime_state[selected_voice].filter_a2 <= shadow_config[selected_voice].filter_a2;
+              pending_commit[selected_voice] <= 1'b1;
             end
           end
           OFF_PHASE_RT: begin
-            runtime_state[selected_voice].phase_inc <= bus_wdata;
+            pending_runtime_state[selected_voice].phase_inc <= bus_wdata;
           end
           OFF_LOOP_MODE: begin
             shadow_config[selected_voice].loop_mode <= bus_wdata[1:0];
           end
           OFF_FILTER_CTL: begin
             shadow_config[selected_voice].filter_enable <= bus_wdata[0];
-            runtime_state[selected_voice].filter_enable <= bus_wdata[0];
+            pending_runtime_state[selected_voice].filter_enable <= bus_wdata[0];
           end
-          OFF_FILTER_B0: begin shadow_config[selected_voice].filter_b0 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b0 <= $signed(bus_wdata); end
-          OFF_FILTER_B1: begin shadow_config[selected_voice].filter_b1 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b1 <= $signed(bus_wdata); end
-          OFF_FILTER_B2: begin shadow_config[selected_voice].filter_b2 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b2 <= $signed(bus_wdata); end
-          OFF_FILTER_A1: begin shadow_config[selected_voice].filter_a1 <= $signed(bus_wdata); runtime_state[selected_voice].filter_a1 <= $signed(bus_wdata); end
-          OFF_FILTER_A2: begin shadow_config[selected_voice].filter_a2 <= $signed(bus_wdata); runtime_state[selected_voice].filter_a2 <= $signed(bus_wdata); end
+          OFF_FILTER_B0: begin shadow_config[selected_voice].filter_b0 <= $signed(bus_wdata); pending_runtime_state[selected_voice].filter_b0 <= $signed(bus_wdata); end
+          OFF_FILTER_B1: begin shadow_config[selected_voice].filter_b1 <= $signed(bus_wdata); pending_runtime_state[selected_voice].filter_b1 <= $signed(bus_wdata); end
+          OFF_FILTER_B2: begin shadow_config[selected_voice].filter_b2 <= $signed(bus_wdata); pending_runtime_state[selected_voice].filter_b2 <= $signed(bus_wdata); end
+          OFF_FILTER_A1: begin shadow_config[selected_voice].filter_a1 <= $signed(bus_wdata); pending_runtime_state[selected_voice].filter_a1 <= $signed(bus_wdata); end
+          OFF_FILTER_A2: begin shadow_config[selected_voice].filter_a2 <= $signed(bus_wdata); pending_runtime_state[selected_voice].filter_a2 <= $signed(bus_wdata); end
           OFF_GAIN_RT: begin
-            runtime_state[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
-            runtime_state[selected_voice].gain_r <= $signed(bus_wdata[31:16]);
+            pending_runtime_state[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
+            pending_runtime_state[selected_voice].gain_r <= $signed(bus_wdata[31:16]);
           end
           OFF_RELEASE: begin
-            runtime_state[selected_voice].released <= bus_wdata[0];
+            pending_runtime_state[selected_voice].released <= bus_wdata[0];
           end
           default: begin
           end

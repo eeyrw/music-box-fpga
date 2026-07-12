@@ -184,7 +184,7 @@ Device: 7a50tfgg484-2
 Vivado result: synth_design completed successfully
 Errors: 0
 Critical warnings: 0
-Warnings: 205
+Warnings: 105
 ```
 
 The warning count is left visible instead of suppressed. It currently includes
@@ -194,8 +194,8 @@ input clock and external SPI/I2S timing contracts are still unresolved.
 Post-synthesis utilization:
 
 ```text
-Slice LUTs       26695 / 32600  81.89%
-Slice Registers 49965 / 65200  76.63%
+Slice LUTs       18723 / 32600  57.43%
+Slice Registers 45282 / 65200  69.45%
 DSP48E1             26 / 120    21.67%
 Block RAM tiles      0 / 75      0.00%
 Bonded IOB          61 / 250    24.40%
@@ -204,9 +204,9 @@ Bonded IOB          61 / 250    24.40%
 Post-synthesis timing does not meet constraints yet:
 
 ```text
-WNS  -11.098 ns
-TNS  -2195.276 ns
-Failing setup endpoints: 574
+WNS  -7.605 ns
+TNS  -1378.595 ns
+Failing setup endpoints: 546
 WHS  -1.329 ns
 THS  -23.799 ns
 Failing hold endpoints: 90
@@ -228,6 +228,25 @@ path.
 The timing report also shows expected board-level gaps: SPI input ports and I2S
 or debug output ports do not yet have external input/output delays. Add those
 only after the real board timing contract is known.
+
+## Resource Follow-Up
+
+The first resource cleanup removed the renderer's full per-frame copies of
+`voice_config` and `voice_runtime`. That brought post-synthesis LUT use down from
+about `81.89%` to `57.43%`, while register use remains high at `69.45%`.
+
+Board-level optimization should now focus on these items, in order:
+
+1. Add a board build option to compile out the optional biquad filter when a
+   bring-up image does not need it.
+2. If filter support is required, replace the current combinational biquad path
+   with a registered multi-cycle/shared-DSP filter block.
+3. Move wide, low-rate voice control fields toward LUTRAM or RAM-backed storage
+   while preserving output-frame atomic updates.
+4. Consider narrowing filter state only with matching fixed-point documentation
+   and exact regression tests.
+5. Re-run full implementation with real pins and clocking before adding final
+   pipeline stages for timing closure.
 
 ## Bring-Up Order
 

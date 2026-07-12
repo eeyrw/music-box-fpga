@@ -158,10 +158,10 @@ or regenerate MIG for a `200 MHz` input clock if that mode is valid for the
 selected DDR3 rate.
 
 The current Vivado batch synthesis passes with the generated MIG and clock wizard
-connected: `0 errors`, `0 critical warnings`, and `205 warnings`. Most warnings
+connected: `0 errors`, `0 critical warnings`, and `105 warnings`. Most warnings
 come from generated Vivado IP and early board-level timing gaps; they are not yet
 filtered because the clocking and real external timing constraints are unsettled.
-Post-synthesis utilization is about `26695 / 32600` LUTs, `49965 / 65200`
+Post-synthesis utilization is about `18723 / 32600` LUTs, `45282 / 65200`
 registers, and `26 / 120` DSPs. Timing is not yet clean, with
-`WNS = -11.098 ns` and `WHS = -1.329 ns`; treat that as a clocking/configuration
+`WNS = -7.605 ns` and `WHS = -1.329 ns`; treat that as a clocking/configuration
 issue until the MIG input frequency and final clock plan are confirmed.

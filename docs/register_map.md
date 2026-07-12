@@ -3,13 +3,15 @@
 The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
 single-beat and 32-bit aligned. The 32-bit data word is the bus container; many
 fields are narrower and explicitly define which bits are meaningful. Writes to
-configuration registers update per-voice shadow state. `COMMIT` copies the full
-shadow configuration into active state atomically. Writes to runtime registers do
-not require `COMMIT` and do not reload playback phase.
+configuration registers update per-voice shadow state. `COMMIT` stages the full
+shadow configuration to be copied into active state atomically at the next
+accepted output-frame boundary. Writes to runtime registers do not require
+`COMMIT` and do not reload playback phase.
 
-The renderer snapshots active configuration and runtime state at the start of each
-output sample render. Runtime writes that arrive while a sample is being rendered
-therefore affect the next render, not a partially scanned set of voices.
+The register bank publishes staged configuration and runtime state at the start
+of each accepted output sample render. Runtime writes that arrive while a sample
+is being rendered therefore affect the next render, not a partially scanned set
+of voices.
 
 `spi_register_bridge` exposes this same register bus through a simple 56-bit SPI
 frame: 8-bit command, 16-bit byte address, then 32-bit data phase. Command bit 7
@@ -74,7 +76,7 @@ configuration, so software can inspect pending writes before commit.
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter writes also update runtime filter state so low-rate
 controller changes can take effect without a phase reload. Reads from runtime
-registers return the current runtime value unless otherwise noted.
+registers return the staged runtime value unless otherwise noted.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a
@@ -120,10 +122,11 @@ smallest useful actions are below.
 ### Note On
 
 For a new note, write the runtime envelope first, then write the shadow
-configuration, then commit. `COMMIT` copies the shadow configuration to active
-state, copies `PHASE_INC` and `GAIN_L/R` into runtime pitch/gain, clears
-`RELEASE_CONTROL.released`, reloads phase from `PHASE_INIT`, and clears filter
-history.
+configuration, then commit. `COMMIT` stages the shadow configuration for active
+state, stages `PHASE_INC` and `GAIN_L/R` into runtime pitch/gain, clears the
+staged `RELEASE_CONTROL.released`, and requests phase reload from `PHASE_INIT`
+plus filter-history clear. Those staged changes become visible together at the
+next accepted output-frame boundary.
 
 Minimal mono no-loop Note On for `slot`:
 
@@ -163,8 +166,8 @@ To update amplitude during attack, decay, sustain, or release, write only:
 voice_base(slot) + 0x2c ENVELOPE_LEVEL = current Q1.15 envelope level
 ```
 
-This does not require `COMMIT`, does not reload phase, and becomes visible on the
-next output-frame render snapshot.
+This does not require `COMMIT`, does not reload phase, and becomes visible at the
+next accepted output-frame boundary.
 
 ### Note Off
 
@@ -204,7 +207,7 @@ voice_base(slot) + 0x50 GAIN_RUNTIME = {right_gain[15:0], left_gain[15:0]}
 
 Neither write reloads phase or changes shadow configuration. A later `COMMIT`
 will overwrite runtime pitch and gain with the shadow `PHASE_INC` and `GAIN_L/R`
-values for the next note setup.
+values staged for the next note setup.
 
 ### Reusing A Slot
 
@@ -212,4 +215,5 @@ Before reusing a slot, software should explicitly write the new note's
 `ENVELOPE_LEVEL`, gains, pitch, loop mode, filter settings, and `CONTROL.enable`,
 then `COMMIT`. Do not rely on runtime state left by the previous note except for
 the documented commit behavior: commit clears `RELEASE_CONTROL.released` and
-reloads phase/filter history, but preserves the current runtime envelope level.
+reloads phase/filter history at the next accepted output-frame boundary, but
+preserves the staged runtime envelope level.

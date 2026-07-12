@@ -136,6 +136,39 @@ module tb_wavetable_core;
     end
   endtask
 
+  task automatic request_write_envelope_mid_render_and_check(
+    input logic [31:0] envelope,
+    input integer expected_l,
+    input integer expected_r
+  );
+    int timeout;
+    @(negedge clk);
+    sample_tick = 1'b1;
+    @(negedge clk);
+    sample_tick = 1'b0;
+    repeat (2) @(negedge clk);
+    bus_write_word(16'h012c, envelope);
+    timeout = 0;
+    while (!sample_valid && timeout < 500) begin
+      @(negedge clk);
+      timeout++;
+    end
+    last_latency_cycles = timeout;
+    if (!sample_valid) begin
+      $error("sample response timed out");
+      errors++;
+    end else begin
+      if ($signed(sample_l) !== expected_l) begin
+        $error("left sample got %0d expected %0d", $signed(sample_l), expected_l);
+        errors++;
+      end
+      if ($signed(sample_r) !== expected_r) begin
+        $error("right sample got %0d expected %0d", $signed(sample_r), expected_r);
+        errors++;
+      end
+    end
+  endtask
+
   task automatic configure_mono;
     // Four mono frames: 0, 1000, 2000, 3000. phase_init=0.5 frame and gain=0.5,
     // so the first sample is interpolate(0,1000,0.5)*0.5 = 250.
@@ -296,8 +329,10 @@ module tb_wavetable_core;
     // Check mono interpolation, gain, and the fact that mono is duplicated to
     // left/right before channel gains are applied.
     configure_mono();
-    request_and_check(250, 250);
-    request_and_check(750, 750);
+    request_write_envelope_mid_render_and_check(32'h0000_4000, 250, 250);
+    request_and_check(375, 375);
+    bus_write_word(16'h012c, 32'h0000_7fff);
+    bus_read_word(16'h012c, 32'h0000_7fff);
 
     // A shadow-only base-address write must not disturb active playback.
     bus_write_word(16'h0104, 32'd16);

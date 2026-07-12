@@ -66,11 +66,11 @@ constraint or PLL specification.
 
 ## Rendering Pipeline
 
-`multi_voice_pipeline` is a time-multiplexed renderer. On each `sample_tick`, it
-snapshots the active voice configuration and runtime control state, scans voice
-slots in index order, skips disabled or invalid slots, fetches the needed
-interpolation endpoints, processes one voice through the shared DSP path, and
-accumulates into a signed 32-bit stereo mixer.
+`multi_voice_pipeline` is a time-multiplexed renderer. On each accepted
+`sample_tick`, the register bank publishes staged control state to the active
+voice arrays; the renderer then scans voice slots in index order, skips disabled
+or invalid slots, fetches the needed interpolation endpoints, processes one voice
+through the shared DSP path, and accumulates into a signed 32-bit stereo mixer.
 
 The core state sequence is:
 
@@ -139,7 +139,7 @@ The hardware contract is register-level:
   runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
 - Runtime gain, pitch, release, and filter updates do not reload phase and become
-  visible on the next output-frame render snapshot.
+  visible at the next accepted output-frame boundary.
 - Note Off for loop-until-release samples writes the runtime released flag and
   then continues envelope release updates.
 - When release reaches zero, software clears `CONTROL.enable` and commits the

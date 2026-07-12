@@ -71,10 +71,11 @@ the final mixed output sample.
 
 ## Current Voice Render Calculation
 
-At each `sample_tick`, the renderer snapshots active configuration and runtime
-state for all voices. Register writes that arrive after this snapshot affect the
-next output sample render. The renderer then scans voice slots in index order and
-accumulates each enabled, valid, not-completed voice into one stereo output.
+At each accepted `sample_tick`, the register bank publishes staged configuration
+and runtime state to the active voice arrays. Register writes that arrive after
+this frame boundary affect the next output sample render. The renderer then
+scans voice slots in index order and accumulates each enabled, valid,
+not-completed voice into one stereo output.
 
 For each contributing voice:
 

@@ -130,12 +130,18 @@ samples into the right-channel raw registers.
 
 ## Config Snapshot
 
-At the start of each output sample render, the pipeline snapshots
-`voice_config`, `voice_runtime`, and `config_valid` into frame-local arrays.
-`START_VOICE` reads that snapshot to decide whether a voice is enabled, whether
-it is valid, whether it is done, and which phase/frame addresses should be
-rendered. Once a voice is accepted, the fields needed by later stages are copied
-into local `current_*` registers:
+At the start of each output sample render, `voice_register_bank` publishes
+staged configuration and runtime writes into the active arrays observed by the
+pipeline. `wavetable_core` only asserts that frame boundary when `sample_tick`
+arrives while the pipeline is idle, so deadline misses cannot change control
+state in the middle of a render. The pipeline latches only the per-frame commit
+bitmap; it no longer duplicates the full `voice_config` and `voice_runtime`
+arrays.
+
+`START_VOICE` reads the stable active arrays to decide whether a voice is
+enabled, whether it is valid, whether it is done, and which phase/frame addresses
+should be rendered. Once a voice is accepted, the fields needed by later stages
+are copied into local `current_*` registers:
 
 - stereo/mono mode
 - wave base address
@@ -144,20 +150,18 @@ into local `current_*` registers:
 - filter enable
 - filter coefficients
 
-Memory request address generation and all DSP stages use these snapshot
-registers. They no longer depend on live `voice_config` or `voice_runtime` reads
-after the sample render has started. SPI or register-bus writes that arrive while
-one output sample is being rendered therefore affect the next output sample
-render rather than a partially scanned set of voices.
+Memory request address generation and all DSP stages use these per-voice
+`current_*` registers. SPI or register-bus writes that arrive while one output
+sample is being rendered remain staged in `voice_register_bank` and affect the
+next accepted output sample render rather than a partially scanned set of voices.
 
 This does not change the external commit contract for configuration registers.
-Configuration writes still update shadow state, commits still atomically copy
-shadow state to active configuration, and a commit still reloads phase and clears
-filter state at a render-safe idle boundary. Runtime writes such as envelope,
-gain, pitch, release, and runtime filter updates do not reload phase. The
-snapshot defines the per-voice render context for the in-flight output sample. It
-is a prerequisite for a future token pipeline where `voice_index` may advance
-before the previous voice has completed all compute stages.
+Configuration writes still update shadow state, commits still atomically stage
+shadow state for active configuration, and a commit still reloads phase and
+clears filter state at a render-safe frame boundary. Runtime writes such as
+envelope, gain, pitch, release, and runtime filter updates do not reload phase.
+The frame-boundary publish defines the per-voice render context for the
+in-flight output sample.
 
 ## Filter State Handling
 
@@ -370,3 +374,40 @@ Potential next steps, in increasing complexity:
    voice is in DSP stages.
 4. Rework the memory subsystem for paired endpoint reads or cache-line extraction
    that returns both interpolation endpoints for common sequential access.
+
+## Resource Optimization Backlog
+
+The first Artix-7 resource pass removed the full per-frame `voice_config` and
+`voice_runtime` array copies from this module. That reduced Smart Artix
+post-synthesis utilization from about `26695` LUTs and `49965` registers to about
+`18723` LUTs and `45282` registers while preserving the output-frame update
+contract. Remaining resource pressure is now concentrated in the control-state
+storage and optional filter path.
+
+Recommended next optimization order:
+
+1. Make the biquad filter board-configurable. A `SYNTH_ENABLE_FILTER`-style build
+   option can compile out filter coefficients, filter state, and filter DSP logic
+   for board images that only need interpolation, envelope, and gain. This should
+   be the lowest-risk way to reduce DSP timing pressure and some LUT/FF use.
+2. If the filter must stay enabled, move it to a multi-cycle shared DSP block.
+   The current left/right biquad evaluation still expands many multiplies in one
+   state. A fixed-latency filter unit with explicit valid timing should reduce
+   combinational depth and make timing closure more predictable.
+3. Move wide, low-rate voice control fields out of flip-flop arrays. Good
+   candidates are base addresses, loop points, filter coefficients, and other
+   fields that change only through the register bus. Keep small hot flags such as
+   enable, valid, released, and pending commit in flops; move wider fields toward
+   LUTRAM or true RAM only after preserving single-frame publish semantics.
+4. Re-evaluate filter state width. The current per-voice, per-channel `z1/z2`
+   state is 64 bits. Narrowing it to a documented fixed-point width such as 40 or
+   48 bits may save registers and muxing, but it changes numeric behavior and
+   requires exact regression updates for saturation and long-running filter cases.
+5. Run full implementation before treating remaining post-synthesis timing as the
+   final bottleneck. After real pins, clocking, and implementation reports are
+   available, add focused pipeline stages on the reported multiply/accumulate
+   paths instead of changing constraints to hide them.
+
+Do not merge these optimizations with interface changes. Each item should keep
+the register map and output-frame update contract stable unless the matching
+documentation and tests are updated in the same change.

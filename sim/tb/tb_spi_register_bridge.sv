@@ -12,6 +12,7 @@ module tb_spi_register_bridge;
   logic bus_write;
   logic [15:0] bus_address;
   logic [31:0] bus_wdata;
+  logic frame_boundary;
   logic [31:0] bus_rdata;
   logic bus_ready;
   logic bus_error;
@@ -47,6 +48,7 @@ module tb_spi_register_bridge;
     .bus_write,
     .bus_address,
     .bus_wdata,
+    .frame_boundary,
     .bus_rdata,
     .bus_ready,
     .bus_error,
@@ -119,8 +121,16 @@ module tb_spi_register_bridge;
     end
   endtask
 
+  task automatic publish_frame_boundary;
+    @(negedge clk);
+    frame_boundary = 1'b1;
+    @(negedge clk);
+    frame_boundary = 1'b0;
+  endtask
+
   initial begin
     rst = 1'b1;
+    frame_boundary = 1'b0;
     spi_sclk = 1'b0;
     spi_cs_n = 1'b1;
     spi_mosi = 1'b0;
@@ -140,6 +150,7 @@ module tb_spi_register_bridge;
     spi_write_word(16'h0108, 32'h0000_0004);
     spi_write_word(16'h0134, 32'h0000_0000);
     spi_write_word(16'h0124, 32'h0000_0001);
+    publish_frame_boundary();
     if (!config_valid[0] || (active_config[0].length !== 16'd4)) begin
       $error("SPI commit did not update active voice configuration");
       errors++;

@@ -23,6 +23,11 @@ module wavetable_core (
   synth_pkg::voice_runtime_t runtime_state [synth_pkg::NUM_VOICES];
   logic [synth_pkg::NUM_VOICES-1:0] config_valid;
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
+  logic voices_busy;
+  logic frame_boundary;
+
+  assign frame_boundary = sample_tick && !voices_busy;
+  assign busy = voices_busy;
 
   voice_register_bank registers (
     .clk,
@@ -31,6 +36,7 @@ module wavetable_core (
     .bus_write,
     .bus_address,
     .bus_wdata,
+    .frame_boundary,
     .bus_rdata,
     .bus_ready,
     .bus_error,
@@ -48,7 +54,7 @@ module wavetable_core (
     .config_valid,
     .config_commit(commit_pulse),
     .sample_tick,
-    .busy,
+    .busy(voices_busy),
     .sample_valid,
     .sample_l,
     .sample_r,
