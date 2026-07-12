@@ -43,6 +43,17 @@ std::vector<uint8_t> make_list(const char type[4], const std::vector<std::pair<s
   return out;
 }
 
+std::vector<uint8_t> make_text(const std::string& value) {
+  return std::vector<uint8_t>(value.begin(), value.end());
+}
+
+std::vector<uint8_t> make_version(uint16_t major, uint16_t minor) {
+  std::vector<uint8_t> out;
+  push_u16(out, major);
+  push_u16(out, minor);
+  return out;
+}
+
 void push_phdr(std::vector<uint8_t>& out, const std::string& name, uint16_t preset,
                uint16_t bank, uint16_t bag_index) {
   push_name(out, name);
@@ -91,8 +102,11 @@ uint16_t bits(int16_t value) {
 
 std::string write_test_sf2() {
   std::vector<uint8_t> smpl;
+  std::vector<uint8_t> sm24;
   for (int i = 0; i < 64; ++i) push_u16(smpl, uint16_t(int16_t((i % 17) * 120 - 900)));
   for (int i = 0; i < 46; ++i) push_u16(smpl, 0);
+  sm24.resize(smpl.size() / 2, 0);
+  sm24[2] = 255;
 
   std::vector<uint8_t> phdr;
   push_phdr(phdr, "Preset", 0, 0, 0);
@@ -119,7 +133,7 @@ std::string write_test_sf2() {
   std::vector<uint8_t> ibag;
   push_bag(ibag, 0, 0);
   push_bag(ibag, 1, 0);
-  push_bag(ibag, 10, 0);
+  push_bag(ibag, 12, 0);
 
   std::vector<uint8_t> igen;
   push_gen(igen, 52, bits(10));        // global fineTune, absolute at instrument level
@@ -127,6 +141,8 @@ std::string write_test_sf2() {
   push_gen(igen, 17, bits(-250));      // local pan
   push_gen(igen, 58, bits(-1));        // use sample header original pitch
   push_gen(igen, 54, 1);               // continuous loop
+  push_gen(igen, 8, 6900);             // initialFilterFc, enables biquad LPF
+  push_gen(igen, 9, 60);               // initialFilterQ
   push_gen(igen, 0, 2);                // startAddrsOffset
   push_gen(igen, 1, bits(-4));         // endAddrsOffset
   push_gen(igen, 2, 1);                // startloopAddrsOffset
@@ -142,10 +158,13 @@ std::string write_test_sf2() {
   riff.insert(riff.end(), {'R', 'I', 'F', 'F'});
   push_u32(riff, 0);
   riff.insert(riff.end(), {'s', 'f', 'b', 'k'});
-  auto sdta = make_list("sdta", {{"smpl", smpl}});
+  auto info = make_list("INFO", {{"ifil", make_version(2, 4)}, {"isng", make_text("EMU8000")},
+                                  {"INAM", make_text("Unit Test SF2")}});
+  auto sdta = make_list("sdta", {{"smpl", smpl}, {"sm24", sm24}});
   auto pdta = make_list("pdta", {{"phdr", phdr}, {"pbag", pbag}, {"pmod", std::vector<uint8_t>(10, 0)},
-                                  {"pgen", pgen}, {"inst", inst}, {"ibag", ibag},
-                                  {"imod", std::vector<uint8_t>(10, 0)}, {"igen", igen}, {"shdr", shdr}});
+                                   {"pgen", pgen}, {"inst", inst}, {"ibag", ibag},
+                                   {"imod", std::vector<uint8_t>(10, 0)}, {"igen", igen}, {"shdr", shdr}});
+  riff.insert(riff.end(), info.begin(), info.end());
   riff.insert(riff.end(), sdta.begin(), sdta.end());
   riff.insert(riff.end(), pdta.begin(), pdta.end());
   uint32_t riff_size = uint32_t(riff.size() - 8);
@@ -200,6 +219,9 @@ int main() {
     std::string path = write_test_sf2();
     expect_load_fails_without_pmod(path);
     render::Sf2Data sf2 = render::load_sf2(path);
+    if (sf2.ifil != "2.4" || sf2.isng != "EMU8000" || sf2.inam != "Unit Test SF2") {
+      throw std::runtime_error("INFO metadata was not parsed correctly");
+    }
     std::vector<int16_t> memory;
     render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
     int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * 65536.0));
@@ -210,6 +232,10 @@ int main() {
     expect_equal(int(preset.length), 58, "sample address offsets length");
     expect_equal(int(preset.loop_start), 7, "sample startloop offset");
     expect_equal(int(preset.loop_end), 37, "sample endloop offset");
+    expect_equal(memory.at(0), -659, "sm24 rounded sample merge");
+    if (!preset.filter_enable || preset.filter_b0 <= 0 || preset.filter_b1 <= 0 || preset.filter_b2 <= 0) {
+      throw std::runtime_error("SF2 filter generators did not produce enabled biquad feed-forward coefficients");
+    }
 
     render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);
     expect_equal(inst.gain_l, 24576, "instrument pan left gain");

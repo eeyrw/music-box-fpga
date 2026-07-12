@@ -21,7 +21,7 @@ Implemented RTL pieces:
 - Unsigned Q16.16 playback phase and runtime phase-increment updates.
 - Mono and interleaved stereo sample playback.
 - Loop modes: no loop, continuous loop, and loop-until-release.
-- Per-channel Q1.15 gain, runtime envelope level, optional one-pole LPF, and
+- Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
   saturated stereo mixing.
 - Abstract one-word memory request/response interface.
 - Minimal one-line cache/burst adapter through `wave_memory_subsystem`.
@@ -117,6 +117,17 @@ The current C++ render harness keeps this policy in reusable host-side code.
 small `RegisterWriteSink` interface. A PC tool using CH347 USB-to-SPI should
 reuse that policy layer and provide only the hardware-backed register transport.
 See `docs/host_control.md` for the intended split.
+
+The SF2 feature boundary is intentionally split by update rate and audio-path
+ownership. SF2 filter audio processing belongs in RTL because it operates on each
+voice's PCM stream; software calculates cutoff/Q/modulation values and writes the
+filter controls. Pitch bend, vibrato, tremolo, and modulation-envelope effects are
+host-driven first through runtime register updates because the SPI path is
+expected to have enough bandwidth for the initial implementation. If those
+updates need sample-accurate timing or produce audible stepping, the LFO/envelope
+state machines can move into RTL later. Reverb/chorus, strict complex linked
+stereo pairing, and higher-polyphony layered playback are deferred architecture
+items.
 
 The hardware contract is register-level:
 

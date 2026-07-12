@@ -14,7 +14,7 @@ data phase for the bridge to complete the internal register-bus access. This is
 a simulation-friendly transport, not a board timing contract.
 
 The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
-uses `0x0100 + N * 0x40` plus the offsets below.
+uses `0x0100 + N * 0x80` plus the offsets below.
 
 | Offset | Name | Description |
 | --- | --- | --- |
@@ -32,7 +32,12 @@ uses `0x0100 + N * 0x40` plus the offsets below.
 | `0x2c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
 | `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q16.16 phase increment |
 | `0x34` | PLAYBACK_MODE | bits 1:0 loop mode, bit 8 released runtime flag |
-| `0x38` | FILTER_CONTROL | bit 16 enable, bits 15:0 one-pole LPF alpha Q0.16 |
+| `0x38` | FILTER_CONTROL | bit 0 enables the per-voice biquad IIR filter |
+| `0x3c` | FILTER_B0 | signed Q4.28 `b0` |
+| `0x40` | FILTER_B1 | signed Q4.28 `b1` |
+| `0x44` | FILTER_B2 | signed Q4.28 `b2` |
+| `0x48` | FILTER_A1 | signed Q4.28 `a1` |
+| `0x4c` | FILTER_A2 | signed Q4.28 `a2` |
 | `0x3000` | VERSION | design version, currently `0x0002_0000` |
 
 A configuration is valid when `length != 0`. Looping modes additionally require
@@ -69,11 +74,15 @@ clear `CONTROL.enable` and commit the slot to free it.
 copying shadow registers and without reloading runtime phase. Use this path for
 pitch bend or low-rate vibrato control.
 
-`FILTER_CONTROL` configures the per-voice one-pole low-pass filter. Writes update
-both shadow and active filter settings without reloading phase. The filter state
-is cleared on commit. `filter_enable = 0` bypasses the filter.
+The filter registers configure a per-voice biquad IIR filter placed after
+interpolation and before channel gain. Writes update both shadow and active
+filter settings without reloading phase. Filter state is per voice and per
+channel and is cleared on commit. `FILTER_CONTROL.enable = 0` bypasses the
+filter. The denominator convention is `1 + a1*z^-1 + a2*z^-2`; the RTL computes
+`b0*x + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]` using a transposed form.
 
 The RTL does not implement SF2 preset selection, velocity mapping, modulators, or
-filter coefficient calculation. A value of `0x7fff` is treated as full envelope
-level and bypasses the extra envelope multiply so existing full-scale voice gains
-are not attenuated by one least-significant bit.
+coefficient calculation; software writes already-quantized filter coefficients.
+A value of `0x7fff` is treated as full envelope level and bypasses the extra
+envelope multiply so existing full-scale voice gains are not attenuated by one
+least-significant bit.

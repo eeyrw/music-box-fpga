@@ -32,6 +32,10 @@ package synth_pkg;
     logic [1:0]                loop_mode;
     logic                      released;
     logic                      filter_enable;
-    logic [15:0]               filter_alpha;
+    logic signed [31:0]        filter_b0;
+    logic signed [31:0]        filter_b1;
+    logic signed [31:0]        filter_b2;
+    logic signed [31:0]        filter_a1;
+    logic signed [31:0]        filter_a2;
   } voice_config_t;
 endpackage

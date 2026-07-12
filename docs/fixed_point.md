@@ -45,20 +45,23 @@ calculate an SF2 ADSR curve. Updating `envelope_level` does not reload playback
 phase. `0x7fff` means full level and is treated as a bypass to preserve exact
 samples from the gain stage.
 
-## One-Pole Low-Pass Filter
+## Biquad IIR Filter
 
-Each voice can enable a one-pole low-pass filter after interpolation and before
-channel gain. The filter coefficient `filter_alpha` is unsigned Q0.16:
+Each voice can enable a second-order IIR filter after interpolation and before
+channel gain. Coefficients are signed Q4.28 values. `0x1000_0000` is unity,
+`0x0800_0000` is 0.5, and negative feedback coefficients use two's-complement signed values.
+The implemented transposed direct-form II equation is:
 
 ```text
-difference = interpolated_sample - previous_filter_output
-filtered = previous_filter_output + ((difference * filter_alpha) >>> 16)
+y_q28 = b0 * x + z1
+y     = saturate(y_q28 >>> 28)
+z1    = saturate_i32(b1 * x - a1 * y + z2)
+z2    = saturate_i32(b2 * x - a2 * y)
 ```
 
-`0x0000` holds the previous filter output. `0xffff` approaches the unfiltered
-sample in one step with one least-significant bit of fixed-point loss. Disabling
-the filter bypasses this stage. Filter state is per voice and per channel, and is
-cleared on commit.
+Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
+the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
+stage. Filter state is per voice and per channel, and is cleared on commit.
 
 ## Mixing
 

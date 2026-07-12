@@ -36,6 +36,12 @@ void test_voice_register_sequence() {
   r.loop_end = 0x180;
   r.gain_l = -1;
   r.gain_r = 0x4000;
+  r.filter_enable = true;
+  r.filter_b0 = 0x08000000;
+  r.filter_b1 = 0x04000000;
+  r.filter_b2 = -0x02000000;
+  r.filter_a1 = -0x01000000;
+  r.filter_a2 = 0x00800000;
   r.loop_mode = 2;
 
   control.set_envelope(3, 40000);
@@ -43,7 +49,7 @@ void test_voice_register_sequence() {
   control.release_voice(3, r);
 
   uint16_t base = voice_addr(3, 0);
-  if (sink.writes.size() != 13) throw std::runtime_error("wrong register write count");
+  if (sink.writes.size() != 19) throw std::runtime_error("wrong register write count");
   expect_write(sink, 0, uint16_t(base + 0x2c), 0x7fff);
   expect_write(sink, 1, uint16_t(base + 0x00), 0x00000003);
   expect_write(sink, 2, uint16_t(base + 0x04), 0x00001234);
@@ -55,8 +61,14 @@ void test_voice_register_sequence() {
   expect_write(sink, 8, uint16_t(base + 0x1c), 0x0000ffff);
   expect_write(sink, 9, uint16_t(base + 0x20), 0x00004000);
   expect_write(sink, 10, uint16_t(base + 0x34), 0x00000002);
-  expect_write(sink, 11, uint16_t(base + 0x24), 0x00000001);
-  expect_write(sink, 12, uint16_t(base + 0x34), 0x00000102);
+  expect_write(sink, 11, uint16_t(base + 0x38), 0x00000001);
+  expect_write(sink, 12, uint16_t(base + 0x3c), 0x08000000);
+  expect_write(sink, 13, uint16_t(base + 0x40), 0x04000000);
+  expect_write(sink, 14, uint16_t(base + 0x44), 0xfe000000);
+  expect_write(sink, 15, uint16_t(base + 0x48), 0xff000000);
+  expect_write(sink, 16, uint16_t(base + 0x4c), 0x00800000);
+  expect_write(sink, 17, uint16_t(base + 0x24), 0x00000001);
+  expect_write(sink, 18, uint16_t(base + 0x34), 0x00000102);
 }
 
 }  // namespace

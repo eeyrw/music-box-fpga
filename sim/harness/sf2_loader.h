@@ -28,6 +28,9 @@ struct SampleHeader {
 
 struct Sf2Data {
   std::vector<int16_t> smpl;
+  std::string ifil;
+  std::string isng;
+  std::string inam;
   std::vector<Preset> presets;
   std::vector<Instrument> instruments;
   std::vector<Bag> preset_bags;
@@ -41,10 +44,16 @@ Sf2Data load_sf2(const std::string& path);
 int select_instrument(const Sf2Data& sf2, const std::string& instrument);
 
 Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                              int velocity, int sample_rate, int tick_samples,
-                              std::vector<int16_t>& memory);
+                               int velocity, int sample_rate, int tick_samples,
+                               std::vector<int16_t>& memory);
+std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int bank, int key,
+                                            int velocity, int sample_rate, int tick_samples,
+                                            std::vector<int16_t>& memory);
 Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                  int velocity, int sample_rate, int tick_samples,
-                                  std::vector<int16_t>& memory);
+                                   int velocity, int sample_rate, int tick_samples,
+                                   std::vector<int16_t>& memory);
+std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
+                                                int velocity, int sample_rate, int tick_samples,
+                                                std::vector<int16_t>& memory);
 
 }  // namespace render

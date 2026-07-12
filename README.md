@@ -6,7 +6,7 @@ register transport, and I2S output before board-specific timing and synthesis ar
 introduced.
 
 The current milestone implements 32 stereo output voice slots with configurable
-variable-length wavetable playback, simple loop modes, one-pole per-voice
+variable-length wavetable playback, simple loop modes, per-voice biquad IIR
 filtering, and saturated mixing.
 
 ## Implemented
@@ -20,7 +20,7 @@ filtering, and saturated mixing.
 - Interleaved stereo PCM playback
 - Per-channel signed Q1.15 gain
 - Per-voice current envelope level supplied through registers
-- Per-voice one-pole low-pass filter with runtime coefficients
+- Per-voice biquad IIR filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
 - Shared multi-voice rendering pipeline and saturated stereo mixer
 - Ready/valid abstract memory interface

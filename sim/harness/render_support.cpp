@@ -48,7 +48,13 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << r.sample_left << "\", \"stereo\": " << (r.stereo ? "true" : "false")
       << ", \"base_addr\": " << r.base_addr << ", \"length\": " << r.length
       << ", \"loop_start\": " << r.loop_start << ", \"loop_end\": " << r.loop_end
-      << ", \"phase_inc\": " << r.phase_inc << "}"
+      << ", \"phase_inc\": " << r.phase_inc
+      << ", \"filter_enable\": " << (r.filter_enable ? "true" : "false")
+      << ", \"filter_b0\": " << r.filter_b0
+      << ", \"filter_b1\": " << r.filter_b1
+      << ", \"filter_b2\": " << r.filter_b2
+      << ", \"filter_a1\": " << r.filter_a1
+      << ", \"filter_a2\": " << r.filter_a2 << "}"
       << (i + 1 < regions.size() ? "," : "") << "\n";
   }
   f << "  ]\n}\n";
@@ -70,11 +76,15 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
     return a.note < b.note;
   });
 
-  std::map<std::array<int, 4>, int> region_by_key;
+  std::map<std::array<int, 4>, std::vector<int>> region_by_key;
   int forced_inst = args.instrument.empty() ? -1 : select_instrument(sf2, args.instrument);
+  std::vector<NoteEvent> expanded_events;
 
   for (auto& e : events) {
-    if (!e.on) continue;
+    if (!e.on) {
+      expanded_events.push_back(e);
+      continue;
+    }
     int key = std::max(0, std::min(127, e.note));
     int velocity = std::max(1, std::min(127, e.velocity));
     int program = std::max(0, std::min(127, e.program));
@@ -82,17 +92,25 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
     std::array<int, 4> region_key = {forced_inst >= 0 ? forced_inst : program, bank, key, velocity};
     auto it = region_by_key.find(region_key);
     if (it == region_by_key.end()) {
-      Region r = forced_inst >= 0
-        ? make_region_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory)
-        : make_region_for_preset(sf2, program, bank, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory);
-      int idx = int(regions.size());
-      regions.push_back(r);
-      region_by_key[region_key] = idx;
+      std::vector<Region> made = forced_inst >= 0
+        ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory)
+        : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory);
+      std::vector<int> indices;
+      for (auto& r : made) {
+        indices.push_back(int(regions.size()));
+        regions.push_back(r);
+      }
+      region_by_key[region_key] = indices;
       it = region_by_key.find(region_key);
     }
-    e.region = it->second;
-    e.phase_inc = regions[e.region].phase_inc;
+    for (int idx : it->second) {
+      NoteEvent layered = e;
+      layered.region = idx;
+      layered.phase_inc = regions[layered.region].phase_inc;
+      expanded_events.push_back(layered);
+    }
   }
+  events.swap(expanded_events);
 
   if (std::none_of(wave_memory.begin(), wave_memory.end(), [](int16_t v) { return v != 0; })) {
     throw std::runtime_error("selected SF2 regions produced an all-zero wave memory image");
@@ -119,12 +137,19 @@ void McuModel::handle_event(const NoteEvent& event) {
 void McuModel::envelope_tick() {
   for (int v = 0; v < kNumVoices; ++v) {
     int next = voices_[v].level;
-    if (voices_[v].state == ENV_ATTACK) {
+    if (voices_[v].state == ENV_DELAY) {
+      if (voices_[v].ticks_remaining > 0) --voices_[v].ticks_remaining;
+      if (voices_[v].ticks_remaining == 0) voices_[v].state = ENV_ATTACK;
+    } else if (voices_[v].state == ENV_ATTACK) {
       next = voices_[v].level + regions_.at(voices_[v].region).attack_step;
       if (next >= voices_[v].target) {
         next = voices_[v].target;
-        voices_[v].state = ENV_DECAY;
+        voices_[v].ticks_remaining = regions_.at(voices_[v].region).hold_ticks;
+        voices_[v].state = voices_[v].ticks_remaining > 0 ? ENV_HOLD : ENV_DECAY;
       }
+    } else if (voices_[v].state == ENV_HOLD) {
+      if (voices_[v].ticks_remaining > 0) --voices_[v].ticks_remaining;
+      if (voices_[v].ticks_remaining == 0) voices_[v].state = ENV_DECAY;
     } else if (voices_[v].state == ENV_DECAY) {
       next = voices_[v].level - regions_.at(voices_[v].region).decay_step;
       if (next <= voices_[v].sustain) {
@@ -167,14 +192,24 @@ void McuModel::note_on(const NoteEvent& event) {
   if (alloc_stamp_ == 0) alloc_stamp_ = 1;
 
   const Region& r = regions_.at(event.region);
+  if (r.exclusive_class > 0) {
+    for (int v = 0; v < kNumVoices; ++v) {
+      if (voices_[v].state != ENV_SILENT && voices_[v].channel == event.channel &&
+          regions_.at(voices_[v].region).exclusive_class == r.exclusive_class) {
+        voices_[v].state = ENV_RELEASE;
+        sink_.release_voice(v, regions_.at(voices_[v].region));
+      }
+    }
+  }
   voices_[slot].note = event.note & 0x7f;
   voices_[slot].channel = event.channel;
   voices_[slot].region = event.region;
-  voices_[slot].state = ENV_ATTACK;
+  voices_[slot].state = r.delay_ticks > 0 ? ENV_DELAY : ENV_ATTACK;
   voices_[slot].level = 0;
-  voices_[slot].target = velocity_target(event.velocity);
+  voices_[slot].target = velocity_target(r.effective_velocity >= 0 ? r.effective_velocity : event.velocity);
   voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
   voices_[slot].stamp = alloc_stamp_;
+  voices_[slot].ticks_remaining = r.delay_ticks;
 
   sink_.set_envelope(slot, 0);
   sink_.commit_voice(slot, 1, event.phase_inc, r);

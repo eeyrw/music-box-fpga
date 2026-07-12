@@ -25,11 +25,19 @@ module multi_voice_pipeline (
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
   localparam logic [VOICE_INDEX_WIDTH-1:0] LAST_VOICE = VOICE_INDEX_WIDTH'(NUM_VOICES - 1);
 
+  typedef struct packed {
+    pcm_t sample;
+    logic signed [63:0] z1;
+    logic signed [63:0] z2;
+  } biquad_result_t;
+
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
   logic [PHASE_WIDTH-1:0] phase [NUM_VOICES];
-  pcm_t filter_state_l [NUM_VOICES];
-  pcm_t filter_state_r [NUM_VOICES];
+  logic signed [63:0] filter_z1_l [NUM_VOICES];
+  logic signed [63:0] filter_z2_l [NUM_VOICES];
+  logic signed [63:0] filter_z1_r [NUM_VOICES];
+  logic signed [63:0] filter_z2_r [NUM_VOICES];
   logic [15:0] frame_0;
   logic [15:0] frame_1;
   logic [15:0] fraction;
@@ -63,42 +71,69 @@ module multi_voice_pipeline (
   logic [1:0] current_loop_mode;
   logic current_released;
   logic current_filter_enable;
-  logic [15:0] current_filter_alpha;
+  logic signed [31:0] current_filter_b0;
+  logic signed [31:0] current_filter_b1;
+  logic signed [31:0] current_filter_b2;
+  logic signed [31:0] current_filter_a1;
+  logic signed [31:0] current_filter_a2;
+  biquad_result_t filter_result_l;
+  biquad_result_t filter_result_r;
 
-  function automatic pcm_t one_pole_lpf(
-    input pcm_t previous,
-    input pcm_t sample,
-    input logic [15:0] alpha
-  );
-    logic signed [16:0] difference;
-    logic signed [33:0] product;
-/* verilator lint_off UNUSEDSIGNAL */
-    logic signed [33:0] shifted_product;
-/* verilator lint_on UNUSEDSIGNAL */
-    logic signed [17:0] delta;
-    logic signed [18:0] next_value;
-    begin
-      difference = $signed(sample) - $signed(previous);
-      product = $signed({{17{difference[16]}}, difference}) * $signed({1'b0, alpha});
-      shifted_product = product >>> 16;
-      delta = shifted_product[17:0];
-      next_value = $signed({{3{previous[15]}}, previous}) + $signed({delta[17], delta});
-      if (next_value > 19'sd32767)
-        one_pole_lpf = 16'sh7fff;
-      else if (next_value < -19'sd32768)
-        one_pole_lpf = 16'sh8000;
-      else
-        one_pole_lpf = next_value[15:0];
-    end
+  function automatic logic signed [63:0] saturate_i64(input logic signed [95:0] value);
+    if (value > 96'sd9223372036854775807)
+      saturate_i64 = 64'sh7fff_ffff_ffff_ffff;
+    else if (value < -96'sd9223372036854775808)
+      saturate_i64 = 64'sh8000_0000_0000_0000;
+    else
+      saturate_i64 = value[63:0];
   endfunction
 
-  function automatic pcm_t saturate_pcm(input logic signed [31:0] value);
-    if (value > 32'sd32767)
+  function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
+    if (value > 64'sd32767)
       saturate_pcm = 16'sh7fff;
-    else if (value < -32'sd32768)
+    else if (value < -64'sd32768)
       saturate_pcm = 16'sh8000;
     else
       saturate_pcm = value[15:0];
+  endfunction
+
+  function automatic biquad_result_t biquad_iir(
+    input logic signed [63:0] z1,
+    input logic signed [63:0] z2,
+    input pcm_t sample,
+    input logic signed [31:0] b0,
+    input logic signed [31:0] b1,
+    input logic signed [31:0] b2,
+    input logic signed [31:0] a1,
+    input logic signed [31:0] a2
+  );
+    logic signed [31:0] x_ext;
+    logic signed [31:0] y_pcm_ext;
+    logic signed [63:0] y_q28;
+    logic signed [63:0] b0_x;
+    logic signed [63:0] b1_x;
+    logic signed [63:0] b2_x;
+    logic signed [63:0] a1_y;
+    logic signed [63:0] a2_y;
+    logic signed [95:0] next_z1;
+    logic signed [95:0] next_z2;
+    biquad_result_t result;
+    begin
+      x_ext = {{16{sample[15]}}, sample};
+      b0_x = $signed(x_ext) * $signed(b0);
+      y_q28 = b0_x + z1;
+      result.sample = saturate_pcm(y_q28 >>> 28);
+      y_pcm_ext = {{16{result.sample[15]}}, result.sample};
+      b1_x = $signed(x_ext) * $signed(b1);
+      b2_x = $signed(x_ext) * $signed(b2);
+      a1_y = $signed(y_pcm_ext) * $signed(a1);
+      a2_y = $signed(y_pcm_ext) * $signed(a2);
+      next_z1 = $signed({{32{b1_x[63]}}, b1_x}) - $signed({{32{a1_y[63]}}, a1_y}) + $signed({{32{z2[63]}}, z2});
+      next_z2 = $signed({{32{b2_x[63]}}, b2_x}) - $signed({{32{a2_y[63]}}, a2_y});
+      result.z1 = saturate_i64(next_z1);
+      result.z2 = saturate_i64(next_z2);
+      biquad_iir = result;
+    end
   endfunction
 
   assign current_enable = voice_config[voice_index].enable;
@@ -114,7 +149,11 @@ module multi_voice_pipeline (
   assign current_loop_mode = voice_config[voice_index].loop_mode;
   assign current_released = voice_config[voice_index].released;
   assign current_filter_enable = voice_config[voice_index].filter_enable;
-  assign current_filter_alpha = voice_config[voice_index].filter_alpha;
+  assign current_filter_b0 = voice_config[voice_index].filter_b0;
+  assign current_filter_b1 = voice_config[voice_index].filter_b1;
+  assign current_filter_b2 = voice_config[voice_index].filter_b2;
+  assign current_filter_a1 = voice_config[voice_index].filter_a1;
+  assign current_filter_a2 = voice_config[voice_index].filter_a2;
 
   always_comb begin
     phase_sum = {1'b0, phase[voice_index]} + {1'b0, current_phase_inc};
@@ -127,8 +166,14 @@ module multi_voice_pipeline (
                  (phase[voice_index][31:16] >= current_length);
     next_accum_l = accum_l + $signed({{16{enveloped_l[15]}}, enveloped_l});
     next_accum_r = accum_r + $signed({{16{enveloped_r[15]}}, enveloped_r});
-    filtered_l = one_pole_lpf(filter_state_l[voice_index], interpolated_l, current_filter_alpha);
-    filtered_r = one_pole_lpf(filter_state_r[voice_index], interpolated_r, current_filter_alpha);
+    filter_result_l = biquad_iir(filter_z1_l[voice_index], filter_z2_l[voice_index], interpolated_l,
+                                 current_filter_b0, current_filter_b1, current_filter_b2,
+                                 current_filter_a1, current_filter_a2);
+    filter_result_r = biquad_iir(filter_z1_r[voice_index], filter_z2_r[voice_index], interpolated_r,
+                                 current_filter_b0, current_filter_b1, current_filter_b2,
+                                 current_filter_a1, current_filter_a2);
+    filtered_l = filter_result_l.sample;
+    filtered_r = filter_result_r.sample;
     gain_input_l = current_filter_enable ? filtered_l : interpolated_l;
     gain_input_r = current_filter_enable ? filtered_r : interpolated_r;
   end
@@ -203,8 +248,10 @@ module multi_voice_pipeline (
       sample_r <= '0;
       for (int v = 0; v < NUM_VOICES; v++) begin
         phase[v] <= 32'd0;
-        filter_state_l[v] <= '0;
-        filter_state_r[v] <= '0;
+        filter_z1_l[v] <= '0;
+        filter_z2_l[v] <= '0;
+        filter_z1_r[v] <= '0;
+        filter_z2_r[v] <= '0;
       end
     end else begin
       sample_valid <= 1'b0;
@@ -212,8 +259,10 @@ module multi_voice_pipeline (
       for (int v = 0; v < NUM_VOICES; v++) begin
         if (config_commit[v]) begin
           phase[v] <= voice_config[v].phase_init;
-          filter_state_l[v] <= '0;
-          filter_state_r[v] <= '0;
+          filter_z1_l[v] <= '0;
+          filter_z2_l[v] <= '0;
+          filter_z1_r[v] <= '0;
+          filter_z2_r[v] <= '0;
         end
       end
 
@@ -267,8 +316,10 @@ module multi_voice_pipeline (
         WAIT_R1: if (mem_rsp_valid) begin raw_r1 <= mem_rsp_data; state <= ACCUMULATE; end
         ACCUMULATE: begin
           if (current_filter_enable) begin
-            filter_state_l[voice_index] <= filtered_l;
-            filter_state_r[voice_index] <= filtered_r;
+            filter_z1_l[voice_index] <= filter_result_l.z1;
+            filter_z2_l[voice_index] <= filter_result_l.z2;
+            filter_z1_r[voice_index] <= filter_result_r.z1;
+            filter_z2_r[voice_index] <= filter_result_r.z2;
           end
           accum_l <= next_accum_l;
           accum_r <= next_accum_r;
@@ -280,8 +331,8 @@ module multi_voice_pipeline (
           end
         end
         FINISH: begin
-          sample_l <= saturate_pcm(accum_l);
-          sample_r <= saturate_pcm(accum_r);
+          sample_l <= saturate_pcm({{32{accum_l[31]}}, accum_l});
+          sample_r <= saturate_pcm({{32{accum_r[31]}}, accum_r});
           sample_valid <= 1'b1;
           state <= IDLE;
         end

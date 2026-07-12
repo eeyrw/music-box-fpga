@@ -25,6 +25,16 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.phase_inc = phase_inc;
   v.gain_l = int16_t(r.gain_l);
   v.gain_r = int16_t(r.gain_r);
+  v.filter_enable = r.filter_enable;
+  v.filter_b0 = int32_t(r.filter_b0);
+  v.filter_b1 = int32_t(r.filter_b1);
+  v.filter_b2 = int32_t(r.filter_b2);
+  v.filter_a1 = int32_t(r.filter_a1);
+  v.filter_a2 = int32_t(r.filter_a2);
+  v.filter_z1_l = 0;
+  v.filter_z2_l = 0;
+  v.filter_z1_r = 0;
+  v.filter_z2_r = 0;
   v.loop_mode = r.loop_mode;
 }
 
@@ -67,8 +77,10 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
     int16_t interp_l = interpolate(raw_l0, raw_l1, fraction);
     int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);
-    int16_t gained_l = apply_gain(interp_l, v.gain_l);
-    int16_t gained_r = apply_gain(interp_r, v.gain_r);
+    int16_t filter_l = v.filter_enable ? biquad(interp_l, v.filter_z1_l, v.filter_z2_l, v) : interp_l;
+    int16_t filter_r = v.filter_enable ? biquad(interp_r, v.filter_z1_r, v.filter_z2_r, v) : interp_r;
+    int16_t gained_l = apply_gain(filter_l, v.gain_l);
+    int16_t gained_r = apply_gain(filter_r, v.gain_r);
     int16_t env_l = v.envelope == int16_t(0x7fff) ? gained_l : apply_gain(gained_l, v.envelope);
     int16_t env_r = v.envelope == int16_t(0x7fff) ? gained_r : apply_gain(gained_r, v.envelope);
     accum_l += env_l;
@@ -94,6 +106,24 @@ int16_t ReferenceSynth::saturate(int32_t value) {
   if (value > 32767) return int16_t(0x7fff);
   if (value < -32768) return int16_t(0x8000);
   return int16_t(value);
+}
+
+int64_t ReferenceSynth::saturate_i64(__int128 value) {
+  if (value > __int128(9223372036854775807ll)) return 0x7fffffffffffffffll;
+  if (value < -__int128(9223372036854775807ll) - 1) return int64_t(0x8000000000000000ull);
+  return int64_t(value);
+}
+
+int16_t ReferenceSynth::biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v) {
+  int64_t y_q28 = int64_t(v.filter_b0) * int64_t(sample) + z1;
+  int64_t y_shift = y_q28 >> 28;
+  int16_t y = y_shift > 32767 ? int16_t(0x7fff) :
+              (y_shift < -32768 ? int16_t(0x8000) : int16_t(y_shift));
+  __int128 next_z1 = __int128(v.filter_b1) * sample - __int128(v.filter_a1) * y + z2;
+  __int128 next_z2 = __int128(v.filter_b2) * sample - __int128(v.filter_a2) * y;
+  z1 = saturate_i64(next_z1);
+  z2 = saturate_i64(next_z2);
+  return y;
 }
 
 int16_t ReferenceSynth::read_word(uint32_t address) const {

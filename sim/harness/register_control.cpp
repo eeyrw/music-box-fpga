@@ -20,6 +20,12 @@ void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_in
   registers_.write_register(voice_addr(voice, 0x1c), uint32_t(uint16_t(r.gain_l)));
   registers_.write_register(voice_addr(voice, 0x20), uint32_t(uint16_t(r.gain_r)));
   registers_.write_register(voice_addr(voice, 0x34), uint32_t(r.loop_mode & 0x3));
+  registers_.write_register(voice_addr(voice, 0x38), uint32_t(r.filter_enable ? 1 : 0));
+  registers_.write_register(voice_addr(voice, 0x3c), uint32_t(r.filter_b0));
+  registers_.write_register(voice_addr(voice, 0x40), uint32_t(r.filter_b1));
+  registers_.write_register(voice_addr(voice, 0x44), uint32_t(r.filter_b2));
+  registers_.write_register(voice_addr(voice, 0x48), uint32_t(r.filter_a1));
+  registers_.write_register(voice_addr(voice, 0x4c), uint32_t(r.filter_a2));
   registers_.write_register(voice_addr(voice, 0x24), 1);
 }
 

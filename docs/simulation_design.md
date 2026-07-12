@@ -234,6 +234,32 @@ build/render_quick/quick_render_config.json
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
 
+Two helper scripts are useful when exercising the SF2 filter path:
+
+```bash
+python3 tools/sf2_filter_report.py --sf2 assets/soundfonts/MT6276.sf2
+python3 tools/make_filter_probe_assets.py --out-dir build/filter_probe
+python3 tools/sf2_filter_report.py --sf2 build/filter_probe/filter_probe.sf2 \
+  --write-midi build/filter_probe/generated_probe.mid
+make render-quick SF2=build/filter_probe/filter_probe.sf2 \
+  MIDI=build/filter_probe/generated_probe.mid SECONDS=2 \
+  RENDER_QUICK_OUT_DIR=build/render_quick_filter_probe
+```
+
+`sf2_filter_report.py` scans raw `pgen`/`igen` records and merged playable
+regions for `initialFilterFc`, `initialFilterQ`, `modLfoToFilterFc`, and
+`modEnvToFilterFc`. The checked-in `MT6276.sf2` currently reports zero filter
+generators, so the generated probe SF2/MIDI pair is the focused regression input
+for static biquad filter behavior.
+
+A real SGM-derived SoundFont such as
+`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2` does use filters heavily. A probe run
+against that file reported hundreds of raw filter generators and thousands of
+merged playable regions with filter settings. Some regions use very low cutoff
+values after SF2 range clamping, so the RTL filter coefficients are signed Q4.28;
+the earlier Q2.14 coefficient format did not preserve enough low-frequency
+precision for those regions.
+
 ## C++ Full-System I2S Render Flow
 
 `make render-full-system` renders through `wavetable_core_system`, a pin-level RTL
@@ -425,6 +451,9 @@ exercise wavetable playback through realistic register and memory traffic.
 Current SF2 support:
 
 - RIFF/sfbk container parsing for `sdta/smpl` and `pdta`.
+- Required `INFO/ifil`, `INFO/isng`, and `INFO/INAM` parsing and validation.
+- Optional `sdta/sm24` parsing. The harness merges the low 8-bit extension with
+  `smpl` and rounds back to the 16-bit PCM width consumed by the RTL memory path.
 - Required `pdta` chunk presence, record-size, terminal-record, and index-table
   consistency checks for `phdr`, `pbag`, `pmod`, `pgen`, `inst`, `ibag`, `imod`,
   `igen`, and `shdr`.
@@ -442,9 +471,15 @@ Current SF2 support:
 - `overridingRootKey`, `fineTune`, `coarseTune`, `scaleTuning`, and `keynum`
   generators for Q16.16 `phase_inc` calculation.
 - `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
-- Volume-envelope `attackVolEnv`, `decayVolEnv`, `sustainVolEnv`, and
-  `releaseVolEnv` generators, converted to software ADSR tick steps.
+- Volume-envelope `delayVolEnv`, `attackVolEnv`, `holdVolEnv`, `decayVolEnv`,
+  `sustainVolEnv`, `releaseVolEnv`, `keynumToVolEnvHold`, and
+  `keynumToVolEnvDecay` generators, converted to software ADSR tick steps.
 - `sampleModes` values for no loop, continuous loop, and loop-until-release.
+- `velocity` substitution for the current software velocity-to-envelope target
+  calculation.
+- `exclusiveClass` for MCU-side mutual exclusion within a MIDI channel.
+- Multiple overlapping matching preset/instrument zones for layered Note On
+  playback.
 
 Known SF2/MIDI gaps to implement later are listed below. These are gaps against
 the SoundFont 2.04 specification, not necessarily blockers for RTL wavetable-core
@@ -452,47 +487,33 @@ regression testing.
 
 SF2 file-format and sample-data gaps:
 
-- `sm24` 24-bit sample extension is not loaded. Rendering uses only the upper
-  16-bit `smpl` chunk. A correct SF2.04 renderer should combine `smpl` and
-  `sm24` when the file version and chunk size permit it, and ignore `sm24` in the
-  spec-defined fallback cases.
-- `INFO` metadata chunks are not validated. The harness currently does not check
-  `ifil`, `isng`, or `INAM`, and therefore does not distinguish SF2 versions or
-  use version-specific behavior except by ignoring `sm24`.
 - ROM samples are not supported. `irom` and `iver` are not parsed, and ROM sample
-  types are treated as normal sample-type flags after masking. A conforming
-  loader should reject or silence ROM sample use unless the referenced ROM is
-  available and verified.
+  use is rejected when a selected sample region references ROM data. A conforming
+  loader with external ROM access would need to validate and serve the referenced
+  ROM instead.
 - Linked sample type `linkedSample = 8` is not implemented. The harness supports
   mono, left, and right sample headers plus the common left/right `sampleLink`
   pair, but not a circular linked-sample list.
 - Structural validation is still partial. The loader checks required chunk
-  presence, record sizes, and table index consistency, but it does not yet enforce
-  every spec constraint such as `keyRange`/`velRange` legality across all bad
-  placements, sample minimum loop size, sample guard points, duplicate preset
-  numbering policy, or every illegal enumerator rule.
+  presence, record sizes, table index consistency, duplicate preset/bank pairs,
+  selected range legality, basic sample bounds, sample rate, sample-link bounds,
+  and sample-type enumerators, but it does not yet enforce every spec constraint
+  such as sample minimum loop size, sample guard points, or every illegal
+  enumerator rule.
 
 Generator gaps:
 
-- Filter generators are parsed only as uninterpreted generator records and are
-  not converted into RTL filter settings. This includes `initialFilterFc`,
-  `initialFilterQ`, `modLfoToFilterFc`, and `modEnvToFilterFc`.
+- `initialFilterFc` and `initialFilterQ` are converted into RTL biquad low-pass
+  coefficients. Dynamic filter modulation from `modLfoToFilterFc` and
+  `modEnvToFilterFc` is not modeled yet.
 - LFO and modulation-envelope generators are not modeled. This includes
   `delayModLFO`, `freqModLFO`, `delayVibLFO`, `freqVibLFO`, the modulation
   envelope ADSR generators, and their pitch/filter routing amounts.
-- Volume-envelope `delayVolEnv`, `holdVolEnv`, `keynumToVolEnvHold`, and
-  `keynumToVolEnvDecay` are not modeled. Attack, decay, sustain, and release are
-  simplified into MCU-side Q1.15 control ticks.
 - Volume-envelope curves are simplified. The SF2 volume envelope is specified in
   perceptual units with convex attack and dB-like decay/release behavior; the
   harness uses linear Q1.15 level steps.
 - Effects sends are ignored. `chorusEffectsSend` and `reverbEffectsSend` do not
   affect the rendered output because the RTL path has no effects processor.
-- `velocity` substitution is not applied. `keynum` substitution is used for pitch,
-  but velocity substitution is not currently fed into envelope level or modulator
-  calculations.
-- `exclusiveClass` is not implemented. New notes do not terminate other sounding
-  notes in the same exclusive class, so hi-hat style mutual exclusion is absent.
 - Generator precedence is implemented only for the subset consumed by the current
   harness. Unsupported value generators may be carried in the merged zone but do
   not affect audio. Unsupported preset-level sample/substitution generators are
@@ -536,23 +557,33 @@ Stereo and region-selection gaps:
   non-pitch generators applied normally. Complex SoundFonts with separate left
   and right zones may therefore render differently.
 - If multiple preset or instrument zones overlap the same key and velocity, the
-  harness selects one region. A complete synthesizer may need to trigger multiple
-  matching zones for layered sounds.
+  harness triggers each matching region as a separate RTL voice. This exercises
+  layered playback, subject to the current 32-voice allocation policy.
 - Zone selection currently treats lack of a key/velocity match as an error for the
   selected preset or instrument. That is useful for regression visibility, but a
   production player may choose to silence only that note while continuing playback.
 
 RTL integration gaps implied by complete SF2 support:
 
-- A full SF2 filter path would need MCU-side coefficient calculation and verified
-  mapping into the existing RTL one-pole filter, or a different RTL filter if the
-  target is closer to the SF2 resonant low-pass model.
-- LFOs, modulation envelope, and most real-time modulators can be implemented in
-  MCU/software by periodically updating existing runtime registers only up to the
-  bandwidth and resolution those registers support. Higher-rate or per-sample
-  modulation would require new RTL behavior.
-- Reverb and chorus require new audio processing outside the current dry stereo
-  wavetable path.
+- SF2 static filter support is an RTL feature. The project uses a per-voice
+  biquad IIR stage and host-calculated coefficients for `initialFilterFc` and
+  `initialFilterQ`. Dynamic cutoff modulation remains host-controlled initially
+  and may move into RTL if update rate or zipper noise becomes a problem.
+- Pitch bend, vibrato, tremolo, and modulation-envelope routing initially remain
+  host-controlled through runtime register updates, including
+  `PHASE_INC_RUNTIME`, `ENVELOPE_LEVEL`, and filter-control writes. SPI bandwidth
+  is expected to be sufficient for the first implementation. If update rate,
+  jitter, or audible zippering becomes a problem, move the high-rate LFO/envelope
+  accumulators into RTL as a later optimization.
+- Reverb and chorus sends remain unsupported for now. They require a separate DSP
+  effects path, wet/dry mixing, and delay memory that are outside the current dry
+  stereo wavetable core.
+- Complex linked-stereo SoundFonts with separate left/right zones remain a known
+  limitation. The current renderer handles common linked stereo repacking; strict
+  paired-zone semantics are deferred.
+- Higher polyphony for heavily layered SF2 presets remains a pipeline and memory
+  bandwidth optimization item. The current harness can trigger overlapping zones,
+  but the RTL still exposes 32 voice slots.
 
 ## Linked Stereo Samples
 
@@ -620,7 +651,7 @@ The current simulation still does not cover:
 - Output FIFO sizing and sustained underrun policy beyond startup behavior.
 - More exhaustive mixer saturation boundaries.
 - Complete SF2 velocity curves, modulators, controller policy, envelope curves,
-  and filter coefficient calculation.
+  and dynamic filter modulation.
 
 Those are good future test areas as the 32-voice core moves toward board-level
 integration.

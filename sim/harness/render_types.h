@@ -9,7 +9,7 @@ namespace render {
 constexpr int kNumVoices = 32;
 constexpr int kQ15Full = 32767;
 constexpr uint16_t kVoiceBase = 0x0100;
-constexpr uint16_t kVoiceStride = 0x0040;
+constexpr uint16_t kVoiceStride = 0x0080;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
@@ -52,7 +52,17 @@ struct Region {
   uint32_t phase_inc = 1;
   int gain_l = 0x4000;
   int gain_r = 0x4000;
+  bool filter_enable = false;
+  int filter_b0 = 0x10000000;
+  int filter_b1 = 0;
+  int filter_b2 = 0;
+  int filter_a1 = 0;
+  int filter_a2 = 0;
   int loop_mode = 0;
+  int effective_velocity = -1;
+  int exclusive_class = 0;
+  int delay_ticks = 0;
+  int hold_ticks = 0;
   int sustain_level = kQ15Full;
   int attack_step = kQ15Full;
   int decay_step = kQ15Full;
@@ -76,14 +86,17 @@ struct VoiceState {
   int target = 0;
   int sustain = 0;
   int stamp = 0;
+  int ticks_remaining = 0;
 };
 
 enum EnvState {
   ENV_SILENT = 0,
-  ENV_ATTACK = 1,
-  ENV_DECAY = 2,
-  ENV_SUSTAIN = 3,
-  ENV_RELEASE = 4,
+  ENV_DELAY = 1,
+  ENV_ATTACK = 2,
+  ENV_HOLD = 3,
+  ENV_DECAY = 4,
+  ENV_SUSTAIN = 5,
+  ENV_RELEASE = 6,
 };
 
 inline int clamp_q15(int value) {

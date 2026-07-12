@@ -150,7 +150,12 @@ module tb_wavetable_core;
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
     bus_write_word(16'h0134, 32'h0000_0001);
-    bus_write_word(16'h0138, 32'h0000_ffff);
+    bus_write_word(16'h0138, 32'h0000_0000);
+    bus_write_word(16'h013c, 32'h1000_0000);
+    bus_write_word(16'h0140, 32'h0000_0000);
+    bus_write_word(16'h0144, 32'h0000_0000);
+    bus_write_word(16'h0148, 32'h0000_0000);
+    bus_write_word(16'h014c, 32'h0000_0000);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
   endtask
@@ -169,7 +174,12 @@ module tb_wavetable_core;
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
     bus_write_word(16'h0134, 32'h0000_0001);
-    bus_write_word(16'h0138, 32'h0000_ffff);
+    bus_write_word(16'h0138, 32'h0000_0000);
+    bus_write_word(16'h013c, 32'h1000_0000);
+    bus_write_word(16'h0140, 32'h0000_0000);
+    bus_write_word(16'h0144, 32'h0000_0000);
+    bus_write_word(16'h0148, 32'h0000_0000);
+    bus_write_word(16'h014c, 32'h0000_0000);
     bus_write_word(16'h0124, 32'd1);
     repeat (2) @(negedge clk);
   endtask
@@ -183,7 +193,7 @@ module tb_wavetable_core;
   );
     logic [15:0] addr;
     begin
-      addr = 16'h0100 + (voice * 16'h0040);
+      addr = 16'(32'h0000_0100 + (voice * 32'h0000_0080));
       bus_write_word(addr + 16'h0000, 32'h0000_0001);
       bus_write_word(addr + 16'h0004, base_addr[31:0]);
       bus_write_word(addr + 16'h0008, 32'd4);
@@ -195,7 +205,12 @@ module tb_wavetable_core;
       bus_write_word(addr + 16'h0020, {{16{gain[15]}}, gain});
       bus_write_word(addr + 16'h002c, {{16{envelope_level[15]}}, envelope_level});
       bus_write_word(addr + 16'h0034, 32'h0000_0001);
-      bus_write_word(addr + 16'h0038, 32'h0000_ffff);
+      bus_write_word(addr + 16'h0038, 32'h0000_0000);
+      bus_write_word(addr + 16'h003c, 32'h1000_0000);
+      bus_write_word(addr + 16'h0040, 32'h0000_0000);
+      bus_write_word(addr + 16'h0044, 32'h0000_0000);
+      bus_write_word(addr + 16'h0048, 32'h0000_0000);
+      bus_write_word(addr + 16'h004c, 32'h0000_0000);
       bus_write_word(addr + 16'h0024, 32'd1);
       repeat (2) @(negedge clk);
     end
@@ -210,7 +225,11 @@ module tb_wavetable_core;
     input logic [31:0] phase_inc,
     input logic [1:0] loop_mode,
     input logic filter_enable,
-    input logic [15:0] filter_alpha
+    input logic signed [31:0] filter_b0,
+    input logic signed [31:0] filter_b1,
+    input logic signed [31:0] filter_b2,
+    input logic signed [31:0] filter_a1,
+    input logic signed [31:0] filter_a2
   );
     begin
       bus_write_word(16'h0100, 32'h0000_0001);
@@ -224,7 +243,12 @@ module tb_wavetable_core;
       bus_write_word(16'h0120, 32'h0000_7fff);
       bus_write_word(16'h012c, 32'h0000_7fff);
       bus_write_word(16'h0134, {23'd0, 1'b0, 6'd0, loop_mode});
-      bus_write_word(16'h0138, {15'd0, filter_enable, filter_alpha});
+      bus_write_word(16'h0138, {31'd0, filter_enable});
+      bus_write_word(16'h013c, filter_b0);
+      bus_write_word(16'h0140, filter_b1);
+      bus_write_word(16'h0144, filter_b2);
+      bus_write_word(16'h0148, filter_a1);
+      bus_write_word(16'h014c, filter_a2);
       bus_write_word(16'h0124, 32'd1);
       repeat (2) @(negedge clk);
     end
@@ -288,20 +312,23 @@ module tb_wavetable_core;
     request_and_check(1250, -1250);
 
     // Runtime PHASE_INC writes retune playback without reloading phase.
-    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS, 1'b0, 16'hffff);
+    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS,
+                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
     bus_write_word(16'h0130, 32'h0002_0000);
     request_and_check(999, 999);
     request_and_check(2999, 2999);
 
     // No-loop voices stop contributing once phase reaches the sample length.
-    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_NONE, 1'b0, 16'hffff);
+    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_NONE,
+                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
     request_and_check(999, 999);
     request_and_check(0, 0);
 
     // Loop-until-release wraps while held, then plays through to sample end.
-    configure_voice0_basic(0, 4, 1, 3, 32'h0002_0000, 32'h0001_0000, LOOP_MODE_UNTIL_RELEASE, 1'b0, 16'hffff);
+    configure_voice0_basic(0, 4, 1, 3, 32'h0002_0000, 32'h0001_0000, LOOP_MODE_UNTIL_RELEASE,
+                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(1999, 1999);
     request_and_check(999, 999);
     bus_write_word(16'h0134, 32'h0000_0102);
@@ -309,14 +336,16 @@ module tb_wavetable_core;
     request_and_check(2999, 2999);
     request_and_check(0, 0);
 
-    // One-pole LPF is applied after interpolation and before channel gain.
-    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS, 1'b1, 16'h8000);
+    // Biquad IIR is applied after interpolation and before channel gain. This
+    // coefficient set is a two-tap FIR case: y[n] = 0.5*x[n] + 0.5*x[n-1].
+    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS,
+                           1'b1, 32'sh0800_0000, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(999, 999);
-    request_and_check(1499, 1499);
+    request_and_check(1999, 1999);
 
     // Register decode must reach the expanded 32nd voice slot.
-    bus_write_word(16'h08c4, 32'h0000_0020);
-    bus_read_word(16'h08c4, 32'h0000_0020);
+    bus_write_word(16'h1084, 32'h0000_0020);
+    bus_read_word(16'h1084, 32'h0000_0020);
 
     // Check that two active voice slots render in one output request and the
     // mixer adds their current enveloped samples with saturation at the end.
