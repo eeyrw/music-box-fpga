@@ -142,6 +142,10 @@ not be used to connect real hardware. The temporary non-DDR I/O standard is
 `LVCMOS33`, and the primary board clock is constrained to `20.000 ns` for the
 confirmed `50 MHz` oscillator. DDR3 pins come from the generated MIG XDC.
 
+`DDRPIN.ucf` is kept as the board-provided DDR pin reference. It is not consumed
+directly by the Vivado batch flow; use it when checking or regenerating the MIG
+pin configuration, then let MIG emit the final DDR3 XDC.
+
 The current board top instantiates `clk_wiz_0` and `mig_7series_0` when the
 generated IP configuration is present. The source-controlled IP inputs are the
 Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` file referenced by
