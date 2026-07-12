@@ -10,6 +10,7 @@ module smart_artix_sd_native_asset_loader #(
   input  logic                      ddr_init_calib_complete,
   output logic                      busy,
   output logic                      asset_loaded,
+  output logic                      sd_initialized,
   output logic [3:0]                status_state,
   output logic [7:0]                sd_error_code,
   output logic [7:0]                loader_error_code,
@@ -45,7 +46,6 @@ module smart_artix_sd_native_asset_loader #(
   output logic                      mig_app_wdf_end,
   input  logic                      mig_app_wdf_rdy
 );
-  logic sd_initialized;
   logic sd_busy;
   logic sd_req_valid;
   logic sd_req_ready;

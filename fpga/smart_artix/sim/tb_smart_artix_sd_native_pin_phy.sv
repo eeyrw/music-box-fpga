@@ -27,6 +27,7 @@ module tb_smart_artix_sd_native_pin_phy;
   int cmd_bits_seen;
   logic [47:0] cmd_seen;
   int data_seen;
+  logic [15:0] crc_dat [0:3];
 
   smart_artix_sd_native_pin_phy #(
     .DIV_WIDTH(4),
@@ -92,6 +93,23 @@ module tb_smart_artix_sd_native_pin_phy;
     end
   endfunction
 
+  function automatic logic [15:0] crc16_next(input logic [15:0] crc, input logic bit_in);
+    logic feedback;
+    begin
+      feedback = bit_in ^ crc[15];
+      crc16_next = {crc[14:12], crc[11] ^ feedback, crc[10:5], crc[4] ^ feedback, crc[3:0], feedback};
+    end
+  endfunction
+
+  task automatic drive_data_nibble(input logic [3:0] nibble);
+    begin
+      @(negedge sd_clk);
+      sd_dat_i = nibble;
+      for (int line = 0; line < 4; line++)
+        crc_dat[line] = crc16_next(crc_dat[line], nibble[line]);
+    end
+  endtask
+
 /* verilator lint_off BLKSEQ */
   always @(posedge sd_clk) begin
     if (sd_cmd_oe && cmd_bits_seen < 48) begin
@@ -131,6 +149,8 @@ module tb_smart_artix_sd_native_pin_phy;
     errors = 0;
     cmd_bits_seen = 0;
     cmd_seen = 48'd0;
+    for (int line = 0; line < 4; line++)
+      crc_dat[line] = 16'd0;
 
     repeat (3) @(posedge clk);
     rst = 1'b0;
@@ -169,11 +189,18 @@ module tb_smart_artix_sd_native_pin_phy;
     sd_dat_i = 4'h0;
     @(posedge sd_clk);
     for (int i = 0; i < 4; i++) begin
-      @(negedge sd_clk);
-      sd_dat_i = 4'(i);
-      @(negedge sd_clk);
-      sd_dat_i = 4'(i[3:0] ^ 4'hf);
+      drive_data_nibble(4'(i));
+      drive_data_nibble(4'(i[3:0] ^ 4'hf));
     end
+
+    for (int bit_index = 15; bit_index >= 0; bit_index--) begin
+      @(negedge sd_clk);
+      for (int line = 0; line < 4; line++)
+        sd_dat_i[line] = crc_dat[line][bit_index];
+    end
+    @(negedge sd_clk);
+    sd_dat_i = 4'hf;
+
     wait (data_seen == 4);
     repeat (2) @(posedge clk);
 

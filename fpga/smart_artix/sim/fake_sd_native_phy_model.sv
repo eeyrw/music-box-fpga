@@ -1,0 +1,270 @@
+module fake_sd_native_phy_model #(
+  parameter int DATA_DELAY_CYCLES = 3,
+  parameter int INIT_BUSY_RESPONSES = 1
+) (
+  input  logic         clk,
+  input  logic         rst,
+
+  input  logic         cmd_valid,
+  output logic         cmd_ready,
+  input  logic [5:0]   cmd_index,
+  input  logic [31:0]  cmd_arg,
+  input  logic [1:0]   cmd_resp_type,
+  input  logic         cmd_data_read,
+  input  logic [15:0]  cmd_block_len,
+  input  logic [15:0]  cmd_block_count,
+
+  output logic         rsp_valid,
+  output logic [2:0]   rsp_status,
+  output logic [119:0] rsp_data,
+
+  output logic         data_valid,
+  input  logic         data_ready,
+  output logic [7:0]   data,
+  output logic         data_last,
+  output logic [2:0]   data_status,
+
+  output logic [7:0]   illegal_command_count,
+  output logic [31:0]  last_read_lba,
+  output logic         selected,
+  output logic         wide_bus
+);
+  localparam logic [2:0] STATUS_OK = 3'd0;
+  localparam logic [2:0] STATUS_TIMEOUT = 3'd1;
+
+  localparam logic [15:0] RCA = 16'h1234;
+  localparam logic [31:0] OCR_BUSY_SDHC = 32'hc0ff_8000;
+  localparam logic [31:0] OCR_STILL_BUSY = 32'h40ff_8000;
+  localparam logic [119:0] CID = 120'h02544d53_41303847_14394a67_c700e4;
+
+  typedef enum logic [2:0] {
+    CARD_IDLE,
+    CARD_READY,
+    CARD_IDENT,
+    CARD_STANDBY,
+    CARD_TRANSFER
+  } card_state_t;
+
+  typedef enum logic [1:0] {
+    DATA_IDLE,
+    DATA_WAIT,
+    DATA_SEND
+  } data_state_t;
+
+  card_state_t card_state;
+  data_state_t data_state;
+  logic app_cmd;
+  logic [15:0] data_delay_count;
+  logic [15:0] data_byte_index;
+  logic [15:0] active_block_len;
+  logic [7:0] acmd41_count;
+  logic cmd_accept;
+  logic unused_cmd_inputs;
+
+  assign cmd_ready = 1'b1;
+  assign cmd_accept = cmd_valid && cmd_ready;
+  assign unused_cmd_inputs = (^cmd_resp_type) ^ (^cmd_block_count);
+
+  function automatic logic [7:0] sector_byte(input logic [31:0] lba,
+                                             input logic [15:0] byte_index);
+    begin
+      sector_byte = lba[7:0] ^ lba[15:8] ^ lba[23:16] ^ lba[31:24]
+          ^ byte_index[7:0] ^ byte_index[15:8];
+    end
+  endfunction
+
+  task automatic respond_ok(input logic [119:0] value);
+    begin
+      rsp_status <= STATUS_OK;
+      rsp_data <= value;
+      rsp_valid <= 1'b1;
+    end
+  endtask
+
+  task automatic respond_illegal();
+    begin
+      rsp_status <= STATUS_TIMEOUT;
+      rsp_data <= '0;
+      rsp_valid <= 1'b1;
+      illegal_command_count <= illegal_command_count + 8'd1;
+    end
+  endtask
+
+  task automatic start_data(input logic [15:0] block_len);
+    begin
+      active_block_len <= block_len;
+      data_byte_index <= '0;
+      data_delay_count <= '0;
+      data_state <= DATA_WAIT;
+    end
+  endtask
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      card_state <= CARD_IDLE;
+      data_state <= DATA_IDLE;
+      app_cmd <= 1'b0;
+      wide_bus <= 1'b0;
+      selected <= 1'b0;
+      acmd41_count <= '0;
+      illegal_command_count <= '0;
+      last_read_lba <= '0;
+      active_block_len <= 16'd512;
+      data_delay_count <= '0;
+      data_byte_index <= '0;
+      rsp_valid <= 1'b0;
+      rsp_status <= STATUS_OK;
+      rsp_data <= '0;
+      data_valid <= 1'b0;
+      data <= '0;
+      data_last <= 1'b0;
+      data_status <= STATUS_OK;
+    end else begin
+      rsp_valid <= 1'b0;
+
+      if (data_valid && data_ready) begin
+        data_valid <= 1'b0;
+        data_last <= 1'b0;
+        if (data_byte_index == active_block_len) begin
+          data_state <= DATA_IDLE;
+        end
+      end
+
+      unique case (data_state)
+        DATA_IDLE: ;
+
+        DATA_WAIT: begin
+          if (data_delay_count == 16'(DATA_DELAY_CYCLES)) begin
+            data_state <= DATA_SEND;
+          end else begin
+            data_delay_count <= data_delay_count + 16'd1;
+          end
+        end
+
+        DATA_SEND: begin
+          if (!data_valid || data_ready) begin
+            data <= sector_byte(last_read_lba, data_byte_index);
+            data_status <= STATUS_OK;
+            data_last <= data_byte_index == active_block_len - 16'd1;
+            data_valid <= 1'b1;
+            data_byte_index <= data_byte_index + 16'd1;
+            if (data_byte_index == active_block_len - 16'd1)
+              data_state <= DATA_IDLE;
+          end
+        end
+
+        default: data_state <= DATA_IDLE;
+      endcase
+
+      if (cmd_accept) begin
+        unique case (cmd_index)
+          6'd0: begin
+            card_state <= CARD_IDLE;
+            selected <= 1'b0;
+            wide_bus <= 1'b0;
+            app_cmd <= 1'b0;
+            acmd41_count <= '0;
+            respond_ok('0);
+          end
+
+          6'd8: begin
+            app_cmd <= 1'b0;
+            if (card_state == CARD_IDLE && cmd_arg[11:0] == 12'h1aa)
+              respond_ok(120'h0000_01aa);
+            else
+              respond_illegal();
+          end
+
+          6'd55: begin
+            app_cmd <= 1'b1;
+            if ((card_state == CARD_IDLE && cmd_arg == 32'd0)
+                || (selected && cmd_arg == {RCA, 16'h0000})) begin
+              respond_ok('0);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd41: begin
+            if (app_cmd && card_state == CARD_IDLE) begin
+              app_cmd <= 1'b0;
+              if (acmd41_count < 8'(INIT_BUSY_RESPONSES)) begin
+                acmd41_count <= acmd41_count + 8'd1;
+                respond_ok({88'd0, OCR_STILL_BUSY});
+              end else begin
+                card_state <= CARD_READY;
+                respond_ok({88'd0, OCR_BUSY_SDHC});
+              end
+            end else begin
+              app_cmd <= 1'b0;
+              respond_illegal();
+            end
+          end
+
+          6'd2: begin
+            app_cmd <= 1'b0;
+            if (card_state == CARD_READY) begin
+              card_state <= CARD_IDENT;
+              respond_ok(CID);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd3: begin
+            app_cmd <= 1'b0;
+            if (card_state == CARD_IDENT || card_state == CARD_READY) begin
+              card_state <= CARD_STANDBY;
+              respond_ok({88'd0, RCA, 16'h0000});
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd7: begin
+            app_cmd <= 1'b0;
+            if (card_state == CARD_STANDBY && cmd_arg == {RCA, 16'h0000}) begin
+              card_state <= CARD_TRANSFER;
+              selected <= 1'b1;
+              respond_ok('0);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd6: begin
+            if (app_cmd && selected && cmd_arg == 32'h0000_0002) begin
+              app_cmd <= 1'b0;
+              wide_bus <= 1'b1;
+              respond_ok('0);
+            end else begin
+              app_cmd <= 1'b0;
+              respond_illegal();
+            end
+          end
+
+          6'd17: begin
+            app_cmd <= 1'b0;
+            if (selected && card_state == CARD_TRANSFER && cmd_data_read && cmd_block_len == 16'd512) begin
+              last_read_lba <= cmd_arg;
+              respond_ok('0);
+              start_data(cmd_block_len);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          default: begin
+            app_cmd <= 1'b0;
+            respond_illegal();
+          end
+        endcase
+      end
+    end
+  end
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_inputs;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_inputs = unused_cmd_inputs;
+endmodule

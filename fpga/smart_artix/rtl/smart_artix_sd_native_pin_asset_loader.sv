@@ -8,10 +8,12 @@ module smart_artix_sd_native_pin_asset_loader #(
   input  logic                      rst,
 
   input  logic                      start,
-  input  logic [SD_DIV_WIDTH-1:0]   sd_clk_div,
+  input  logic [SD_DIV_WIDTH-1:0]   sd_init_clk_div,
+  input  logic [SD_DIV_WIDTH-1:0]   sd_transfer_clk_div,
   input  logic                      ddr_init_calib_complete,
   output logic                      busy,
   output logic                      asset_loaded,
+  output logic                      sd_initialized,
   output logic [3:0]                status_state,
   output logic [7:0]                sd_error_code,
   output logic [7:0]                loader_error_code,
@@ -51,6 +53,9 @@ module smart_artix_sd_native_pin_asset_loader #(
   logic [7:0] sd_data;
   logic sd_data_last;
   logic [2:0] sd_data_status;
+  logic [SD_DIV_WIDTH-1:0] selected_sd_clk_div;
+
+  assign selected_sd_clk_div = sd_initialized ? sd_transfer_clk_div : sd_init_clk_div;
 
   smart_artix_sd_native_asset_loader #(
     .LBA_WIDTH(LBA_WIDTH),
@@ -63,6 +68,7 @@ module smart_artix_sd_native_pin_asset_loader #(
     .ddr_init_calib_complete,
     .busy,
     .asset_loaded,
+    .sd_initialized,
     .status_state,
     .sd_error_code,
     .loader_error_code,
@@ -101,7 +107,7 @@ module smart_artix_sd_native_pin_asset_loader #(
   ) phy (
     .clk,
     .rst,
-    .clk_div(sd_clk_div),
+    .clk_div(selected_sd_clk_div),
     .cmd_valid(sd_cmd_valid),
     .cmd_ready(sd_cmd_ready),
     .cmd_index(sd_cmd_index),

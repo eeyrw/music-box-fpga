@@ -72,8 +72,21 @@ native SD pins: CLK, CMD, DAT[3:0]
 The native reader initializes SDHC/SDXC cards, selects the assigned RCA, switches
 to 4-bit bus mode with `ACMD6`, and issues single-block `CMD17` reads. The native
 pin PHY drives `SD_CLK`, transmits commands with CRC7, releases/captures the `CMD`
-line for responses, and receives `DAT[3:0]` as a byte stream. CRC16 checking on the
-four data lines is still a follow-up hardening item.
+line for responses, receives `DAT[3:0]` as a byte stream, and checks each data
+line's CRC16 before releasing the final byte of a block.
+
+The initialization policy follows the same practical sequence used by small FPGA
+SD readers, but narrowed to SDHC/SDXC: `CMD0`, `CMD8`, retrying `CMD55/ACMD41`
+with HCS, then either `CMD58` for SPI mode or `CMD2/CMD3/CMD7` plus
+`CMD55/ACMD6` for native 4-bit mode. SDv1/SDSC and `CMD16` fallback remain out of
+scope for this loader path. The native pin asset-loader wrapper has separate
+`sd_init_clk_div` and `sd_transfer_clk_div` inputs and switches to the transfer
+divider after the SD reader reports initialization complete.
+
+An optional `smart_artix_fat_file_reader` can sit above either SD block reader when
+bring-up needs to load an 8.3-named file from a FAT16/FAT32 root directory. It
+keeps the same sector-stream boundary as the raw-image loader and deliberately
+does not implement long filenames or subdirectories yet.
 
 ## DDR3 Line-Reader Assumptions
 
@@ -190,6 +203,16 @@ verilator --binary --timing --Wall -Wno-fatal \
 build/sd_spi_reader_obj_dir/Vtb_smart_artix_sd_spi_block_reader
 ```
 
+Run the FAT file-reader unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/fat_file_reader_obj_dir \
+  --top-module tb_smart_artix_fat_file_reader \
+  rtl/smart_artix_fat_file_reader.sv sim/tb_smart_artix_fat_file_reader.sv
+build/fat_file_reader_obj_dir/Vtb_smart_artix_fat_file_reader
+```
+
 Run the native SD command-level reader unit test from this directory:
 
 ```bash
@@ -200,6 +223,19 @@ verilator --binary --timing --Wall -Wno-fatal \
 build/sd_native_reader_obj_dir/Vtb_smart_artix_sd_native_block_reader
 ```
 
+Run the native SD reader against the fake-card command/data model from this
+directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/sd_native_fake_obj_dir \
+  --top-module tb_smart_artix_sd_native_block_reader_fake \
+  rtl/smart_artix_sd_native_block_reader.sv \
+  sim/fake_sd_native_phy_model.sv \
+  sim/tb_smart_artix_sd_native_block_reader_fake.sv
+build/sd_native_fake_obj_dir/Vtb_smart_artix_sd_native_block_reader_fake
+```
+
 Run the native SD pin-level PHY unit test from this directory:
 
 ```bash
@@ -208,4 +244,16 @@ verilator --binary --timing --Wall -Wno-fatal \
   --top-module tb_smart_artix_sd_native_pin_phy \
   rtl/smart_artix_sd_native_pin_phy.sv sim/tb_smart_artix_sd_native_pin_phy.sv
 build/sd_native_pin_phy_obj_dir/Vtb_smart_artix_sd_native_pin_phy
+```
+
+Run the native SD pin-level fake-card transport test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/sd_native_pin_fake_obj_dir \
+  --top-module tb_smart_artix_sd_native_pin_phy_fake \
+  rtl/smart_artix_sd_native_pin_phy.sv \
+  sim/fake_sd_native_pin_model.sv \
+  sim/tb_smart_artix_sd_native_pin_phy_fake.sv
+build/sd_native_pin_fake_obj_dir/Vtb_smart_artix_sd_native_pin_phy_fake
 ```

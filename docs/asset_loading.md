@@ -117,23 +117,83 @@ The first Smart Artix implementation provides the board-side middle of this path
 - `smart_artix_sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
   `SD_CLK`, bidirectional `CMD` through `cmd_o/cmd_oe/cmd_i`, and `DAT[3:0]` read
   sampling. It generates command CRC7, captures short/long responses, and converts
-  4-bit data nibbles into the reader's byte stream.
+  4-bit data nibbles into the reader's byte stream, and validates the four
+  DAT-line CRC16 values before releasing the final byte of a block.
 - `smart_artix_sd_native_pin_asset_loader` wires the native pin layer through the
   native block reader into the raw image loader and DDR3 writer.
+- `smart_artix_fat_file_reader` is an optional FAT layer above the same
+  sector-stream SD reader interface. It supports 512-byte sectors, FAT16 and
+  FAT32 root-directory search, 8.3 short filenames, and cluster-chain file byte
+  streaming. It is intended for board bring-up with a normally formatted card;
+  the raw-image loader remains the simpler product path until long filenames,
+  subdirectories, and broader filesystem policy are needed.
 
 The SD SPI block reader follows the same split used by LiteSDCard: command/control
 sequencing is separate from the byte data stream. `smart_artix_sd_spi_byte_master`
 now provides the direct FPGA-pin SPI layer for `CLK`, `CMD/MOSI`, `DAT0/MISO`, and
 `DAT3/CS`; no external SD PHY chip is implied. Native 4-bit SD uses the same split
 and now has a first pin-level implementation for command and read-data timing. The
-current native pin layer generates command CRC7 and receives data bytes, but it
-does not yet validate DAT-line CRC16; add CRC16 checks before treating SD media
-errors as fully covered.
+current native pin layer generates command CRC7, receives data bytes, and checks
+DAT-line CRC16 at the end of each block. A CRC mismatch is reported through the
+data status attached to the final byte.
 
-Both current readers intentionally target SDHC/SDXC block-addressed cards. They
+Board simulation also includes `fake_sd_native_phy_model`, a card-side behavioral
+model following the fake-card testing style used by standalone SD-reader projects.
+It maintains initialization state, app-command state, RCA selection, 4-bit bus
+mode, OCR/CID-style responses, and delayed `CMD17` block data. This gives the
+native command reader a more realistic regression than a scripted response list,
+while still stopping at the command/data interface rather than modeling pin-level
+`CMD`/`DAT` electrical timing.
+`fake_sd_native_pin_model` complements it at the pin-transport layer by observing
+48-bit command frames from `sd_cmd_o/sd_cmd_oe`, driving `sd_cmd_i` responses, and
+driving `DAT[3:0]` data nibbles into `smart_artix_sd_native_pin_phy`.
+
+The SD initialization sequence intentionally borrows the practical bring-up shape
+used by simple FPGA SD readers:
+
+```text
+SPI mode:
+  power-up dummy clocks with CS high
+  CMD0            -> idle
+  CMD8            -> SD v2 voltage/check pattern
+  CMD55/ACMD41    -> retry until ready, request HCS
+  CMD58           -> confirm CCS/SDHC
+  CMD17           -> single-block reads by LBA
+
+Native mode:
+  CMD0            -> idle
+  CMD8            -> SD v2 voltage/check pattern
+  CMD55/ACMD41    -> retry until ready, request HCS
+  CMD2            -> read CID
+  CMD3            -> capture RCA
+  CMD7            -> select card
+  CMD55/ACMD6     -> switch DAT bus to 4-bit mode
+  CMD17           -> single-block reads by LBA
+```
+
+The fake-card regression exercises the native-mode retry path by returning busy
+OCR values before the ready/SDHC OCR. The command reader tests therefore cover the
+important initialization state transitions rather than only the successful final
+responses.
+
+Some compatibility behavior from broader SD-reader examples is deliberately not
+adopted yet:
+
+- SDv1 and SDv2 SDSC fallback paths are not implemented.
+- `CMD16` block-length setup is not used because SDHC/SDXC cards have fixed
+  512-byte block addressing for this path.
+- The reader does not switch from a slow initialization clock to a faster transfer
+  clock internally; `smart_artix_sd_native_pin_asset_loader` selects between
+  `sd_init_clk_div` and `sd_transfer_clk_div` at the pin PHY based on the reader's
+  `sd_initialized` state.
+- Pin-level pull-up behavior on `CMD` and `DAT[3:0]` is handled in the Smart Artix
+  XDC skeleton with conditional `PULLUP` constraints that become active when the
+  board top exposes native SD ports.
+
+Both current SD block readers intentionally target SDHC/SDXC block-addressed cards. They
 request high-capacity support with `ACMD41(HCS)` and require the capacity-status
 bit before accepting the card. SDSC byte-addressed cards are not supported because
-the asset loader operates in 512-byte logical block addresses.
+the asset loaders and FAT layer operate in 512-byte logical block addresses.
 
 In this document, "native SD" or "4-bit SD" means the SD memory-card protocol over
 `CMD` and `DAT[3:0]`. It does not mean the separate SDIO I/O-card function

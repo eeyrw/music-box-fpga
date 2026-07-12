@@ -20,6 +20,7 @@ rtl/smart_artix_ddr3_line_reader.sv
 rtl/smart_artix_ddr3_rw_arbiter.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
+rtl/smart_artix_fat_file_reader.sv
 rtl/smart_artix_sd_ddr3_asset_loader.sv
 rtl/smart_artix_sd_spi_block_reader.sv
 rtl/smart_artix_sd_spi_asset_loader.sv
