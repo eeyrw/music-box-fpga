@@ -1,0 +1,258 @@
+# SD Asset Loading To DDR3
+
+This document defines the planned board-level path for loading large SoundFont
+assets from an SD card into DDR3 before wavetable playback starts. It is a board
+system contract, not part of the generic wavetable core under `rtl/`.
+
+## Design Position
+
+The FPGA should not parse the full SF2 preset model, allocate voices, or evaluate
+SoundFont regions. Those remain owned by the external MCU, host tool, or later
+soft control processor. The FPGA-side loader only needs to move a contiguous raw
+asset image from SD card sectors into DDR3 and expose enough status for software
+to know when playback can start.
+
+The existing wave-memory contract is preserved: word address zero is the first
+16-bit word of the complete SF2 file image in DDR3, and voice `BASE_ADDR` values
+include the `smpl` chunk payload offset. Software writes voice registers using
+metadata produced by a host-side SF2 parser or preprocessing tool.
+
+```text
+SD raw image
+  -> FPGA SD block reader
+  -> sector FIFO / width adapter
+  -> DDR3 write DMA
+  -> DDR3 wave image
+
+MCU / host control
+  -> SF2 or preprocessed metadata
+  -> voice register writes over SPI/control bus
+  -> wavetable_core reads PCM from DDR3
+```
+
+## Raw SD Image Format
+
+Use raw sectors rather than a filesystem for the first board path. Sector 0 holds
+a fixed little-endian header, followed by the SF2 byte image and optional metadata
+tables.
+
+```text
+offset  size  field
+0x00    4     magic = "WTSF"
+0x04    4     version = 1
+0x08    4     header_size_bytes
+0x0c    4     flags
+0x10    8     sf2_start_lba
+0x18    8     sf2_size_bytes
+0x20    8     ddr_base_byte_addr
+0x28    8     metadata_start_lba
+0x30    8     metadata_size_bytes
+0x38    4     sf2_crc32, optional when flags enable it
+0x3c    4     header_crc32, optional when flags enable it
+```
+
+The first implementation should require `ddr_base_byte_addr = 0` so the current
+wave-memory address convention remains direct. If a later board reserves low DDR
+space for diagnostics or firmware buffers, software must add the base offset when
+programming voice `BASE_ADDR` registers.
+
+The optional metadata region is intended for MCU or host software. The FPGA loader
+may copy it to DDR or ignore it, depending on board control needs. The loader does
+not need to understand metadata contents.
+
+## FPGA Loader Blocks
+
+Board-specific RTL should keep these responsibilities separate:
+
+```text
+sd_raw_reader
+  - initialize card in the selected SD mode
+  - issue single-block or multi-block reads
+  - produce a 512-byte sector stream with valid/ready/last/error
+
+asset_loader
+  - read and validate sector 0 header
+  - sequence sector reads over the SF2 byte range
+  - generate byte counts, CRC state, and loader status
+
+ddr3_asset_writer
+  - pack sector bytes into MIG application write beats
+  - generate aligned DDR write addresses and byte enables
+  - backpressure the SD stream when MIG cannot accept writes
+
+ddr3_arbiter
+  - grant loader writes before playback starts
+  - grant wavetable line reads during playback
+  - optionally support low-priority writes only when the audio path is idle
+```
+
+These blocks belong under a concrete board directory such as `fpga/smart_artix/`.
+The generic `wavetable_core`, `wave_memory_subsystem`, and register map should not
+depend on SD, MIG, or board clocking signals.
+
+The first Smart Artix implementation provides the board-side middle of this path:
+
+- `smart_artix_asset_loader` parses sector 0, validates the raw-image header,
+  requests SF2 data sectors, and exposes loader status.
+- `smart_artix_ddr3_asset_writer` packs the byte stream into MIG write-data beats,
+  emits write masks for a partial final beat, and tracks the independent MIG
+  command and write-data ready handshakes.
+- `smart_artix_ddr3_rw_arbiter` multiplexes wavetable read commands and loader
+  write commands onto one MIG application command port. Read commands have
+  priority; the write-data channel is passed through independently to match the
+  7-series MIG app interface.
+- `smart_artix_sd_ddr3_asset_loader` wires those two blocks together behind a
+  sector-stream SD reader interface and a MIG write interface.
+- `smart_artix_sd_spi_block_reader` implements the minimal SD SPI-mode protocol
+  subset needed for raw-sector reads: power-up dummy clocks, `CMD0`, `CMD8`,
+  `CMD55`/`ACMD41`, `CMD58` SDHC detection, and `CMD17` single-block reads.
+- `smart_artix_sd_spi_asset_loader` connects the SD SPI block reader to the raw
+  image loader and DDR3 writer through the same sector-stream contract.
+- `smart_artix_sd_native_block_reader` implements the matching command-level
+  native SD path above a future command/data PHY: `CMD0`, `CMD8`,
+  `CMD55`/`ACMD41`, `CMD2`, `CMD3`, `CMD7`, `CMD55`/`ACMD6` to enter 4-bit bus
+  mode, then `CMD17` single-block reads.
+- `smart_artix_sd_native_asset_loader` connects the native reader to the same raw
+  image loader and DDR3 writer.
+- `smart_artix_sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
+  `SD_CLK`, bidirectional `CMD` through `cmd_o/cmd_oe/cmd_i`, and `DAT[3:0]` read
+  sampling. It generates command CRC7, captures short/long responses, and converts
+  4-bit data nibbles into the reader's byte stream.
+- `smart_artix_sd_native_pin_asset_loader` wires the native pin layer through the
+  native block reader into the raw image loader and DDR3 writer.
+
+The SD SPI block reader follows the same split used by LiteSDCard: command/control
+sequencing is separate from the byte data stream. `smart_artix_sd_spi_byte_master`
+now provides the direct FPGA-pin SPI layer for `CLK`, `CMD/MOSI`, `DAT0/MISO`, and
+`DAT3/CS`; no external SD PHY chip is implied. Native 4-bit SD uses the same split
+and now has a first pin-level implementation for command and read-data timing. The
+current native pin layer generates command CRC7 and receives data bytes, but it
+does not yet validate DAT-line CRC16; add CRC16 checks before treating SD media
+errors as fully covered.
+
+Both current readers intentionally target SDHC/SDXC block-addressed cards. They
+request high-capacity support with `ACMD41(HCS)` and require the capacity-status
+bit before accepting the card. SDSC byte-addressed cards are not supported because
+the asset loader operates in 512-byte logical block addresses.
+
+In this document, "native SD" or "4-bit SD" means the SD memory-card protocol over
+`CMD` and `DAT[3:0]`. It does not mean the separate SDIO I/O-card function
+protocol with `CMD5`/function registers.
+
+The read/write arbiter is available as board RTL, but the current
+`smart_artix_top` remains read-path focused until real SD pins and the generated
+MIG instance are connected.
+
+## SD Mode Choice
+
+The loader interface should abstract sector reads so the physical SD mode can be
+changed without touching DDR or wavetable logic.
+
+Start with one of these modes:
+
+| Mode | Use | Expected result |
+| --- | --- | --- |
+| SPI mode | Simplest bring-up and debugging | Low bandwidth; a 500 MB image may take minutes |
+| Native 4-bit SD | Practical product path | Higher PHY complexity; tens of seconds for a 500 MB image |
+
+SD card latency is not deterministic enough for real-time wavetable reads. The SD
+card is an asset source only; DDR3 remains the audio read memory.
+
+## DDR3 Addressing
+
+The wavetable core addresses signed 16-bit PCM words. The loader writes the SF2
+file bytes into DDR3 without changing the SF2 byte order. The board DDR line
+reader is responsible for returning the requested little-endian 16-bit sample
+word to `wave_memory_subsystem`.
+
+```text
+ddr_byte_addr = ddr_base_byte_addr + wave_word_addr * 2
+pcm_word      = {sf2_byte[ddr_byte_addr + 1], sf2_byte[ddr_byte_addr]}
+```
+
+For SF2 sample playback, software calculates:
+
+```text
+base_addr = (smpl_payload_byte_offset / 2) + sample_start_frame
+```
+
+For linked stereo samples, `BASE_ADDR` and `BASE_ADDR_R` are independent absolute
+word addresses for the left and right sample data.
+
+## Capacity Policy
+
+The current Smart Artix target assumes one 512 MB DDR3 device. A nominal 500 MB
+SoundFont leaves little margin for metadata, diagnostics, test buffers, or future
+double-buffering. The first board software should enforce a conservative maximum,
+such as:
+
+```text
+sf2_size_bytes <= 480 MiB
+```
+
+Larger practical libraries should be preprocessed on a PC into a compact wave
+image containing only required presets and samples. Keeping a full original SF2
+image in DDR3 is useful for bring-up and simple control software, but it is not
+the most space-efficient long-term format.
+
+## Loader State And Status
+
+The board wrapper should expose a small status/control surface to the MCU or host.
+The exact register transport can be board-specific, but the minimum observable
+state is:
+
+```text
+idle
+ddr_calibrating
+sd_initializing
+reading_header
+loading_sf2
+verifying
+loaded
+error
+```
+
+Recommended counters and flags:
+
+```text
+bytes_loaded
+sf2_size_bytes
+current_lba
+error_code
+crc_expected
+crc_observed
+asset_loaded
+loader_busy
+```
+
+Playback should remain disabled until DDR3 calibration has completed and
+`asset_loaded` is set. The first implementation should not support concurrent SD
+loads and active audio playback; that requires a DDR arbiter policy with strict
+read priority and underrun testing.
+
+## Bring-Up Sequence
+
+The intended hardware bring-up order is:
+
+1. Generate a small raw SD image with the header and a known SF2 or PCM test
+   payload.
+2. Bring up DDR3 calibration and a simple write/read memory test.
+3. Implement SD block reads and validate sector 0 header fields.
+4. Stream a small image from SD to DDR3 and verify the copied bytes through a test
+   readback path.
+5. Connect the DDR line reader to `wave_memory_subsystem` and play a known sample
+   from DDR3 through I2S.
+6. Increase image size and measure full-load time, CRC behavior, and error paths.
+7. Move from SD SPI mode to native 4-bit SD if load time is unacceptable.
+
+## Open Decisions
+
+These choices should be made when the concrete board wrapper is implemented:
+
+- Whether metadata is copied into DDR3 or consumed only by the MCU/host.
+- Whether sector 0 is enough for the header or a larger aligned header area should
+  be reserved.
+- Whether CRC32 is required for every load or only for diagnostics.
+- Whether the initial SD reader uses SPI mode or native 4-bit SD.
+- How loader status is exposed: existing SPI register bridge, a separate board
+  status register bank, UART, or MCU-local GPIO/status pins.

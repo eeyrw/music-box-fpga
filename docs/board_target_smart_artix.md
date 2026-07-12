@@ -66,20 +66,24 @@ bring-up unless the selected load path requires them.
 ## Asset Loading Direction
 
 SD card storage is treated as an asset source, not as the real-time audio read
-path. A practical flow is:
+path. The planned first contract is documented in `docs/asset_loading.md`: the SD
+card stores a raw image with a small header, the FPGA copies the SF2 byte image
+into DDR3 before playback, and the MCU or host owns SF2 metadata and voice policy.
+A practical flow is:
 
 ```text
 PC preprocessing tool
-  -> wave image and metadata
-  -> SD card, MCU storage, or host transfer
-  -> DDR3 load before playback
+  -> raw SD image: header, SF2 bytes, optional metadata
+  -> FPGA SD block reader
+  -> DDR3 load before playback starts
   -> SPI voice-register control during playback
 ```
 
 SPI is acceptable for register control and small diagnostics. Loading large
-wave-memory images through a low-speed SPI control link will be slow, so the
-board design should keep room for a faster load path through an MCU-side SD
-reader, Ethernet, or another host-assisted mechanism.
+wave-memory images through the low-speed SPI control link will be slow, so the
+board design should use a dedicated SD load path or another faster asset upload
+path. SD SPI mode is acceptable for initial bring-up, but native 4-bit SD is the
+more practical path for a roughly 500 MB image.
 
 ## Ethernet Direction
 
@@ -98,7 +102,7 @@ is better owned by an MCU or soft core than by the wavetable datapath RTL.
 4. Generate a MIG configuration for `MT41K256M16TW` and connect a read-only DDR3
    line-reader adapter to `wave_memory_subsystem`.
 5. Play a small known wave image from DDR3 through I2S.
-6. Add a practical DDR3 asset-loading path.
+6. Add the SD raw-image to DDR3 asset-loading path from `docs/asset_loading.md`.
 
 The initial skeleton lives in `fpga/smart_artix/`. It intentionally keeps DDR3
 stubbed so the first synthesis pass can measure core resource use before MIG and

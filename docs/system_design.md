@@ -7,6 +7,7 @@ work. Stable external contracts live in the focused documents:
 - `docs/memory_format.md`: wave-memory layout and line-memory interface.
 - `docs/register_map.md`: software-visible register contract.
 - `docs/simulation_design.md`: test and render harness behavior.
+- `docs/asset_loading.md`: planned SD raw-image to DDR3 loading contract.
 
 ## Current Scope
 
@@ -210,10 +211,11 @@ the generic RTL to one vendor flow.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-7. Define the asset-loading contract.
-   Runtime `.sf2` parsing is simulation-only. Define a preprocessed flash image,
-   region metadata tables, preset selection policy, controller handling, and how
-   the MCU loads or streams those assets before programming voices.
+7. Implement the SD-to-DDR3 asset-loading path.
+   `docs/asset_loading.md` defines the first board contract: an SD raw image with
+   a small header, FPGA-side sector reads and DDR3 write DMA, and host/MCU-owned
+   SF2 metadata and voice policy. Runtime `.sf2` parsing remains outside the
+   generic wavetable core.
 
 8. Strengthen full-system pass/fail checks.
    Compare I2S-decoded PCM against the `render-quick` reference on short exact

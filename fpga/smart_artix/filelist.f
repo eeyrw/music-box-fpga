@@ -17,4 +17,16 @@
 # Board-specific RTL.
 rtl/smart_artix_mig_stub.sv
 rtl/smart_artix_ddr3_line_reader.sv
+rtl/smart_artix_ddr3_rw_arbiter.sv
+rtl/smart_artix_ddr3_asset_writer.sv
+rtl/smart_artix_asset_loader.sv
+rtl/smart_artix_sd_ddr3_asset_loader.sv
+rtl/smart_artix_sd_spi_block_reader.sv
+rtl/smart_artix_sd_spi_asset_loader.sv
+rtl/smart_artix_sd_spi_byte_master.sv
+rtl/smart_artix_sd_spi_pin_asset_loader.sv
+rtl/smart_artix_sd_native_block_reader.sv
+rtl/smart_artix_sd_native_asset_loader.sv
+rtl/smart_artix_sd_native_pin_phy.sv
+rtl/smart_artix_sd_native_pin_asset_loader.sv
 rtl/smart_artix_top.sv

@@ -35,9 +35,45 @@ The intended memory replacement is:
 ```text
 wavetable_core_system external line-read pins
   -> smart_artix_ddr3_line_reader
+  -> smart_artix_ddr3_rw_arbiter
   -> Xilinx MIG app interface
   -> MT41K256M16TW
 ```
+
+The SD raw-image loading path is implemented as reusable board RTL but is not yet
+connected to `smart_artix_top` because the SD bit-level SPI master, real MIG
+instance, and read/write arbitration policy still need board-specific decisions:
+
+```text
+SD SPI pins: CLK, CMD/MOSI, DAT0/MISO, DAT3/CS
+  -> smart_artix_sd_spi_byte_master
+  -> smart_artix_sd_spi_block_reader
+  -> smart_artix_sd_ddr3_asset_loader
+  -> MIG app write interface
+```
+
+The SD SPI path intentionally implements only the raw-sector subset needed for
+asset loading. It borrows LiteSDCard's command/data separation but omits filesystem
+logic, write commands, DMA frontends, and native 4-bit timing. The SPI electrical
+connection is direct FPGA I/O; `PHY` here means the small RTL layer that shifts and
+samples the pins, not an external chip.
+
+A matching native 4-bit command-level reader is also present:
+
+```text
+native SD pins: CLK, CMD, DAT[3:0]
+  -> smart_artix_sd_native_pin_phy
+  -> smart_artix_sd_native_block_reader
+  -> smart_artix_sd_ddr3_asset_loader
+  -> smart_artix_ddr3_rw_arbiter
+  -> MIG app write interface
+```
+
+The native reader initializes SDHC/SDXC cards, selects the assigned RCA, switches
+to 4-bit bus mode with `ACMD6`, and issues single-block `CMD17` reads. The native
+pin PHY drives `SD_CLK`, transmits commands with CRC7, releases/captures the `CMD`
+line for responses, and receives `DAT[3:0]` as a byte stream. CRC16 checking on the
+four data lines is still a follow-up hardening item.
 
 ## DDR3 Line-Reader Assumptions
 
@@ -72,7 +108,8 @@ source material for later pin and constraint work, not as synthesis inputs.
 4. Verify I2S `BCLK`, `LRCLK`, and `SDATA` pins with a scope or logic analyzer.
 5. Add a tiny BRAM-backed line-memory test source for one known waveform.
 6. Generate MIG for `MT41K256M16TW` and add a read-only DDR3 line-reader adapter.
-7. Add a DDR3 asset-loading path after read-only playback is proven.
+7. Add the SD raw-image loader path: SD sector stream, asset header parser, and
+   DDR3 write DMA.
 
 ## Vivado Batch Skeleton
 
@@ -111,4 +148,64 @@ verilator --binary --timing --Wall -Wno-fatal \
   --top-module tb_smart_artix_mig_stub \
   rtl/smart_artix_mig_stub.sv sim/tb_smart_artix_mig_stub.sv
 build/mig_stub_obj_dir/Vtb_smart_artix_mig_stub
+```
+
+Run the DDR3 asset-writer unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/asset_writer_obj_dir \
+  --top-module tb_smart_artix_ddr3_asset_writer \
+  rtl/smart_artix_ddr3_asset_writer.sv sim/tb_smart_artix_ddr3_asset_writer.sv
+build/asset_writer_obj_dir/Vtb_smart_artix_ddr3_asset_writer
+```
+
+Run the DDR3 read/write arbiter unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/ddr3_rw_arbiter_obj_dir \
+  --top-module tb_smart_artix_ddr3_rw_arbiter \
+  rtl/smart_artix_ddr3_rw_arbiter.sv sim/tb_smart_artix_ddr3_rw_arbiter.sv
+build/ddr3_rw_arbiter_obj_dir/Vtb_smart_artix_ddr3_rw_arbiter
+```
+
+Run the raw-image asset-loader unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/asset_loader_obj_dir \
+  --top-module tb_smart_artix_asset_loader \
+  rtl/smart_artix_asset_loader.sv sim/tb_smart_artix_asset_loader.sv
+build/asset_loader_obj_dir/Vtb_smart_artix_asset_loader
+```
+
+Run the SD SPI block-reader protocol unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/sd_spi_reader_obj_dir \
+  --top-module tb_smart_artix_sd_spi_block_reader \
+  rtl/smart_artix_sd_spi_block_reader.sv sim/tb_smart_artix_sd_spi_block_reader.sv
+build/sd_spi_reader_obj_dir/Vtb_smart_artix_sd_spi_block_reader
+```
+
+Run the native SD command-level reader unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/sd_native_reader_obj_dir \
+  --top-module tb_smart_artix_sd_native_block_reader \
+  rtl/smart_artix_sd_native_block_reader.sv sim/tb_smart_artix_sd_native_block_reader.sv
+build/sd_native_reader_obj_dir/Vtb_smart_artix_sd_native_block_reader
+```
+
+Run the native SD pin-level PHY unit test from this directory:
+
+```bash
+verilator --binary --timing --Wall -Wno-fatal \
+  --Mdir build/sd_native_pin_phy_obj_dir \
+  --top-module tb_smart_artix_sd_native_pin_phy \
+  rtl/smart_artix_sd_native_pin_phy.sv sim/tb_smart_artix_sd_native_pin_phy.sv
+build/sd_native_pin_phy_obj_dir/Vtb_smart_artix_sd_native_pin_phy
 ```
