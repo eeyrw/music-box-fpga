@@ -133,7 +133,7 @@ std::string write_test_sf2() {
   std::vector<uint8_t> ibag;
   push_bag(ibag, 0, 0);
   push_bag(ibag, 1, 0);
-  push_bag(ibag, 12, 0);
+  push_bag(ibag, 20, 0);
 
   std::vector<uint8_t> igen;
   push_gen(igen, 52, bits(10));        // global fineTune, absolute at instrument level
@@ -143,6 +143,14 @@ std::string write_test_sf2() {
   push_gen(igen, 54, 1);               // continuous loop
   push_gen(igen, 8, 6900);             // initialFilterFc, enables biquad LPF
   push_gen(igen, 9, 60);               // initialFilterQ
+  push_gen(igen, 5, bits(50));         // modLfoToPitch
+  push_gen(igen, 6, bits(25));         // vibLfoToPitch
+  push_gen(igen, 7, bits(-10));        // modEnvToPitch
+  push_gen(igen, 10, bits(1200));      // modLfoToFilterFc
+  push_gen(igen, 11, bits(-600));      // modEnvToFilterFc
+  push_gen(igen, 22, bits(0));         // freqModLFO, 8.176 Hz
+  push_gen(igen, 24, bits(1200));      // freqVibLFO, 16.352 Hz
+  push_gen(igen, 26, bits(-1200));     // attackModEnv
   push_gen(igen, 0, 2);                // startAddrsOffset
   push_gen(igen, 1, bits(-4));         // endAddrsOffset
   push_gen(igen, 2, 1);                // startloopAddrsOffset
@@ -235,6 +243,17 @@ int main() {
     expect_equal(memory.at(0), -659, "sm24 rounded sample merge");
     if (!preset.filter_enable || preset.filter_b0 <= 0 || preset.filter_b1 <= 0 || preset.filter_b2 <= 0) {
       throw std::runtime_error("SF2 filter generators did not produce enabled biquad feed-forward coefficients");
+    }
+    expect_equal(preset.mod_lfo_to_pitch, 50, "modLfoToPitch amount");
+    expect_equal(preset.vib_lfo_to_pitch, 25, "vibLfoToPitch amount");
+    expect_equal(preset.mod_env_to_pitch, -10, "modEnvToPitch amount");
+    expect_equal(preset.mod_lfo_to_filter_fc, 1200, "modLfoToFilterFc amount");
+    expect_equal(preset.mod_env_to_filter_fc, -600, "modEnvToFilterFc amount");
+    if (preset.mod_lfo_step == 0 || preset.vib_lfo_step <= preset.mod_lfo_step) {
+      throw std::runtime_error("LFO frequency generators did not produce ordered phase steps");
+    }
+    if (preset.mod_env_attack_step <= 0 || preset.mod_env_attack_step >= render::kQ15Full) {
+      throw std::runtime_error("modulation envelope attack generator was not converted to a finite step");
     }
 
     render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);

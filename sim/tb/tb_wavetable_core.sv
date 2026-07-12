@@ -306,6 +306,10 @@ module tb_wavetable_core;
     bus_write_word(16'h012c, 32'h0000_4000);
     request_and_check(375, 375);
 
+    // Runtime stereo gain writes affect both active channels atomically without a commit.
+    bus_write_word(16'h0150, 32'h2000_2000);
+    request_and_check(62, 62);
+
     // Check stereo addressing and exclusive loop wrapping.
     configure_stereo_loop();
     request_and_check(1250, -1250);

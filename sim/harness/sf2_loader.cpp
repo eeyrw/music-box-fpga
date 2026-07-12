@@ -18,8 +18,26 @@ constexpr int GEN_END_ADDRS_OFFSET = 1;
 constexpr int GEN_STARTLOOP_ADDRS_OFFSET = 2;
 constexpr int GEN_ENDLOOP_ADDRS_OFFSET = 3;
 constexpr int GEN_START_ADDRS_COARSE_OFFSET = 4;
+constexpr int GEN_MOD_LFO_TO_PITCH = 5;
+constexpr int GEN_VIB_LFO_TO_PITCH = 6;
+constexpr int GEN_MOD_ENV_TO_PITCH = 7;
 constexpr int GEN_INITIAL_FILTER_FC = 8;
 constexpr int GEN_INITIAL_FILTER_Q = 9;
+constexpr int GEN_MOD_LFO_TO_FILTER_FC = 10;
+constexpr int GEN_MOD_ENV_TO_FILTER_FC = 11;
+constexpr int GEN_END_ADDRS_COARSE_OFFSET = 12;
+constexpr int GEN_DELAY_MOD_LFO = 21;
+constexpr int GEN_FREQ_MOD_LFO = 22;
+constexpr int GEN_DELAY_VIB_LFO = 23;
+constexpr int GEN_FREQ_VIB_LFO = 24;
+constexpr int GEN_DELAY_MOD_ENV = 25;
+constexpr int GEN_ATTACK_MOD_ENV = 26;
+constexpr int GEN_HOLD_MOD_ENV = 27;
+constexpr int GEN_DECAY_MOD_ENV = 28;
+constexpr int GEN_SUSTAIN_MOD_ENV = 29;
+constexpr int GEN_RELEASE_MOD_ENV = 30;
+constexpr int GEN_KEYNUM_TO_MOD_ENV_HOLD = 31;
+constexpr int GEN_KEYNUM_TO_MOD_ENV_DECAY = 32;
 constexpr int GEN_DELAY_VOL_ENV = 33;
 constexpr int GEN_ATTACK_VOL_ENV = 34;
 constexpr int GEN_HOLD_VOL_ENV = 35;
@@ -35,7 +53,6 @@ constexpr int GEN_STARTLOOP_ADDRS_COARSE_OFFSET = 45;
 constexpr int GEN_KEYNUM = 46;
 constexpr int GEN_VELOCITY = 47;
 constexpr int GEN_INITIAL_ATTENUATION = 48;
-constexpr int GEN_END_ADDRS_COARSE_OFFSET = 12;
 constexpr int GEN_ENDLOOP_ADDRS_COARSE_OFFSET = 50;
 constexpr int GEN_COARSE_TUNE = 51;
 constexpr int GEN_FINE_TUNE = 52;
@@ -495,6 +512,11 @@ int envelope_step(double seconds, int tick_samples, int sample_rate) {
   return std::max(1, std::min(kQ15Full, int(std::round(double(kQ15Full) / ticks))));
 }
 
+int envelope_tick_count(double seconds, int tick_samples, int sample_rate) {
+  if (seconds <= 0.0) return 1;
+  return std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
+}
+
 int q4_28(double value) {
   double raw = std::round(value * 268435456.0);
   if (raw > double(std::numeric_limits<int32_t>::max())) return std::numeric_limits<int32_t>::max();
@@ -502,22 +524,15 @@ int q4_28(double value) {
   return int(raw);
 }
 
-void filter_coefficients(const Zone& zone, int output_sample_rate, Region& region) {
-  int cutoff_cents = zone.count(GEN_INITIAL_FILTER_FC) ? signed_amount(zone.at(GEN_INITIAL_FILTER_FC)) : 13500;
+FilterConfig filter_config_for(int cutoff_cents, int resonance_cb, int output_sample_rate) {
   cutoff_cents = std::max(1500, std::min(13500, cutoff_cents));
   double cutoff_hz = 8.176 * std::pow(2.0, double(cutoff_cents) / 1200.0);
   double nyquist = double(output_sample_rate) * 0.5;
+  FilterConfig filter;
   if (cutoff_hz >= nyquist * 0.97) {
-    region.filter_enable = false;
-    region.filter_b0 = 0x10000000;
-    region.filter_b1 = 0;
-    region.filter_b2 = 0;
-    region.filter_a1 = 0;
-    region.filter_a2 = 0;
-    return;
+    return filter;
   }
 
-  int resonance_cb = zone.count(GEN_INITIAL_FILTER_Q) ? signed_amount(zone.at(GEN_INITIAL_FILTER_Q)) : 0;
   resonance_cb = std::max(0, std::min(960, resonance_cb));
   double q = std::max(0.5, std::pow(10.0, double(resonance_cb) / 200.0) * 0.7071067811865476);
   double omega = 2.0 * 3.14159265358979323846 * cutoff_hz / double(output_sample_rate);
@@ -526,17 +541,80 @@ void filter_coefficients(const Zone& zone, int output_sample_rate, Region& regio
   double alpha = sin_w / (2.0 * q);
   double a0 = 1.0 + alpha;
 
-  region.filter_enable = true;
-  region.filter_b0 = q4_28(((1.0 - cos_w) * 0.5) / a0);
-  region.filter_b1 = q4_28((1.0 - cos_w) / a0);
-  region.filter_b2 = q4_28(((1.0 - cos_w) * 0.5) / a0);
-  region.filter_a1 = q4_28((-2.0 * cos_w) / a0);
-  region.filter_a2 = q4_28((1.0 - alpha) / a0);
+  filter.enable = true;
+  filter.b0 = q4_28(((1.0 - cos_w) * 0.5) / a0);
+  filter.b1 = q4_28((1.0 - cos_w) / a0);
+  filter.b2 = q4_28(((1.0 - cos_w) * 0.5) / a0);
+  filter.a1 = q4_28((-2.0 * cos_w) / a0);
+  filter.a2 = q4_28((1.0 - alpha) / a0);
+  return filter;
+}
+
+void filter_coefficients(const Zone& zone, int output_sample_rate, Region& region) {
+  region.initial_filter_fc = zone.count(GEN_INITIAL_FILTER_FC) ? signed_amount(zone.at(GEN_INITIAL_FILTER_FC)) : 13500;
+  region.initial_filter_q = zone.count(GEN_INITIAL_FILTER_Q) ? signed_amount(zone.at(GEN_INITIAL_FILTER_Q)) : 0;
+  FilterConfig filter = filter_config_for(region.initial_filter_fc, region.initial_filter_q, output_sample_rate);
+  region.filter_enable = filter.enable;
+  region.filter_b0 = filter.b0;
+  region.filter_b1 = filter.b1;
+  region.filter_b2 = filter.b2;
+  region.filter_a1 = filter.a1;
+  region.filter_a2 = filter.a2;
 }
 
 int envelope_ticks(double seconds, int tick_samples, int sample_rate) {
   if (seconds <= 0.0) return 0;
   return std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
+}
+
+uint32_t lfo_step(int freq_cents, bool present, int tick_samples, int sample_rate) {
+  if (!present) return 0;
+  double hz = 8.176 * std::pow(2.0, double(signed_amount(freq_cents)) / 1200.0);
+  double cycles_per_tick = hz * double(tick_samples) / double(sample_rate);
+  double raw = std::round(cycles_per_tick * 65536.0);
+  if (raw <= 0.0) return 0;
+  if (raw > double(UINT32_MAX)) return UINT32_MAX;
+  return uint32_t(raw);
+}
+
+void modulation_generators(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
+  region.mod_lfo_delay_ticks = envelope_ticks(timecents_to_seconds(zone.count(GEN_DELAY_MOD_LFO) ? zone.at(GEN_DELAY_MOD_LFO) : 0,
+                                                              zone.count(GEN_DELAY_MOD_LFO), -12000),
+                                             tick_samples, sample_rate);
+  region.vib_lfo_delay_ticks = envelope_ticks(timecents_to_seconds(zone.count(GEN_DELAY_VIB_LFO) ? zone.at(GEN_DELAY_VIB_LFO) : 0,
+                                                              zone.count(GEN_DELAY_VIB_LFO), -12000),
+                                             tick_samples, sample_rate);
+  region.mod_lfo_step = lfo_step(zone.count(GEN_FREQ_MOD_LFO) ? zone.at(GEN_FREQ_MOD_LFO) : 0,
+                                 zone.count(GEN_FREQ_MOD_LFO), tick_samples, sample_rate);
+  region.vib_lfo_step = lfo_step(zone.count(GEN_FREQ_VIB_LFO) ? zone.at(GEN_FREQ_VIB_LFO) : 0,
+                                 zone.count(GEN_FREQ_VIB_LFO), tick_samples, sample_rate);
+  region.mod_lfo_to_pitch = zone.count(GEN_MOD_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_LFO_TO_PITCH)) : 0;
+  region.vib_lfo_to_pitch = zone.count(GEN_VIB_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_VIB_LFO_TO_PITCH)) : 0;
+  region.mod_env_to_pitch = zone.count(GEN_MOD_ENV_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_ENV_TO_PITCH)) : 0;
+  region.mod_lfo_to_filter_fc = zone.count(GEN_MOD_LFO_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_LFO_TO_FILTER_FC)) : 0;
+  region.mod_env_to_filter_fc = zone.count(GEN_MOD_ENV_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_ENV_TO_FILTER_FC)) : 0;
+
+  double a = timecents_to_seconds(zone.count(GEN_ATTACK_MOD_ENV) ? zone.at(GEN_ATTACK_MOD_ENV) : 0,
+                                  zone.count(GEN_ATTACK_MOD_ENV), -12000);
+  int hold_tc = signed_amount(zone.count(GEN_HOLD_MOD_ENV) ? zone.at(GEN_HOLD_MOD_ENV) : 0);
+  if (zone.count(GEN_KEYNUM_TO_MOD_ENV_HOLD)) hold_tc += signed_amount(zone.at(GEN_KEYNUM_TO_MOD_ENV_HOLD)) * (60 - key);
+  double h = timecents_to_seconds(hold_tc, zone.count(GEN_HOLD_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_HOLD), -12000);
+  int decay_tc = signed_amount(zone.count(GEN_DECAY_MOD_ENV) ? zone.at(GEN_DECAY_MOD_ENV) : 0);
+  if (zone.count(GEN_KEYNUM_TO_MOD_ENV_DECAY)) decay_tc += signed_amount(zone.at(GEN_KEYNUM_TO_MOD_ENV_DECAY)) * (60 - key);
+  double d = timecents_to_seconds(decay_tc, zone.count(GEN_DECAY_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_DECAY), -12000);
+  double r = timecents_to_seconds(zone.count(GEN_RELEASE_MOD_ENV) ? zone.at(GEN_RELEASE_MOD_ENV) : 0,
+                                  zone.count(GEN_RELEASE_MOD_ENV), -12000);
+  double delay = timecents_to_seconds(zone.count(GEN_DELAY_MOD_ENV) ? zone.at(GEN_DELAY_MOD_ENV) : 0,
+                                      zone.count(GEN_DELAY_MOD_ENV), -12000);
+  region.mod_env_delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
+  region.mod_env_hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
+  region.mod_env_sustain_level = centibels_to_level(zone.count(GEN_SUSTAIN_MOD_ENV) ? zone.at(GEN_SUSTAIN_MOD_ENV) : 0);
+  region.mod_env_attack_ticks = envelope_tick_count(a, tick_samples, sample_rate);
+  region.mod_env_decay_ticks = envelope_tick_count(d, tick_samples, sample_rate);
+  region.mod_env_release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
+  region.mod_env_attack_step = envelope_step(a, tick_samples, sample_rate);
+  region.mod_env_decay_step = envelope_step(d, tick_samples, sample_rate);
+  region.mod_env_release_step = envelope_step(r, tick_samples, sample_rate);
 }
 
 void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
@@ -557,6 +635,9 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
   region.delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
   region.hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
   region.sustain_level = centibels_to_level(zone.count(GEN_SUSTAIN_VOL_ENV) ? zone.at(GEN_SUSTAIN_VOL_ENV) : 0);
+  region.attack_ticks = envelope_tick_count(a, tick_samples, sample_rate);
+  region.decay_ticks = envelope_tick_count(d, tick_samples, sample_rate);
+  region.release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
   region.attack_step = envelope_step(a, tick_samples, sample_rate);
   region.decay_step = envelope_step(d, tick_samples, sample_rate);
   region.release_step = envelope_step(r, tick_samples, sample_rate);
@@ -756,6 +837,7 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       int sample_id = zone.at(GEN_SAMPLE_ID);
       Region r;
       r.key = key;
+      r.output_sample_rate = sample_rate;
       r.program = program;
       r.bank = bank;
       r.preset = sf2.presets.at(preset_idx).name;
@@ -771,6 +853,7 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
       r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
       volume_envelope(zone, key, tick_samples, sample_rate, r);
+      modulation_generators(zone, key, tick_samples, sample_rate, r);
       filter_coefficients(zone, sample_rate, r);
       memory.insert(memory.end(), words.begin(), words.end());
       regions.push_back(r);
@@ -797,6 +880,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     int sample_id = zone.at(GEN_SAMPLE_ID);
     Region r;
     r.key = key;
+    r.output_sample_rate = sample_rate;
     r.instrument = sf2.instruments.at(inst_idx).name;
     r.preset = r.instrument;
     r.base_addr = uint32_t(memory.size());
@@ -810,6 +894,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
     r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
     volume_envelope(zone, key, tick_samples, sample_rate, r);
+    modulation_generators(zone, key, tick_samples, sample_rate, r);
     filter_coefficients(zone, sample_rate, r);
     memory.insert(memory.end(), words.begin(), words.end());
     regions.push_back(r);

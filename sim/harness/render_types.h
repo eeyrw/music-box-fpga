@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,14 @@ struct Args {
 };
 
 struct NoteEvent {
+  enum Type {
+    EVENT_NOTE = 0,
+    EVENT_CONTROL = 1,
+    EVENT_PITCH_BEND = 2,
+    EVENT_CHANNEL_PRESSURE = 3,
+    EVENT_KEY_PRESSURE = 4,
+  };
+
   double time_seconds = 0.0;
   int note = 0;
   bool on = false;
@@ -35,6 +44,10 @@ struct NoteEvent {
   int channel = 0;
   int program = 0;
   int bank = 0;
+  Type type = EVENT_NOTE;
+  int controller = 0;
+  int value = 0;
+  int pitch_bend = 0;
   int sample = 0;
   uint32_t phase_inc = 1;
   int region = 0;
@@ -42,6 +55,7 @@ struct NoteEvent {
 
 struct Region {
   int key = 0;
+  int output_sample_rate = 48000;
   int program = 0;
   int bank = 0;
   std::string preset;
@@ -68,15 +82,50 @@ struct Region {
   int delay_ticks = 0;
   int hold_ticks = 0;
   int sustain_level = kQ15Full;
+  int attack_ticks = 1;
+  int decay_ticks = 1;
+  int release_ticks = 1;
   int attack_step = kQ15Full;
   int decay_step = kQ15Full;
   int release_step = kQ15Full;
+  int initial_filter_fc = 13500;
+  int initial_filter_q = 0;
+  int mod_lfo_delay_ticks = 0;
+  uint32_t mod_lfo_step = 0;
+  int vib_lfo_delay_ticks = 0;
+  uint32_t vib_lfo_step = 0;
+  int mod_lfo_to_pitch = 0;
+  int vib_lfo_to_pitch = 0;
+  int mod_env_to_pitch = 0;
+  int mod_lfo_to_filter_fc = 0;
+  int mod_env_to_filter_fc = 0;
+  int mod_env_delay_ticks = 0;
+  int mod_env_hold_ticks = 0;
+  int mod_env_sustain_level = kQ15Full;
+  int mod_env_attack_ticks = 1;
+  int mod_env_decay_ticks = 1;
+  int mod_env_release_ticks = 1;
+  int mod_env_attack_step = kQ15Full;
+  int mod_env_decay_step = kQ15Full;
+  int mod_env_release_step = kQ15Full;
+};
+
+struct FilterConfig {
+  bool enable = false;
+  int b0 = 0x10000000;
+  int b1 = 0;
+  int b2 = 0;
+  int a1 = 0;
+  int a2 = 0;
 };
 
 class VoiceControlSink {
  public:
   virtual ~VoiceControlSink() = default;
   virtual void set_envelope(int voice, int level) = 0;
+  virtual void set_gain(int voice, int gain_l, int gain_r) = 0;
+  virtual void set_phase_inc(int voice, uint32_t phase_inc) = 0;
+  virtual void set_filter(int voice, const FilterConfig& filter) = 0;
   virtual void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) = 0;
   virtual void release_voice(int voice, const Region& region) = 0;
 };
@@ -91,6 +140,18 @@ struct VoiceState {
   int sustain = 0;
   int stamp = 0;
   int ticks_remaining = 0;
+  int env_stage_tick = 0;
+  int release_start = 0;
+  bool sustain_held = false;
+  uint32_t mod_lfo_phase = 0;
+  uint32_t vib_lfo_phase = 0;
+  int mod_lfo_wait_ticks = 0;
+  int vib_lfo_wait_ticks = 0;
+  int mod_env_state = 0;
+  int mod_env_level = 0;
+  int mod_env_ticks_remaining = 0;
+  int mod_env_stage_tick = 0;
+  int mod_env_release_start = 0;
 };
 
 enum EnvState {
@@ -111,7 +172,11 @@ inline int clamp_q15(int value) {
 
 inline int velocity_target(int velocity) {
   int vel = velocity < 0 ? 0 : (velocity > 127 ? 127 : velocity);
-  return (vel * kQ15Full + 63) / 127;
+  if (vel == 0) return 0;
+  double missing = double(127 - vel) / 127.0;
+  double attenuation_cb = 960.0 * missing * missing;
+  int level = int(std::round(double(kQ15Full) * std::pow(10.0, -attenuation_cb / 200.0)));
+  return clamp_q15(level);
 }
 
 inline uint16_t voice_addr(int voice, int offset) {

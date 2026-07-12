@@ -125,6 +125,7 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
         int note = data[pos++];
         int vel = data[pos++];
         NoteEvent ev;
+        ev.type = NoteEvent::EVENT_NOTE;
         ev.note = note;
         ev.on = (type == 0x90 && vel != 0);
         ev.velocity = vel;
@@ -140,14 +141,48 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
         // inspect controller history again.
         if (controller == 0) bank_msb[ch] = value;
         else if (controller == 32) bank_lsb[ch] = value;
+        NoteEvent ev;
+        ev.type = NoteEvent::EVENT_CONTROL;
+        ev.channel = ch;
+        ev.program = program[ch];
+        ev.bank = (bank_msb[ch] << 7) | bank_lsb[ch];
+        ev.controller = controller & 0x7f;
+        ev.value = value & 0x7f;
+        tick_events.push_back({tick, ev});
       } else if (type == 0xc0) {
         // Program changes also latch per channel and are copied into Note On
         // events. This models what firmware would know when allocating a voice.
         program[ch] = data[pos++];
-      } else if (type == 0xa0 || type == 0xe0) {
-        pos += 2;
+      } else if (type == 0xa0) {
+        int note = data[pos++];
+        int pressure = data[pos++];
+        NoteEvent ev;
+        ev.type = NoteEvent::EVENT_KEY_PRESSURE;
+        ev.channel = ch;
+        ev.program = program[ch];
+        ev.bank = (bank_msb[ch] << 7) | bank_lsb[ch];
+        ev.note = note & 0x7f;
+        ev.value = pressure & 0x7f;
+        tick_events.push_back({tick, ev});
+      } else if (type == 0xe0) {
+        int lsb = data[pos++];
+        int msb = data[pos++];
+        NoteEvent ev;
+        ev.type = NoteEvent::EVENT_PITCH_BEND;
+        ev.channel = ch;
+        ev.program = program[ch];
+        ev.bank = (bank_msb[ch] << 7) | bank_lsb[ch];
+        ev.pitch_bend = ((msb & 0x7f) << 7 | (lsb & 0x7f)) - 8192;
+        tick_events.push_back({tick, ev});
       } else if (type == 0xd0) {
-        pos += 1;
+        int pressure = data[pos++];
+        NoteEvent ev;
+        ev.type = NoteEvent::EVENT_CHANNEL_PRESSURE;
+        ev.channel = ch;
+        ev.program = program[ch];
+        ev.bank = (bank_msb[ch] << 7) | bank_lsb[ch];
+        ev.value = pressure & 0x7f;
+        tick_events.push_back({tick, ev});
       } else {
         throw std::runtime_error("unsupported MIDI status");
       }
@@ -191,8 +226,18 @@ std::vector<NoteEvent> default_melody() {
   std::vector<int> notes{60, 64, 67, 72, 67, 64, 60};
   std::vector<NoteEvent> events;
   for (size_t i = 0; i < notes.size(); ++i) {
-    events.push_back({double(i) * 0.24, notes[i], true, 110, 0, 0, 0});
-    events.push_back({double(i) * 0.24 + 0.20, notes[i], false, 0, 0, 0, 0});
+    NoteEvent on;
+    on.time_seconds = double(i) * 0.24;
+    on.note = notes[i];
+    on.on = true;
+    on.velocity = 110;
+    events.push_back(on);
+    NoteEvent off;
+    off.time_seconds = double(i) * 0.24 + 0.20;
+    off.note = notes[i];
+    off.on = false;
+    off.velocity = 0;
+    events.push_back(off);
   }
   return events;
 }

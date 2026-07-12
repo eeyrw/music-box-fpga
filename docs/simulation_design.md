@@ -344,8 +344,8 @@ The C++ harness performs only simulation-side work:
   append the selected sample data into one C++ wave-memory image.
 - Calculate each event's Q16.16 `phase_inc` from MIDI note, SF2 root key,
   tuning, and output sample rate.
-- Convert SF2 volume envelope attack, decay, sustain, release, and sampleModes
-  into per-region control values used by the C++ MCU model.
+- Convert SF2 volume and modulation envelope attack, decay, sustain, release,
+  and sampleModes into per-region control values used by the C++ MCU model.
 - Drive `wavetable_core_memory` through its public Verilated ports, including the
   external line-memory request/response interface.
 
@@ -479,6 +479,15 @@ Current SF2 support:
 - `overridingRootKey`, `fineTune`, `coarseTune`, `scaleTuning`, and `keynum`
   generators for Q16.16 `phase_inc` calculation.
 - `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
+- Default MIDI velocity-to-initial-attenuation is approximated with a concave
+  centibel curve before the software envelope target is quantized to Q1.15.
+- Modulation and vibrato LFO generators `delayModLFO`, `freqModLFO`,
+  `delayVibLFO`, and `freqVibLFO`, plus routing generators
+  `modLfoToPitch`, `vibLfoToPitch`, and `modLfoToFilterFc`. The C++ MCU model
+  advances them once per ADSR tick and writes runtime phase/filter registers.
+- Modulation-envelope `delayModEnv`, `attackModEnv`, `holdModEnv`,
+  `decayModEnv`, `sustainModEnv`, `releaseModEnv`, `keynumToModEnvHold`, and
+  `keynumToModEnvDecay`, plus `modEnvToPitch` and `modEnvToFilterFc` routing.
 - Volume-envelope `delayVolEnv`, `attackVolEnv`, `holdVolEnv`, `decayVolEnv`,
   `sustainVolEnv`, `releaseVolEnv`, `keynumToVolEnvHold`, and
   `keynumToVolEnvDecay` generators, converted to software ADSR tick steps.
@@ -486,6 +495,11 @@ Current SF2 support:
 - `velocity` substitution for the current software velocity-to-envelope target
   calculation.
 - `exclusiveClass` for MCU-side mutual exclusion within a MIDI channel.
+- MIDI CC7 volume, CC10 pan, CC11 expression, CC64 sustain pedal, CC120 All
+  Sound Off, CC123 All Notes Off, and pitch bend. These are MCU-side controller
+  policy events that drive runtime gain, envelope/release, and
+  `PHASE_INC_RUNTIME` writes. Runtime left/right gain updates use one packed
+  register write so SPI cannot expose a half-updated stereo gain pair.
 - Multiple overlapping matching preset/instrument zones for layered Note On
   playback.
 - Standard MIDI renders silence Note On events whose selected preset/instrument
@@ -542,15 +556,14 @@ SF2 file-format and sample-data gaps:
 
 Generator gaps:
 
-- `initialFilterFc` and `initialFilterQ` are converted into RTL biquad low-pass
-  coefficients. Dynamic filter modulation from `modLfoToFilterFc` and
-  `modEnvToFilterFc` is not modeled yet.
-- LFO and modulation-envelope generators are not modeled. This includes
-  `delayModLFO`, `freqModLFO`, `delayVibLFO`, `freqVibLFO`, the modulation
-  envelope ADSR generators, and their pitch/filter routing amounts.
-- Volume-envelope curves are simplified. The SF2 volume envelope is specified in
-  perceptual units with convex attack and dB-like decay/release behavior; the
-  harness uses linear Q1.15 level steps.
+- LFO and modulation-envelope generators are modeled at the MCU control-tick
+  rate, not at audio-sample rate. Very fast modulation or audio-rate modulation
+  will therefore be approximated by stepped runtime `PHASE_INC_RUNTIME` and
+  filter-coefficient writes.
+- Volume and modulation envelopes use control-tick curve approximations: convex
+  attack and nonlinear decay/release from the current stage level. This is closer
+  to SF2 perceptual envelope behavior than the old linear Q1.15 steps, but it is
+  still not a complete implementation of every SF2 envelope transform detail.
 - Effects sends are ignored. `chorusEffectsSend` and `reverbEffectsSend` do not
   affect the rendered output because the RTL path has no effects processor.
 - Generator precedence is implemented only for the subset consumed by the current
@@ -562,10 +575,11 @@ Modulator gaps:
 
 - `pmod` and `imod` chunks are validated for presence and record size but their
   records are not parsed into runtime behavior.
-- Default SF2 modulators are not implemented. Missing behavior includes MIDI
-  velocity to initial attenuation, velocity to filter cutoff, channel pressure and
-  modulation wheel to vibrato depth, CC7 volume, CC10 pan, CC11 expression, CC91
-  reverb send, CC93 chorus send, and pitch wheel to pitch.
+- Some default SF2 modulators are approximated directly in the MCU policy rather
+  than parsed from `pmod`/`imod`: MIDI velocity to initial attenuation, CC7
+  volume, CC10 pan, CC11 expression, and pitch wheel to pitch. Missing default
+  behavior still includes velocity to filter cutoff, channel pressure and
+  modulation wheel to vibrato depth, CC91 reverb send, and CC93 chorus send.
 - Custom modulator source mapping, polarity, direction, concave/convex/switch
   curves, secondary amount sources, transforms, and linked modulators are not
   implemented.
@@ -574,17 +588,15 @@ Modulator gaps:
 
 MIDI and controller-policy gaps:
 
-- Velocity is used for zone selection and Note On peak level only. The current
-  peak level is a simple linear mapping, not the SF2 default velocity-to-volume
-  concave attenuation curve.
+- Velocity is used for zone selection and Note On peak level. The current peak
+  level approximates the SF2 default velocity-to-volume concave attenuation
+  curve before the curved Q1.15 envelope model is applied.
 - Channel 10 percussion uses the General MIDI/SF2 convention of bank 128 and then
   relies on normal SF2 key-range selection for drum-note maps. More advanced
   preset-specific percussion policy is not modeled.
-- Pitch bend, sustain pedal, sostenuto, soft pedal, expression, volume, pan,
-  aftertouch, modulation wheel, RPN, NRPN, All Sound Off, and All Notes Off are
-  not modeled as SF2/MIDI controller behavior. Some RTL hooks exist, such as
-  runtime `PHASE_INC_RUNTIME`, but the C++ MCU policy does not yet drive them as
-  a complete SF2-compatible controller layer.
+- Sostenuto, soft pedal, aftertouch, modulation wheel, RPN, NRPN, and complete
+  pitch-bend-range negotiation are not modeled as SF2/MIDI controller behavior.
+  Pitch bend currently uses the General MIDI default +/-2 semitone range.
 - Bank-select policy is minimal. CC0 and CC32 are parsed into a 14-bit bank value,
   but SF2-specific bank conventions beyond simple preset lookup are not modeled.
 

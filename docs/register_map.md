@@ -38,6 +38,7 @@ uses `0x0100 + N * 0x80` plus the offsets below.
 | `0x44` | FILTER_B2 | signed Q4.28 `b2` |
 | `0x48` | FILTER_A1 | signed Q4.28 `a1` |
 | `0x4c` | FILTER_A2 | signed Q4.28 `a2` |
+| `0x50` | GAIN_RUNTIME | bits 15:0 left Q1.15, bits 31:16 right Q1.15 |
 | `0x3000` | VERSION | design version, currently `0x0002_0000` |
 
 A configuration is valid when `length != 0`. Looping modes additionally require
@@ -62,6 +63,12 @@ playback phase. A commit preserves the current active envelope value while it
 loads the rest of the voice configuration. This lets MCU firmware or a testbench
 model advance attack, decay, sustain, and release curves while the FPGA pipeline
 keeps rendering the same note.
+
+`GAIN_L` and `GAIN_R` are shadow configuration fields copied by `COMMIT`.
+`GAIN_RUNTIME` updates both active channel gains in one bus write without copying
+shadow registers and without reloading playback phase. Use this path for MIDI
+volume, expression, pan, or similar low-rate controller changes where a two-write
+left/right gain update could otherwise be visible over SPI.
 
 A Note On sequence normally writes sample address, loop range, `PHASE_INC`, gains,
 initial `ENVELOPE_LEVEL`, then writes `COMMIT`. The initial envelope write is

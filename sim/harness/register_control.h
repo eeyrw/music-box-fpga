@@ -17,6 +17,9 @@ class RegisterVoiceControl : public VoiceControlSink {
   explicit RegisterVoiceControl(RegisterWriteSink& registers);
 
   void set_envelope(int voice, int level) override;
+  void set_gain(int voice, int gain_l, int gain_r) override;
+  void set_phase_inc(int voice, uint32_t phase_inc) override;
+  void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
   void release_voice(int voice, const Region& region) override;
 

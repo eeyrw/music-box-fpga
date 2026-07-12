@@ -82,6 +82,18 @@ void FullSystemHarness::set_envelope(int voice, int level) {
   voice_control_.set_envelope(voice, level);
 }
 
+void FullSystemHarness::set_gain(int voice, int gain_l, int gain_r) {
+  voice_control_.set_gain(voice, gain_l, gain_r);
+}
+
+void FullSystemHarness::set_phase_inc(int voice, uint32_t phase_inc) {
+  voice_control_.set_phase_inc(voice, phase_inc);
+}
+
+void FullSystemHarness::set_filter(int voice, const FilterConfig& filter) {
+  voice_control_.set_filter(voice, filter);
+}
+
 void FullSystemHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   voice_control_.commit_voice(voice, enable, phase_inc, r);
 }

@@ -47,6 +47,19 @@ void QuickRtlHarness::set_envelope(int voice, int level) {
   voice_control_.set_envelope(voice, level);
 }
 
+void QuickRtlHarness::set_gain(int voice, int gain_l, int gain_r) {
+  voice_control_.set_gain(voice, gain_l, gain_r);
+}
+
+void QuickRtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
+  voice_control_.set_phase_inc(voice, phase_inc);
+}
+
+void QuickRtlHarness::set_filter(int voice, const FilterConfig& filter) {
+  voices_.at(voice).filter_enable = filter.enable;
+  voice_control_.set_filter(voice, filter);
+}
+
 void QuickRtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   voices_.at(voice).enabled = enable != 0;
   voices_.at(voice).stereo = r.stereo;

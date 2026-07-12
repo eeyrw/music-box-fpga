@@ -57,6 +57,10 @@ std::string write_tick_zero_fast_tempo_midi() {
   append_track(file, tempo_track);
 
   std::vector<uint8_t> note_track;
+  push_varlen(note_track, 0);
+  note_track.insert(note_track.end(), {0xb0, 7, 100});
+  push_varlen(note_track, 0);
+  note_track.insert(note_track.end(), {0xe0, 0x00, 0x60});
   push_varlen(note_track, 480);
   note_track.insert(note_track.end(), {0x90, 60, 100});
   push_varlen(note_track, 480);
@@ -83,11 +87,17 @@ void expect_near(double actual, double expected, const char* label) {
 int main() {
   try {
     auto events = render::parse_midi(write_tick_zero_fast_tempo_midi());
-    if (events.size() != 2) {
-      throw std::runtime_error("expected 2 note events, got " + std::to_string(events.size()));
+    if (events.size() != 4) {
+      throw std::runtime_error("expected 4 MIDI events, got " + std::to_string(events.size()));
     }
-    expect_near(events[0].time_seconds, 0.375, "note on time");
-    expect_near(events[1].time_seconds, 0.750, "note off time");
+    if (events[0].type != render::NoteEvent::EVENT_CONTROL || events[0].controller != 7 || events[0].value != 100) {
+      throw std::runtime_error("CC7 volume event was not preserved");
+    }
+    if (events[1].type != render::NoteEvent::EVENT_PITCH_BEND || events[1].pitch_bend != 4096) {
+      throw std::runtime_error("pitch bend event was not preserved");
+    }
+    expect_near(events[2].time_seconds, 0.375, "note on time");
+    expect_near(events[3].time_seconds, 0.750, "note off time");
     std::cout << "PASS: MIDI parser preserves tick-zero tempo over default tempo\n";
     return 0;
   } catch (const std::exception& e) {

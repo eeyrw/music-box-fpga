@@ -40,6 +40,7 @@ module voice_register_bank (
   localparam logic [15:0] OFF_FILTER_B2   = 16'h0044;
   localparam logic [15:0] OFF_FILTER_A1   = 16'h0048;
   localparam logic [15:0] OFF_FILTER_A2   = 16'h004c;
+  localparam logic [15:0] OFF_GAIN_RT     = 16'h0050;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
@@ -95,6 +96,7 @@ module voice_register_bank (
         OFF_FILTER_B2:   bus_rdata = shadow_config[selected_voice].filter_b2;
         OFF_FILTER_A1:   bus_rdata = shadow_config[selected_voice].filter_a1;
         OFF_FILTER_A2:   bus_rdata = shadow_config[selected_voice].filter_a2;
+        OFF_GAIN_RT:     bus_rdata = {active_config[selected_voice].gain_r, active_config[selected_voice].gain_l};
         default: begin
           address_valid = 1'b0;
           bus_rdata = 32'd0;
@@ -179,6 +181,10 @@ module voice_register_bank (
           OFF_FILTER_B2: begin shadow_config[selected_voice].filter_b2 <= $signed(bus_wdata); active_config[selected_voice].filter_b2 <= $signed(bus_wdata); end
           OFF_FILTER_A1: begin shadow_config[selected_voice].filter_a1 <= $signed(bus_wdata); active_config[selected_voice].filter_a1 <= $signed(bus_wdata); end
           OFF_FILTER_A2: begin shadow_config[selected_voice].filter_a2 <= $signed(bus_wdata); active_config[selected_voice].filter_a2 <= $signed(bus_wdata); end
+          OFF_GAIN_RT: begin
+            active_config[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
+            active_config[selected_voice].gain_r <= $signed(bus_wdata[31:16]);
+          end
           default: begin
           end
         endcase

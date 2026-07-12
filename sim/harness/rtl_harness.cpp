@@ -107,6 +107,18 @@ void RtlHarness::set_envelope(int voice, int level) {
   voice_control_.set_envelope(voice, level);
 }
 
+void RtlHarness::set_gain(int voice, int gain_l, int gain_r) {
+  voice_control_.set_gain(voice, gain_l, gain_r);
+}
+
+void RtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
+  voice_control_.set_phase_inc(voice, phase_inc);
+}
+
+void RtlHarness::set_filter(int voice, const FilterConfig& filter) {
+  voice_control_.set_filter(voice, filter);
+}
+
 void RtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   voice_control_.commit_voice(voice, enable, phase_inc, r);
 }

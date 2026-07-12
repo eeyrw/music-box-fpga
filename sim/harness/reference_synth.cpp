@@ -11,6 +11,26 @@ void ReferenceSynth::set_envelope(int voice, int level) {
   voices_.at(voice).envelope = int16_t(clamp_q15(level));
 }
 
+void ReferenceSynth::set_gain(int voice, int gain_l, int gain_r) {
+  VoiceConfig& v = voices_.at(voice);
+  v.gain_l = int16_t(clamp_q15(gain_l));
+  v.gain_r = int16_t(clamp_q15(gain_r));
+}
+
+void ReferenceSynth::set_phase_inc(int voice, uint32_t phase_inc) {
+  voices_.at(voice).phase_inc = phase_inc;
+}
+
+void ReferenceSynth::set_filter(int voice, const FilterConfig& filter) {
+  VoiceConfig& v = voices_.at(voice);
+  v.filter_enable = filter.enable;
+  v.filter_b0 = int32_t(filter.b0);
+  v.filter_b1 = int32_t(filter.b1);
+  v.filter_b2 = int32_t(filter.b2);
+  v.filter_a1 = int32_t(filter.a1);
+  v.filter_a2 = int32_t(filter.a2);
+}
+
 void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   VoiceConfig& v = voices_.at(voice);
   v.enable = enable != 0;

@@ -4,6 +4,7 @@
 #include "sf2_loader.h"
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -26,12 +27,32 @@ class McuModel {
   void envelope_tick();
 
  private:
+  struct ChannelState {
+    int volume = 127;
+    int expression = 127;
+    int pan = 64;
+    int pitch_bend = 0;
+    bool sustain = false;
+  };
+
+  void control_change(const NoteEvent& event);
+  void pitch_bend(const NoteEvent& event);
+  void update_voice_controls(int voice);
+  void update_voice_modulation(int voice);
+  void update_channel_controls(int channel);
+  void release_voice(int voice);
   void note_off(int channel, int note);
   void note_on(const NoteEvent& event);
   int first_free_or_oldest_slot() const;
+  static int scale_gain(int gain, int volume, int expression, int pan, bool right);
+  static uint32_t bend_phase_inc(uint32_t base_phase_inc, int bend);
+  static uint32_t modulated_phase_inc(uint32_t base_phase_inc, double cents);
+  static FilterConfig filter_for(int cutoff_cents, int resonance_cb, int sample_rate);
 
   VoiceControlSink& sink_;
   const std::vector<Region>& regions_;
+  int sample_rate_ = 48000;
+  std::array<ChannelState, 16> channels_{};
   std::array<VoiceState, kNumVoices> voices_{};
   int alloc_stamp_ = 0;
 };
