@@ -3,6 +3,7 @@
 #include "Vwavetable_core.h"
 
 #include <cstdio>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -42,10 +43,14 @@ void QuickRtlHarness::reset() {
 }
 
 void QuickRtlHarness::set_envelope(int voice, int level) {
+  voices_.at(voice).envelope_level = level;
   voice_control_.set_envelope(voice, level);
 }
 
 void QuickRtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
+  voices_.at(voice).enabled = enable != 0;
+  voices_.at(voice).stereo = r.stereo;
+  voices_.at(voice).filter_enable = r.filter_enable;
   voice_control_.commit_voice(voice, enable, phase_inc, r);
 }
 
@@ -55,17 +60,37 @@ void QuickRtlHarness::release_voice(int voice, const Region& r) {
 
 std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
   top_->sample_tick = 1;
+  uint64_t start_memory_reads = total_memory_reads_;
+  uint32_t enabled_voices = count_enabled_voices();
+  uint32_t audible_voices = count_audible_voices();
+  uint32_t filtered_voices = count_filtered_voices();
+  uint32_t stereo_voices = count_stereo_voices();
   tick();
   top_->sample_tick = 0;
 
   int timeout = 0;
+  uint32_t render_cycles = 1;
   while (!top_->sample_valid && timeout < 500) {
     tick();
     ++timeout;
+    ++render_cycles;
   }
   if (!top_->sample_valid) {
     throw std::runtime_error("quick RTL sample response timed out at output sample " + std::to_string(produced));
   }
+  render_cycles_sum_ += render_cycles;
+  max_render_cycles_ = std::max(max_render_cycles_, render_cycles);
+  uint32_t render_memory_reads = uint32_t(total_memory_reads_ - start_memory_reads);
+  render_memory_reads_sum_ += render_memory_reads;
+  max_render_memory_reads_ = std::max(max_render_memory_reads_, render_memory_reads);
+  enabled_voice_sum_ += enabled_voices;
+  max_enabled_voices_ = std::max(max_enabled_voices_, enabled_voices);
+  audible_voice_sum_ += audible_voices;
+  max_audible_voices_ = std::max(max_audible_voices_, audible_voices);
+  filtered_voice_sum_ += filtered_voices;
+  max_filtered_voices_ = std::max(max_filtered_voices_, filtered_voices);
+  stereo_voice_sum_ += stereo_voices;
+  max_stereo_voices_ = std::max(max_stereo_voices_, stereo_voices);
   return {int16_t(top_->sample_l), int16_t(top_->sample_r)};
 }
 
@@ -84,6 +109,7 @@ void QuickRtlHarness::write_register(uint16_t address, uint32_t data) {
 }
 
 void QuickRtlHarness::tick() {
+  ++total_cycles_;
   top_->clk = 0;
   top_->mem_req_ready = 1;
   top_->mem_rsp_valid = rsp_valid_ ? 1 : 0;
@@ -92,6 +118,7 @@ void QuickRtlHarness::tick() {
 
   bool next_rsp_valid = top_->mem_req_valid && top_->mem_req_ready;
   int16_t next_rsp_data = next_rsp_valid ? read_word(top_->mem_req_addr) : 0;
+  if (next_rsp_valid) ++total_memory_reads_;
 
   top_->clk = 1;
   top_->eval();
@@ -105,6 +132,38 @@ void QuickRtlHarness::tick() {
 
 int16_t QuickRtlHarness::read_word(uint32_t address) const {
   return address < memory_.size() ? memory_[address] : 0;
+}
+
+uint32_t QuickRtlHarness::count_enabled_voices() const {
+  uint32_t count = 0;
+  for (const auto& voice : voices_) {
+    if (voice.enabled) ++count;
+  }
+  return count;
+}
+
+uint32_t QuickRtlHarness::count_audible_voices() const {
+  uint32_t count = 0;
+  for (const auto& voice : voices_) {
+    if (voice.enabled && voice.envelope_level > 0) ++count;
+  }
+  return count;
+}
+
+uint32_t QuickRtlHarness::count_filtered_voices() const {
+  uint32_t count = 0;
+  for (const auto& voice : voices_) {
+    if (voice.enabled && voice.filter_enable) ++count;
+  }
+  return count;
+}
+
+uint32_t QuickRtlHarness::count_stereo_voices() const {
+  uint32_t count = 0;
+  for (const auto& voice : voices_) {
+    if (voice.enabled && voice.stereo) ++count;
+  }
+  return count;
 }
 
 }  // namespace render

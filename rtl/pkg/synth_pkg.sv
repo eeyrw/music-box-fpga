@@ -4,7 +4,11 @@ package synth_pkg;
   localparam int PCM_WIDTH = 16;
   localparam int PHASE_WIDTH = 32;
   localparam int ADDR_WIDTH = 32;
+`ifdef SYNTH_NUM_VOICES
+  localparam int NUM_VOICES = `SYNTH_NUM_VOICES;
+`else
   localparam int NUM_VOICES = 32;
+`endif
 
   localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
   localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;

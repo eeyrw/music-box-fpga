@@ -1,6 +1,9 @@
 VERILATOR ?= verilator
 BUILD_DIR := build
 TOP := tb_wavetable_core
+NUM_VOICES ?= 32
+RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES)
+CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
 
 # Defaults for the SoundFont render flow. Users can override any of these on the
 # make command line, for example: make render-instrument INSTRUMENT=10 KEY=64.
@@ -51,53 +54,53 @@ all: test
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core $(RTL_SOURCES)
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_spi $(RTL_SOURCES)
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_memory $(RTL_SOURCES)
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wavetable_core_system $(RTL_SOURCES)
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
-	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module i2s_tx $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_core $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_core_spi $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_core_memory $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_core_system $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx $(RTL_SOURCES)
 
 test:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
 		sim/harness/midi_parser.cpp sim/harness/midi_parser_test.cpp \
 		-o $(BUILD_DIR)/midi_parser_test
 	$(BUILD_DIR)/midi_parser_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
 		sim/harness/register_control.cpp sim/harness/register_control_test.cpp \
 		-o $(BUILD_DIR)/register_control_test
 	$(BUILD_DIR)/register_control_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
 		sim/harness/sf2_loader.cpp sim/harness/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
 		sim/harness/render_support.cpp sim/harness/sf2_loader.cpp \
 		sim/harness/midi_parser.cpp sim/harness/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
 	# Build and run the self-checking synthetic-data regression.
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
 		$(RTL_SOURCES) $(SIM_SOURCES)
 	$(BUILD_DIR)/obj_dir/V$(TOP)
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
 		$(RTL_SOURCES) $(SPI_SIM_SOURCES)
 	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
 		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
 
 host-ch347:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++17 -Wall -Wextra -Werror -I. \
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) -I. \
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
 		sim/harness/register_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
@@ -113,7 +116,7 @@ render-instrument:
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--out-dir $(BUILD_DIR)/render
 	# 2. Build and execute the render testbench against the generated memory.
-	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
 		-I$(BUILD_DIR)/render --Mdir $(BUILD_DIR)/render_obj_dir \
 		--top-module tb_render_wavetable_core \
 		$(RTL_SOURCES) sim/models/line_memory_model.sv sim/tb/tb_render_wavetable_core.sv
@@ -125,7 +128,7 @@ render-instrument:
 render-quick:
 	# Build and run the fast C++ reference-vs-RTL harness against wavetable_core.
 	mkdir -p $(RENDER_QUICK_OUT_DIR)
-	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_quick_cpp_obj_dir --top-module wavetable_core \
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_quick_main.cpp) \
@@ -135,7 +138,7 @@ render-quick:
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/reference_synth.cpp) \
 		$(abspath sim/harness/quick_rtl_harness.cpp) \
-		--build -CFLAGS "-std=c++17"
+		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
 	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
@@ -146,7 +149,7 @@ render-memory:
 	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_core_memory.
 	mkdir -p $(RENDER_MEMORY_OUT_DIR)
 	rm -f $(RENDER_MEMORY_OUT_DIR)/out.pcm
-	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_core_memory \
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_memory_main.cpp) \
@@ -155,7 +158,7 @@ render-memory:
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/rtl_harness.cpp) \
-		--build -CFLAGS "-std=c++17"
+		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
 	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_core_memory --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
@@ -166,7 +169,7 @@ render-memory:
 render-full-system:
 	# Build and run the pin-level full-system harness. WAV output is captured from I2S RX.
 	mkdir -p $(RENDER_FULL_SYSTEM_OUT_DIR)
-	$(VERILATOR) --cc --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_core_system \
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_full_system_main.cpp) \
@@ -175,7 +178,7 @@ render-full-system:
 		$(abspath sim/harness/midi_parser.cpp) \
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/full_system_harness.cpp) \
-		--build -CFLAGS "-std=c++17"
+		--build -CFLAGS "-std=c++17 $(CXX_DEFINES)"
 	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_core_system --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \

@@ -6,7 +6,11 @@
 
 namespace render {
 
-constexpr int kNumVoices = 32;
+#ifndef RENDER_NUM_VOICES
+#define RENDER_NUM_VOICES 32
+#endif
+
+constexpr int kNumVoices = RENDER_NUM_VOICES;
 constexpr int kQ15Full = 32767;
 constexpr uint16_t kVoiceBase = 0x0100;
 constexpr uint16_t kVoiceStride = 0x0080;

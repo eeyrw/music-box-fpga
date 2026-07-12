@@ -11,7 +11,8 @@ namespace render {
 
 Args parse_args(int argc, char** argv);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
-                   int sample_rate, int samples, int events);
+                   int sample_rate, int samples, int events,
+                   const std::string& extra_fields = "");
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
                                 int adsr_tick_samples, std::vector<NoteEvent>& events,
                                 std::vector<Region>& regions,

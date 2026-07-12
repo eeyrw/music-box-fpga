@@ -343,9 +343,12 @@ module tb_wavetable_core;
     request_and_check(999, 999);
     request_and_check(1999, 1999);
 
-    // Register decode must reach the expanded 32nd voice slot.
-    bus_write_word(16'h1084, 32'h0000_0020);
-    bus_read_word(16'h1084, 32'h0000_0020);
+    // Register decode must reach the expanded 32nd voice slot in the default
+    // 32-voice build. Smaller NUM_VOICES configurations intentionally omit it.
+    if (NUM_VOICES >= 32) begin
+      bus_write_word(16'h1084, 32'h0000_0020);
+      bus_read_word(16'h1084, 32'h0000_0020);
+    end
 
     // Check that two active voice slots render in one output request and the
     // mixer adds their current enveloped samples with saturation at the end.
@@ -353,13 +356,13 @@ module tb_wavetable_core;
     configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
     request_and_check(750, 750);
 
-    // All 32 voice slots can be addressed and mixed. Each contributes 15 after
-    // Q1.15 gain scaling, for a total of 480.
+    // All configured voice slots can be addressed and mixed. Each contributes 15
+    // after Q1.15 gain scaling.
     for (int v = 0; v < NUM_VOICES; v++)
       configure_mono_slot(v, 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
-    request_and_check(480, 480);
-    if (last_latency_cycles > 300) begin
-      $error("32-voice mono render latency got %0d cycles expected <= 300", last_latency_cycles);
+    request_and_check(NUM_VOICES * 15, NUM_VOICES * 15);
+    if (last_latency_cycles > 400) begin
+      $error("%0d-voice mono render latency got %0d cycles expected <= 400", NUM_VOICES, last_latency_cycles);
       errors++;
     end
 

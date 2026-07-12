@@ -44,12 +44,15 @@ Args parse_args(int argc, char** argv) {
 }
 
 void write_summary(const std::string& path, const std::vector<Region>& regions,
-                   int sample_rate, int samples, int events) {
+                   int sample_rate, int samples, int events,
+                   const std::string& extra_fields) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   f << "{\n  \"output_sample_rate\": " << sample_rate
     << ",\n  \"output_samples\": " << samples
-    << ",\n  \"event_count\": " << events << ",\n  \"regions\": [\n";
+    << ",\n  \"event_count\": " << events;
+  if (!extra_fields.empty()) f << ",\n" << extra_fields;
+  f << ",\n  \"regions\": [\n";
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& r = regions[i];
     f << "    {\"key\": " << r.key << ", \"program\": " << r.program

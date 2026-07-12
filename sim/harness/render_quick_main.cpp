@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 namespace render {
 namespace {
@@ -59,9 +60,6 @@ int main(int argc, char** argv) {
     std::vector<int16_t> wave_memory;
     std::vector<render::Region> regions;
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
-    render::write_summary(args.out_dir + "/quick_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()));
-
     render::ReferenceSynth reference(wave_memory);
     render::QuickRtlHarness rtl(wave_memory);
     rtl.reset();
@@ -110,11 +108,45 @@ int main(int argc, char** argv) {
                                " max_diff_r=" + std::to_string(max_diff_r));
     }
 
+    double avg_render_cycles = sample_count == 0
+                                   ? 0.0
+                                   : double(rtl.render_cycles_sum()) / double(sample_count);
+    auto avg = [sample_count](uint64_t value) {
+      return sample_count == 0 ? 0.0 : double(value) / double(sample_count);
+    };
+
+    std::ostringstream stats;
+    stats << "  \"rtl_total_cycles\": " << rtl.total_cycles()
+          << ",\n  \"rtl_total_memory_reads\": " << rtl.total_memory_reads()
+          << ",\n  \"rtl_render_cycles_sum\": " << rtl.render_cycles_sum()
+          << ",\n  \"rtl_avg_render_cycles\": " << avg_render_cycles
+          << ",\n  \"rtl_max_render_cycles\": " << rtl.max_render_cycles()
+          << ",\n  \"rtl_render_memory_reads_sum\": " << rtl.render_memory_reads_sum()
+          << ",\n  \"rtl_avg_render_memory_reads\": " << avg(rtl.render_memory_reads_sum())
+          << ",\n  \"rtl_max_render_memory_reads\": " << rtl.max_render_memory_reads()
+          << ",\n  \"rtl_avg_enabled_voices\": " << avg(rtl.enabled_voice_sum())
+          << ",\n  \"rtl_max_enabled_voices\": " << rtl.max_enabled_voices()
+          << ",\n  \"rtl_avg_audible_voices\": " << avg(rtl.audible_voice_sum())
+          << ",\n  \"rtl_max_audible_voices\": " << rtl.max_audible_voices()
+          << ",\n  \"rtl_avg_filtered_voices\": " << avg(rtl.filtered_voice_sum())
+          << ",\n  \"rtl_max_filtered_voices\": " << rtl.max_filtered_voices()
+          << ",\n  \"rtl_avg_stereo_voices\": " << avg(rtl.stereo_voice_sum())
+          << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices();
+    render::write_summary(args.out_dir + "/quick_render_config.json", regions, args.sample_rate,
+                          sample_count, int(events.size()), stats.str());
+
     std::cout << "PASS: quick RTL/reference render matched " << sample_count
               << " stereo samples, regions=" << regions.size()
               << " wave_words=" << wave_memory.size()
               << " events=" << events.size()
-              << " nonzero_output_words=" << nonzero_words << "\n";
+              << " nonzero_output_words=" << nonzero_words
+              << " rtl_total_cycles=" << rtl.total_cycles()
+              << " rtl_avg_render_cycles=" << avg_render_cycles
+              << " rtl_max_render_cycles=" << rtl.max_render_cycles()
+              << " rtl_avg_memory_reads=" << avg(rtl.render_memory_reads_sum())
+              << " rtl_max_memory_reads=" << rtl.max_render_memory_reads()
+              << " rtl_max_enabled_voices=" << rtl.max_enabled_voices()
+              << " rtl_max_filtered_voices=" << rtl.max_filtered_voices() << "\n";
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "render-quick failed: " << e.what() << "\n";
