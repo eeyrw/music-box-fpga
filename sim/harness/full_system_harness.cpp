@@ -68,6 +68,8 @@ FullSystemStats FullSystemHarness::stats() const {
   s.nonzero_output_words = nonzero_output_words_;
   s.underruns = underruns_;
   s.sample_drops = sample_drops_;
+  s.render_deadline_misses = render_deadline_misses_;
+  s.max_render_latency_cycles = max_render_latency_cycles_;
   s.memory_hits = memory_hits_;
   s.memory_misses = memory_misses_;
   s.memory_responses = memory_responses_;
@@ -131,6 +133,10 @@ void FullSystemHarness::tick() {
 
   if (top_->underrun_pulse) ++underruns_;
   if (top_->sample_drop_pulse) ++sample_drops_;
+  if (top_->render_deadline_miss_pulse) ++render_deadline_misses_;
+  if (top_->render_latency_cycles > max_render_latency_cycles_) {
+    max_render_latency_cycles_ = top_->render_latency_cycles;
+  }
   if (top_->mem_debug_hit_pulse) ++memory_hits_;
   if (top_->mem_debug_miss_pulse) ++memory_misses_;
   if (top_->mem_debug_response_pulse) ++memory_responses_;

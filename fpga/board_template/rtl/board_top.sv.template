@@ -31,6 +31,9 @@ module board_top (
   logic [31:0] ext_req_addr;
   logic        ext_rsp_valid;
   logic [8*16-1:0] ext_rsp_data;
+  logic [3:0] output_fifo_level;
+  logic render_deadline_miss_pulse;
+  logic [15:0] render_latency_cycles;
 
   assign ext_req_ready = 1'b0;
   assign ext_rsp_valid = 1'b0;
@@ -61,10 +64,14 @@ module board_top (
     .mem_debug_hit_pulse(),
     .mem_debug_miss_pulse(),
     .mem_debug_response_pulse(),
-    .mem_debug_response_latency()
+    .mem_debug_response_latency(),
+    .output_fifo_level(output_fifo_level),
+    .render_deadline_miss_pulse(render_deadline_miss_pulse),
+    .render_latency_cycles(render_latency_cycles)
   );
 
   // Keep ext_req_addr referenced until the memory controller is implemented.
   logic unused_ext_req;
-  assign unused_ext_req = ext_req_valid ^ ext_req_addr[0];
+  assign unused_ext_req = ext_req_valid ^ ext_req_addr[0] ^ output_fifo_level[0]
+      ^ render_deadline_miss_pulse ^ render_latency_cycles[0];
 endmodule

@@ -23,6 +23,7 @@ RTL_SOURCES := \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
+	rtl/audio/output_sample_fifo.sv \
 	rtl/audio/i2s_tx.sv \
 	rtl/voice/multi_voice_pipeline.sv \
 	rtl/top/wavetable_core.sv \

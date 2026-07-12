@@ -89,7 +89,10 @@ Useful learning documents:
 - [`docs/register_map.md`](docs/register_map.md): software-visible register map.
 - [`docs/host_control.md`](docs/host_control.md): reusable host-side C++ control
   boundary for future PC/CH347 SPI control.
-- [`fpga/`](fpga/): board-specific synthesis workspace and bring-up templates.
+- [`docs/board_target_smart_artix.md`](docs/board_target_smart_artix.md): current
+  XC7A50T Smart Artix board assumptions and board integration direction.
+- [`fpga/smart_artix/`](fpga/smart_artix/): Smart Artix XC7A50T synthesis and
+  bring-up skeleton.
 
 ## Requirements
 

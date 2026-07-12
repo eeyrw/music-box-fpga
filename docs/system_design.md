@@ -27,6 +27,7 @@ Implemented RTL pieces:
 - Minimal one-line cache/burst adapter through `wave_memory_subsystem`.
 - Simulation-friendly SPI register transport through `spi_register_bridge`.
 - Fixed 48 kHz stereo I2S transmit path through `i2s_tx`.
+- Output sample FIFO and render-deadline observability in the full-system wrapper.
 
 ## Top-Level Variants
 
@@ -144,6 +145,7 @@ Minimum measurements before board migration:
 - cache hit/miss counts and memory stall cycles,
 - output FIFO level and underrun count,
 - steady-state `sample_drop_pulse == 0`,
+- steady-state `render_deadline_miss_pulse == 0`,
 - high-polyphony MIDI/SF2 stress cases with stereo samples and release tails.
 
 ## Board-Level Backlog
@@ -159,15 +161,15 @@ directory; it records the required top-level wrapper, clocking, constraints,
 memory-controller, audio, asset-image, and tool-flow decisions without binding
 the generic RTL to one vendor flow.
 
-1. Add an output FIFO and deadline accounting.
-   Record render latency, FIFO level, startup underrun, steady-state underrun, and
-   sample drops. Fail full-system tests on steady-state underrun or any sample
-   drop.
+1. Strengthen output FIFO and deadline accounting.
+   The full-system wrapper now records render latency, FIFO level, deadline
+   misses, I2S underruns, and sample drops. Next, fail longer full-system stress
+   tests on steady-state deadline misses, underruns, or sample drops.
 
-2. Replace the C++ storage model with concrete memory-controller models.
-   Candidate first targets are parallel NOR and SPI/QSPI Flash. Model command
-   overhead, bus turnaround, burst alignment, cache misses, prefetch, and request
-   backpressure.
+2. Replace the C++ storage model with concrete DDR3 controller models.
+   The current board target is a Micron `MT41K256M16TW` DDR3 device behind a
+   Xilinx MIG wrapper. Model burst alignment, calibration delay, cache misses,
+   prefetch, and request backpressure before relying on hardware timing.
 
 3. Split board clocks and reset sequencing.
    Separate system/control, memory, and audio clocks where the board requires it,

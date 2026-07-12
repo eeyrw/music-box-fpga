@@ -14,5 +14,7 @@
 ../../rtl/top/wavetable_core_spi.sv
 ../../rtl/top/wavetable_core_system.sv
 
-# Board-specific RTL. Replace this with the concrete board top after copying.
-rtl/board_top.sv.template
+# Board-specific RTL.
+rtl/smart_artix_mig_stub.sv
+rtl/smart_artix_ddr3_line_reader.sv
+rtl/smart_artix_top.sv

@@ -23,6 +23,8 @@ void write_full_system_stats(const std::string& path, const FullSystemStats& sta
     << "  \"nonzero_output_words\": " << stats.nonzero_output_words << ",\n"
     << "  \"underruns\": " << stats.underruns << ",\n"
     << "  \"sample_drops\": " << stats.sample_drops << ",\n"
+    << "  \"render_deadline_misses\": " << stats.render_deadline_misses << ",\n"
+    << "  \"max_render_latency_cycles\": " << stats.max_render_latency_cycles << ",\n"
     << "  \"memory_hits\": " << stats.memory_hits << ",\n"
     << "  \"memory_misses\": " << stats.memory_misses << ",\n"
     << "  \"memory_responses\": " << stats.memory_responses << ",\n"
@@ -85,6 +87,8 @@ int main(int argc, char** argv) {
               << " nonzero_output_words=" << stats.nonzero_output_words
               << " underruns=" << stats.underruns
               << " sample_drops=" << stats.sample_drops
+              << " render_deadline_misses=" << stats.render_deadline_misses
+              << " max_render_latency_cycles=" << stats.max_render_latency_cycles
               << " memory_hits=" << stats.memory_hits
               << " memory_misses=" << stats.memory_misses << "\n";
     return 0;

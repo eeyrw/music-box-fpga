@@ -1,5 +1,6 @@
 module wavetable_core_system #(
   parameter int LINE_WORDS = 8,
+  parameter int OUTPUT_FIFO_DEPTH = 8,
   parameter int SYS_CLK_HZ = 49_152_000,
   parameter int SAMPLE_RATE_HZ = 48_000
 ) (
@@ -23,7 +24,10 @@ module wavetable_core_system #(
   output logic                     mem_debug_hit_pulse,
   output logic                     mem_debug_miss_pulse,
   output logic                     mem_debug_response_pulse,
-  output logic [15:0]              mem_debug_response_latency
+  output logic [15:0]              mem_debug_response_latency,
+  output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
+  output logic                     render_deadline_miss_pulse,
+  output logic [15:0]              render_latency_cycles
 );
   localparam int SAMPLE_TICK_CYCLES = SYS_CLK_HZ / SAMPLE_RATE_HZ;
   localparam int SAMPLE_TICK_WIDTH = $clog2(SAMPLE_TICK_CYCLES);
@@ -45,6 +49,15 @@ module wavetable_core_system #(
   logic core_busy;
 /* verilator lint_on UNUSEDSIGNAL */
   logic i2s_sample_ready;
+/* verilator lint_off UNUSEDSIGNAL */
+  logic fifo_input_ready;
+/* verilator lint_on UNUSEDSIGNAL */
+  logic fifo_sample_valid;
+  logic fifo_sample_ready;
+  synth_pkg::pcm_t fifo_sample_l;
+  synth_pkg::pcm_t fifo_sample_r;
+  logic render_pending;
+  logic [15:0] render_latency_count;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -62,10 +75,24 @@ module wavetable_core_system #(
   end
 
   always_ff @(posedge clk) begin
-    if (rst)
-      sample_drop_pulse <= 1'b0;
-    else
-      sample_drop_pulse <= core_sample_valid && !i2s_sample_ready;
+    if (rst) begin
+      render_pending <= 1'b0;
+      render_latency_count <= '0;
+      render_latency_cycles <= '0;
+      render_deadline_miss_pulse <= 1'b0;
+    end else begin
+      render_deadline_miss_pulse <= sample_tick && render_pending && !core_sample_valid;
+
+      if (sample_tick) begin
+        render_pending <= 1'b1;
+        render_latency_count <= '0;
+      end else if (core_sample_valid) begin
+        render_pending <= 1'b0;
+        render_latency_cycles <= render_latency_count;
+      end else if (render_pending && render_latency_count != 16'hffff) begin
+        render_latency_count <= render_latency_count + 1'b1;
+      end
+    end
   end
 
   spi_register_bridge spi_bridge (
@@ -111,16 +138,33 @@ module wavetable_core_system #(
     .mem_debug_response_latency
   );
 
+  output_sample_fifo #(.DEPTH(OUTPUT_FIFO_DEPTH)) output_fifo (
+    .clk,
+    .rst,
+    .in_valid(core_sample_valid),
+    .in_ready(fifo_input_ready),
+    .in_l(core_sample_l),
+    .in_r(core_sample_r),
+    .out_valid(fifo_sample_valid),
+    .out_ready(fifo_sample_ready),
+    .out_l(fifo_sample_l),
+    .out_r(fifo_sample_r),
+    .overflow_pulse(sample_drop_pulse),
+    .level(output_fifo_level)
+  );
+
+  assign fifo_sample_ready = fifo_sample_valid && i2s_sample_ready;
+
   i2s_tx #(
     .SYS_CLK_HZ(SYS_CLK_HZ),
     .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ)
   ) audio_tx (
     .clk,
     .rst,
-    .sample_valid(core_sample_valid && i2s_sample_ready),
+    .sample_valid(fifo_sample_valid && i2s_sample_ready),
     .sample_ready(i2s_sample_ready),
-    .sample_l(core_sample_l),
-    .sample_r(core_sample_r),
+    .sample_l(fifo_sample_l),
+    .sample_r(fifo_sample_r),
     .underrun_pulse,
     .i2s_bclk,
     .i2s_lrclk,

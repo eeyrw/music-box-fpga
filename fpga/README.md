@@ -5,8 +5,9 @@ under `rtl/` is the generic synthesizable wavetable core; files here should bind
 that core to a real board, a real clock tree, real pins, and real memory/audio
 devices.
 
-The current repository does not yet target a specific FPGA board. Use
-`board_template/` as the starting point for a concrete board directory, for
+The current concrete target is `smart_artix/`, a Smart Artix XC7A50T skeleton
+for SPI control, DDR3-backed wavetable memory, and simple I2S audio. Use
+`board_template/` as the starting point for future board directories, for
 example:
 
 ```text
@@ -55,9 +56,9 @@ fpga/<board-name>/
    timing for SPI, I2S, and memory interfaces.
 
 5. Replace abstract memory with a physical memory controller.
-   `wavetable_core_memory` exposes a line-read interface, not real DDR, SDRAM,
-   PSRAM, SPI Flash, QSPI Flash, or parallel NOR pins. A board wrapper must
-   translate line requests into the selected memory protocol.
+   `wavetable_core_memory` exposes a line-read interface, not real DDR3 pins or
+   a MIG app interface. The Smart Artix path should translate line requests into
+   reads from a MIG controller configured for the Micron `MT41K256M16TW`.
 
 6. Complete the audio interface.
    `i2s_tx` emits BCLK, LRCLK, and serial data. Many boards also need codec MCLK,
