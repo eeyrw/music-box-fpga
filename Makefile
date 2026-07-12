@@ -68,6 +68,10 @@ test:
 		sim/harness/register_control.cpp sim/harness/register_control_test.cpp \
 		-o $(BUILD_DIR)/register_control_test
 	$(BUILD_DIR)/register_control_test
+	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+		sim/harness/sf2_loader.cpp sim/harness/sf2_loader_test.cpp \
+		-o $(BUILD_DIR)/sf2_loader_test
+	$(BUILD_DIR)/sf2_loader_test
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) --binary --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \

@@ -13,6 +13,11 @@ namespace render {
 namespace {
 
 constexpr int GEN_PAN = 17;
+constexpr int GEN_START_ADDRS_OFFSET = 0;
+constexpr int GEN_END_ADDRS_OFFSET = 1;
+constexpr int GEN_STARTLOOP_ADDRS_OFFSET = 2;
+constexpr int GEN_ENDLOOP_ADDRS_OFFSET = 3;
+constexpr int GEN_START_ADDRS_COARSE_OFFSET = 4;
 constexpr int GEN_ATTACK_VOL_ENV = 34;
 constexpr int GEN_DECAY_VOL_ENV = 36;
 constexpr int GEN_SUSTAIN_VOL_ENV = 37;
@@ -20,11 +25,18 @@ constexpr int GEN_RELEASE_VOL_ENV = 38;
 constexpr int GEN_INSTRUMENT = 41;
 constexpr int GEN_KEY_RANGE = 43;
 constexpr int GEN_VEL_RANGE = 44;
+constexpr int GEN_STARTLOOP_ADDRS_COARSE_OFFSET = 45;
+constexpr int GEN_KEYNUM = 46;
+constexpr int GEN_VELOCITY = 47;
 constexpr int GEN_INITIAL_ATTENUATION = 48;
+constexpr int GEN_END_ADDRS_COARSE_OFFSET = 12;
+constexpr int GEN_ENDLOOP_ADDRS_COARSE_OFFSET = 50;
 constexpr int GEN_COARSE_TUNE = 51;
 constexpr int GEN_FINE_TUNE = 52;
 constexpr int GEN_SAMPLE_ID = 53;
 constexpr int GEN_SAMPLE_MODES = 54;
+constexpr int GEN_SCALE_TUNING = 56;
+constexpr int GEN_EXCLUSIVE_CLASS = 57;
 constexpr int GEN_OVERRIDING_ROOT_KEY = 58;
 
 constexpr int SAMPLE_MONO = 1;
@@ -69,6 +81,20 @@ std::map<std::string, std::vector<uint8_t>> list_chunks(const std::vector<uint8_
     pos = start + size + (size & 1u);
   }
   return chunks;
+}
+
+const std::vector<uint8_t>& require_chunk(const std::map<std::string, std::vector<uint8_t>>& chunks,
+                                          const char* id, size_t record_size,
+                                          size_t min_records) {
+  auto it = chunks.find(id);
+  if (it == chunks.end()) throw std::runtime_error(std::string("missing SF2 chunk ") + id);
+  if (record_size != 0 && (it->second.size() % record_size) != 0) {
+    throw std::runtime_error(std::string("SF2 chunk ") + id + " has invalid record size");
+  }
+  if (record_size != 0 && it->second.size() / record_size < min_records) {
+    throw std::runtime_error(std::string("SF2 chunk ") + id + " has too few records");
+  }
+  return it->second;
 }
 
 int signed_amount(int amount) {
@@ -135,13 +161,89 @@ std::vector<SampleHeader> parse_samples(const std::vector<uint8_t>& c) {
   return out;
 }
 
-Zone generators_for_zone(const std::vector<Generator>& gens, int start, int end) {
-  // Convert the flat generator list referenced by a bag range into a lookup map.
-  // Later duplicate operators replace earlier ones, matching the "last value in
-  // the zone wins" behavior used by the rest of the loader.
+void validate_index_tables(const Sf2Data& sf2) {
+  auto check_monotonic = [](const char* label, const auto& records, auto member) {
+    for (size_t i = 1; i < records.size(); ++i) {
+      if (records[i].*member < records[i - 1].*member) {
+        throw std::runtime_error(std::string("SF2 ") + label + " indices are not monotonic");
+      }
+    }
+  };
+  check_monotonic("phdr bag", sf2.presets, &Preset::bag_index);
+  check_monotonic("inst bag", sf2.instruments, &Instrument::bag_index);
+  check_monotonic("pbag generator", sf2.preset_bags, &Bag::gen_index);
+  check_monotonic("ibag generator", sf2.instrument_bags, &Bag::gen_index);
+  check_monotonic("pbag modulator", sf2.preset_bags, &Bag::mod_index);
+  check_monotonic("ibag modulator", sf2.instrument_bags, &Bag::mod_index);
+
+  if (sf2.presets.back().bag_index + 1 != int(sf2.preset_bags.size())) {
+    throw std::runtime_error("SF2 phdr terminal bag index does not match pbag size");
+  }
+  if (sf2.instruments.back().bag_index + 1 != int(sf2.instrument_bags.size())) {
+    throw std::runtime_error("SF2 inst terminal bag index does not match ibag size");
+  }
+  if (sf2.preset_bags.back().gen_index + 1 != int(sf2.preset_generators.size())) {
+    throw std::runtime_error("SF2 pbag terminal generator index does not match pgen size");
+  }
+  if (sf2.instrument_bags.back().gen_index + 1 != int(sf2.instrument_generators.size())) {
+    throw std::runtime_error("SF2 ibag terminal generator index does not match igen size");
+  }
+  if (sf2.samples.size() < 2) throw std::runtime_error("SF2 shdr has no usable samples");
+}
+
+bool illegal_preset_generator(int oper) {
+  // SF2 sample, substitution, and some index generators are undefined at the
+  // preset level. Preset value generators are relative; these are not.
+  return oper == GEN_START_ADDRS_OFFSET || oper == GEN_END_ADDRS_OFFSET ||
+         oper == GEN_STARTLOOP_ADDRS_OFFSET || oper == GEN_ENDLOOP_ADDRS_OFFSET ||
+         oper == GEN_START_ADDRS_COARSE_OFFSET || oper == GEN_END_ADDRS_COARSE_OFFSET ||
+         oper == GEN_STARTLOOP_ADDRS_COARSE_OFFSET || oper == GEN_KEYNUM || oper == GEN_VELOCITY ||
+         oper == GEN_ENDLOOP_ADDRS_COARSE_OFFSET || oper == GEN_SAMPLE_ID ||
+         oper == GEN_SAMPLE_MODES || oper == GEN_EXCLUSIVE_CLASS ||
+         oper == GEN_OVERRIDING_ROOT_KEY;
+}
+
+bool additive_preset_generator(int oper) {
+  return oper != GEN_KEY_RANGE && oper != GEN_VEL_RANGE && oper != GEN_INSTRUMENT &&
+         !illegal_preset_generator(oper);
+}
+
+Zone generators_for_zone_checked(const std::vector<Generator>& gens, int start, int end,
+                                 int terminal_oper, bool preset_level,
+                                 bool& has_terminal) {
   Zone zone;
-  for (int i = start; i < end; ++i) zone[gens.at(i).oper] = gens.at(i).amount;
+  has_terminal = false;
+  for (int i = start; i < end; ++i) {
+    int oper = gens.at(i).oper;
+    int rel = i - start;
+    if (oper == GEN_KEY_RANGE && rel != 0) continue;
+    if (oper == GEN_VEL_RANGE && !(rel == 0 || (rel == 1 && gens.at(start).oper == GEN_KEY_RANGE))) continue;
+    if (preset_level && illegal_preset_generator(oper)) continue;
+    zone[oper] = gens.at(i).amount;
+    if (oper == terminal_oper) {
+      has_terminal = true;
+      break;
+    }
+  }
   return zone;
+}
+
+int add_amount_bits(int a, int b) {
+  int sum = signed_amount(a) + signed_amount(b);
+  sum = std::max(-32768, std::min(32767, sum));
+  return int(uint16_t(int16_t(sum)));
+}
+
+int sample_offset(const Zone& zone, int fine_oper, int coarse_oper) {
+  int fine = zone.count(fine_oper) ? signed_amount(zone.at(fine_oper)) : 0;
+  int coarse = zone.count(coarse_oper) ? signed_amount(zone.at(coarse_oper)) : 0;
+  return fine + coarse * 32768;
+}
+
+uint32_t clamp_sample_pos(int64_t value, uint32_t low, uint32_t high) {
+  if (value < int64_t(low)) return low;
+  if (value > int64_t(high)) return high;
+  return uint32_t(value);
 }
 
 std::pair<int, int> key_range(const Zone& zone) {
@@ -168,13 +270,15 @@ std::vector<Zone> instrument_zones(const Sf2Data& sf2, int inst_index) {
   std::vector<Zone> zones;
   Zone global;
   for (int bag = start; bag < end; ++bag) {
-    Zone z = generators_for_zone(sf2.instrument_generators,
-                                 sf2.instrument_bags.at(bag).gen_index,
-                                 sf2.instrument_bags.at(bag + 1).gen_index);
-    if (!z.count(GEN_SAMPLE_ID)) {
-      // An instrument bag without sampleID is a global instrument zone. It
-      // supplies defaults inherited by later sample zones in this instrument.
-      for (const auto& kv : z) global[kv.first] = kv.second;
+    bool has_sample = false;
+    Zone z = generators_for_zone_checked(sf2.instrument_generators,
+                                         sf2.instrument_bags.at(bag).gen_index,
+                                         sf2.instrument_bags.at(bag + 1).gen_index,
+                                         GEN_SAMPLE_ID, false, has_sample);
+    if (!has_sample) {
+      // Only the first zone can be global. Later zones without sampleID are
+      // malformed local zones and are ignored by the SF2 spec.
+      if (bag == start) for (const auto& kv : z) global[kv.first] = kv.second;
     } else {
       // A local sample zone overrides any matching global generator. The merged
       // result is what Note On region selection consumes.
@@ -192,13 +296,15 @@ std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
   std::vector<Zone> zones;
   Zone global;
   for (int bag = start; bag < end; ++bag) {
-    Zone z = generators_for_zone(sf2.preset_generators,
-                                 sf2.preset_bags.at(bag).gen_index,
-                                 sf2.preset_bags.at(bag + 1).gen_index);
-    if (!z.count(GEN_INSTRUMENT)) {
-      // Same pattern as instruments: a preset bag without instrument is a global
-      // preset zone and contributes defaults to subsequent instrument zones.
-      for (const auto& kv : z) global[kv.first] = kv.second;
+    bool has_instrument = false;
+    Zone z = generators_for_zone_checked(sf2.preset_generators,
+                                         sf2.preset_bags.at(bag).gen_index,
+                                         sf2.preset_bags.at(bag + 1).gen_index,
+                                         GEN_INSTRUMENT, true, has_instrument);
+    if (!has_instrument) {
+      // Only the first zone can be global. Later zones without instrument are
+      // malformed local zones and are ignored by the SF2 spec.
+      if (bag == start) for (const auto& kv : z) global[kv.first] = kv.second;
     } else {
       Zone merged = global;
       for (const auto& kv : z) merged[kv.first] = kv.second;
@@ -209,16 +315,8 @@ std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
 }
 
 Zone select_zone_for_velocity(const std::vector<Zone>& zones, int key, int velocity) {
-  // Prefer an exact key+velocity match. If velocity splits are missing or odd,
-  // fall back to a key-only match, then to the first zone. This keeps rendering
-  // useful for imperfect SoundFonts while still honoring normal splits.
   for (const auto& z : zones) if (zone_matches(z, key, velocity)) return z;
-  for (const auto& z : zones) {
-    auto kr = key_range(z);
-    if (kr.first <= key && key <= kr.second) return z;
-  }
-  if (!zones.empty()) return zones.front();
-  throw std::runtime_error("instrument has no sample zones");
+  throw std::runtime_error("no SF2 zone matches key/velocity");
 }
 
 int select_preset(const Sf2Data& sf2, int program, int bank) {
@@ -245,10 +343,20 @@ uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample
   // Convert SF2 pitch metadata into the RTL Q16.16 phase increment. One integer
   // phase unit is 1/65536 of a source sample frame; 0x00010000 advances by one
   // source frame per output frame.
-  int root_key = zone.count(GEN_OVERRIDING_ROOT_KEY) ? zone.at(GEN_OVERRIDING_ROOT_KEY)
-                                                     : sample.original_pitch;
-  if (root_key == 255) root_key = sample.original_pitch;
-  int cents = ((key - root_key) * 100 + sample.pitch_correction +
+  int effective_key = key;
+  if (zone.count(GEN_KEYNUM)) {
+    int forced_key = signed_amount(zone.at(GEN_KEYNUM));
+    if (0 <= forced_key && forced_key <= 127) effective_key = forced_key;
+  }
+  int sample_root = (0 <= sample.original_pitch && sample.original_pitch <= 127) ? sample.original_pitch : 60;
+  int root_key = sample_root;
+  if (zone.count(GEN_OVERRIDING_ROOT_KEY)) {
+    int override_key = signed_amount(zone.at(GEN_OVERRIDING_ROOT_KEY));
+    if (0 <= override_key && override_key <= 127) root_key = override_key;
+  }
+  int scale_tuning = zone.count(GEN_SCALE_TUNING) ? signed_amount(zone.at(GEN_SCALE_TUNING)) : 100;
+  scale_tuning = std::max(0, std::min(1200, scale_tuning));
+  int cents = ((effective_key - root_key) * scale_tuning + sample.pitch_correction +
                signed_amount(zone.count(GEN_FINE_TUNE) ? zone.at(GEN_FINE_TUNE) : 0) +
                signed_amount(zone.count(GEN_COARSE_TUNE) ? zone.at(GEN_COARSE_TUNE) : 0) * 100);
   double rate_ratio = (double(sample.sample_rate) / double(output_sample_rate)) *
@@ -265,9 +373,9 @@ std::pair<int, int> pan_gains(const Zone& zone) {
   // balance, then applies initial attenuation in centibels.
   int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
   pan = std::max(-500, std::min(500, pan));
-  int left = pan < 0 ? int(std::round(0x4000 * double(500 - pan) / 500.0)) : 0x4000;
-  int right = pan > 0 ? int(std::round(0x4000 * double(500 + pan) / 500.0)) : 0x4000;
-  int atten = zone.count(GEN_INITIAL_ATTENUATION) ? zone.at(GEN_INITIAL_ATTENUATION) : 0;
+  int left = int(std::round(0x4000 * double(500 - pan) / 500.0));
+  int right = int(std::round(0x4000 * double(500 + pan) / 500.0));
+  int atten = zone.count(GEN_INITIAL_ATTENUATION) ? signed_amount(zone.at(GEN_INITIAL_ATTENUATION)) : 0;
   if (atten) {
     double scale = std::pow(10.0, -double(atten) / 200.0);
     left = int(std::round(left * scale));
@@ -318,6 +426,16 @@ void volume_envelope(const Zone& zone, int tick_samples, int sample_rate,
   release = envelope_step(r, tick_samples, sample_rate);
 }
 
+Zone combine_preset_and_instrument_zones(const Zone& preset, const Zone& instrument) {
+  Zone zone = instrument;
+  for (const auto& kv : preset) {
+    if (!additive_preset_generator(kv.first)) continue;
+    auto it = zone.find(kv.first);
+    zone[kv.first] = (it == zone.end()) ? kv.second : add_amount_bits(it->second, kv.second);
+  }
+  return zone;
+}
+
 int loop_mode_from_zone(const Zone& zone) {
   // SF2 sampleModes 1 means continuous loop and 3 means loop until note release.
   // Those map directly to the small loop-mode field implemented by the RTL.
@@ -338,17 +456,40 @@ std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
   return {selected, -1};
 }
 
-std::vector<int16_t> sample_pcm(const Sf2Data& sf2, const SampleHeader& h) {
+struct SampleWindow {
+  uint32_t start = 0;
+  uint32_t end = 0;
+  uint32_t start_loop = 0;
+  uint32_t end_loop = 0;
+};
+
+SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone& zone) {
+  uint32_t pool = uint32_t(std::min<size_t>(sf2.smpl.size(), std::numeric_limits<uint32_t>::max()));
+  uint32_t header_start = std::min<uint32_t>(h.start, pool);
+  uint32_t header_end = std::min<uint32_t>(h.end, pool);
+  if (header_end < header_start) header_end = header_start;
+
+  int start_offset = sample_offset(zone, GEN_START_ADDRS_OFFSET, GEN_START_ADDRS_COARSE_OFFSET);
+  int end_offset = sample_offset(zone, GEN_END_ADDRS_OFFSET, GEN_END_ADDRS_COARSE_OFFSET);
+  int start_loop_offset = sample_offset(zone, GEN_STARTLOOP_ADDRS_OFFSET, GEN_STARTLOOP_ADDRS_COARSE_OFFSET);
+  int end_loop_offset = sample_offset(zone, GEN_ENDLOOP_ADDRS_OFFSET, GEN_ENDLOOP_ADDRS_COARSE_OFFSET);
+
+  SampleWindow w;
+  w.start = clamp_sample_pos(int64_t(h.start) + start_offset, header_start, header_end);
+  w.end = clamp_sample_pos(int64_t(h.end) + end_offset, w.start, header_end);
+  w.start_loop = clamp_sample_pos(int64_t(h.start_loop) + start_loop_offset, w.start, w.end);
+  w.end_loop = clamp_sample_pos(int64_t(h.end_loop) + end_loop_offset, w.start_loop, w.end);
+  return w;
+}
+
+std::vector<int16_t> sample_pcm(const Sf2Data& sf2, const SampleWindow& w) {
   // SampleHeader offsets are word indexes into the smpl chunk. Clamp corrupt or
   // out-of-range values to the loaded PCM array so malformed SF2 data fails
   // softly where possible.
-  uint32_t start = std::min<uint32_t>(h.start, sf2.smpl.size());
-  uint32_t end = std::min<uint32_t>(h.end, sf2.smpl.size());
-  if (end < start) end = start;
-  return std::vector<int16_t>(sf2.smpl.begin() + start, sf2.smpl.begin() + end);
+  return std::vector<int16_t>(sf2.smpl.begin() + w.start, sf2.smpl.begin() + w.end);
 }
 
-std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, Region& region) {
+std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, const Zone& zone, Region& region) {
   // Build the exact wave-memory words consumed by wavetable_core and fill the
   // region metadata that will later be committed into a voice slot. The RTL uses
   // frame indexes for length and loop points; stereo consumes two memory words
@@ -356,14 +497,16 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, R
   auto rel = [](uint32_t value, uint32_t base) -> uint32_t { return value > base ? value - base : 0; };
   auto pair = linked_pair(sf2, selected_sample);
   const auto& left = sf2.samples.at(pair.first);
-  std::vector<int16_t> left_pcm = sample_pcm(sf2, left);
+  SampleWindow left_window = sample_window(sf2, left, zone);
+  std::vector<int16_t> left_pcm = sample_pcm(sf2, left_window);
   region.sample_left = left.name;
 
   // SF2 stereo is usually two linked mono sample headers. Convert that pair to
   // the RTL memory contract: left0, right0, left1, right1, ...
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
     const auto& right = sf2.samples.at(pair.second);
-    std::vector<int16_t> right_pcm = sample_pcm(sf2, right);
+    SampleWindow right_window = sample_window(sf2, right, zone);
+    std::vector<int16_t> right_pcm = sample_pcm(sf2, right_window);
     uint32_t frames = std::min<uint32_t>({uint32_t(left_pcm.size()), uint32_t(right_pcm.size()), 65535u});
     std::vector<int16_t> words;
     words.reserve(size_t(frames) * 2);
@@ -376,8 +519,8 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, R
     region.length = frames;
     // SF2 loop end points are absolute sample positions. Convert to frame-local
     // indexes and keep the RTL contract that loop_end is exclusive.
-    region.loop_start = std::min<uint32_t>({rel(left.start_loop, left.start), rel(right.start_loop, right.start), frames ? frames - 1 : 0});
-    region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>({rel(left.end_loop, left.start), rel(right.end_loop, right.start), frames}));
+    region.loop_start = std::min<uint32_t>({rel(left_window.start_loop, left_window.start), rel(right_window.start_loop, right_window.start), frames ? frames - 1 : 0});
+    region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>({rel(left_window.end_loop, left_window.start), rel(right_window.end_loop, right_window.start), frames}));
     return words;
   }
 
@@ -385,8 +528,8 @@ std::vector<int16_t> build_wave_words(const Sf2Data& sf2, int selected_sample, R
   std::vector<int16_t> words(left_pcm.begin(), left_pcm.begin() + frames);
   region.stereo = false;
   region.length = frames;
-  region.loop_start = std::min<uint32_t>(rel(left.start_loop, left.start), frames ? frames - 1 : 0);
-  region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left.end_loop, left.start), frames));
+  region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
+  region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames));
   if (region.loop_start >= region.loop_end || region.loop_end > frames) {
     region.loop_start = 0;
     region.loop_end = frames;
@@ -404,15 +547,18 @@ Sf2Data load_sf2(const std::string& path) {
   auto sdta = list_chunks(find_list_chunk(data, "sdta"));
   auto pdta = list_chunks(find_list_chunk(data, "pdta"));
   Sf2Data sf2;
-  const auto& smpl = sdta.at("smpl");
+  const auto& smpl = require_chunk(sdta, "smpl", 2, 0);
   for (size_t i = 0; i + 2 <= smpl.size(); i += 2) sf2.smpl.push_back(int16_t(read_u16le(smpl, i)));
-  sf2.presets = parse_presets(pdta.at("phdr"));
-  sf2.instruments = parse_instruments(pdta.at("inst"));
-  sf2.preset_bags = parse_bags(pdta.at("pbag"));
-  sf2.instrument_bags = parse_bags(pdta.at("ibag"));
-  sf2.preset_generators = parse_generators(pdta.at("pgen"));
-  sf2.instrument_generators = parse_generators(pdta.at("igen"));
-  sf2.samples = parse_samples(pdta.at("shdr"));
+  sf2.presets = parse_presets(require_chunk(pdta, "phdr", 38, 2));
+  sf2.preset_bags = parse_bags(require_chunk(pdta, "pbag", 4, 1));
+  require_chunk(pdta, "pmod", 10, 1);
+  sf2.preset_generators = parse_generators(require_chunk(pdta, "pgen", 4, 1));
+  sf2.instruments = parse_instruments(require_chunk(pdta, "inst", 22, 2));
+  sf2.instrument_bags = parse_bags(require_chunk(pdta, "ibag", 4, 1));
+  require_chunk(pdta, "imod", 10, 1);
+  sf2.instrument_generators = parse_generators(require_chunk(pdta, "igen", 4, 1));
+  sf2.samples = parse_samples(require_chunk(pdta, "shdr", 46, 2));
+  validate_index_tables(sf2);
   return sf2;
 }
 
@@ -446,8 +592,7 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
   Zone pzone = select_zone_for_velocity(preset_zones(sf2, preset_idx), key, velocity);
   int inst_idx = pzone.at(GEN_INSTRUMENT);
   Zone izone = select_zone_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
-  Zone zone = pzone;
-  for (const auto& kv : izone) zone[kv.first] = kv.second;
+  Zone zone = combine_preset_and_instrument_zones(pzone, izone);
   int sample_id = zone.at(GEN_SAMPLE_ID);
 
   Region r;
@@ -459,7 +604,7 @@ Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key
   r.base_addr = uint32_t(memory.size());
   // Append this region's PCM words to one shared memory image. base_addr records
   // where the RTL voice should start fetching for this region.
-  auto words = build_wave_words(sf2, sample_id, r);
+  auto words = build_wave_words(sf2, sample_id, zone, r);
   const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
   r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
   auto gains = pan_gains(zone);
@@ -484,11 +629,12 @@ Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
   r.instrument = sf2.instruments.at(inst_idx).name;
   r.preset = r.instrument;
   r.base_addr = uint32_t(memory.size());
-  auto words = build_wave_words(sf2, sample_id, r);
+  auto words = build_wave_words(sf2, sample_id, zone, r);
   const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
   r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
-  r.gain_l = 0x4000;
-  r.gain_r = 0x4000;
+  auto gains = pan_gains(zone);
+  r.gain_l = gains.first;
+  r.gain_r = gains.second;
   r.loop_mode = loop_mode_from_zone(zone);
   volume_envelope(zone, tick_samples, sample_rate, r.sustain_level, r.attack_step, r.decay_step, r.release_step);
   memory.insert(memory.end(), words.begin(), words.end());

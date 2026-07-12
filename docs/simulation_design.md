@@ -425,41 +425,134 @@ exercise wavetable playback through realistic register and memory traffic.
 Current SF2 support:
 
 - RIFF/sfbk container parsing for `sdta/smpl` and `pdta`.
-- `phdr`, `inst`, `pbag`, `ibag`, `pgen`, `igen`, and `shdr` table parsing.
+- Required `pdta` chunk presence, record-size, terminal-record, and index-table
+  consistency checks for `phdr`, `pbag`, `pmod`, `pgen`, `inst`, `ibag`, `imod`,
+  `igen`, and `shdr`.
 - MIDI program and bank-select lookup into SF2 presets.
 - Preset-zone and instrument-zone selection by key range and velocity range.
-- Global-zone plus local-zone merging for presets and instruments.
+- Global-zone plus local-zone merging for presets and instruments, with
+  instrument-level generators treated as absolute and preset-level value
+  generators treated as additive where supported.
 - Mono samples and common linked-stereo samples. Linked stereo is repacked into
   the RTL memory format `left0, right0, left1, right1, ...`.
 - Sample header `start`, `end`, `startLoop`, `endLoop`, `sampleRate`,
   `originalPitch`, and `pitchCorrection` fields.
-- `overridingRootKey`, `fineTune`, and `coarseTune` generators for Q16.16
-  `phase_inc` calculation.
+- Sample-address offset generators `startAddrsOffset`, `endAddrsOffset`,
+  `startloopAddrsOffset`, `endloopAddrsOffset`, and their coarse variants.
+- `overridingRootKey`, `fineTune`, `coarseTune`, `scaleTuning`, and `keynum`
+  generators for Q16.16 `phase_inc` calculation.
 - `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
 - Volume-envelope `attackVolEnv`, `decayVolEnv`, `sustainVolEnv`, and
   `releaseVolEnv` generators, converted to software ADSR tick steps.
 - `sampleModes` values for no loop, continuous loop, and loop-until-release.
 
-Known SF2/MIDI gaps to implement later:
+Known SF2/MIDI gaps to implement later are listed below. These are gaps against
+the SoundFont 2.04 specification, not necessarily blockers for RTL wavetable-core
+regression testing.
 
-- `pmod` and `imod` modulators are not modeled.
-- Filter generators and filter coefficient calculation are not modeled.
-- LFOs, modulation envelope, pitch envelope, reverb send, and chorus send are not
-  modeled.
-- Volume-envelope delay, hold, and key-number envelope scaling are not modeled.
-- Sample-address offset generators such as start/end offsets and loop offsets are
-  not modeled.
-- `sm24` 24-bit sample extension is not loaded; only 16-bit `smpl` data is used.
-- Envelope curves are simplified to linear Q1.15 control ticks, not full SF2
-  curve behavior.
-- Velocity is used for zone selection and Note On peak level only; complete SF2
-  velocity-to-volume and velocity-to-modulator behavior is not implemented.
-- Generator combination is simplified as later values overriding earlier values;
-  the full SF2 add/override rules are not implemented for every generator type.
-- Channel 10 percussion currently falls back to bank 0 and does not implement a
-  complete drum-bank or drum-note map policy.
-- Pitch bend, sustain pedal, expression, volume, pan controllers, and most other
-  real-time MIDI controller behavior are not modeled.
+SF2 file-format and sample-data gaps:
+
+- `sm24` 24-bit sample extension is not loaded. Rendering uses only the upper
+  16-bit `smpl` chunk. A correct SF2.04 renderer should combine `smpl` and
+  `sm24` when the file version and chunk size permit it, and ignore `sm24` in the
+  spec-defined fallback cases.
+- `INFO` metadata chunks are not validated. The harness currently does not check
+  `ifil`, `isng`, or `INAM`, and therefore does not distinguish SF2 versions or
+  use version-specific behavior except by ignoring `sm24`.
+- ROM samples are not supported. `irom` and `iver` are not parsed, and ROM sample
+  types are treated as normal sample-type flags after masking. A conforming
+  loader should reject or silence ROM sample use unless the referenced ROM is
+  available and verified.
+- Linked sample type `linkedSample = 8` is not implemented. The harness supports
+  mono, left, and right sample headers plus the common left/right `sampleLink`
+  pair, but not a circular linked-sample list.
+- Structural validation is still partial. The loader checks required chunk
+  presence, record sizes, and table index consistency, but it does not yet enforce
+  every spec constraint such as `keyRange`/`velRange` legality across all bad
+  placements, sample minimum loop size, sample guard points, duplicate preset
+  numbering policy, or every illegal enumerator rule.
+
+Generator gaps:
+
+- Filter generators are parsed only as uninterpreted generator records and are
+  not converted into RTL filter settings. This includes `initialFilterFc`,
+  `initialFilterQ`, `modLfoToFilterFc`, and `modEnvToFilterFc`.
+- LFO and modulation-envelope generators are not modeled. This includes
+  `delayModLFO`, `freqModLFO`, `delayVibLFO`, `freqVibLFO`, the modulation
+  envelope ADSR generators, and their pitch/filter routing amounts.
+- Volume-envelope `delayVolEnv`, `holdVolEnv`, `keynumToVolEnvHold`, and
+  `keynumToVolEnvDecay` are not modeled. Attack, decay, sustain, and release are
+  simplified into MCU-side Q1.15 control ticks.
+- Volume-envelope curves are simplified. The SF2 volume envelope is specified in
+  perceptual units with convex attack and dB-like decay/release behavior; the
+  harness uses linear Q1.15 level steps.
+- Effects sends are ignored. `chorusEffectsSend` and `reverbEffectsSend` do not
+  affect the rendered output because the RTL path has no effects processor.
+- `velocity` substitution is not applied. `keynum` substitution is used for pitch,
+  but velocity substitution is not currently fed into envelope level or modulator
+  calculations.
+- `exclusiveClass` is not implemented. New notes do not terminate other sounding
+  notes in the same exclusive class, so hi-hat style mutual exclusion is absent.
+- Generator precedence is implemented only for the subset consumed by the current
+  harness. Unsupported value generators may be carried in the merged zone but do
+  not affect audio. Unsupported preset-level sample/substitution generators are
+  ignored where the loader recognizes them as illegal.
+
+Modulator gaps:
+
+- `pmod` and `imod` chunks are validated for presence and record size but their
+  records are not parsed into runtime behavior.
+- Default SF2 modulators are not implemented. Missing behavior includes MIDI
+  velocity to initial attenuation, velocity to filter cutoff, channel pressure and
+  modulation wheel to vibrato depth, CC7 volume, CC10 pan, CC11 expression, CC91
+  reverb send, CC93 chorus send, and pitch wheel to pitch.
+- Custom modulator source mapping, polarity, direction, concave/convex/switch
+  curves, secondary amount sources, transforms, and linked modulators are not
+  implemented.
+- Modulator precedence rules between default, instrument global/local, and preset
+  global/local modulators are not implemented.
+
+MIDI and controller-policy gaps:
+
+- Velocity is used for zone selection and Note On peak level only. The current
+  peak level is a simple linear mapping, not the SF2 default velocity-to-volume
+  concave attenuation curve.
+- Channel 10 percussion currently falls back to bank 0 and does not implement the
+  General MIDI percussion bank convention, drum-note maps, or preset-specific
+  percussion policy.
+- Pitch bend, sustain pedal, sostenuto, soft pedal, expression, volume, pan,
+  aftertouch, modulation wheel, RPN, NRPN, All Sound Off, and All Notes Off are
+  not modeled as SF2/MIDI controller behavior. Some RTL hooks exist, such as
+  runtime `PHASE_INC_RUNTIME`, but the C++ MCU policy does not yet drive them as
+  a complete SF2-compatible controller layer.
+- Bank-select policy is minimal. CC0 and CC32 are parsed into a 14-bit bank value,
+  but SF2-specific bank conventions beyond simple preset lookup are not modeled.
+
+Stereo and region-selection gaps:
+
+- Linked stereo is repacked as one interleaved RTL region using one selected zone's
+  generators. The SF2 spec expects left/right sample headers in a stereo pair to
+  play synchronously, with pitch controlled by the right sample's generators and
+  non-pitch generators applied normally. Complex SoundFonts with separate left
+  and right zones may therefore render differently.
+- If multiple preset or instrument zones overlap the same key and velocity, the
+  harness selects one region. A complete synthesizer may need to trigger multiple
+  matching zones for layered sounds.
+- Zone selection currently treats lack of a key/velocity match as an error for the
+  selected preset or instrument. That is useful for regression visibility, but a
+  production player may choose to silence only that note while continuing playback.
+
+RTL integration gaps implied by complete SF2 support:
+
+- A full SF2 filter path would need MCU-side coefficient calculation and verified
+  mapping into the existing RTL one-pole filter, or a different RTL filter if the
+  target is closer to the SF2 resonant low-pass model.
+- LFOs, modulation envelope, and most real-time modulators can be implemented in
+  MCU/software by periodically updating existing runtime registers only up to the
+  bandwidth and resolution those registers support. Higher-rate or per-sample
+  modulation would require new RTL behavior.
+- Reverb and chorus require new audio processing outside the current dry stereo
+  wavetable path.
 
 ## Linked Stereo Samples
 
