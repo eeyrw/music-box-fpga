@@ -122,7 +122,7 @@ module tb_render_wavetable_core;
       @(negedge clk);
       sample_tick = 1'b0;
       timeout = 0;
-      while (!sample_valid && timeout < 64) begin
+      while (!sample_valid && timeout < 1000) begin
         @(negedge clk);
         timeout++;
       end

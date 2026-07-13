@@ -21,18 +21,12 @@ module multi_voice_pipeline (
 
   typedef enum logic [4:0] {
     IDLE, READ_VOICE, WAIT_VOICE, START_VOICE, REQ_L0, WAIT_L0, REQ_L1, WAIT_L1,
-    REQ_R0, WAIT_R0, REQ_R1, WAIT_R1, INTERPOLATE, FILTER,
-    GAIN, ACCUMULATE, FINISH
+    REQ_R0, WAIT_R0, REQ_R1, WAIT_R1, INTERPOLATE, FILTER_INPUT, FILTER_MUL_X,
+    FILTER_Y, FILTER_MUL_Y, FILTER_ACC, GAIN, ACCUMULATE, FINISH
   } state_t;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
   localparam logic [VOICE_INDEX_WIDTH-1:0] LAST_VOICE = VOICE_INDEX_WIDTH'(NUM_VOICES - 1);
-
-  typedef struct packed {
-    pcm_t sample;
-    logic signed [FILTER_STATE_WIDTH-1:0] z1;
-    logic signed [FILTER_STATE_WIDTH-1:0] z2;
-  } biquad_result_t;
 
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
@@ -47,7 +41,8 @@ module multi_voice_pipeline (
   logic [PHASE_FRAC_WIDTH-1:0] fraction;
   pcm_t raw_l0, raw_l1, raw_r0, raw_r1;
   pcm_t interpolated_l, interpolated_r;
-  pcm_t interp_stage_l, interp_stage_r;
+  (* keep = "true", dont_touch = "true" *) pcm_t interp_stage_l, interp_stage_r;
+  (* keep = "true", dont_touch = "true" *) pcm_t filter_input_l, filter_input_r;
   pcm_t filtered_l, filtered_r;
   pcm_t gain_input_l, gain_input_r;
   pcm_t gain_stage_input_l, gain_stage_input_r;
@@ -96,12 +91,32 @@ module multi_voice_pipeline (
   logic signed [31:0] current_filter_b2;
   logic signed [31:0] current_filter_a1;
   logic signed [31:0] current_filter_a2;
-  biquad_result_t filter_result_l;
-  biquad_result_t filter_result_r;
   logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z1_l;
   logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z2_l;
   logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z1_r;
   logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z2_r;
+  logic signed [63:0] filter_b0_x_l;
+  logic signed [63:0] filter_b1_x_l;
+  logic signed [63:0] filter_b2_x_l;
+  logic signed [63:0] filter_a1_y_l;
+  logic signed [63:0] filter_a2_y_l;
+  logic signed [63:0] filter_z1_ext_l;
+  logic signed [63:0] filter_z2_ext_l;
+  logic signed [63:0] filter_b0_x_r;
+  logic signed [63:0] filter_b1_x_r;
+  logic signed [63:0] filter_b2_x_r;
+  logic signed [63:0] filter_a1_y_r;
+  logic signed [63:0] filter_a2_y_r;
+  logic signed [63:0] filter_z1_ext_r;
+  logic signed [63:0] filter_z2_ext_r;
+  logic signed [63:0] filter_y_q28_l;
+  logic signed [63:0] filter_y_q28_r;
+  logic signed [31:0] filter_y_pcm_ext_l;
+  logic signed [31:0] filter_y_pcm_ext_r;
+  logic signed [95:0] filter_next_z1_raw_l;
+  logic signed [95:0] filter_next_z2_raw_l;
+  logic signed [95:0] filter_next_z1_raw_r;
+  logic signed [95:0] filter_next_z2_raw_r;
   logic [PHASE_WIDTH-1:0] current_phase;
 
   function automatic logic signed [FILTER_STATE_WIDTH-1:0] saturate_filter_state(input logic signed [95:0] value);
@@ -126,49 +141,6 @@ module multi_voice_pipeline (
       saturate_pcm = 16'sh8000;
     else
       saturate_pcm = value[15:0];
-  endfunction
-
-  function automatic biquad_result_t biquad_iir(
-    input logic signed [FILTER_STATE_WIDTH-1:0] z1,
-    input logic signed [FILTER_STATE_WIDTH-1:0] z2,
-    input pcm_t sample,
-    input logic signed [31:0] b0,
-    input logic signed [31:0] b1,
-    input logic signed [31:0] b2,
-    input logic signed [31:0] a1,
-    input logic signed [31:0] a2
-  );
-    logic signed [31:0] x_ext;
-    logic signed [31:0] y_pcm_ext;
-    logic signed [63:0] y_q28;
-    logic signed [63:0] z1_ext;
-    logic signed [63:0] z2_ext;
-    logic signed [63:0] b0_x;
-    logic signed [63:0] b1_x;
-    logic signed [63:0] b2_x;
-    logic signed [63:0] a1_y;
-    logic signed [63:0] a2_y;
-    logic signed [95:0] next_z1;
-    logic signed [95:0] next_z2;
-    biquad_result_t result;
-    begin
-      x_ext = {{16{sample[15]}}, sample};
-      z1_ext = {{(64-FILTER_STATE_WIDTH){z1[FILTER_STATE_WIDTH-1]}}, z1};
-      z2_ext = {{(64-FILTER_STATE_WIDTH){z2[FILTER_STATE_WIDTH-1]}}, z2};
-      b0_x = $signed(x_ext) * $signed(b0);
-      y_q28 = b0_x + z1_ext;
-      result.sample = saturate_pcm(y_q28 >>> 28);
-      y_pcm_ext = {{16{result.sample[15]}}, result.sample};
-      b1_x = $signed(x_ext) * $signed(b1);
-      b2_x = $signed(x_ext) * $signed(b2);
-      a1_y = $signed(y_pcm_ext) * $signed(a1);
-      a2_y = $signed(y_pcm_ext) * $signed(a2);
-      next_z1 = $signed({{32{b1_x[63]}}, b1_x}) - $signed({{32{a1_y[63]}}, a1_y}) + $signed({{32{z2_ext[63]}}, z2_ext});
-      next_z2 = $signed({{32{b2_x[63]}}, b2_x}) - $signed({{32{a2_y[63]}}, a2_y});
-      result.z1 = saturate_filter_state(next_z1);
-      result.z2 = saturate_filter_state(next_z2);
-      biquad_iir = result;
-    end
   endfunction
 
   assign voice_read_index = voice_index;
@@ -204,14 +176,20 @@ module multi_voice_pipeline (
                  (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] >= cfg_length);
     next_accum_l = accum_l + $signed({{16{enveloped_l[15]}}, enveloped_l});
     next_accum_r = accum_r + $signed({{16{enveloped_r[15]}}, enveloped_r});
-    filter_result_l = biquad_iir(filter_z1_l[voice_index], filter_z2_l[voice_index], interp_stage_l,
-                                 current_filter_b0, current_filter_b1, current_filter_b2,
-                                 current_filter_a1, current_filter_a2);
-    filter_result_r = biquad_iir(filter_z1_r[voice_index], filter_z2_r[voice_index], interp_stage_r,
-                                 current_filter_b0, current_filter_b1, current_filter_b2,
-                                 current_filter_a1, current_filter_a2);
-    filtered_l = filter_result_l.sample;
-    filtered_r = filter_result_r.sample;
+    filter_y_q28_l = filter_b0_x_l + filter_z1_ext_l;
+    filter_y_q28_r = filter_b0_x_r + filter_z1_ext_r;
+    filtered_l = saturate_pcm(filter_y_q28_l >>> 28);
+    filtered_r = saturate_pcm(filter_y_q28_r >>> 28);
+    filter_next_z1_raw_l = $signed({{32{filter_b1_x_l[63]}}, filter_b1_x_l}) -
+                           $signed({{32{filter_a1_y_l[63]}}, filter_a1_y_l}) +
+                           $signed({{32{filter_z2_ext_l[63]}}, filter_z2_ext_l});
+    filter_next_z2_raw_l = $signed({{32{filter_b2_x_l[63]}}, filter_b2_x_l}) -
+                           $signed({{32{filter_a2_y_l[63]}}, filter_a2_y_l});
+    filter_next_z1_raw_r = $signed({{32{filter_b1_x_r[63]}}, filter_b1_x_r}) -
+                           $signed({{32{filter_a1_y_r[63]}}, filter_a1_y_r}) +
+                           $signed({{32{filter_z2_ext_r[63]}}, filter_z2_ext_r});
+    filter_next_z2_raw_r = $signed({{32{filter_b2_x_r[63]}}, filter_b2_x_r}) -
+                           $signed({{32{filter_a2_y_r[63]}}, filter_a2_y_r});
     gain_input_l = gain_stage_input_l;
     gain_input_r = gain_stage_input_r;
   end
@@ -295,6 +273,8 @@ module multi_voice_pipeline (
       raw_r1 <= '0;
       interp_stage_l <= '0;
       interp_stage_r <= '0;
+      filter_input_l <= '0;
+      filter_input_r <= '0;
       gain_stage_input_l <= '0;
       gain_stage_input_r <= '0;
       gained_stage_l <= '0;
@@ -303,6 +283,22 @@ module multi_voice_pipeline (
       filter_next_z2_l <= '0;
       filter_next_z1_r <= '0;
       filter_next_z2_r <= '0;
+      filter_b0_x_l <= '0;
+      filter_b1_x_l <= '0;
+      filter_b2_x_l <= '0;
+      filter_a1_y_l <= '0;
+      filter_a2_y_l <= '0;
+      filter_z1_ext_l <= '0;
+      filter_z2_ext_l <= '0;
+      filter_b0_x_r <= '0;
+      filter_b1_x_r <= '0;
+      filter_b2_x_r <= '0;
+      filter_a1_y_r <= '0;
+      filter_a2_y_r <= '0;
+      filter_z1_ext_r <= '0;
+      filter_z2_ext_r <= '0;
+      filter_y_pcm_ext_l <= '0;
+      filter_y_pcm_ext_r <= '0;
       accum_l <= 32'sd0;
       accum_r <= 32'sd0;
       sample_valid <= 1'b0;
@@ -400,15 +396,47 @@ module multi_voice_pipeline (
         INTERPOLATE: begin
           interp_stage_l <= interpolated_l;
           interp_stage_r <= interpolated_r;
-          state <= FILTER;
+          state <= FILTER_INPUT;
         end
-        FILTER: begin
-          gain_stage_input_l <= current_filter_enable ? filtered_l : interp_stage_l;
-          gain_stage_input_r <= current_filter_enable ? filtered_r : interp_stage_r;
-          filter_next_z1_l <= filter_result_l.z1;
-          filter_next_z2_l <= filter_result_l.z2;
-          filter_next_z1_r <= filter_result_r.z1;
-          filter_next_z2_r <= filter_result_r.z2;
+        FILTER_INPUT: begin
+          filter_input_l <= interp_stage_l;
+          filter_input_r <= interp_stage_r;
+          state <= FILTER_MUL_X;
+        end
+        FILTER_MUL_X: begin
+          filter_b0_x_l <= $signed({{16{filter_input_l[15]}}, filter_input_l}) * $signed(current_filter_b0);
+          filter_b1_x_l <= $signed({{16{filter_input_l[15]}}, filter_input_l}) * $signed(current_filter_b1);
+          filter_b2_x_l <= $signed({{16{filter_input_l[15]}}, filter_input_l}) * $signed(current_filter_b2);
+          filter_z1_ext_l <= {{(64-FILTER_STATE_WIDTH){filter_z1_l[voice_index][FILTER_STATE_WIDTH-1]}}, filter_z1_l[voice_index]};
+          filter_z2_ext_l <= {{(64-FILTER_STATE_WIDTH){filter_z2_l[voice_index][FILTER_STATE_WIDTH-1]}}, filter_z2_l[voice_index]};
+          filter_b0_x_r <= $signed({{16{filter_input_r[15]}}, filter_input_r}) * $signed(current_filter_b0);
+          filter_b1_x_r <= $signed({{16{filter_input_r[15]}}, filter_input_r}) * $signed(current_filter_b1);
+          filter_b2_x_r <= $signed({{16{filter_input_r[15]}}, filter_input_r}) * $signed(current_filter_b2);
+          filter_z1_ext_r <= {{(64-FILTER_STATE_WIDTH){filter_z1_r[voice_index][FILTER_STATE_WIDTH-1]}}, filter_z1_r[voice_index]};
+          filter_z2_ext_r <= {{(64-FILTER_STATE_WIDTH){filter_z2_r[voice_index][FILTER_STATE_WIDTH-1]}}, filter_z2_r[voice_index]};
+          state <= FILTER_Y;
+        end
+        FILTER_Y: begin
+          gain_stage_input_l <= current_filter_enable ? filtered_l : filter_input_l;
+          gain_stage_input_r <= current_filter_enable ? filtered_r : filter_input_r;
+          filter_y_pcm_ext_l <= {{16{filtered_l[15]}}, filtered_l};
+          filter_y_pcm_ext_r <= {{16{filtered_r[15]}}, filtered_r};
+          state <= FILTER_MUL_Y;
+        end
+        FILTER_MUL_Y: begin
+          filter_a1_y_l <= $signed(filter_y_pcm_ext_l) * $signed(current_filter_a1);
+          filter_a2_y_l <= $signed(filter_y_pcm_ext_l) * $signed(current_filter_a2);
+          filter_a1_y_r <= $signed(filter_y_pcm_ext_r) * $signed(current_filter_a1);
+          filter_a2_y_r <= $signed(filter_y_pcm_ext_r) * $signed(current_filter_a2);
+          state <= FILTER_ACC;
+        end
+        FILTER_ACC: begin
+          gain_stage_input_l <= current_filter_enable ? filtered_l : filter_input_l;
+          gain_stage_input_r <= current_filter_enable ? filtered_r : filter_input_r;
+          filter_next_z1_l <= saturate_filter_state(filter_next_z1_raw_l);
+          filter_next_z2_l <= saturate_filter_state(filter_next_z2_raw_l);
+          filter_next_z1_r <= saturate_filter_state(filter_next_z1_raw_r);
+          filter_next_z2_r <= saturate_filter_state(filter_next_z2_raw_r);
           state <= GAIN;
         end
         GAIN: begin

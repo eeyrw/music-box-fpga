@@ -67,23 +67,33 @@ add/subtract operations.
 ## Current Pipeline Shape
 
 The current implementation uses the same registered compute stages for every
-enabled voice. If the per-voice biquad filter is disabled, the `FILTER` stage
-acts as a registered bypass from interpolation to gain. If the filter is enabled,
-the same stage evaluates the biquad and captures the next filter state.
+enabled voice. If the per-voice biquad filter is disabled, the filter stages act
+as a registered bypass from interpolation to gain. If the filter is enabled, the
+stages evaluate the biquad output, feedback products, and saturated next filter
+state over multiple cycles.
 
 Compute path after endpoint fetch:
 
 ```text
 WAIT_L1 or WAIT_R1
   -> INTERPOLATE
-  -> FILTER
+  -> FILTER_INPUT
+  -> FILTER_MUL_X
+  -> FILTER_Y
+  -> FILTER_MUL_Y
+  -> FILTER_ACC
   -> GAIN
   -> ACCUMULATE
 ```
 
 The added registers are local to `multi_voice_pipeline`:
 
-- `interp_stage_l/r` capture the linear interpolation result.
+- `interp_stage_l/r` capture the linear interpolation result and are preserved as
+  explicit synthesis boundaries.
+- `filter_input_l/r` capture the filter input sample so the interpolator output
+  path is separated from the filter coefficient multipliers.
+- `filter_b*_x_*`, `filter_a*_y_*`, and `filter_y_pcm_ext_*` capture biquad
+  product and feedback inputs across the filter sub-states.
 - `gain_stage_input_l/r` capture the selected post-filter sample.
 - `gained_stage_l/r` capture the channel-gain result.
 - `filter_next_z1/z2_l/r` hold the next biquad state until the voice reaches
@@ -120,7 +130,11 @@ Current state sequence:
 | `REQ_R1` | Stereo only: issue right endpoint-1 memory request. | Memory request address for right `frame_1`. |
 | `WAIT_R1` | Stereo only: wait for right endpoint-1 response. | `raw_r1`. |
 | `INTERPOLATE` | Evaluate left/right linear interpolation from raw endpoints and the captured fraction. | `interp_stage_l/r`. |
-| `FILTER` | If enabled, evaluate biquad output and next state. If disabled, bypass interpolated samples. | `gain_stage_input_l/r`, `filter_next_z1/z2_l/r`. |
+| `FILTER_INPUT` | Register the interpolated sample before it feeds the filter coefficient multipliers. | `filter_input_l/r`. |
+| `FILTER_MUL_X` | Multiply filter input by `b0`, `b1`, and `b2` and capture current filter state as sign-extended values. | `filter_b*_x_*`, `filter_z*_ext_*`. |
+| `FILTER_Y` | Add `b0*x + z1`, saturate to PCM, and select filtered or bypass sample for gain. | `gain_stage_input_l/r`, `filter_y_pcm_ext_l/r`. |
+| `FILTER_MUL_Y` | Multiply saturated filter output by feedback coefficients `a1` and `a2`. | `filter_a*_y_*`. |
+| `FILTER_ACC` | Saturate the next biquad state from registered products. | `filter_next_z1/z2_l/r`. |
 | `GAIN` | Apply left/right channel gain. | `gained_stage_l/r`. |
 | `ACCUMULATE` | Apply envelope or full-level bypass, update filter state when enabled, and add the voice contribution into the stereo accumulator. | `accum_l/r`, optional `filter_z*_*[voice_index]`; advances to next voice or `FINISH`. |
 | `FINISH` | Saturate the 32-bit stereo accumulators to signed 16-bit PCM. | `sample_l/r`, `sample_valid`. |
@@ -180,10 +194,12 @@ filter_z1_r[voice]
 filter_z2_r[voice]
 ```
 
-The `FILTER` stage computes the next state from the captured interpolation
-result and current coefficients. It stores the computed next state in
-`filter_next_*` registers. The actual per-voice filter state arrays are updated
-only in `ACCUMULATE`, and only when `current_filter_enable` is set.
+The filter sub-states compute the next state from the captured filter input and
+current coefficients. `FILTER_MUL_X` captures the feed-forward products,
+`FILTER_Y` derives the saturated output sample, `FILTER_MUL_Y` captures feedback
+products, and `FILTER_ACC` stores the saturated next state in `filter_next_*`
+registers. The actual per-voice filter state arrays are updated only in
+`ACCUMULATE`, and only when `current_filter_enable` is set.
 
 This preserves the rule that a voice's IIR state advances exactly once per
 rendered output sample contribution. It also keeps filter state aligned with the
@@ -194,32 +210,39 @@ same `voice_index` that produced the interpolated sample.
 All scanned voices spend two scheduler cycles in `READ_VOICE`/`WAIT_VOICE` before
 `START_VOICE`, which allows synchronous RAM-backed register-bank fields to be
 used without changing the external render contract. All enabled voices then add
-three deterministic compute cycles after endpoint fetch: `INTERPOLATE`, `FILTER`,
-and `GAIN` before `ACCUMULATE`. The latency is hidden behind the existing
-`sample_valid` completion handshake, and output sample values remain numerically
-equivalent at the completed `sample_valid` boundary.
+seven deterministic compute cycles after endpoint fetch: `INTERPOLATE`, the five
+filter sub-states, and `GAIN` before `ACCUMULATE`. The latency is hidden behind
+the existing `sample_valid` completion handshake, and output sample values remain
+numerically equivalent at the completed `sample_valid` boundary.
 
 The regression latency guard for the 32-voice mono render case is now
-`400 + NUM_VOICES` cycles. This is a structural regression limit, not a
+`600 + NUM_VOICES` cycles. This is a structural regression limit, not a
 board-level real-time deadline. It allows the fixed multi-stage compute pipeline
 plus the synchronous register-bank read cycle while still catching accidental
 large latency regressions in the scheduler or memory handshake. On the current
-simulation memory model, the all-voice path has been observed around 417 cycles
+simulation memory model, the all-voice path has been observed around 545 cycles
 for the 32-voice mono case.
 
 ## Timing Benefit
 
 For filtered voices, the long DSP calculation is now split across stages:
 
-- `INTERPOLATE` registers the interpolation result before it feeds the biquad.
-- `FILTER` isolates the biquad calculation from gain and envelope scaling.
+- `INTERPOLATE` registers the interpolation result.
+- `FILTER_INPUT` preserves a register boundary between interpolation and filter
+  coefficient multiplication.
+- `FILTER_MUL_X`, `FILTER_Y`, `FILTER_MUL_Y`, and `FILTER_ACC` split biquad
+  feed-forward multiplication, output saturation, feedback multiplication, and
+  next-state saturation.
 - `GAIN` isolates channel gain from envelope scaling and final accumulation.
 - `ACCUMULATE` applies envelope/full-level bypass, updates filter state, and
   adds the final voice sample into the stereo mix accumulator.
 
-This should improve Fmax for configurations where the biquad path is the critical
-path. Exact Fmax improvement must be measured in the target FPGA synthesis flow;
-Verilator lint and simulation only verify structural validity and behavior.
+Post-synthesis Smart Artix timing improved from a `clk_pll_i` setup WNS of
+`-10.650 ns` before filter pipelining to `+0.670 ns` after preserving the
+interpolation/filter register boundary. Hold violations remain in the early
+board-level clocking/MIG paths and still require implementation and constraint
+work. Verilator lint and simulation verify structural validity and behavior, not
+FPGA timing closure.
 
 ## Behavioral Contracts Preserved
 

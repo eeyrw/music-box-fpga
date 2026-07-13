@@ -221,17 +221,25 @@ the generic RTL to one vendor flow.
    Define the supported SPI mode, SCLK-to-system-clock timing limits, CS
    setup/hold, read turnaround timing, and any board wrapper synchronizers.
 
-7. Extend the audio interface.
+7. Keep vendor build flows incremental where the tool benefits from it.
+   The Smart Artix Vivado synthesis flow now preserves the generated project,
+   IP output products, and completed `synth_1` run under `build/` and reuses an
+   up-to-date run. Source changes still reset and rerun synthesis because Vivado
+   2018.3 requires that for stale completed runs. Future implementation scripts
+   should use checkpoint-based incremental implementation where it provides a
+   larger runtime benefit than synthesis project reuse.
+
+8. Extend the audio interface.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-8. Implement the SD-to-DDR3 asset-loading path.
+9. Implement the SD-to-DDR3 asset-loading path.
    `docs/asset_loading.md` defines the first board contract: an SD raw image with
    a small header, FPGA-side sector reads and DDR3 write DMA, and host/MCU-owned
    SF2 metadata and voice policy. Runtime `.sf2` parsing remains outside the
    generic wavetable core.
 
-9. Strengthen full-system pass/fail checks.
+10. Strengthen full-system pass/fail checks.
    Compare I2S-decoded PCM against the `render-quick` reference on short exact
    cases, record SPI transaction counts and memory stall cycles, and run longer
    high-polyphony stress cases.

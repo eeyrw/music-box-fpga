@@ -5,8 +5,18 @@
 
 source [file join [file dirname [file normalize [info script]]] project.tcl]
 
-launch_runs synth_1 -jobs 4
-wait_on_run synth_1
+set synth_run [get_runs synth_1]
+set synth_status [get_property STATUS $synth_run]
+
+if {[string match "*Complete*" $synth_status] && ![get_property NEEDS_REFRESH $synth_run]} {
+  puts "INFO: synth_1 is complete and up-to-date; reusing existing run."
+} else {
+  if {[string match "*Complete*" $synth_status] || [get_property NEEDS_REFRESH $synth_run]} {
+    reset_run synth_1
+  }
+  launch_runs synth_1 -jobs 4
+  wait_on_run synth_1
+}
 
 set synth_status [get_property STATUS [get_runs synth_1]]
 if {![string match "*Complete*" $synth_status]} {

@@ -138,17 +138,17 @@ Timing WNS: -0.725 ns at 49.152 MHz
 ```
 
 Current post-synthesis result after the Q24.8 phase change, 48-bit filter state,
-active/shadow config split, staged readback, and BRAM-backed active
-configuration/runtime filter/runtime scalar storage, using the generated MIG and
-clock wizard:
+active/shadow config split, staged readback, BRAM-backed active
+configuration/runtime filter/runtime scalar storage, and the pipelined filter
+datapath, using the generated MIG and clock wizard:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
-Slice LUTs: 9891 / 32600, 30.34%
-Slice registers: 13373 / 65200, 20.51%
+Slice LUTs: 9723 / 32600, 29.83%
+Slice registers: 13766 / 65200, 21.11%
 DSP48E1: 26 / 120, 21.67%
 Block RAM tiles: 9 / 75, 12.00%
-Timing WNS: -10.650 ns, WHS: -1.329 ns on clk_pll_i
+Setup WNS: +0.670 ns, WHS: -1.329 ns
 ```
 
 The latest pass confirms that the largest voice-register-bank muxes have been
@@ -160,9 +160,38 @@ configuration/runtime readback was intentionally removed from the main register
 path; low-rate inspection now uses the staged readback window, and software
 should still mirror write state on the host side for normal operation.
 
-This timing result is still an early warning, not a final board result. The next
-timing work is to run implementation after real pins and clocking are known, then
-pipeline the voice pipeline multiply/accumulation path if the violation remains.
+The filter pipeline removed the previous `clk_pll_i` post-synthesis setup
+violation. Vivado still reports hold violations, primarily around generated
+MIG/clocking paths. Treat those as implementation/clocking-constraint work until
+the MIG input clock, real board pins, and final clock-domain plan are confirmed.
+
+## Vivado Project Reuse
+
+The Smart Artix Tcl flow intentionally keeps the generated Vivado project under
+`build/fpga/smart_artix/vivado/` between runs. `project.tcl` opens an existing
+`smart_artix.xpr` when present instead of recreating it, avoids recopying or
+regenerating IP output products unless they are missing, and adds source and XDC
+files only if they are not already in the project.
+
+`synth.tcl` checks the `synth_1` run before launching synthesis:
+
+- If the run is complete and not marked `NEEDS_REFRESH`, the script reuses it,
+  opens the existing run, and rewrites the post-synthesis checkpoint and reports.
+- If RTL, XDC, IP, or project inputs make the run stale, the script resets and
+  relaunches `synth_1` instead of failing with Vivado's `needs to be reset`
+  message.
+- If a clean rebuild is required, set `VIVADO_FORCE_REBUILD=1`. If IP output
+  products need to be regenerated from the source `.xci` files, set
+  `VIVADO_REGENERATE_IP=1`.
+
+This is project/run reuse, not Vivado implementation incremental checkpointing.
+Source changes still require a synthesis rerun; unchanged inputs avoid a needless
+project/IP rebuild and avoid a needless synthesis rerun.
+
+The behavior was verified with three batch runs: an up-to-date run logged
+`synth_1 is complete and up-to-date; reusing existing run`, touching an RTL file
+caused an automatic reset/relaunch and completed synthesis, and
+`VIVADO_FORCE_REBUILD=1` rebuilt the project and completed synthesis.
 
 ## MIG Clocking Note
 
