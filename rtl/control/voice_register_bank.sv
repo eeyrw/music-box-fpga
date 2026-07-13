@@ -9,8 +9,9 @@ module voice_register_bank (
   output logic [31:0]                bus_rdata,
   output logic                       bus_ready,
   output logic                       bus_error,
-  output synth_pkg::voice_config_t   active_config [synth_pkg::NUM_VOICES],
-  output synth_pkg::voice_runtime_t  runtime_state [synth_pkg::NUM_VOICES],
+  input  logic [$clog2(synth_pkg::NUM_VOICES)-1:0] render_voice_index,
+  output synth_pkg::voice_config_t   render_config,
+  output synth_pkg::voice_runtime_t  render_runtime,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse
 );
@@ -48,25 +49,159 @@ module voice_register_bank (
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
+  localparam int ACTIVE_CONFIG_WORD_WIDTH = $bits(voice_config_t);
 
-  voice_shadow_t shadow_config [NUM_VOICES];
+  localparam int FILTER_COEFF_WORD_WIDTH = 160;
+  localparam int FILTER_B0_LSB = 128;
+  localparam int FILTER_B1_LSB = 96;
+  localparam int FILTER_B2_LSB = 64;
+  localparam int FILTER_A1_LSB = 32;
+  localparam int FILTER_A2_LSB = 0;
+  localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
+    32'sh1000_0000,
+    32'sh0000_0000,
+    32'sh0000_0000,
+    32'sh0000_0000,
+    32'sh0000_0000
+  };
+
+  function automatic logic [ACTIVE_CONFIG_WORD_WIDTH-1:0] pack_active_config(
+    input logic enable,
+    input logic stereo,
+    input logic [ADDR_WIDTH-1:0] base_addr,
+    input logic [ADDR_WIDTH-1:0] base_addr_r,
+    input logic [PHASE_FRAME_WIDTH-1:0] length,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_start,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_end,
+    input logic [PHASE_WIDTH-1:0] phase_init,
+    input logic [1:0] loop_mode
+  );
+    pack_active_config = {
+      enable,
+      stereo,
+      base_addr,
+      base_addr_r,
+      length,
+      loop_start,
+      loop_end,
+      phase_init,
+      loop_mode
+    };
+  endfunction
+
+  function automatic voice_config_t unpack_active_config(
+    input logic [ACTIVE_CONFIG_WORD_WIDTH-1:0] word
+  );
+    voice_config_t cfg;
+    begin
+      cfg = word;
+      unpack_active_config = cfg;
+    end
+  endfunction
+
+  (* ram_style = "distributed" *) logic                      shadow_enable [NUM_VOICES];
+  (* ram_style = "distributed" *) logic                      shadow_stereo [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]     shadow_base_addr [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]     shadow_base_addr_r [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_FRAME_WIDTH-1:0] shadow_length [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_FRAME_WIDTH-1:0] shadow_loop_start [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_FRAME_WIDTH-1:0] shadow_loop_end [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0]    shadow_phase_init [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0]    shadow_phase_inc [NUM_VOICES];
+  (* ram_style = "distributed" *) logic signed [15:0]        shadow_gain_l [NUM_VOICES];
+  (* ram_style = "distributed" *) logic signed [15:0]        shadow_gain_r [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [1:0]                shadow_loop_mode [NUM_VOICES];
+  (* ram_style = "distributed" *) logic                      shadow_filter_enable [NUM_VOICES];
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] shadow_filter_coeff [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0]    runtime_phase_inc [NUM_VOICES];
+  (* ram_style = "distributed" *) logic signed [15:0]        runtime_gain_l [NUM_VOICES];
+  (* ram_style = "distributed" *) logic signed [15:0]        runtime_gain_r [NUM_VOICES];
+  (* ram_style = "distributed" *) logic signed [15:0]        runtime_envelope_level [NUM_VOICES];
+  (* ram_style = "distributed" *) logic                      runtime_released [NUM_VOICES];
+  (* ram_style = "distributed" *) logic                      runtime_filter_enable [NUM_VOICES];
+  logic [NUM_VOICES-1:0] active_config_valid;
+  logic [NUM_VOICES-1:0] shadow_config_valid;
   logic [NUM_VOICES-1:0] pending_commit;
   logic address_valid;
   logic voice_address;
   logic [VOICE_INDEX_WIDTH-1:0] selected_voice;
   logic [15:0] selected_offset;
   logic [15:0] voice_relative;
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] shadow_filter_wdata;
+  logic [ACTIVE_CONFIG_WORD_WIDTH-1:0] active_config_bus_word;
+  logic [ACTIVE_CONFIG_WORD_WIDTH-1:0] active_config_ram_word;
+  logic active_config_write;
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] runtime_filter_render_word;
+  logic runtime_filter_write;
   int i;
+
+  initial begin
+    for (int v = 0; v < NUM_VOICES; v++) begin
+      shadow_filter_coeff[v] = DEFAULT_FILTER_COEFF;
+    end
+  end
+
+  assign runtime_filter_write = bus_valid && bus_write && voice_address &&
+                                ((selected_offset == OFF_FILTER_B0) ||
+                                 (selected_offset == OFF_FILTER_B1) ||
+                                 (selected_offset == OFF_FILTER_B2) ||
+                                 (selected_offset == OFF_FILTER_A1) ||
+                                 (selected_offset == OFF_FILTER_A2));
+
+  assign active_config_bus_word = pack_active_config(
+    shadow_enable[selected_voice],
+    shadow_stereo[selected_voice],
+    shadow_base_addr[selected_voice],
+    shadow_base_addr_r[selected_voice],
+    shadow_length[selected_voice],
+    shadow_loop_start[selected_voice],
+    shadow_loop_end[selected_voice],
+    shadow_phase_init[selected_voice],
+    shadow_loop_mode[selected_voice]
+  );
+
+  assign active_config_write = bus_valid && bus_write && voice_address &&
+                               (selected_offset == OFF_COMMIT) && bus_wdata[0];
+
+  voice_bram_1r1w #(
+    .NUM_WORDS(NUM_VOICES),
+    .ADDR_WIDTH(VOICE_INDEX_WIDTH),
+    .DATA_WIDTH(ACTIVE_CONFIG_WORD_WIDTH),
+    .DEFAULT_WORD('0)
+  ) active_config_ram (
+    .clk(clk),
+    .write_en(active_config_write),
+    .write_addr(selected_voice),
+    .write_data(active_config_bus_word),
+    .read_addr(render_voice_index),
+    .read_data(active_config_ram_word)
+  );
+
+  voice_bram_1r1w #(
+    .NUM_WORDS(NUM_VOICES),
+    .ADDR_WIDTH(VOICE_INDEX_WIDTH),
+    .DATA_WIDTH(FILTER_COEFF_WORD_WIDTH),
+    .DEFAULT_WORD(DEFAULT_FILTER_COEFF)
+  ) runtime_filter_ram (
+    .clk(clk),
+    .write_en(runtime_filter_write),
+    .write_addr(selected_voice),
+    .write_data(shadow_filter_wdata),
+    .read_addr(render_voice_index),
+    .read_data(runtime_filter_render_word)
+  );
 
   always_comb begin
     for (int v = 0; v < NUM_VOICES; v++) begin
       // A committed voice is playable when it has a nonzero length. Looping
       // modes additionally require a non-empty loop range inside the length.
-      config_valid[v] = (active_config[v].length != '0) &&
-                        ((active_config[v].loop_mode == LOOP_MODE_NONE) ||
-                         ((active_config[v].loop_start < active_config[v].loop_end) &&
-                          (active_config[v].loop_end <= active_config[v].length)));
+      shadow_config_valid[v] = (shadow_length[v] != '0) &&
+                               ((shadow_loop_mode[v] == LOOP_MODE_NONE) ||
+                                ((shadow_loop_start[v] < shadow_loop_end[v]) &&
+                                 (shadow_loop_end[v] <= shadow_length[v])));
     end
+
+    config_valid = active_config_valid;
 
     voice_relative = bus_address - VOICE_BASE;
     selected_voice = voice_relative[7 +: VOICE_INDEX_WIDTH];
@@ -74,35 +209,39 @@ module voice_register_bank (
     voice_address = (bus_address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
 
-    // Reads return shadow/staged state so software can verify pending writes
-    // before they become visible to the renderer at the next frame boundary.
+    shadow_filter_wdata = shadow_filter_coeff[selected_voice];
+    unique case (selected_offset)
+      OFF_FILTER_B0: begin
+        shadow_filter_wdata[FILTER_B0_LSB +: 32] = bus_wdata;
+      end
+      OFF_FILTER_B1: begin
+        shadow_filter_wdata[FILTER_B1_LSB +: 32] = bus_wdata;
+      end
+      OFF_FILTER_B2: begin
+        shadow_filter_wdata[FILTER_B2_LSB +: 32] = bus_wdata;
+      end
+      OFF_FILTER_A1: begin
+        shadow_filter_wdata[FILTER_A1_LSB +: 32] = bus_wdata;
+      end
+      OFF_FILTER_A2: begin
+        shadow_filter_wdata[FILTER_A2_LSB +: 32] = bus_wdata;
+      end
+      default: begin
+      end
+    endcase
+
     address_valid = voice_address || (bus_address == ADDR_VERSION);
     bus_rdata = 32'd0;
     if (voice_address) begin
       unique case (selected_offset)
-        OFF_CONTROL:    bus_rdata = {30'd0, shadow_config[selected_voice].stereo, shadow_config[selected_voice].enable};
-        OFF_BASE:       bus_rdata = shadow_config[selected_voice].base_addr;
-        OFF_LENGTH:     bus_rdata = {8'd0, shadow_config[selected_voice].length};
-        OFF_LOOP_START: bus_rdata = {8'd0, shadow_config[selected_voice].loop_start};
-        OFF_LOOP_END:   bus_rdata = {8'd0, shadow_config[selected_voice].loop_end};
-        OFF_PHASE_INIT: bus_rdata = shadow_config[selected_voice].phase_init;
-        OFF_PHASE_INC:  bus_rdata = shadow_config[selected_voice].phase_inc;
-        OFF_GAIN_L:     bus_rdata = {{16{shadow_config[selected_voice].gain_l[15]}}, shadow_config[selected_voice].gain_l};
-        OFF_GAIN_R:     bus_rdata = {{16{shadow_config[selected_voice].gain_r[15]}}, shadow_config[selected_voice].gain_r};
-        OFF_COMMIT:     bus_rdata = 32'd0;
+        OFF_CONTROL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
+        OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_COMMIT,
+        OFF_ENVELOPE, OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL,
+        OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
+        OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R: begin
+          bus_rdata = 32'd0;
+        end
         OFF_STATUS:     bus_rdata = {31'd0, config_valid[selected_voice]};
-        OFF_ENVELOPE:   bus_rdata = {{16{runtime_state[selected_voice].envelope_level[15]}}, runtime_state[selected_voice].envelope_level};
-        OFF_PHASE_RT:   bus_rdata = runtime_state[selected_voice].phase_inc;
-        OFF_LOOP_MODE:  bus_rdata = {30'd0, shadow_config[selected_voice].loop_mode};
-        OFF_FILTER_CTL:  bus_rdata = {31'd0, shadow_config[selected_voice].filter_enable};
-        OFF_FILTER_B0:   bus_rdata = shadow_config[selected_voice].filter_b0;
-        OFF_FILTER_B1:   bus_rdata = shadow_config[selected_voice].filter_b1;
-        OFF_FILTER_B2:   bus_rdata = shadow_config[selected_voice].filter_b2;
-        OFF_FILTER_A1:   bus_rdata = shadow_config[selected_voice].filter_a1;
-        OFF_FILTER_A2:   bus_rdata = shadow_config[selected_voice].filter_a2;
-        OFF_GAIN_RT:     bus_rdata = {runtime_state[selected_voice].gain_r, runtime_state[selected_voice].gain_l};
-        OFF_RELEASE:     bus_rdata = {31'd0, runtime_state[selected_voice].released};
-        OFF_BASE_R:      bus_rdata = shadow_config[selected_voice].base_addr_r;
         default: begin
           address_valid = 1'b0;
           bus_rdata = 32'd0;
@@ -121,103 +260,107 @@ module voice_register_bank (
   always_ff @(posedge clk) begin
     if (rst) begin
       for (i = 0; i < NUM_VOICES; i++) begin
-        shadow_config[i] <= '0;
-        shadow_config[i].loop_mode <= LOOP_MODE_NONE;
-        shadow_config[i].filter_b0 <= 32'sh1000_0000;
-        shadow_config[i].filter_b1 <= 32'sh0000_0000;
-        shadow_config[i].filter_b2 <= 32'sh0000_0000;
-        shadow_config[i].filter_a1 <= 32'sh0000_0000;
-        shadow_config[i].filter_a2 <= 32'sh0000_0000;
-        active_config[i] <= '0;
-        active_config[i].loop_mode <= LOOP_MODE_NONE;
-        runtime_state[i] <= '0;
-        runtime_state[i].envelope_level <= 16'sh7fff;
-        runtime_state[i].filter_b0 <= 32'sh1000_0000;
-        runtime_state[i].filter_b1 <= 32'sh0000_0000;
-        runtime_state[i].filter_b2 <= 32'sh0000_0000;
-        runtime_state[i].filter_a1 <= 32'sh0000_0000;
-        runtime_state[i].filter_a2 <= 32'sh0000_0000;
+        shadow_enable[i] <= 1'b0;
+        shadow_stereo[i] <= 1'b0;
+        shadow_base_addr[i] <= '0;
+        shadow_base_addr_r[i] <= '0;
+        shadow_length[i] <= '0;
+        shadow_loop_start[i] <= '0;
+        shadow_loop_end[i] <= '0;
+        shadow_phase_init[i] <= '0;
+        shadow_phase_inc[i] <= '0;
+        shadow_gain_l[i] <= '0;
+        shadow_gain_r[i] <= '0;
+        shadow_loop_mode[i] <= LOOP_MODE_NONE;
+        shadow_filter_enable[i] <= 1'b0;
+        runtime_phase_inc[i] <= '0;
+        runtime_gain_l[i] <= '0;
+        runtime_gain_r[i] <= '0;
+        runtime_envelope_level[i] <= 16'sh7fff;
+        runtime_released[i] <= 1'b0;
+        runtime_filter_enable[i] <= 1'b0;
       end
+      render_config <= '0;
+      render_config.loop_mode <= LOOP_MODE_NONE;
+      render_runtime <= '0;
+      render_runtime.envelope_level <= 16'sh7fff;
+      render_runtime.filter_b0 <= 32'sh1000_0000;
       commit_pulse <= '0;
       pending_commit <= '0;
+      active_config_valid <= '0;
     end else begin
+      render_config <= unpack_active_config(active_config_ram_word);
+
+      render_runtime.phase_inc <= runtime_phase_inc[render_voice_index];
+      render_runtime.gain_l <= runtime_gain_l[render_voice_index];
+      render_runtime.gain_r <= runtime_gain_r[render_voice_index];
+      render_runtime.envelope_level <= runtime_envelope_level[render_voice_index];
+      render_runtime.released <= runtime_released[render_voice_index];
+      render_runtime.filter_enable <= runtime_filter_enable[render_voice_index];
+      render_runtime.filter_b0 <= runtime_filter_render_word[FILTER_B0_LSB +: 32];
+      render_runtime.filter_b1 <= runtime_filter_render_word[FILTER_B1_LSB +: 32];
+      render_runtime.filter_b2 <= runtime_filter_render_word[FILTER_B2_LSB +: 32];
+      render_runtime.filter_a1 <= runtime_filter_render_word[FILTER_A1_LSB +: 32];
+      render_runtime.filter_a2 <= runtime_filter_render_word[FILTER_A2_LSB +: 32];
+
       commit_pulse <= pending_commit;
 
       if (frame_boundary) begin
-        for (int v = 0; v < NUM_VOICES; v++) begin
-          if (pending_commit[v]) begin
-            active_config[v].enable <= shadow_config[v].enable;
-            active_config[v].stereo <= shadow_config[v].stereo;
-            active_config[v].base_addr <= shadow_config[v].base_addr;
-            active_config[v].base_addr_r <= shadow_config[v].base_addr_r;
-            active_config[v].length <= shadow_config[v].length;
-            active_config[v].loop_start <= shadow_config[v].loop_start;
-            active_config[v].loop_end <= shadow_config[v].loop_end;
-            active_config[v].phase_init <= shadow_config[v].phase_init;
-            active_config[v].loop_mode <= shadow_config[v].loop_mode;
-            runtime_state[v].phase_inc <= shadow_config[v].phase_inc;
-            runtime_state[v].gain_l <= shadow_config[v].gain_l;
-            runtime_state[v].gain_r <= shadow_config[v].gain_r;
-            runtime_state[v].released <= 1'b0;
-            runtime_state[v].filter_enable <= shadow_config[v].filter_enable;
-            runtime_state[v].filter_b0 <= shadow_config[v].filter_b0;
-            runtime_state[v].filter_b1 <= shadow_config[v].filter_b1;
-            runtime_state[v].filter_b2 <= shadow_config[v].filter_b2;
-            runtime_state[v].filter_a1 <= shadow_config[v].filter_a1;
-            runtime_state[v].filter_a2 <= shadow_config[v].filter_a2;
-          end
-        end
         pending_commit <= '0;
       end
 
       if (bus_valid && bus_write && voice_address) begin
         unique case (selected_offset)
           OFF_CONTROL: begin
-            shadow_config[selected_voice].enable <= bus_wdata[0];
-            shadow_config[selected_voice].stereo <= bus_wdata[1];
+            shadow_enable[selected_voice] <= bus_wdata[0];
+            shadow_stereo[selected_voice] <= bus_wdata[1];
           end
-          OFF_BASE:       shadow_config[selected_voice].base_addr <= bus_wdata;
-          OFF_BASE_R:     shadow_config[selected_voice].base_addr_r <= bus_wdata;
-          OFF_LENGTH:     shadow_config[selected_voice].length <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
-          OFF_LOOP_START: shadow_config[selected_voice].loop_start <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
-          OFF_LOOP_END:   shadow_config[selected_voice].loop_end <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
-          OFF_PHASE_INIT: shadow_config[selected_voice].phase_init <= bus_wdata;
-          OFF_PHASE_INC:  shadow_config[selected_voice].phase_inc <= bus_wdata;
-          OFF_GAIN_L:     shadow_config[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
-          OFF_GAIN_R:     shadow_config[selected_voice].gain_r <= $signed(bus_wdata[15:0]);
+          OFF_BASE:       shadow_base_addr[selected_voice] <= bus_wdata;
+          OFF_BASE_R:     shadow_base_addr_r[selected_voice] <= bus_wdata;
+          OFF_LENGTH:     shadow_length[selected_voice] <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
+          OFF_LOOP_START: shadow_loop_start[selected_voice] <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
+          OFF_LOOP_END:   shadow_loop_end[selected_voice] <= bus_wdata[PHASE_FRAME_WIDTH-1:0];
+          OFF_PHASE_INIT: shadow_phase_init[selected_voice] <= bus_wdata;
+          OFF_PHASE_INC:  shadow_phase_inc[selected_voice] <= bus_wdata;
+          OFF_GAIN_L:     shadow_gain_l[selected_voice] <= $signed(bus_wdata[15:0]);
+          OFF_GAIN_R:     shadow_gain_r[selected_voice] <= $signed(bus_wdata[15:0]);
           OFF_ENVELOPE: begin
             // Envelope is runtime state owned by the MCU/control layer. Updating
             // it must not reload phase or disturb in-flight note playback.
-            runtime_state[selected_voice].envelope_level <= $signed(bus_wdata[15:0]);
+            runtime_envelope_level[selected_voice] <= $signed(bus_wdata[15:0]);
           end
           OFF_COMMIT: begin
-            // Commit is atomic at the voice-config granularity: partially
-            // written shadow fields do not affect playback until this write.
+            // Resource-first commit: write the selected active BRAM entry now;
+            // frame_boundary only times phase/filter-state reload in the renderer.
             if (bus_wdata[0]) begin
               pending_commit[selected_voice] <= 1'b1;
+              active_config_valid[selected_voice] <= shadow_config_valid[selected_voice];
+              runtime_phase_inc[selected_voice] <= shadow_phase_inc[selected_voice];
+              runtime_gain_l[selected_voice] <= shadow_gain_l[selected_voice];
+              runtime_gain_r[selected_voice] <= shadow_gain_r[selected_voice];
+              runtime_released[selected_voice] <= 1'b0;
+              runtime_filter_enable[selected_voice] <= shadow_filter_enable[selected_voice];
             end
           end
           OFF_PHASE_RT: begin
-            runtime_state[selected_voice].phase_inc <= bus_wdata;
+            runtime_phase_inc[selected_voice] <= bus_wdata;
           end
           OFF_LOOP_MODE: begin
-            shadow_config[selected_voice].loop_mode <= bus_wdata[1:0];
+            shadow_loop_mode[selected_voice] <= bus_wdata[1:0];
           end
           OFF_FILTER_CTL: begin
-            shadow_config[selected_voice].filter_enable <= bus_wdata[0];
-            runtime_state[selected_voice].filter_enable <= bus_wdata[0];
+            shadow_filter_enable[selected_voice] <= bus_wdata[0];
+            runtime_filter_enable[selected_voice] <= bus_wdata[0];
           end
-          OFF_FILTER_B0: begin shadow_config[selected_voice].filter_b0 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b0 <= $signed(bus_wdata); end
-          OFF_FILTER_B1: begin shadow_config[selected_voice].filter_b1 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b1 <= $signed(bus_wdata); end
-          OFF_FILTER_B2: begin shadow_config[selected_voice].filter_b2 <= $signed(bus_wdata); runtime_state[selected_voice].filter_b2 <= $signed(bus_wdata); end
-          OFF_FILTER_A1: begin shadow_config[selected_voice].filter_a1 <= $signed(bus_wdata); runtime_state[selected_voice].filter_a1 <= $signed(bus_wdata); end
-          OFF_FILTER_A2: begin shadow_config[selected_voice].filter_a2 <= $signed(bus_wdata); runtime_state[selected_voice].filter_a2 <= $signed(bus_wdata); end
+          OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1, OFF_FILTER_A2: begin
+            shadow_filter_coeff[selected_voice] <= shadow_filter_wdata;
+          end
           OFF_GAIN_RT: begin
-            runtime_state[selected_voice].gain_l <= $signed(bus_wdata[15:0]);
-            runtime_state[selected_voice].gain_r <= $signed(bus_wdata[31:16]);
+            runtime_gain_l[selected_voice] <= $signed(bus_wdata[15:0]);
+            runtime_gain_r[selected_voice] <= $signed(bus_wdata[31:16]);
           end
           OFF_RELEASE: begin
-            runtime_state[selected_voice].released <= bus_wdata[0];
+            runtime_released[selected_voice] <= bus_wdata[0];
           end
           default: begin
           end

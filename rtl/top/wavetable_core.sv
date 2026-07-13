@@ -19,8 +19,11 @@ module wavetable_core (
   input  logic                     mem_rsp_valid,
   input  synth_pkg::pcm_t          mem_rsp_data
 );
-  synth_pkg::voice_config_t active_config [synth_pkg::NUM_VOICES];
-  synth_pkg::voice_runtime_t runtime_state [synth_pkg::NUM_VOICES];
+  localparam int VOICE_INDEX_WIDTH = $clog2(synth_pkg::NUM_VOICES);
+
+  synth_pkg::voice_config_t render_config;
+  synth_pkg::voice_runtime_t render_runtime;
+  logic [VOICE_INDEX_WIDTH-1:0] voice_read_index;
   logic [synth_pkg::NUM_VOICES-1:0] config_valid;
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
   logic voices_busy;
@@ -40,8 +43,9 @@ module wavetable_core (
     .bus_rdata,
     .bus_ready,
     .bus_error,
-    .active_config,
-    .runtime_state,
+    .render_voice_index(voice_read_index),
+    .render_config,
+    .render_runtime,
     .config_valid,
     .commit_pulse
   );
@@ -49,8 +53,9 @@ module wavetable_core (
   multi_voice_pipeline voices (
     .clk,
     .rst,
-    .voice_config(active_config),
-    .voice_runtime(runtime_state),
+    .voice_read_index,
+    .voice_config(render_config),
+    .voice_runtime(render_runtime),
     .config_valid,
     .config_commit(commit_pulse),
     .sample_tick,

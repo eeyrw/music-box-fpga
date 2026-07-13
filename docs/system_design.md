@@ -18,7 +18,8 @@ vendor memory IP, and FPGA constraints.
 
 Implemented RTL pieces:
 
-- 32 committed voice slots with shadow/active register state.
+- 32 committed voice slots with shadow configuration and BRAM-backed active
+  renderer snapshots.
 - Separate per-voice configuration state and runtime control state, with runtime
   updates sampled at output-frame boundaries.
 - Unsigned Q24.8 playback phase and runtime phase-increment updates.
@@ -67,15 +68,18 @@ constraint or PLL specification.
 ## Rendering Pipeline
 
 `multi_voice_pipeline` is a time-multiplexed renderer. On each accepted
-`sample_tick`, the register bank publishes staged control state to the active
-voice arrays; the renderer then scans voice slots in index order, skips disabled
-or invalid slots, fetches the needed interpolation endpoints, processes one voice
-through the shared DSP path, and accumulates into a signed 32-bit stereo mixer.
+`sample_tick`, the renderer scans voice slots in index order, reads each active
+configuration/runtime snapshot through the register bank's synchronous read path,
+skips disabled or invalid slots, fetches the needed interpolation endpoints,
+processes one voice through the shared DSP path, and accumulates into a signed
+32-bit stereo mixer.
 
 The core state sequence is:
 
 ```text
 IDLE
+READ_VOICE
+WAIT_VOICE
 START_VOICE
 REQ_L0  -> WAIT_L0
 REQ_L1  -> WAIT_L1
@@ -139,7 +143,7 @@ The hardware contract is register-level:
   runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
 - Runtime gain, pitch, release, and filter updates do not reload phase and update
-  the live runtime state sampled by the renderer for each accepted voice.
+  the runtime state sampled by the renderer when it accepts each voice snapshot.
 - Note Off for loop-until-release samples writes the runtime released flag and
   then continues envelope release updates.
 - When release reaches zero, software clears `CONTROL.enable` and commits the
@@ -183,13 +187,13 @@ the generic RTL to one vendor flow.
    misses, I2S underruns, and sample drops. Next, fail longer full-system stress
    tests on steady-state deadline misses, underruns, or sample drops.
 
-2. Convert wide voice-control storage from flops to RAM-backed structures.
-   The latest Smart Artix synthesis reduced flip-flop usage but moved the design
-   into an LUT-bound state. The next register-bank pass should keep hot control
-   flags in flops, but store wide low-rate fields such as base addresses,
-   length/loop points, phase increments, gains, and filter coefficients in LUTRAM
-   or a small RAM structure. Preserve the documented configuration commit
-   behavior and runtime update behavior while reducing per-voice mux fan-in.
+2. Continue voice-control storage reduction where it is worth the protocol cost.
+   The latest register-bank pass moved active configuration and runtime filter
+   coefficients into inferred Block RAM and removed large per-voice readback
+   muxes. Further savings for runtime pitch, gain, envelope, release, and filter
+   enable likely require multi-cycle read-modify-write behavior or wider bus
+   writes, so those should be handled only if post-implementation resource or
+   timing data justifies the added control complexity.
 
 3. Design a wavetable-optimized memory subsystem.
    The current `wave_memory_subsystem` is a minimal single-line cache. A later

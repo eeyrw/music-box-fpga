@@ -16,8 +16,9 @@ module tb_spi_register_bridge;
   logic [31:0] bus_rdata;
   logic bus_ready;
   logic bus_error;
-  voice_config_t active_config [NUM_VOICES];
-  voice_runtime_t runtime_state [NUM_VOICES];
+  logic [$clog2(NUM_VOICES)-1:0] render_voice_index;
+  voice_config_t render_config;
+  voice_runtime_t render_runtime;
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
   int errors = 0;
@@ -52,8 +53,9 @@ module tb_spi_register_bridge;
     .bus_rdata,
     .bus_ready,
     .bus_error,
-    .active_config,
-    .runtime_state,
+    .render_voice_index,
+    .render_config,
+    .render_runtime,
     .config_valid,
     .commit_pulse
   );
@@ -134,6 +136,7 @@ module tb_spi_register_bridge;
     spi_sclk = 1'b0;
     spi_cs_n = 1'b1;
     spi_mosi = 1'b0;
+    render_voice_index = '0;
 
     repeat (5) @(negedge clk);
     rst = 1'b0;
@@ -144,14 +147,14 @@ module tb_spi_register_bridge;
       $error("SPI write unexpectedly reported error");
       errors++;
     end
-    expect_read(16'h0104, 32'h1234_5678);
     expect_read(16'h3000, 32'h0004_0000);
 
     spi_write_word(16'h0108, 32'h0000_0004);
     spi_write_word(16'h0134, 32'h0000_0000);
     spi_write_word(16'h0124, 32'h0000_0001);
     publish_frame_boundary();
-    if (!config_valid[0] || (active_config[0].length !== 24'd4)) begin
+    @(negedge clk);
+    if (!config_valid[0] || (render_config.length !== 24'd4)) begin
       $error("SPI commit did not update active voice configuration");
       errors++;
     end

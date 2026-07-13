@@ -24,6 +24,7 @@ RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
 	rtl/bus/register_bus_if.sv \
 	rtl/bus/spi_register_bridge.sv \
+	rtl/control/voice_bram_1r1w.sv \
 	rtl/control/voice_register_bank.sv \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/dsp/linear_interpolator.sv \

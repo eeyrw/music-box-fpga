@@ -1,8 +1,9 @@
 module multi_voice_pipeline (
   input  logic                       clk,
   input  logic                       rst,
-  input  synth_pkg::voice_config_t   voice_config [synth_pkg::NUM_VOICES],
-  input  synth_pkg::voice_runtime_t  voice_runtime [synth_pkg::NUM_VOICES],
+  output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] voice_read_index,
+  input  synth_pkg::voice_config_t   voice_config,
+  input  synth_pkg::voice_runtime_t  voice_runtime,
   input  logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   input  logic [synth_pkg::NUM_VOICES-1:0] config_commit,
   input  logic                       sample_tick,
@@ -18,8 +19,8 @@ module multi_voice_pipeline (
 );
   import synth_pkg::*;
 
-  typedef enum logic [3:0] {
-    IDLE, START_VOICE, REQ_L0, WAIT_L0, REQ_L1, WAIT_L1,
+  typedef enum logic [4:0] {
+    IDLE, READ_VOICE, WAIT_VOICE, START_VOICE, REQ_L0, WAIT_L0, REQ_L1, WAIT_L1,
     REQ_R0, WAIT_R0, REQ_R1, WAIT_R1, INTERPOLATE, FILTER,
     GAIN, ACCUMULATE, FINISH
   } state_t;
@@ -170,26 +171,27 @@ module multi_voice_pipeline (
     end
   endfunction
 
-  assign cfg_enable = voice_config[voice_index].enable;
-  assign cfg_stereo = voice_config[voice_index].stereo;
-  assign cfg_base_addr = voice_config[voice_index].base_addr;
-  assign cfg_base_addr_r = voice_config[voice_index].base_addr_r;
-  assign cfg_length = voice_config[voice_index].length;
-  assign cfg_loop_start = voice_config[voice_index].loop_start;
-  assign cfg_loop_end = voice_config[voice_index].loop_end;
-  assign cfg_phase_inc = voice_runtime[voice_index].phase_inc;
-  assign cfg_gain_l = voice_runtime[voice_index].gain_l;
-  assign cfg_gain_r = voice_runtime[voice_index].gain_r;
-  assign cfg_envelope_level = voice_runtime[voice_index].envelope_level;
-  assign cfg_loop_mode = voice_config[voice_index].loop_mode;
-  assign cfg_released = voice_runtime[voice_index].released;
-  assign cfg_filter_enable = voice_runtime[voice_index].filter_enable;
-  assign cfg_filter_b0 = voice_runtime[voice_index].filter_b0;
-  assign cfg_filter_b1 = voice_runtime[voice_index].filter_b1;
-  assign cfg_filter_b2 = voice_runtime[voice_index].filter_b2;
-  assign cfg_filter_a1 = voice_runtime[voice_index].filter_a1;
-  assign cfg_filter_a2 = voice_runtime[voice_index].filter_a2;
-  assign current_phase = frame_commit[voice_index] ? voice_config[voice_index].phase_init : phase[voice_index];
+  assign voice_read_index = voice_index;
+  assign cfg_enable = voice_config.enable;
+  assign cfg_stereo = voice_config.stereo;
+  assign cfg_base_addr = voice_config.base_addr;
+  assign cfg_base_addr_r = voice_config.base_addr_r;
+  assign cfg_length = voice_config.length;
+  assign cfg_loop_start = voice_config.loop_start;
+  assign cfg_loop_end = voice_config.loop_end;
+  assign cfg_phase_inc = voice_runtime.phase_inc;
+  assign cfg_gain_l = voice_runtime.gain_l;
+  assign cfg_gain_r = voice_runtime.gain_r;
+  assign cfg_envelope_level = voice_runtime.envelope_level;
+  assign cfg_loop_mode = voice_config.loop_mode;
+  assign cfg_released = voice_runtime.released;
+  assign cfg_filter_enable = voice_runtime.filter_enable;
+  assign cfg_filter_b0 = voice_runtime.filter_b0;
+  assign cfg_filter_b1 = voice_runtime.filter_b1;
+  assign cfg_filter_b2 = voice_runtime.filter_b2;
+  assign cfg_filter_a1 = voice_runtime.filter_a1;
+  assign cfg_filter_a2 = voice_runtime.filter_a2;
+  assign current_phase = frame_commit[voice_index] ? voice_config.phase_init : phase[voice_index];
 
   always_comb begin
     phase_sum = {1'b0, current_phase} + {1'b0, cfg_phase_inc};
@@ -324,15 +326,23 @@ module multi_voice_pipeline (
             accum_r <= 32'sd0;
             frame_commit <= config_commit;
             voice_index <= '0;
-            state <= START_VOICE;
+            state <= READ_VOICE;
           end
+        end
+        READ_VOICE: begin
+          state <= WAIT_VOICE;
+        end
+        WAIT_VOICE: begin
+          state <= START_VOICE;
         end
         START_VOICE: begin
           if (!cfg_enable || !config_valid[voice_index] || voice_done) begin
             if (voice_index == LAST_VOICE)
               state <= FINISH;
-            else
+            else begin
               voice_index <= voice_index + 1'b1;
+              state <= READ_VOICE;
+            end
           end else begin
             if (frame_commit[voice_index]) begin
               filter_z1_l[voice_index] <= '0;
@@ -419,7 +429,7 @@ module multi_voice_pipeline (
             state <= FINISH;
           else begin
             voice_index <= voice_index + 1'b1;
-            state <= START_VOICE;
+            state <= READ_VOICE;
           end
         end
         FINISH: begin

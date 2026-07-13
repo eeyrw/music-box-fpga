@@ -4,10 +4,10 @@ The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
 single-beat and 32-bit aligned. The 32-bit data word is the bus container; many
 fields are narrower and explicitly define which bits are meaningful. Wave-memory
 base addresses are 32-bit word addresses. Writes to configuration registers
-update per-voice shadow state. `COMMIT` stages the shadow configuration to be
-copied into active state atomically at the next accepted output-frame boundary.
-Writes to runtime registers do not require `COMMIT`, update live runtime state
-directly, and do not reload playback phase.
+update per-voice shadow state. `COMMIT` copies the selected shadow configuration
+into renderer-facing active storage and stages a render-boundary commit pulse for
+phase reload and filter-history clear. Writes to runtime registers do not require
+`COMMIT`, update live runtime state directly, and do not reload playback phase.
 
 `spi_register_bridge` exposes this same register bus through a simple 56-bit SPI
 frame: 8-bit command, 16-bit byte address, then 32-bit data phase. Command bit 7
@@ -36,7 +36,7 @@ register_addr    = voice_base(slot) + offset
 | `0x18` | PHASE_INC | unsigned Q24.8 frames per output sample |
 | `0x1c` | GAIN_L | signed Q1.15 in bits 15:0 |
 | `0x20` | GAIN_R | signed Q1.15 in bits 15:0 |
-| `0x24` | COMMIT | write bit 0 as one to atomically activate this voice slot |
+| `0x24` | COMMIT | write bit 0 as one to activate this voice slot and stage render-boundary reload |
 | `0x28` | STATUS | bit 0 configuration valid for this voice slot |
 | `0x2c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
 | `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q24.8 phase increment |
@@ -68,13 +68,16 @@ The maximum represented region length is `0x00ff_ffff` frames.
 
 Configuration registers are `CONTROL`, `BASE_ADDR`, `BASE_ADDR_R`, `LENGTH`,
 `LOOP_START`, `LOOP_END`, `PHASE_INIT`, `PHASE_INC`, `GAIN_L`, `GAIN_R`,
-`LOOP_MODE`, and the filter registers. Reads from these addresses return the shadow
-configuration, so software can inspect pending writes before commit.
+`LOOP_MODE`, and the filter registers. The resource-optimized register bank does
+not preserve per-voice writeback read data for these addresses; reads from
+per-voice configuration and runtime data registers return zero except for
+`STATUS`. Software should treat this map as write-dominant and maintain any
+needed mirror state on the host side.
 
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter writes also update runtime filter state so low-rate
 controller changes can take effect without a phase reload. Reads from runtime
-registers return the live runtime value unless otherwise noted.
+registers are not a live-state inspection path in the resource-optimized RTL.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a
@@ -120,11 +123,12 @@ smallest useful actions are below.
 ### Note On
 
 For a new note, write the runtime envelope first, then write the shadow
-configuration, then commit. `COMMIT` stages the shadow configuration for active
-state, stages `PHASE_INC` and `GAIN_L/R` into runtime pitch/gain, clears the
-staged `RELEASE_CONTROL.released`, and requests phase reload from `PHASE_INIT`
-plus filter-history clear. Those staged changes become visible together at the
-next accepted output-frame boundary.
+configuration, then commit. `COMMIT` updates the active renderer configuration,
+stages `PHASE_INC` and `GAIN_L/R` into runtime pitch/gain, clears the staged
+`RELEASE_CONTROL.released`, and requests phase reload from `PHASE_INIT` plus
+filter-history clear at the next accepted output-frame boundary. Software should
+not depend on a committed voice being rendered before that boundary pulse has
+been accepted.
 
 Minimal mono no-loop Note On for `slot`:
 

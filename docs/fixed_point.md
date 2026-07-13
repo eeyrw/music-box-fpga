@@ -72,11 +72,12 @@ the final mixed output sample.
 
 ## Current Voice Render Calculation
 
-At each accepted `sample_tick`, the register bank publishes pending committed
-configuration to the active voice array. Runtime registers are live state; the
-renderer samples each voice's runtime values when that voice is accepted for the
-current render. The renderer then scans voice slots in index order and
-accumulates each enabled, valid, not-completed voice into one stereo output.
+At each accepted `sample_tick`, the renderer scans active voice slots in index
+order. Committed configuration is stored in renderer-facing active storage, while
+runtime registers remain live state. The renderer reads one voice snapshot at a
+time through the register bank's synchronous read path and samples runtime values
+when that voice is accepted for the current render. It accumulates each enabled,
+valid, not-completed voice into one stereo output.
 
 For each contributing voice:
 

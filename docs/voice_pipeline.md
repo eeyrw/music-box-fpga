@@ -107,7 +107,9 @@ Current state sequence:
 
 | Stage | Purpose | Main registered outputs |
 | --- | --- | --- |
-| `IDLE` | Wait for `sample_tick`. | Clears `accum_l/r`, selects voice 0, enters `START_VOICE`. |
+| `IDLE` | Wait for `sample_tick`. | Clears `accum_l/r`, selects voice 0, enters `READ_VOICE`. |
+| `READ_VOICE` | Present `voice_read_index` to the register bank and runtime filter coefficient RAM. | Holds `voice_index` stable for synchronous storage reads. |
+| `WAIT_VOICE` | Wait one cycle for synchronous RAM-backed fields to reach the register-bank render outputs. | Holds `voice_index` stable before `START_VOICE` samples `voice_config` and `voice_runtime`. |
 | `START_VOICE` | Qualify the current voice, snapshot render config, calculate endpoint frame numbers, and advance phase. | `current_*` config snapshot, `frame_0`, `frame_1`, `fraction`, updated `phase[voice_index]`. |
 | `REQ_L0` | Issue left or mono endpoint-0 memory request. | Memory request address for `frame_0`. |
 | `WAIT_L0` | Wait for endpoint-0 response. | `raw_l0`. |
@@ -130,16 +132,19 @@ samples into the right-channel raw registers.
 
 ## Config Snapshot
 
-At the start of each output sample render, `voice_register_bank` publishes
-pending committed configuration into the active configuration array observed by
-the pipeline. `wavetable_core` only asserts that frame boundary when
-`sample_tick` arrives while the pipeline is idle, so commits cannot change
-configuration in the middle of a render. Runtime registers are live state and are
+The render pipeline drives a single `voice_read_index`, and the register bank
+returns only that voice's active configuration and runtime control snapshot. The
+scheduler uses `READ_VOICE` and `WAIT_VOICE` before `START_VOICE` so synchronous
+BRAM-backed fields, currently active configuration and runtime filter
+coefficients, are stable before they are captured. `wavetable_core` only asserts
+the frame-boundary input when `sample_tick` arrives while the pipeline is idle;
+that boundary pulse reloads committed phase and clears filter history for voices
+that were committed by the register bus. Runtime registers are live state and are
 sampled when `START_VOICE` accepts each voice. The pipeline latches only the
-per-frame commit bitmap; it no longer duplicates the full `voice_config` and
-`voice_runtime` arrays.
+per-frame commit bitmap; it does not receive or duplicate the full `voice_config`
+and `voice_runtime` arrays.
 
-`START_VOICE` reads the stable active arrays to decide whether a voice is
+`START_VOICE` reads the selected stable active entry to decide whether a voice is
 enabled, whether it is valid, whether it is done, and which phase/frame addresses
 should be rendered. Once a voice is accepted, the fields needed by later stages
 are copied into local `current_*` registers:
@@ -157,10 +162,9 @@ output sample is being rendered may affect voices that have not yet reached
 `START_VOICE`; they do not affect a voice after its `current_*` registers have
 been captured.
 
-This does not change the external commit contract for configuration registers.
-Configuration writes still update shadow state, commits still atomically stage
-shadow state for active configuration, and a commit still reloads phase and
-clears filter state at a render-safe frame boundary. Runtime writes such as
+Configuration writes still update shadow state. `COMMIT` writes the selected
+shadow entry into active configuration storage immediately and stages a
+frame-boundary reload/clear pulse for the renderer. Runtime writes such as
 envelope, gain, pitch, release, and runtime filter updates do not reload phase.
 The `START_VOICE` capture defines the per-voice render context for the in-flight
 output sample.
@@ -187,17 +191,21 @@ same `voice_index` that produced the interpolated sample.
 
 ## Latency Impact
 
-All enabled voices add three deterministic compute cycles after endpoint fetch:
-`INTERPOLATE`, `FILTER`, and `GAIN` before `ACCUMULATE`. The latency is hidden
-behind the existing `sample_valid` completion handshake, and output sample values
-remain numerically equivalent at the completed `sample_valid` boundary.
+All scanned voices spend two scheduler cycles in `READ_VOICE`/`WAIT_VOICE` before
+`START_VOICE`, which allows synchronous RAM-backed register-bank fields to be
+used without changing the external render contract. All enabled voices then add
+three deterministic compute cycles after endpoint fetch: `INTERPOLATE`, `FILTER`,
+and `GAIN` before `ACCUMULATE`. The latency is hidden behind the existing
+`sample_valid` completion handshake, and output sample values remain numerically
+equivalent at the completed `sample_valid` boundary.
 
-The regression latency guard for the 32-voice mono render case is now 400 cycles.
-This is a structural regression limit, not a board-level real-time deadline. It
-allows the fixed multi-stage compute pipeline while still catching accidental
+The regression latency guard for the 32-voice mono render case is now
+`400 + NUM_VOICES` cycles. This is a structural regression limit, not a
+board-level real-time deadline. It allows the fixed multi-stage compute pipeline
+plus the synchronous register-bank read cycle while still catching accidental
 large latency regressions in the scheduler or memory handshake. On the current
-simulation memory model, the all-voice multi-stage path has been observed around
-353 cycles for the 32-voice mono case.
+simulation memory model, the all-voice path has been observed around 417 cycles
+for the 32-voice mono case.
 
 ## Timing Benefit
 
@@ -377,7 +385,7 @@ Potential next steps, in increasing complexity:
 4. Rework the memory subsystem for paired endpoint reads or cache-line extraction
    that returns both interpolation endpoints for common sequential access.
 
-## Resource Optimization Backlog
+## Resource Optimization Notes
 
 The first Artix-7 resource pass removed the full per-frame `voice_config` and
 `voice_runtime` array copies from this module. A later pass changed playback to
@@ -386,18 +394,53 @@ per-voice biquad `z1/z2` state to signed 48 bits, split shadow and active
 configuration structs, and removed the duplicate pending runtime-state array.
 With the Smart Artix MIG synthesis wrapper, that reduced post-synthesis register
 use to about `39013 / 65200` registers, but LUT use rose to about
-`26475 / 32600` LUTs. Remaining resource pressure is now concentrated in the
+`26475 / 32600` LUTs. Remaining resource pressure was concentrated in the
 control-state storage and large per-voice mux networks in `voice_register_bank`.
+
+The first voice-bank storage pass changed the renderer-facing interface from
+whole-array exports to an indexed read port. `multi_voice_pipeline` drives
+`voice_read_index`, and `voice_register_bank` returns only `render_config` and
+`render_runtime` for that voice. The intermediate implementation kept the
+selected read combinational and split shadow, active, and runtime fields into
+per-field arrays with distributed-RAM synthesis attributes. That removed the
+cross-module exposure of full active/runtime tables but did not infer RAM for the
+wide selected fields.
+
+Post-synthesis check on Vivado 2018.3 for Smart Artix (`xc7a50tfgg484-2`) showed
+that this combinational-read version did not materially reduce the board resource
+pressure. The earlier 2026-07-13 synthesis run reported `26503 / 32600` slice
+LUTs, `39017 / 65200` slice registers, `565` LUTs as memory, and `26 / 120` DSPs.
+The final distributed-RAM mapping report only identified the output FIFO RAMs,
+not the wide `voice_register_bank` fields.
+
+The next passes introduced a reusable `voice_bram_1r1w` synchronous RAM template
+and moved the two widest renderer-facing voice-bank groups into inferred Block
+RAM:
+
+- `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
+- `active_config_ram`: `32 x 172` committed active voice configuration.
+
+`COMMIT` now writes the selected active-config BRAM entry directly. The
+frame-boundary pulse is still used by the renderer to reload phase and clear
+filter history, but the active config storage itself no longer needs a multi-voice
+frame-boundary copy. Per-voice configuration/runtime readback data was also
+removed from the register bus; only `STATUS` and `VERSION` remain meaningful read
+paths. This avoids keeping large readback muxes solely for software inspection.
+
+Vivado 2018.3 final mapping now reports two Block RAM objects:
+`32 x 160` and `32 x 172`, each using `RAMB18E1 x1` plus `RAMB36E1 x2`. The
+latest Smart Artix synthesis run reports `14394 / 32600` slice LUTs,
+`23165 / 65200` slice registers, `725` LUTs as memory, `5 / 75` Block RAM tiles,
+and `26 / 120` DSPs. Post-synthesis timing is still not closed with WNS
+`-10.650 ns`, so this storage change fixes the major voice-bank resource pressure
+but not the remaining DSP/timing architecture.
 
 Recommended next optimization order:
 
-1. Move wide, low-rate voice control fields out of flip-flop arrays. Good
-   candidates are base addresses, 24-bit length/loop points, phase increments,
-   gains, and filter coefficients. Keep small hot flags such as enable, valid,
-   released, and pending commit in flops; move wider fields toward LUTRAM or true
-   RAM while preserving commit-at-frame-boundary semantics. This is now more
-   important than shrinking bit widths because the latest synthesis is LUT-bound,
-   not FF-bound.
+1. Consider moving runtime pitch/gain/envelope/release/filter-enable into another
+   packed synchronous RAM only if the register bus is allowed to perform multi-
+   cycle read-modify-write transactions. Keeping single-cycle partial updates for
+   those fields requires mirror state and weakens the BRAM resource win.
 2. If the filter must stay enabled, move it to a multi-cycle shared DSP block.
    The current left/right biquad evaluation still expands many multiplies in one
    state. A fixed-latency filter unit with explicit valid timing should reduce
@@ -410,6 +453,6 @@ Recommended next optimization order:
    available, add focused pipeline stages on the reported multiply/accumulate
    paths instead of changing constraints to hide them.
 
-Do not merge these optimizations with interface changes. Each item should keep
-the register map and output-frame update contract stable unless the matching
-documentation and tests are updated in the same change.
+Do not merge these optimizations with external register-map or output-contract
+changes unless the matching documentation and tests are updated in the same
+change.
