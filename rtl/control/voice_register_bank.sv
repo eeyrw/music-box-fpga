@@ -18,8 +18,8 @@ module voice_register_bank (
   import synth_pkg::*;
 
   // Byte addresses for the simple 32-bit register bus. Configuration writes
-  // update shadow_config first; only OFF_COMMIT stages that state for the next
-  // frame boundary. Runtime registers update the live runtime state directly.
+  // update shadow state first; commit strobes copy coherent groups into the
+  // renderer-facing active/runtime state.
   localparam logic [15:0] VOICE_BASE      = 16'h0100;
   localparam logic [15:0] VOICE_STRIDE    = 16'h0080;
   localparam logic [15:0] VOICE_LIMIT     = 16'(NUM_VOICES * VOICE_STRIDE);
@@ -57,6 +57,7 @@ module voice_register_bank (
   localparam int FILTER_B2_LSB = 64;
   localparam int FILTER_A1_LSB = 32;
   localparam int FILTER_A2_LSB = 0;
+  localparam int FILTER_COMMIT_BIT = 31;
   localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
     32'sh1000_0000,
     32'sh0000_0000,
@@ -142,11 +143,8 @@ module voice_register_bank (
   end
 
   assign runtime_filter_write = bus_valid && bus_write && voice_address &&
-                                ((selected_offset == OFF_FILTER_B0) ||
-                                 (selected_offset == OFF_FILTER_B1) ||
-                                 (selected_offset == OFF_FILTER_B2) ||
-                                 (selected_offset == OFF_FILTER_A1) ||
-                                 (selected_offset == OFF_FILTER_A2));
+                                (((selected_offset == OFF_FILTER_CTL) && bus_wdata[FILTER_COMMIT_BIT]) ||
+                                 ((selected_offset == OFF_COMMIT) && bus_wdata[0]));
 
   assign active_config_bus_word = pack_active_config(
     shadow_enable[selected_voice],
@@ -350,7 +348,9 @@ module voice_register_bank (
           end
           OFF_FILTER_CTL: begin
             shadow_filter_enable[selected_voice] <= bus_wdata[0];
-            runtime_filter_enable[selected_voice] <= bus_wdata[0];
+            if (bus_wdata[FILTER_COMMIT_BIT]) begin
+              runtime_filter_enable[selected_voice] <= bus_wdata[0];
+            end
           end
           OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1, OFF_FILTER_A2: begin
             shadow_filter_coeff[selected_voice] <= shadow_filter_wdata;

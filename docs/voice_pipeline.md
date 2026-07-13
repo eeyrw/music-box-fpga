@@ -420,12 +420,16 @@ RAM:
 - `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
 - `active_config_ram`: `32 x 172` committed active voice configuration.
 
-`COMMIT` now writes the selected active-config BRAM entry directly. The
-frame-boundary pulse is still used by the renderer to reload phase and clear
-filter history, but the active config storage itself no longer needs a multi-voice
-frame-boundary copy. Per-voice configuration/runtime readback data was also
-removed from the register bus; only `STATUS` and `VERSION` remain meaningful read
-paths. This avoids keeping large readback muxes solely for software inspection.
+`COMMIT` now writes the selected active-config BRAM entry directly and also copies
+the shadow filter coefficient group into runtime filter BRAM for new-note setup.
+For active voices, `FILTER_CONTROL[31]` commits the complete shadow filter group
+to runtime filter BRAM as one packed `160` bit word, avoiding mixed old/new IIR
+coefficients. The frame-boundary pulse is still used by the renderer to reload
+phase and clear filter history on voice commit, but the active config storage
+itself no longer needs a multi-voice frame-boundary copy. Per-voice
+configuration/runtime readback data was also removed from the register bus; only
+`STATUS` and `VERSION` remain meaningful read paths. This avoids keeping large
+readback muxes solely for software inspection.
 
 Vivado 2018.3 final mapping now reports two Block RAM objects:
 `32 x 160` and `32 x 172`, each using `RAMB18E1 x1` plus `RAMB36E1 x2`. The

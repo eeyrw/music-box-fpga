@@ -506,7 +506,8 @@ Current SF2 support:
 - Modulation and vibrato LFO generators `delayModLFO`, `freqModLFO`,
   `delayVibLFO`, and `freqVibLFO`, plus routing generators
   `modLfoToPitch`, `vibLfoToPitch`, and `modLfoToFilterFc`. The C++ MCU model
-  advances them once per ADSR tick and writes runtime phase/filter registers.
+  advances them once per ADSR tick and writes runtime phase plus committed filter
+  control updates.
 - Modulation-envelope `delayModEnv`, `attackModEnv`, `holdModEnv`,
   `decayModEnv`, `sustainModEnv`, `releaseModEnv`, `keynumToModEnvHold`, and
   `keynumToModEnvDecay`, plus `modEnvToPitch` and `modEnvToFilterFc` routing.

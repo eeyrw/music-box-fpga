@@ -142,8 +142,9 @@ The hardware contract is register-level:
 - Note On writes wave address or linked-stereo addresses, length, loop range, phase increment, gains,
   runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
-- Runtime gain, pitch, release, and filter updates do not reload phase and update
-  the runtime state sampled by the renderer when it accepts each voice snapshot.
+- Runtime gain, pitch, release, and committed filter updates do not reload phase
+  and update the runtime state sampled by the renderer when it accepts each voice
+  snapshot.
 - Note Off for loop-until-release samples writes the runtime released flag and
   then continues envelope release updates.
 - When release reaches zero, software clears `CONTROL.enable` and commits the
