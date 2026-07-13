@@ -51,6 +51,8 @@ register_addr    = voice_base(slot) + offset
 | `0x54` | RELEASE_CONTROL | bit 0 released runtime flag |
 | `0x58` | BASE_ADDR_R | right-channel 16-bit-word memory address |
 | `0x3000` | VERSION | design version, currently `0x0004_0000` |
+| `0x3004` | READBACK_ADDR | write a 16-bit register address to sample through the readback window |
+| `0x3008` | READBACK_DATA | read sampled 32-bit data for `READBACK_ADDR` |
 
 A configuration is valid when `length != 0`. `length`, `loop_start`, and
 `loop_end` are 24-bit frame counts. Looping modes additionally require
@@ -71,14 +73,25 @@ Configuration registers are `CONTROL`, `BASE_ADDR`, `BASE_ADDR_R`, `LENGTH`,
 `LOOP_MODE`, and the filter registers. The resource-optimized register bank does
 not preserve per-voice writeback read data for these addresses; reads from
 per-voice configuration and runtime data registers return zero except for
-`STATUS`. Software should treat this map as write-dominant and maintain any
-needed mirror state on the host side.
+`STATUS`. To inspect per-voice state over SPI, write the target 16-bit register
+address to `READBACK_ADDR`, then read `READBACK_DATA`. This readback window is a
+debug and inspection path; control software should still treat the main per-voice
+map as write-dominant and maintain host-side mirror state for normal operation.
 
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter coefficient and control writes update shadow filter
 state; writing `FILTER_CONTROL` with bit 31 set commits the complete shadow
 filter group to runtime without a phase reload. Reads from runtime registers are
-not a live-state inspection path in the resource-optimized RTL.
+not a live-state inspection path in the resource-optimized RTL unless accessed
+through `READBACK_ADDR` and `READBACK_DATA`.
+
+`READBACK_ADDR` accepts the same 16-bit addresses used by the register map. The
+sampled value is captured when `READBACK_ADDR` is written and remains stable until
+the next readback-address write. For per-voice configuration and filter
+registers, the sampled value is the shadow state. For `ENVELOPE_LEVEL`,
+`PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and `RELEASE_CONTROL`, the sampled value is
+the live runtime scalar state. `STATUS` and `VERSION` can be read either directly
+or through the readback window. Unsupported readback addresses return zero.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a

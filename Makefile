@@ -2,6 +2,8 @@ VERILATOR ?= verilator
 BUILD_DIR := build
 TOP := tb_wavetable_core
 NUM_VOICES ?= 32
+VERILATOR_JOBS ?= -j 0
+MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
 
@@ -25,6 +27,7 @@ RTL_SOURCES := \
 	rtl/bus/register_bus_if.sv \
 	rtl/bus/spi_register_bridge.sv \
 	rtl/control/voice_bram_1r1w.sv \
+	rtl/control/voice_bram_1w2r.sv \
 	rtl/control/voice_register_bank.sv \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/dsp/linear_interpolator.sv \
@@ -84,19 +87,19 @@ test:
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
 	# Build and run the self-checking synthetic-data regression.
-	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
 		$(RTL_SOURCES) $(SIM_SOURCES)
 	$(BUILD_DIR)/obj_dir/V$(TOP)
-	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
 		$(RTL_SOURCES) $(SPI_SIM_SOURCES)
 	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
-	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
 		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
-	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
@@ -119,7 +122,7 @@ render-instrument:
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--out-dir $(BUILD_DIR)/render
 	# 2. Build and execute the render testbench against the generated memory.
-	$(VERILATOR) $(RTL_DEFINES) --binary --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		-I$(BUILD_DIR)/render --Mdir $(BUILD_DIR)/render_obj_dir \
 		--top-module tb_render_wavetable_core \
 		$(RTL_SOURCES) sim/models/line_memory_model.sv sim/tb/tb_render_wavetable_core.sv
@@ -142,7 +145,7 @@ render-quick:
 		$(abspath sim/harness/reference_synth.cpp) \
 		$(abspath sim/harness/quick_rtl_harness.cpp) \
 		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
-	$(MAKE) -C $(BUILD_DIR)/render_quick_cpp_obj_dir -f Vwavetable_core.mk \
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_quick_cpp_obj_dir -f Vwavetable_core.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
@@ -164,7 +167,7 @@ render-memory:
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/rtl_harness.cpp) \
 		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
-	$(MAKE) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_core_memory.mk \
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_core_memory.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_core_memory --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
@@ -186,7 +189,7 @@ render-full-system:
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/full_system_harness.cpp) \
 		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
-	$(MAKE) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_core_system.mk \
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_core_system.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_core_system --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \

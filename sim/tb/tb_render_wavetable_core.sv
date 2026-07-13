@@ -86,13 +86,16 @@ module tb_render_wavetable_core;
 
   task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
     // Program one register write through the same bus interface used by the
-    // self-checking testbench. A failed write aborts the render immediately.
+    // self-checking testbench. Commit writes can hold ready low while shadow
+    // BRAM is read into active state.
     @(negedge clk);
     bus_valid = 1'b1;
     bus_write = 1'b1;
     bus_address = address;
     bus_wdata = data;
-    @(negedge clk);
+    do begin
+      @(negedge clk);
+    end while (!bus_ready);
     if (!bus_ready || bus_error)
       $fatal(1, "bus write failed at 0x%04x", address);
     bus_valid = 1'b0;

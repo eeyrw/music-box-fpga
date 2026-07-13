@@ -138,24 +138,27 @@ Timing WNS: -0.725 ns at 49.152 MHz
 ```
 
 Current post-synthesis result after the Q24.8 phase change, 48-bit filter state,
-active/shadow config split, direct runtime state update, and BRAM-backed active
-configuration plus runtime filter coefficients, using the generated MIG and clock
-wizard:
+active/shadow config split, staged readback, and BRAM-backed active
+configuration/runtime filter/runtime scalar storage, using the generated MIG and
+clock wizard:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
-Slice LUTs: 14394 / 32600, 44.15%
-Slice registers: 23165 / 65200, 35.53%
+Slice LUTs: 9891 / 32600, 30.34%
+Slice registers: 13373 / 65200, 20.51%
 DSP48E1: 26 / 120, 21.67%
-Block RAM tiles: 5 / 75, 6.67%
+Block RAM tiles: 9 / 75, 12.00%
 Timing WNS: -10.650 ns, WHS: -1.329 ns on clk_pll_i
 ```
 
 The latest pass confirms that the largest voice-register-bank muxes have been
 removed: active configuration is stored as a `32 x 172` BRAM-backed word and
-runtime filter coefficients as a `32 x 160` BRAM-backed word. Per-voice
-configuration/runtime readback was intentionally dropped from the resource-
-optimized register bank; software should mirror write state on the host side.
+runtime filter coefficients as a `32 x 160` BRAM-backed word. Runtime phase
+increment, gain, and envelope state are stored in narrow true-dual-port RAM banks
+so readback does not steal the renderer read port. Direct per-voice
+configuration/runtime readback was intentionally removed from the main register
+path; low-rate inspection now uses the staged readback window, and software
+should still mirror write state on the host side for normal operation.
 
 This timing result is still an early warning, not a final board result. The next
 timing work is to run implementation after real pins and clocking are known, then

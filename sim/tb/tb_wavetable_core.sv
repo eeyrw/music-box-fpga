@@ -74,14 +74,16 @@ module tb_wavetable_core;
   );
 
   task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
-    // The register bus is single-beat: present valid/write/address/data for one
-    // cycle, then verify the slave accepted it without an address error.
+    // Hold the request until the register bank accepts it. Most writes complete
+    // in one cycle; commit writes may take longer while shadow BRAM is read.
     @(negedge clk);
     bus_valid = 1'b1;
     bus_write = 1'b1;
     bus_address = address;
     bus_wdata = data;
-    @(negedge clk);
+    do begin
+      @(negedge clk);
+    end while (!bus_ready);
     if (!bus_ready || bus_error) begin
       $error("bus write failed at 0x%04x", address);
       errors++;
@@ -96,7 +98,9 @@ module tb_wavetable_core;
     bus_write = 1'b0;
     bus_address = address;
     bus_wdata = '0;
-    @(negedge clk);
+    do begin
+      @(negedge clk);
+    end while (!bus_ready);
     if (!bus_ready || bus_error) begin
       $error("bus read failed at 0x%04x", address);
       errors++;

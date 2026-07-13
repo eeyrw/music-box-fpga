@@ -189,11 +189,12 @@ the generic RTL to one vendor flow.
    tests on steady-state deadline misses, underruns, or sample drops.
 
 2. Continue voice-control storage reduction where it is worth the protocol cost.
-   The latest register-bank pass moved active configuration and runtime filter
-   coefficients into inferred Block RAM and removed large per-voice readback
-   muxes. Further savings for runtime pitch, gain, envelope, release, and filter
-   enable likely require multi-cycle read-modify-write behavior or wider bus
-   writes, so those should be handled only if post-implementation resource or
+   The latest register-bank passes moved active configuration, shadow register
+   state, runtime filter coefficients, and runtime phase/gain/envelope state into
+   inferred RAM and removed large direct per-voice readback muxes from the main
+   bus path. The staged readback window preserves low-rate inspection without
+   restoring the old direct mux. Further savings for one-bit runtime release and
+   filter-enable state should be handled only if post-implementation resource or
    timing data justifies the added control complexity.
 
 3. Design a wavetable-optimized memory subsystem.

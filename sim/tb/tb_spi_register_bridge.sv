@@ -123,6 +123,11 @@ module tb_spi_register_bridge;
     end
   endtask
 
+  task automatic expect_readback(input logic [15:0] address, input logic [31:0] expected);
+    spi_write_word(16'h3004, {16'd0, address});
+    expect_read(16'h3008, expected);
+  endtask
+
   task automatic publish_frame_boundary;
     @(negedge clk);
     frame_boundary = 1'b1;
@@ -148,16 +153,26 @@ module tb_spi_register_bridge;
       errors++;
     end
     expect_read(16'h3000, 32'h0004_0000);
+    expect_read(16'h0104, 32'h0000_0000);
+    expect_readback(16'h0104, 32'h1234_5678);
 
     spi_write_word(16'h0108, 32'h0000_0004);
+    spi_write_word(16'h012c, 32'h0000_4000);
+    spi_write_word(16'h0138, 32'h0000_0001);
+    spi_write_word(16'h013c, 32'h0800_0000);
     spi_write_word(16'h0134, 32'h0000_0000);
     spi_write_word(16'h0124, 32'h0000_0001);
+    expect_readback(16'h0108, 32'h0000_0004);
+    expect_readback(16'h012c, 32'h0000_4000);
+    expect_readback(16'h0138, 32'h0000_0001);
+    expect_readback(16'h013c, 32'h0800_0000);
     publish_frame_boundary();
     @(negedge clk);
     if (!config_valid[0] || (render_config.length !== 24'd4)) begin
       $error("SPI commit did not update active voice configuration");
       errors++;
     end
+    expect_readback(16'h0128, 32'h0000_0001);
     if (^commit_pulse === 1'bx) begin
       $error("commit_pulse contains unknown bits");
       errors++;

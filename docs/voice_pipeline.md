@@ -135,8 +135,8 @@ samples into the right-channel raw registers.
 The render pipeline drives a single `voice_read_index`, and the register bank
 returns only that voice's active configuration and runtime control snapshot. The
 scheduler uses `READ_VOICE` and `WAIT_VOICE` before `START_VOICE` so synchronous
-BRAM-backed fields, currently active configuration and runtime filter
-coefficients, are stable before they are captured. `wavetable_core` only asserts
+BRAM-backed fields, including active configuration, runtime phase/gain/envelope,
+and runtime filter coefficients, are stable before they are captured. `wavetable_core` only asserts
 the frame-boundary input when `sample_tick` arrives while the pipeline is idle;
 that boundary pulse reloads committed phase and clears filter history for voices
 that were committed by the register bus. Runtime registers are live state and are
@@ -417,8 +417,14 @@ The next passes introduced a reusable `voice_bram_1r1w` synchronous RAM template
 and moved the two widest renderer-facing voice-bank groups into inferred Block
 RAM:
 
-- `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
 - `active_config_ram`: `32 x 172` committed active voice configuration.
+- `runtime_phase_ram`: `32 x 32` runtime phase increments with independent
+  renderer and readback read ports.
+- `runtime_gain_ram`: `32 x 32` packed runtime left/right gains with independent
+  renderer and readback read ports.
+- `runtime_envelope_ram`: `32 x 16` runtime envelope levels with independent
+  renderer and readback read ports.
+- `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
 
 `COMMIT` now writes the selected active-config BRAM entry directly and also copies
 the shadow filter coefficient group into runtime filter BRAM for new-note setup.
@@ -427,24 +433,24 @@ to runtime filter BRAM as one packed `160` bit word, avoiding mixed old/new IIR
 coefficients. The frame-boundary pulse is still used by the renderer to reload
 phase and clear filter history on voice commit, but the active config storage
 itself no longer needs a multi-voice frame-boundary copy. Per-voice
-configuration/runtime readback data was also removed from the register bus; only
-`STATUS` and `VERSION` remain meaningful read paths. This avoids keeping large
-readback muxes solely for software inspection.
+configuration/runtime readback data was also removed from the direct per-voice
+register bus path; only `STATUS` and `VERSION` remain meaningful direct read
+paths. Software inspection uses the staged `READBACK_ADDR`/`READBACK_DATA` window
+instead of direct per-field reads, avoiding the large combinational readback mux
+on the main register path.
 
-Vivado 2018.3 final mapping now reports two Block RAM objects:
-`32 x 160` and `32 x 172`, each using `RAMB18E1 x1` plus `RAMB36E1 x2`. The
-latest Smart Artix synthesis run reports `14394 / 32600` slice LUTs,
-`23165 / 65200` slice registers, `725` LUTs as memory, `5 / 75` Block RAM tiles,
-and `26 / 120` DSPs. Post-synthesis timing is still not closed with WNS
+Vivado 2018.3 recognizes the active, shadow, runtime filter, and runtime scalar
+storage as RAM templates. The latest Smart Artix synthesis run reports
+`9891 / 32600` slice LUTs, `13373 / 65200` slice registers, `565` LUTs as
+memory, `9 / 75` Block RAM tiles, and `26 / 120` DSPs. Post-synthesis timing is still not closed with WNS
 `-10.650 ns`, so this storage change fixes the major voice-bank resource pressure
 but not the remaining DSP/timing architecture.
 
 Recommended next optimization order:
 
-1. Consider moving runtime pitch/gain/envelope/release/filter-enable into another
-   packed synchronous RAM only if the register bus is allowed to perform multi-
-   cycle read-modify-write transactions. Keeping single-cycle partial updates for
-   those fields requires mirror state and weakens the BRAM resource win.
+1. Consider whether runtime release and filter-enable bits are worth moving out
+   of flip-flops. They are only one bit per voice, so the likely win is small
+   compared with the extra read-modify-write and readback complexity.
 2. If the filter must stay enabled, move it to a multi-cycle shared DSP block.
    The current left/right biquad evaluation still expands many multiplies in one
    state. A fixed-latency filter unit with explicit valid timing should reduce
