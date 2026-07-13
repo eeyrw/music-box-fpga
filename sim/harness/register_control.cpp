@@ -26,6 +26,7 @@ void RegisterVoiceControl::set_filter(int voice, const FilterConfig& filter) {
   registers_.write_register(voice_addr(voice, kRegFilterB2), uint32_t(filter.b2));
   registers_.write_register(voice_addr(voice, kRegFilterA1), uint32_t(filter.a1));
   registers_.write_register(voice_addr(voice, kRegFilterA2), uint32_t(filter.a2));
+  registers_.write_register(voice_addr(voice, kRegFilterCommit), 1);
 }
 
 void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {

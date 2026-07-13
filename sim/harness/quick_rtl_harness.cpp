@@ -108,12 +108,17 @@ std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
 }
 
 void QuickRtlHarness::write_register(uint16_t address, uint32_t data) {
+  constexpr int kBusTimeoutCycles = 1000;
   note_register_write(register_write_stats_, address);
   top_->bus_valid = 1;
   top_->bus_write = 1;
   top_->bus_address = address;
   top_->bus_wdata = data;
-  tick();
+  int waited = 0;
+  while (!top_->bus_ready && waited < kBusTimeoutCycles) {
+    tick();
+    ++waited;
+  }
   if (!top_->bus_ready || top_->bus_error) {
     throw std::runtime_error("quick RTL bus write failed at address 0x" + hex16(address));
   }

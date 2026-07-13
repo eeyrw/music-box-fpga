@@ -43,6 +43,7 @@ constexpr int kRegFilterA2 = 0x4c;
 constexpr int kRegGainRuntime = 0x50;
 constexpr int kRegReleaseControl = 0x54;
 constexpr int kRegBaseAddrR = 0x58;
+constexpr int kRegFilterCommit = 0x5c;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
@@ -243,6 +244,7 @@ inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
     case kRegFilterB2:
     case kRegFilterA1:
     case kRegFilterA2:
+    case kRegFilterCommit:
       ++stats.filter;
       break;
     case kRegCommit:

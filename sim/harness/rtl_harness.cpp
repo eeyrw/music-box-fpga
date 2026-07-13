@@ -87,15 +87,19 @@ void RtlHarness::reset() {
 }
 
 void RtlHarness::write_register(uint16_t address, uint32_t data) {
+  constexpr int kBusTimeoutCycles = 1000;
   note_register_write(register_write_stats_, address);
-  // The register bus is a single-cycle valid/write transaction in this harness.
-  // The RTL is expected to accept writes immediately; any error is fatal because
-  // continuing would produce a WAV that no longer represents the intended setup.
+  // Commit writes can hold ready low while the RTL reads shadow state into the
+  // active/runtime RAMs. Keep valid asserted until the register bank accepts it.
   top_->bus_valid = 1;
   top_->bus_write = 1;
   top_->bus_address = address;
   top_->bus_wdata = data;
-  tick();
+  int waited = 0;
+  while (!top_->bus_ready && waited < kBusTimeoutCycles) {
+    tick();
+    ++waited;
+  }
   if (!top_->bus_ready || top_->bus_error) {
     throw std::runtime_error("bus write failed at address 0x" + hex16(address));
   }

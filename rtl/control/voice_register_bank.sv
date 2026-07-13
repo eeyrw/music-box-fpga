@@ -46,6 +46,7 @@ module voice_register_bank (
   localparam logic [15:0] OFF_GAIN_RT     = 16'h0050;
   localparam logic [15:0] OFF_RELEASE     = 16'h0054;
   localparam logic [15:0] OFF_BASE_R      = 16'h0058;
+  localparam logic [15:0] OFF_FILTER_COMMIT = 16'h005c;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
   localparam logic [15:0] ADDR_READBACK_ADDR = 16'h3004;
   localparam logic [15:0] ADDR_READBACK_DATA = 16'h3008;
@@ -61,7 +62,6 @@ module voice_register_bank (
   localparam int FILTER_B2_LSB = 64;
   localparam int FILTER_A1_LSB = 32;
   localparam int FILTER_A2_LSB = 0;
-  localparam int FILTER_COMMIT_BIT = 31;
   localparam int VOICE_COMMIT_LAST_SEQ = 17;
   localparam int FILTER_COMMIT_LAST_SEQ = 5;
   localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
@@ -112,7 +112,8 @@ module voice_register_bank (
       OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_COMMIT,
       OFF_STATUS, OFF_ENVELOPE, OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL,
       OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
-      OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R: known_voice_offset = 1'b1;
+      OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
+      OFF_FILTER_COMMIT: known_voice_offset = 1'b1;
       default: known_voice_offset = 1'b0;
     endcase
   endfunction
@@ -390,7 +391,7 @@ module voice_register_bank (
                          (selected_offset == OFF_COMMIT) && bus_wdata[0] &&
                          (bus_state == BUS_IDLE);
     commit_start_filter = bus_valid && bus_write && voice_address &&
-                          (selected_offset == OFF_FILTER_CTL) && bus_wdata[FILTER_COMMIT_BIT] &&
+                          (selected_offset == OFF_FILTER_COMMIT) && bus_wdata[0] &&
                           (bus_state == BUS_IDLE);
 
     shadow_write = bus_valid && bus_write && voice_address &&
@@ -416,8 +417,8 @@ module voice_register_bank (
       OFF_LOOP_MODE: begin
         shadow_write_data = {30'd0, bus_wdata[1:0]};
       end
-      OFF_FILTER_CTL: begin
-        shadow_write_data = {31'd0, bus_wdata[0]};
+        OFF_FILTER_CTL: begin
+          shadow_write_data = {31'd0, bus_wdata[0]};
       end
       default: begin
       end
@@ -453,6 +454,9 @@ module voice_register_bank (
         OFF_ENVELOPE, OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL,
         OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
         OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R: begin
+          bus_rdata = 32'd0;
+        end
+        OFF_FILTER_COMMIT: begin
           bus_rdata = 32'd0;
         end
         OFF_STATUS:     bus_rdata = {31'd0, config_valid[selected_voice]};

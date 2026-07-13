@@ -41,7 +41,7 @@ register_addr    = voice_base(slot) + offset
 | `0x2c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
 | `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q24.8 phase increment |
 | `0x34` | LOOP_MODE | bits 1:0 loop mode |
-| `0x38` | FILTER_CONTROL | bit 0 shadow enable, bit 31 commits shadow filter settings to runtime |
+| `0x38` | FILTER_CONTROL | bit 0 shadow enable |
 | `0x3c` | FILTER_B0 | signed Q4.28 `b0` |
 | `0x40` | FILTER_B1 | signed Q4.28 `b1` |
 | `0x44` | FILTER_B2 | signed Q4.28 `b2` |
@@ -50,6 +50,7 @@ register_addr    = voice_base(slot) + offset
 | `0x50` | GAIN_RUNTIME | bits 15:0 left Q1.15, bits 31:16 right Q1.15 |
 | `0x54` | RELEASE_CONTROL | bit 0 released runtime flag |
 | `0x58` | BASE_ADDR_R | right-channel 16-bit-word memory address |
+| `0x5c` | FILTER_COMMIT | write bit 0 as one to commit shadow filter settings to runtime |
 | `0x3000` | VERSION | design version, currently `0x0004_0000` |
 | `0x3004` | READBACK_ADDR | write a 16-bit register address to sample through the readback window |
 | `0x3008` | READBACK_DATA | read sampled 32-bit data for `READBACK_ADDR` |
@@ -80,7 +81,7 @@ map as write-dominant and maintain host-side mirror state for normal operation.
 
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter coefficient and control writes update shadow filter
-state; writing `FILTER_CONTROL` with bit 31 set commits the complete shadow
+state; writing `FILTER_COMMIT` with bit 0 set commits the complete shadow
 filter group to runtime without a phase reload. Reads from runtime registers are
 not a live-state inspection path in the resource-optimized RTL unless accessed
 through `READBACK_ADDR` and `READBACK_DATA`.
@@ -119,9 +120,9 @@ The filter registers configure a per-voice biquad IIR filter placed after
 interpolation and before channel gain. `FILTER_CONTROL[0]` and `FILTER_B0` through
 `FILTER_A2` form one shadow filter group. A voice `COMMIT` copies that group into
 runtime filter state for a new note. During active playback, write the desired
-shadow filter group first, then write `FILTER_CONTROL` with bit 31 set and bit 0
-holding the desired enable value; that copies enable plus all five coefficients to
-runtime together without reloading phase. Filter history is per voice and per
+shadow filter group first, then write `FILTER_COMMIT` with bit 0 set; that copies
+the shadow enable plus all five coefficients to runtime together without
+reloading phase. Filter history is per voice and per
 channel and is cleared on voice `COMMIT`. `FILTER_CONTROL.enable = 0` bypasses the
 filter. The denominator convention is `1 + a1*z^-1 + a2*z^-2`; the RTL computes
 `b0*x + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]` using a transposed form.

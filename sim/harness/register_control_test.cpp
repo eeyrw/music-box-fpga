@@ -49,10 +49,18 @@ void test_voice_register_sequence() {
   control.set_gain(3, 0x2000, 0x1000);
   control.set_phase_inc(3, 0x0001a000);
   control.commit_voice(3, 1, 0x00018000, r);
+  FilterConfig filter;
+  filter.enable = r.filter_enable;
+  filter.b0 = r.filter_b0;
+  filter.b1 = r.filter_b1;
+  filter.b2 = r.filter_b2;
+  filter.a1 = r.filter_a1;
+  filter.a2 = r.filter_a2;
+  control.set_filter(3, filter);
   control.release_voice(3, r);
 
   uint16_t base = voice_addr(3, 0);
-  if (sink.writes.size() != 22) throw std::runtime_error("wrong register write count");
+  if (sink.writes.size() != 29) throw std::runtime_error("wrong register write count");
   expect_write(sink, 0, uint16_t(base + kRegEnvelopeLevel), 0x7fff);
   expect_write(sink, 1, uint16_t(base + kRegGainRuntime), 0x10002000);
   expect_write(sink, 2, uint16_t(base + kRegPhaseIncRuntime), 0x0001a000);
@@ -74,7 +82,14 @@ void test_voice_register_sequence() {
   expect_write(sink, 18, uint16_t(base + kRegFilterA1), 0xff000000);
   expect_write(sink, 19, uint16_t(base + kRegFilterA2), 0x00800000);
   expect_write(sink, 20, uint16_t(base + kRegCommit), 0x00000001);
-  expect_write(sink, 21, uint16_t(base + kRegReleaseControl), 0x00000001);
+  expect_write(sink, 21, uint16_t(base + kRegFilterControl), 0x00000001);
+  expect_write(sink, 22, uint16_t(base + kRegFilterB0), 0x08000000);
+  expect_write(sink, 23, uint16_t(base + kRegFilterB1), 0x04000000);
+  expect_write(sink, 24, uint16_t(base + kRegFilterB2), 0xfe000000);
+  expect_write(sink, 25, uint16_t(base + kRegFilterA1), 0xff000000);
+  expect_write(sink, 26, uint16_t(base + kRegFilterA2), 0x00800000);
+  expect_write(sink, 27, uint16_t(base + kRegFilterCommit), 0x00000001);
+  expect_write(sink, 28, uint16_t(base + kRegReleaseControl), 0x00000001);
 }
 
 }  // namespace

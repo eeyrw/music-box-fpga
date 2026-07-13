@@ -428,7 +428,7 @@ RAM:
 
 `COMMIT` now writes the selected active-config BRAM entry directly and also copies
 the shadow filter coefficient group into runtime filter BRAM for new-note setup.
-For active voices, `FILTER_CONTROL[31]` commits the complete shadow filter group
+For active voices, `FILTER_COMMIT[0]` commits the complete shadow filter group
 to runtime filter BRAM as one packed `160` bit word, avoiding mixed old/new IIR
 coefficients. The frame-boundary pulse is still used by the renderer to reload
 phase and clear filter history on voice commit, but the active config storage

@@ -388,15 +388,15 @@ module tb_wavetable_core;
     request_and_check(1999, 1999);
 
     // Runtime filter coefficients update as one committed group. Coefficient
-    // writes alone update shadow state only; FILTER_CONTROL[31] commits the
-    // packed coefficient word and enable bit to the renderer-facing RAM.
+    // writes alone update shadow state only; FILTER_COMMIT commits the packed
+    // coefficient word and enable bit to the renderer-facing RAM.
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b1, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
     request_and_check(499, 499);
     bus_write_word(16'h013c, 32'sh1000_0000);
     request_and_check(999, 999);
-    bus_write_word(16'h0138, 32'h8000_0001);
+    bus_write_word(16'h015c, 32'h0000_0001);
     request_and_check(2999, 2999);
 
     // Register decode must reach the expanded 32nd voice slot in the default
