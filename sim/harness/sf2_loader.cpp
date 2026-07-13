@@ -490,8 +490,8 @@ int select_preset(const Sf2Data& sf2, int program, int bank) {
 }
 
 uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample, int output_sample_rate) {
-  // Convert SF2 pitch metadata into the RTL Q16.16 phase increment. One integer
-  // phase unit is 1/65536 of a source sample frame; 0x00010000 advances by one
+  // Convert SF2 pitch metadata into the RTL Q24.8 phase increment. One integer
+  // phase unit is 1/256 of a source sample frame; 0x00000100 advances by one
   // source frame per output frame.
   int effective_key = key;
   if (zone.count(GEN_KEYNUM)) {
@@ -511,7 +511,7 @@ uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample
                signed_amount(zone.count(GEN_COARSE_TUNE) ? zone.at(GEN_COARSE_TUNE) : 0) * 100);
   double rate_ratio = (double(sample.sample_rate) / double(output_sample_rate)) *
                       std::pow(2.0, double(cents) / 1200.0);
-  double raw = std::round(rate_ratio * 65536.0);
+  double raw = std::round(rate_ratio * double(kPhaseFracScale));
   if (raw < 1.0) return 1;
   if (raw > double(std::numeric_limits<uint32_t>::max())) return std::numeric_limits<uint32_t>::max();
   return uint32_t(raw);
@@ -764,7 +764,7 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
     SampleWindow right_window = sample_window(sf2, right, zone);
     uint32_t frames = std::min<uint32_t>({left_window.end - left_window.start,
                                           right_window.end - right_window.start,
-                                          65535u});
+                                          kPhaseFrameMask});
     region.stereo = true;
     region.sample_right = right.name;
     region.base_addr_r = sf2.smpl_word_offset + right_window.start;
@@ -774,7 +774,7 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
     return;
   }
 
-  uint32_t frames = std::min<uint32_t>(left_window.end - left_window.start, 65535u);
+  uint32_t frames = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
   region.stereo = false;
   region.base_addr_r = region.base_addr;
   region.length = frames;

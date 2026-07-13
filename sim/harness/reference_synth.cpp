@@ -39,9 +39,9 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.released = false;
   v.base_addr = r.base_addr;
   v.base_addr_r = r.base_addr_r;
-  v.length = uint16_t(r.length);
-  v.loop_start = uint16_t(r.loop_start);
-  v.loop_end = uint16_t(r.loop_end);
+  v.length = r.length & kPhaseFrameMask;
+  v.loop_start = r.loop_start & kPhaseFrameMask;
+  v.loop_end = r.loop_end & kPhaseFrameMask;
   v.phase = 0;
   v.phase_inc = phase_inc;
   v.gain_l = int16_t(r.gain_l);
@@ -71,21 +71,21 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
   for (VoiceConfig& v : voices_) {
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
-    bool voice_done = (v.loop_mode == 0 || !loop_active) && ((v.phase >> 16) >= v.length);
+    bool voice_done = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
     if (!v.enable || !v.valid || voice_done) continue;
 
-    uint16_t frame_0 = uint16_t(v.phase >> 16);
-    uint16_t frame_1 = 0;
+    uint32_t frame_0 = (v.phase >> kPhaseFracBits) & kPhaseFrameMask;
+    uint32_t frame_1 = 0;
     if (loop_active) {
-      frame_1 = (uint16_t(frame_0 + 1) >= v.loop_end) ? v.loop_start : uint16_t(frame_0 + 1);
+      frame_1 = ((frame_0 + 1) >= v.loop_end) ? v.loop_start : frame_0 + 1;
     } else {
-      frame_1 = (uint16_t(frame_0 + 1) >= v.length) ? frame_0 : uint16_t(frame_0 + 1);
+      frame_1 = ((frame_0 + 1) >= v.length) ? frame_0 : frame_0 + 1;
     }
-    uint16_t fraction = uint16_t(v.phase & 0xffffu);
+    uint32_t fraction = v.phase & kPhaseFracMask;
 
     uint64_t phase_sum = uint64_t(v.phase) + uint64_t(v.phase_inc);
-    uint64_t loop_end_phase = uint64_t(v.loop_end) << 16;
-    uint32_t loop_length_phase = uint32_t(v.loop_end - v.loop_start) << 16;
+    uint64_t loop_end_phase = uint64_t(v.loop_end) << kPhaseFracBits;
+    uint32_t loop_length_phase = uint32_t(v.loop_end - v.loop_start) << kPhaseFracBits;
     if (loop_active && phase_sum >= loop_end_phase)
       v.phase = uint32_t(phase_sum) - loop_length_phase;
     else
@@ -111,10 +111,10 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
   return {saturate(accum_l), saturate(accum_r)};
 }
 
-int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint16_t fraction) {
+int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction) {
   int32_t difference = int32_t(sample_1) - int32_t(sample_0);
   int64_t product = int64_t(difference) * int64_t(fraction);
-  int32_t scaled_difference = int32_t(product >> 16);
+  int32_t scaled_difference = int32_t(product >> kPhaseFracBits);
   return saturate(int32_t(sample_0) + scaled_difference);
 }
 

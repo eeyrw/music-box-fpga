@@ -131,12 +131,13 @@ samples into the right-channel raw registers.
 ## Config Snapshot
 
 At the start of each output sample render, `voice_register_bank` publishes
-staged configuration and runtime writes into the active arrays observed by the
-pipeline. `wavetable_core` only asserts that frame boundary when `sample_tick`
-arrives while the pipeline is idle, so deadline misses cannot change control
-state in the middle of a render. The pipeline latches only the per-frame commit
-bitmap; it no longer duplicates the full `voice_config` and `voice_runtime`
-arrays.
+pending committed configuration into the active configuration array observed by
+the pipeline. `wavetable_core` only asserts that frame boundary when
+`sample_tick` arrives while the pipeline is idle, so commits cannot change
+configuration in the middle of a render. Runtime registers are live state and are
+sampled when `START_VOICE` accepts each voice. The pipeline latches only the
+per-frame commit bitmap; it no longer duplicates the full `voice_config` and
+`voice_runtime` arrays.
 
 `START_VOICE` reads the stable active arrays to decide whether a voice is
 enabled, whether it is valid, whether it is done, and which phase/frame addresses
@@ -151,21 +152,22 @@ are copied into local `current_*` registers:
 - filter coefficients
 
 Memory request address generation and all DSP stages use these per-voice
-`current_*` registers. SPI or register-bus writes that arrive while one output
-sample is being rendered remain staged in `voice_register_bank` and affect the
-next accepted output sample render rather than a partially scanned set of voices.
+`current_*` registers. SPI or register-bus runtime writes that arrive while one
+output sample is being rendered may affect voices that have not yet reached
+`START_VOICE`; they do not affect a voice after its `current_*` registers have
+been captured.
 
 This does not change the external commit contract for configuration registers.
 Configuration writes still update shadow state, commits still atomically stage
 shadow state for active configuration, and a commit still reloads phase and
 clears filter state at a render-safe frame boundary. Runtime writes such as
 envelope, gain, pitch, release, and runtime filter updates do not reload phase.
-The frame-boundary publish defines the per-voice render context for the
-in-flight output sample.
+The `START_VOICE` capture defines the per-voice render context for the in-flight
+output sample.
 
 ## Filter State Handling
 
-Biquad state is stored per voice and per channel:
+Biquad state is stored as signed 48-bit values per voice and per channel:
 
 ```text
 filter_z1_l[voice]

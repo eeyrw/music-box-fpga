@@ -8,9 +8,9 @@ bits and saturate only at the output boundary.
 
 ## Playback Phase
 
-`phase` and `phase_inc` are unsigned Q16.16 values measured in sample frames.
-The upper 16 bits select a frame and the lower 16 bits are the interpolation
-fraction. For example, `0x0001_8000` identifies the point halfway between frame
+`phase` and `phase_inc` are unsigned Q24.8 values measured in sample frames.
+The upper 24 bits select a frame and the lower 8 bits are the interpolation
+fraction. For example, `0x0000_0180` identifies the point halfway between frame
 1 and frame 2.
 
 At each accepted sample request, the current phase is rendered and then
@@ -26,7 +26,7 @@ Linear interpolation is evaluated with signed intermediate values:
 
 ```text
 delta = sample_1 - sample_0
-value = sample_0 + ((delta * fraction) >>> 16)
+value = sample_0 + ((delta * fraction) >>> 8)
 ```
 
 The mathematical result remains in the signed 16-bit sample range.
@@ -55,13 +55,14 @@ The implemented transposed direct-form II equation is:
 ```text
 y_q28 = b0 * x + z1
 y     = saturate(y_q28 >>> 28)
-z1    = saturate_i64(b1 * x - a1 * y + z2)
-z2    = saturate_i64(b2 * x - a2 * y)
+z1    = saturate_i48(b1 * x - a1 * y + z2)
+z2    = saturate_i48(b2 * x - a2 * y)
 ```
 
 Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
 the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
-stage. Filter state is per voice and per channel, and is cleared on commit.
+stage. Filter state is signed 48-bit per voice and per channel, and is cleared
+on commit.
 
 ## Mixing
 
@@ -71,18 +72,18 @@ the final mixed output sample.
 
 ## Current Voice Render Calculation
 
-At each accepted `sample_tick`, the register bank publishes staged configuration
-and runtime state to the active voice arrays. Register writes that arrive after
-this frame boundary affect the next output sample render. The renderer then
-scans voice slots in index order and accumulates each enabled, valid,
-not-completed voice into one stereo output.
+At each accepted `sample_tick`, the register bank publishes pending committed
+configuration to the active voice array. Runtime registers are live state; the
+renderer samples each voice's runtime values when that voice is accepted for the
+current render. The renderer then scans voice slots in index order and
+accumulates each enabled, valid, not-completed voice into one stereo output.
 
 For each contributing voice:
 
 ```text
 phase_now = phase[voice]
-frame_0   = phase_now[31:16]
-fraction  = phase_now[15:0]
+frame_0   = phase_now[31:8]
+fraction  = phase_now[7:0]
 ```
 
 Endpoint frame selection uses the active loop mode:
@@ -102,17 +103,18 @@ The phase advances after `frame_0`, `frame_1`, and `fraction` are captured:
 ```text
 phase_sum = phase_now + phase_inc_runtime
 
-if loop_active && phase_sum >= (loop_end << 16):
-  phase_next = phase_sum - ((loop_end - loop_start) << 16)
+if loop_active && phase_sum >= (loop_end << 8):
+  phase_next = phase_sum - ((loop_end - loop_start) << 8)
 else:
   phase_next = phase_sum[31:0]
 ```
 
-V1 requires `phase_inc_runtime < ((loop_end - loop_start) << 16)` for looped
+V1 requires `phase_inc_runtime < ((loop_end - loop_start) << 8)` for looped
 voices so this single subtraction is sufficient. No-loop voices and released
-loop-until-release voices stop contributing when `phase_now[31:16] >= length`.
+loop-until-release voices stop contributing when `phase_now[31:8] >= length`.
 
-Memory addressing is in signed 16-bit words:
+Memory addressing is in signed 16-bit words using 32-bit base addresses and
+24-bit frame offsets:
 
 ```text
 if stereo == 0:
@@ -130,8 +132,8 @@ else:
 Interpolation is applied independently per channel:
 
 ```text
-interp_l = l0 + (((l1 - l0) * fraction) >>> 16)
-interp_r = r0 + (((r1 - r0) * fraction) >>> 16)
+interp_l = l0 + (((l1 - l0) * fraction) >>> 8)
+interp_r = r0 + (((r1 - r0) * fraction) >>> 8)
 ```
 
 If the runtime filter is enabled, each channel then runs through the per-voice

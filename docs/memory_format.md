@@ -3,8 +3,11 @@
 Addresses identify 16-bit words in the external wave-memory image. For SF2-backed
 flows, word address zero is the first 16-bit word of the complete SF2 file image;
 sample addresses therefore include the `smpl` chunk payload offset. A voice
-configuration gives `base_addr` and `base_addr_r` in words and gives `length`,
-`loop_start`, and `loop_end` in sample frames.
+configuration gives 32-bit `base_addr` and `base_addr_r` in words and gives
+24-bit `length`, `loop_start`, and `loop_end` in sample frames.
+A single mono 16-bit sample region can therefore span up to `0x00ff_ffff`
+frames, or just under 32 MiB of PCM data. Linked-stereo regions have that limit
+per channel because the left and right channels use independent base addresses.
 
 ## Mono
 
@@ -140,7 +143,7 @@ not need a specific memory profile.
 
 The current subsystem is intentionally small and generic. It is not optimized for
 the access pattern of a polyphonic wavetable synthesizer, where each active voice
-walks through one sample region with a predictable Q16.16 phase stride while the
+walks through one sample region with a predictable Q24.8 phase stride while the
 renderer interleaves requests from many voices.
 
 A later memory subsystem should evaluate these improvements:

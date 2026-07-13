@@ -101,7 +101,7 @@ The key helper tasks are:
 The test checks these behaviors:
 
 - Mono samples are duplicated to both output channels.
-- Fractional Q16.16 phase drives linear interpolation.
+- Fractional Q24.8 phase drives linear interpolation.
 - Q1.15 gain scales the interpolated sample.
 - Shadow register writes do not affect active playback until commit.
 - Stereo samples are fetched from independent absolute left/right memory regions.
@@ -362,7 +362,7 @@ The C++ harness performs only simulation-side work:
 - Track MIDI channel program and bank-select state for Note On events.
 - Map each event to an SF2 preset, instrument zone, and sample region, then
   append the selected sample data into one C++ wave-memory image.
-- Calculate each event's Q16.16 `phase_inc` from MIDI note, SF2 root key,
+- Calculate each event's Q24.8 `phase_inc` from MIDI note, SF2 root key,
   tuning, and output sample rate.
 - Convert SF2 volume and modulation envelope attack, decay, sustain, release,
   and sampleModes into per-region control values used by the C++ MCU model.
@@ -412,11 +412,11 @@ Pitch calculation:
 ```text
 phase_inc = round(source_sample_rate / output_sample_rate
                   * 2^((midi_key - root_key + tuning_cents / 100) / 12)
-                  * 65536)
+                  * 256)
 ```
 
 `root_key`, tuning, and sample rate come from the selected SF2 instrument zone and
-sample header. The RTL receives only the resulting unsigned Q16.16 `PHASE_INC`.
+sample header. The RTL receives only the resulting unsigned Q24.8 `PHASE_INC`.
 
 Voice allocation is MCU-side policy:
 
@@ -445,7 +445,7 @@ LENGTH         = sample frames
 LOOP_START     = first loop frame
 LOOP_END       = exclusive loop end
 PHASE_INIT     = 0
-PHASE_INC      = generated Q16.16 increment
+PHASE_INC      = generated Q24.8 increment
 GAIN_L/R       = selected Q1.15 channel gains
 LOOP_MODE      = no loop / continuous / loop-until-release
 COMMIT         = 1
@@ -499,7 +499,7 @@ Current SF2 support:
 - Sample-address offset generators `startAddrsOffset`, `endAddrsOffset`,
   `startloopAddrsOffset`, `endloopAddrsOffset`, and their coarse variants.
 - `overridingRootKey`, `fineTune`, `coarseTune`, `scaleTuning`, and `keynum`
-  generators for Q16.16 `phase_inc` calculation.
+  generators for Q24.8 `phase_inc` calculation.
 - `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
 - Default MIDI velocity-to-initial-attenuation is approximated with a concave
   centibel curve before the software envelope target is quantized to Q1.15.

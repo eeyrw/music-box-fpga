@@ -262,7 +262,7 @@ int main() {
     render::Region mod_region;
     mod_region.length = 4;
     mod_region.loop_end = 4;
-    mod_region.phase_inc = 0x00010000;
+    mod_region.phase_inc = render::kPhaseFracScale;
     mod_region.gain_l = 0x4000;
     mod_region.gain_r = 0x4000;
     mod_region.mod_lfo_step = 0x4000;
@@ -299,7 +299,7 @@ int main() {
     render::NoteEvent curve_note;
     curve_note.on = true;
     curve_note.velocity = 127;
-    curve_note.phase_inc = 0x00010000;
+    curve_note.phase_inc = render::kPhaseFracScale;
     curve_mcu.handle_event(curve_note);
     curve_mcu.envelope_tick();
     if (curve_sink.envelopes.size() < 2 || curve_sink.envelopes.back() >= render::kQ15Full / 4) {

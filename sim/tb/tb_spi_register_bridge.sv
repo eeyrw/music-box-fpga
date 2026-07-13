@@ -151,7 +151,7 @@ module tb_spi_register_bridge;
     spi_write_word(16'h0134, 32'h0000_0000);
     spi_write_word(16'h0124, 32'h0000_0001);
     publish_frame_boundary();
-    if (!config_valid[0] || (active_config[0].length !== 16'd4)) begin
+    if (!config_valid[0] || (active_config[0].length !== 24'd4)) begin
       $error("SPI commit did not update active voice configuration");
       errors++;
     end

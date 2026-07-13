@@ -2,16 +2,12 @@
 
 The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
 single-beat and 32-bit aligned. The 32-bit data word is the bus container; many
-fields are narrower and explicitly define which bits are meaningful. Writes to
-configuration registers update per-voice shadow state. `COMMIT` stages the full
-shadow configuration to be copied into active state atomically at the next
-accepted output-frame boundary. Writes to runtime registers do not require
-`COMMIT` and do not reload playback phase.
-
-The register bank publishes staged configuration and runtime state at the start
-of each accepted output sample render. Runtime writes that arrive while a sample
-is being rendered therefore affect the next render, not a partially scanned set
-of voices.
+fields are narrower and explicitly define which bits are meaningful. Wave-memory
+base addresses are 32-bit word addresses. Writes to configuration registers
+update per-voice shadow state. `COMMIT` stages the shadow configuration to be
+copied into active state atomically at the next accepted output-frame boundary.
+Writes to runtime registers do not require `COMMIT`, update live runtime state
+directly, and do not reload playback phase.
 
 `spi_register_bridge` exposes this same register bus through a simple 56-bit SPI
 frame: 8-bit command, 16-bit byte address, then 32-bit data phase. Command bit 7
@@ -33,17 +29,17 @@ register_addr    = voice_base(slot) + offset
 | --- | --- | --- |
 | `0x00` | CONTROL | bit 0 enable, bit 1 stereo |
 | `0x04` | BASE_ADDR | left/mono 16-bit-word memory address |
-| `0x08` | LENGTH | number of sample frames |
-| `0x0c` | LOOP_START | first loop frame |
-| `0x10` | LOOP_END | exclusive loop end frame |
-| `0x14` | PHASE_INIT | unsigned Q16.16 initial position |
-| `0x18` | PHASE_INC | unsigned Q16.16 frames per output sample |
+| `0x08` | LENGTH | number of sample frames in bits 23:0 |
+| `0x0c` | LOOP_START | first loop frame in bits 23:0 |
+| `0x10` | LOOP_END | exclusive loop end frame in bits 23:0 |
+| `0x14` | PHASE_INIT | unsigned Q24.8 initial position |
+| `0x18` | PHASE_INC | unsigned Q24.8 frames per output sample |
 | `0x1c` | GAIN_L | signed Q1.15 in bits 15:0 |
 | `0x20` | GAIN_R | signed Q1.15 in bits 15:0 |
 | `0x24` | COMMIT | write bit 0 as one to atomically activate this voice slot |
 | `0x28` | STATUS | bit 0 configuration valid for this voice slot |
 | `0x2c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
-| `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q16.16 phase increment |
+| `0x30` | PHASE_INC_RUNTIME | runtime unsigned Q24.8 phase increment |
 | `0x34` | LOOP_MODE | bits 1:0 loop mode |
 | `0x38` | FILTER_CONTROL | bit 0 enables the per-voice biquad IIR filter |
 | `0x3c` | FILTER_B0 | signed Q4.28 `b0` |
@@ -56,9 +52,11 @@ register_addr    = voice_base(slot) + offset
 | `0x58` | BASE_ADDR_R | right-channel 16-bit-word memory address |
 | `0x3000` | VERSION | design version, currently `0x0004_0000` |
 
-A configuration is valid when `length != 0`. Looping modes additionally require
+A configuration is valid when `length != 0`. `length`, `loop_start`, and
+`loop_end` are 24-bit frame counts. Looping modes additionally require
 `loop_start < loop_end` and `loop_end <= length`. Invalid active configurations
 do not produce memory requests or audio samples.
+The maximum represented region length is `0x00ff_ffff` frames.
 
 `LOOP_MODE` values are:
 
@@ -76,7 +74,7 @@ configuration, so software can inspect pending writes before commit.
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter writes also update runtime filter state so low-rate
 controller changes can take effect without a phase reload. Reads from runtime
-registers return the staged runtime value unless otherwise noted.
+registers return the live runtime value unless otherwise noted.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a
@@ -140,7 +138,7 @@ Minimal mono no-loop Note On for `slot`:
 | 6 | `voice_base(slot) + 0x0c` `LOOP_START` | `0` for no-loop voices |
 | 7 | `voice_base(slot) + 0x10` `LOOP_END` | `0` for no-loop voices |
 | 8 | `voice_base(slot) + 0x14` `PHASE_INIT` | usually `0x0000_0000` |
-| 9 | `voice_base(slot) + 0x18` `PHASE_INC` | Q16.16 playback increment |
+| 9 | `voice_base(slot) + 0x18` `PHASE_INC` | Q24.8 playback increment |
 | 10 | `voice_base(slot) + 0x1c` `GAIN_L` | signed Q1.15 initial left gain |
 | 11 | `voice_base(slot) + 0x20` `GAIN_R` | signed Q1.15 initial right gain |
 | 12 | `voice_base(slot) + 0x34` `LOOP_MODE` | `0` no loop |
@@ -166,8 +164,8 @@ To update amplitude during attack, decay, sustain, or release, write only:
 voice_base(slot) + 0x2c ENVELOPE_LEVEL = current Q1.15 envelope level
 ```
 
-This does not require `COMMIT`, does not reload phase, and becomes visible at the
-next accepted output-frame boundary.
+This does not require `COMMIT` and does not reload phase. The renderer samples
+the live runtime value when it accepts each voice for rendering.
 
 ### Note Off
 
@@ -196,7 +194,7 @@ the slot when silent.
 Pitch bend or low-rate vibrato writes:
 
 ```text
-voice_base(slot) + 0x30 PHASE_INC_RUNTIME = new Q16.16 phase increment
+voice_base(slot) + 0x30 PHASE_INC_RUNTIME = new Q24.8 phase increment
 ```
 
 Runtime gain, volume, expression, or pan writes both channels atomically:
@@ -216,4 +214,4 @@ Before reusing a slot, software should explicitly write the new note's
 then `COMMIT`. Do not rely on runtime state left by the previous note except for
 the documented commit behavior: commit clears `RELEASE_CONTROL.released` and
 reloads phase/filter history at the next accepted output-frame boundary, but
-preserves the staged runtime envelope level.
+preserves the live runtime envelope level.

@@ -28,9 +28,9 @@ class ReferenceSynth : public VoiceControlSink {
     bool released = false;
     uint32_t base_addr = 0;
     uint32_t base_addr_r = 0;
-    uint16_t length = 0;
-    uint16_t loop_start = 0;
-    uint16_t loop_end = 0;
+    uint32_t length = 0;
+    uint32_t loop_start = 0;
+    uint32_t loop_end = 0;
     uint32_t phase = 0;
     uint32_t phase_inc = 0;
     int16_t gain_l = 0;
@@ -49,7 +49,7 @@ class ReferenceSynth : public VoiceControlSink {
     int loop_mode = 0;
   };
 
-  static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint16_t fraction);
+  static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction);
   static int16_t apply_gain(int16_t sample, int16_t gain);
   static int16_t saturate(int32_t value);
   static int64_t saturate_i64(__int128 value);

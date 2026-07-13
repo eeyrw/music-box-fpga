@@ -232,7 +232,7 @@ int main() {
     }
     std::vector<int16_t> memory = sf2.file_words;
     render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
-    int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * 65536.0));
+    int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * render::kPhaseFracScale));
     int expected_gain = int(std::round(0x4000 * std::pow(10.0, -100.0 / 200.0)));
     expect_equal(int(preset.phase_inc), expected_phase, "preset additive fineTune phase");
     expect_equal(preset.gain_l, expected_gain, "preset additive pan left gain");

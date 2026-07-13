@@ -21,7 +21,7 @@ Implemented RTL pieces:
 - 32 committed voice slots with shadow/active register state.
 - Separate per-voice configuration state and runtime control state, with runtime
   updates sampled at output-frame boundaries.
-- Unsigned Q16.16 playback phase and runtime phase-increment updates.
+- Unsigned Q24.8 playback phase and runtime phase-increment updates.
 - Mono and linked-stereo sample playback with independent left/right base addresses.
 - Loop modes: no loop, continuous loop, and loop-until-release.
 - Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
@@ -89,10 +89,10 @@ IDLE
 The generated sample uses these integer operations:
 
 ```text
-frame_0      = phase[31:16]
+frame_0      = phase[31:8]
 frame_1      = next frame, clamped or loop-wrapped as needed
-fraction     = phase[15:0]
-interpolated = sample_0 + ((sample_1 - sample_0) * fraction >>> 16)
+fraction     = phase[7:0]
+interpolated = sample_0 + ((sample_1 - sample_0) * fraction >>> 8)
 gained       = saturate(interpolated * gain >>> 15)
 enveloped    = gained when envelope_level == 0x7fff
 enveloped    = saturate(gained * envelope_level >>> 15) otherwise
@@ -101,7 +101,7 @@ mix_accum   += enveloped
 
 Phase is advanced after capturing the current frame indexes. Loop wrapping uses
 one subtraction, so valid V1 looped voices require `phase_inc < (loop_end -
-loop_start) << 16`.
+loop_start) << 8`.
 
 ## Control Model
 
@@ -138,8 +138,8 @@ The hardware contract is register-level:
 - Note On writes wave address or linked-stereo addresses, length, loop range, phase increment, gains,
   runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
-- Runtime gain, pitch, release, and filter updates do not reload phase and become
-  visible at the next accepted output-frame boundary.
+- Runtime gain, pitch, release, and filter updates do not reload phase and update
+  the live runtime state sampled by the renderer for each accepted voice.
 - Note Off for loop-until-release samples writes the runtime released flag and
   then continues envelope release updates.
 - When release reaches zero, software clears `CONTROL.enable` and commits the
@@ -185,7 +185,7 @@ the generic RTL to one vendor flow.
 
 2. Design a wavetable-optimized memory subsystem.
    The current `wave_memory_subsystem` is a minimal single-line cache. A later
-   revision should exploit the predictable per-voice Q16.16 phase stride with
+   revision should exploit the predictable per-voice Q24.8 phase stride with
    per-voice small line caches, demand-priority fills, and low-priority prefetch
    for the next interpolated frame or loop-wrapped frame. This likely requires
    adding a voice identifier to the core memory-request interface, or otherwise

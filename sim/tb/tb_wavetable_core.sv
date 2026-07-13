@@ -177,8 +177,8 @@ module tb_wavetable_core;
     bus_write_word(16'h0108, 32'd4);
     bus_write_word(16'h010c, 32'd0);
     bus_write_word(16'h0110, 32'd4);
-    bus_write_word(16'h0114, 32'h0000_8000);
-    bus_write_word(16'h0118, 32'h0001_0000);
+    bus_write_word(16'h0114, 32'h0000_0080);
+    bus_write_word(16'h0118, 32'h0000_0100);
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
@@ -203,8 +203,8 @@ module tb_wavetable_core;
     bus_write_word(16'h0108, 32'd4);
     bus_write_word(16'h010c, 32'd1);
     bus_write_word(16'h0110, 32'd3);
-    bus_write_word(16'h0114, 32'h0002_8000);
-    bus_write_word(16'h0118, 32'h0001_0000);
+    bus_write_word(16'h0114, 32'h0000_0280);
+    bus_write_word(16'h0118, 32'h0000_0100);
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
     bus_write_word(16'h012c, 32'h0000_7fff);
@@ -235,7 +235,7 @@ module tb_wavetable_core;
       bus_write_word(addr + 16'h000c, 32'd0);
       bus_write_word(addr + 16'h0010, 32'd4);
       bus_write_word(addr + 16'h0014, phase_init);
-      bus_write_word(addr + 16'h0018, 32'h0001_0000);
+      bus_write_word(addr + 16'h0018, 32'h0000_0100);
       bus_write_word(addr + 16'h001c, {{16{gain[15]}}, gain});
       bus_write_word(addr + 16'h0020, {{16{gain[15]}}, gain});
       bus_write_word(addr + 16'h002c, {{16{envelope_level[15]}}, envelope_level});
@@ -355,23 +355,23 @@ module tb_wavetable_core;
     request_and_check(1250, -1250);
 
     // Runtime PHASE_INC writes retune playback without reloading phase.
-    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS,
+    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
-    bus_write_word(16'h0130, 32'h0002_0000);
-    bus_read_word(16'h0130, 32'h0002_0000);
+    bus_write_word(16'h0130, 32'h0000_0200);
+    bus_read_word(16'h0130, 32'h0000_0200);
     request_and_check(999, 999);
     request_and_check(2999, 2999);
 
     // No-loop voices stop contributing once phase reaches the sample length.
-    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_NONE,
+    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_NONE,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
     request_and_check(999, 999);
     request_and_check(0, 0);
 
     // Loop-until-release wraps while held, then plays through to sample end.
-    configure_voice0_basic(0, 4, 1, 3, 32'h0002_0000, 32'h0001_0000, LOOP_MODE_UNTIL_RELEASE,
+    configure_voice0_basic(0, 4, 1, 3, 32'h0000_0200, 32'h0000_0100, LOOP_MODE_UNTIL_RELEASE,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(1999, 1999);
     request_and_check(999, 999);
@@ -383,7 +383,7 @@ module tb_wavetable_core;
 
     // Biquad IIR is applied after interpolation and before channel gain. This
     // coefficient set is a two-tap FIR case: y[n] = 0.5*x[n] + 0.5*x[n-1].
-    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0001_0000, LOOP_MODE_CONTINUOUS,
+    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b1, 32'sh0800_0000, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(999, 999);
     request_and_check(1999, 1999);
@@ -397,7 +397,7 @@ module tb_wavetable_core;
 
     // Check that two active voice slots render in one output request and the
     // mixer adds their current enveloped samples with saturation at the end.
-    configure_mono_slot(0, 0, 32'h0000_8000, 16'sh4000, 16'sh7fff);
+    configure_mono_slot(0, 0, 32'h0000_0080, 16'sh4000, 16'sh7fff);
     configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
     request_and_check(750, 750);
 

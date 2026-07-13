@@ -29,21 +29,21 @@ module multi_voice_pipeline (
 
   typedef struct packed {
     pcm_t sample;
-    logic signed [63:0] z1;
-    logic signed [63:0] z2;
+    logic signed [FILTER_STATE_WIDTH-1:0] z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] z2;
   } biquad_result_t;
 
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
   logic [NUM_VOICES-1:0] frame_commit;
   logic [PHASE_WIDTH-1:0] phase [NUM_VOICES];
-  logic signed [63:0] filter_z1_l [NUM_VOICES];
-  logic signed [63:0] filter_z2_l [NUM_VOICES];
-  logic signed [63:0] filter_z1_r [NUM_VOICES];
-  logic signed [63:0] filter_z2_r [NUM_VOICES];
-  logic [15:0] frame_0;
-  logic [15:0] frame_1;
-  logic [15:0] fraction;
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l [NUM_VOICES];
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l [NUM_VOICES];
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r [NUM_VOICES];
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_r [NUM_VOICES];
+  logic [PHASE_FRAME_WIDTH-1:0] frame_0;
+  logic [PHASE_FRAME_WIDTH-1:0] frame_1;
+  logic [PHASE_FRAC_WIDTH-1:0] fraction;
   pcm_t raw_l0, raw_l1, raw_r0, raw_r1;
   pcm_t interpolated_l, interpolated_r;
   pcm_t interp_stage_l, interp_stage_r;
@@ -68,9 +68,9 @@ module multi_voice_pipeline (
   logic cfg_stereo;
   logic [ADDR_WIDTH-1:0] cfg_base_addr;
   logic [ADDR_WIDTH-1:0] cfg_base_addr_r;
-  logic [15:0] cfg_length;
-  logic [15:0] cfg_loop_start;
-  logic [15:0] cfg_loop_end;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_length;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_start;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_end;
   logic [PHASE_WIDTH-1:0] cfg_phase_inc;
   logic signed [15:0] cfg_gain_l;
   logic signed [15:0] cfg_gain_r;
@@ -97,19 +97,25 @@ module multi_voice_pipeline (
   logic signed [31:0] current_filter_a2;
   biquad_result_t filter_result_l;
   biquad_result_t filter_result_r;
-  logic signed [63:0] filter_next_z1_l;
-  logic signed [63:0] filter_next_z2_l;
-  logic signed [63:0] filter_next_z1_r;
-  logic signed [63:0] filter_next_z2_r;
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z1_l;
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z2_l;
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z1_r;
+  logic signed [FILTER_STATE_WIDTH-1:0] filter_next_z2_r;
   logic [PHASE_WIDTH-1:0] current_phase;
 
-  function automatic logic signed [63:0] saturate_i64(input logic signed [95:0] value);
-    if (value > 96'sd9223372036854775807)
-      saturate_i64 = 64'sh7fff_ffff_ffff_ffff;
-    else if (value < -96'sd9223372036854775808)
-      saturate_i64 = 64'sh8000_0000_0000_0000;
-    else
-      saturate_i64 = value[63:0];
+  function automatic logic signed [FILTER_STATE_WIDTH-1:0] saturate_filter_state(input logic signed [95:0] value);
+    logic signed [95:0] max_value;
+    logic signed [95:0] min_value;
+    begin
+      max_value = (96'sd1 <<< (FILTER_STATE_WIDTH - 1)) - 96'sd1;
+      min_value = -(96'sd1 <<< (FILTER_STATE_WIDTH - 1));
+      if (value > max_value)
+        saturate_filter_state = {1'b0, {(FILTER_STATE_WIDTH-1){1'b1}}};
+      else if (value < min_value)
+        saturate_filter_state = {1'b1, {(FILTER_STATE_WIDTH-1){1'b0}}};
+      else
+        saturate_filter_state = value[FILTER_STATE_WIDTH-1:0];
+    end
   endfunction
 
   function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
@@ -122,8 +128,8 @@ module multi_voice_pipeline (
   endfunction
 
   function automatic biquad_result_t biquad_iir(
-    input logic signed [63:0] z1,
-    input logic signed [63:0] z2,
+    input logic signed [FILTER_STATE_WIDTH-1:0] z1,
+    input logic signed [FILTER_STATE_WIDTH-1:0] z2,
     input pcm_t sample,
     input logic signed [31:0] b0,
     input logic signed [31:0] b1,
@@ -134,6 +140,8 @@ module multi_voice_pipeline (
     logic signed [31:0] x_ext;
     logic signed [31:0] y_pcm_ext;
     logic signed [63:0] y_q28;
+    logic signed [63:0] z1_ext;
+    logic signed [63:0] z2_ext;
     logic signed [63:0] b0_x;
     logic signed [63:0] b1_x;
     logic signed [63:0] b2_x;
@@ -144,18 +152,20 @@ module multi_voice_pipeline (
     biquad_result_t result;
     begin
       x_ext = {{16{sample[15]}}, sample};
+      z1_ext = {{(64-FILTER_STATE_WIDTH){z1[FILTER_STATE_WIDTH-1]}}, z1};
+      z2_ext = {{(64-FILTER_STATE_WIDTH){z2[FILTER_STATE_WIDTH-1]}}, z2};
       b0_x = $signed(x_ext) * $signed(b0);
-      y_q28 = b0_x + z1;
+      y_q28 = b0_x + z1_ext;
       result.sample = saturate_pcm(y_q28 >>> 28);
       y_pcm_ext = {{16{result.sample[15]}}, result.sample};
       b1_x = $signed(x_ext) * $signed(b1);
       b2_x = $signed(x_ext) * $signed(b2);
       a1_y = $signed(y_pcm_ext) * $signed(a1);
       a2_y = $signed(y_pcm_ext) * $signed(a2);
-      next_z1 = $signed({{32{b1_x[63]}}, b1_x}) - $signed({{32{a1_y[63]}}, a1_y}) + $signed({{32{z2[63]}}, z2});
+      next_z1 = $signed({{32{b1_x[63]}}, b1_x}) - $signed({{32{a1_y[63]}}, a1_y}) + $signed({{32{z2_ext[63]}}, z2_ext});
       next_z2 = $signed({{32{b2_x[63]}}, b2_x}) - $signed({{32{a2_y[63]}}, a2_y});
-      result.z1 = saturate_i64(next_z1);
-      result.z2 = saturate_i64(next_z2);
+      result.z1 = saturate_filter_state(next_z1);
+      result.z2 = saturate_filter_state(next_z2);
       biquad_iir = result;
     end
   endfunction
@@ -183,13 +193,13 @@ module multi_voice_pipeline (
 
   always_comb begin
     phase_sum = {1'b0, current_phase} + {1'b0, cfg_phase_inc};
-    loop_end_phase = {1'b0, cfg_loop_end, 16'd0};
-    loop_length_phase = {(cfg_loop_end - cfg_loop_start), 16'd0};
+    loop_end_phase = {1'b0, cfg_loop_end, {PHASE_FRAC_WIDTH{1'b0}}};
+    loop_length_phase = {(cfg_loop_end - cfg_loop_start), {PHASE_FRAC_WIDTH{1'b0}}};
     wrapped_phase = phase_sum[31:0] - loop_length_phase;
     loop_active = (cfg_loop_mode == LOOP_MODE_CONTINUOUS) ||
                   ((cfg_loop_mode == LOOP_MODE_UNTIL_RELEASE) && !cfg_released);
     voice_done = (cfg_loop_mode == LOOP_MODE_NONE || !loop_active) &&
-                 (current_phase[31:16] >= cfg_length);
+                 (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] >= cfg_length);
     next_accum_l = accum_l + $signed({{16{enveloped_l[15]}}, enveloped_l});
     next_accum_r = accum_r + $signed({{16{enveloped_r[15]}}, enveloped_r});
     filter_result_l = biquad_iir(filter_z1_l[voice_index], filter_z2_l[voice_index], interp_stage_l,
@@ -239,19 +249,19 @@ module multi_voice_pipeline (
     unique case (state)
       REQ_L0: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {16'd0, frame_0};
+        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
       end
       REQ_L1: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {16'd0, frame_1};
+        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
       end
       REQ_R0: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {16'd0, frame_0};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
       end
       REQ_R1: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {16'd0, frame_1};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
       end
       default: begin
       end
@@ -262,9 +272,9 @@ module multi_voice_pipeline (
     if (rst) begin
       state <= IDLE;
       voice_index <= '0;
-      frame_0 <= 16'd0;
-      frame_1 <= 16'd0;
-      fraction <= 16'd0;
+      frame_0 <= '0;
+      frame_1 <= '0;
+      fraction <= '0;
       current_stereo <= 1'b0;
       current_base_addr <= '0;
       current_base_addr_r <= '0;
@@ -342,14 +352,14 @@ module multi_voice_pipeline (
             current_filter_b2 <= cfg_filter_b2;
             current_filter_a1 <= cfg_filter_a1;
             current_filter_a2 <= cfg_filter_a2;
-            frame_0 <= current_phase[31:16];
+            frame_0 <= current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH];
             if (loop_active)
-              frame_1 <= (current_phase[31:16] + 16'd1 >= cfg_loop_end) ?
-                         cfg_loop_start : current_phase[31:16] + 16'd1;
+              frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= cfg_loop_end) ?
+                         cfg_loop_start : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
             else
-              frame_1 <= (current_phase[31:16] + 16'd1 >= cfg_length) ?
-                         current_phase[31:16] : current_phase[31:16] + 16'd1;
-            fraction <= current_phase[15:0];
+              frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= cfg_length) ?
+                         current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+            fraction <= current_phase[PHASE_FRAC_WIDTH-1:0];
             if (loop_active && phase_sum >= loop_end_phase)
               phase[voice_index] <= wrapped_phase;
             else

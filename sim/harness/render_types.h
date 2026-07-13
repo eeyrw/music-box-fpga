@@ -13,6 +13,11 @@ namespace render {
 
 constexpr int kNumVoices = RENDER_NUM_VOICES;
 constexpr int kQ15Full = 32767;
+constexpr int kPhaseFrameBits = 24;
+constexpr int kPhaseFracBits = 8;
+constexpr uint32_t kPhaseFracScale = 1u << kPhaseFracBits;
+constexpr uint32_t kPhaseFracMask = kPhaseFracScale - 1u;
+constexpr uint32_t kPhaseFrameMask = (1u << kPhaseFrameBits) - 1u;
 constexpr uint16_t kVoiceBase = 0x0100;
 constexpr uint16_t kVoiceStride = 0x0080;
 

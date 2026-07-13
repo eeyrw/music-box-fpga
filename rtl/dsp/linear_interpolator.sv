@@ -1,16 +1,19 @@
 module linear_interpolator (
   input  synth_pkg::pcm_t sample_0,
   input  synth_pkg::pcm_t sample_1,
-  input  logic [15:0]     fraction,
+  input  logic [synth_pkg::PHASE_FRAC_WIDTH-1:0] fraction,
   output synth_pkg::pcm_t sample_out
 );
-  // Implements: sample_0 + ((sample_1 - sample_0) * fraction >> 16).
-  // The fraction is unsigned Q0.16, so 0 selects sample_0 and values close to
-  // 0xffff approach sample_1 without stepping beyond it.
+  import synth_pkg::*;
+
+  localparam int PRODUCT_WIDTH = 17 + PHASE_FRAC_WIDTH;
+
+  // Implements: sample_0 + ((sample_1 - sample_0) * fraction >> PHASE_FRAC_WIDTH).
+  // The fraction is unsigned Q0.PHASE_FRAC_WIDTH, so 0 selects sample_0 and
+  // all-ones approaches sample_1 without stepping beyond it.
   logic signed [16:0] difference;
-  logic signed [32:0] difference_extended;
-  logic signed [32:0] fraction_extended;
-  logic signed [32:0] product;
+  logic signed [PHASE_FRAC_WIDTH:0] fraction_extended;
+  logic signed [PRODUCT_WIDTH-1:0] product;
   logic signed [16:0] scaled_difference;
   logic signed [17:0] interpolated;
 
@@ -18,10 +21,9 @@ module linear_interpolator (
     // One extra sign bit is kept for the difference because subtracting two
     // signed 16-bit endpoints can require 17 bits.
     difference = $signed(sample_1) - $signed(sample_0);
-    difference_extended = {{16{difference[16]}}, difference};
-    fraction_extended = $signed({17'd0, fraction});
-    product = difference_extended * fraction_extended;
-    scaled_difference = $signed(product[32:16]);
+    fraction_extended = $signed({1'b0, fraction});
+    product = PRODUCT_WIDTH'($signed(difference) * $signed(fraction_extended));
+    scaled_difference = product[PHASE_FRAC_WIDTH +: 17];
     interpolated = $signed({{2{sample_0[15]}}, sample_0}) +
                    $signed({scaled_difference[16], scaled_difference});
 
