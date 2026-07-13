@@ -115,7 +115,7 @@ read data beat returns one `LINE_WORDS = 8` PCM-word line.
 
 Vivado 2018.3 is installed under `/opt/Xilinx/Vivado/2018.3` on the local
 development machine. The Smart Artix batch flow is in
-`fpga/smart_artix/scripts/vivado_synth.tcl` and currently runs synthesis for
+`fpga/smart_artix/vivado/scripts/synth.tcl` and currently runs synthesis for
 `smart_artix_top` with `xc7a50tfgg484-2`.
 
 The current XDC uses temporary legal package pins and `LVCMOS33` so Vivado can
@@ -140,10 +140,11 @@ pipeline the voice pipeline multiply/accumulation path if the violation remains.
 
 ## MIG Clocking Note
 
-Generated IP currently exists under
-`fpga/smart_artix/music-box-fpga.srcs/sources_1/ip/`. Only the source-level IP
-configuration files are intended for version control: the Clocking Wizard `.xci`,
-the MIG `.xci`, and the MIG `.prj` referenced by that `.xci`. `clk_wiz_0`
+Generated IP source configuration lives under `fpga/smart_artix/vivado/ip/`.
+Only the source-level IP configuration files are intended for version control:
+the Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` referenced by
+that `.xci`. Vivado-generated project files, checkpoints, netlists, and reports
+remain local build output under `build/fpga/smart_artix/vivado/`. `clk_wiz_0`
 converts the board `50 MHz` oscillator to `200 MHz`. The latest generated
 `mig_7series_0` native app interface is `128` bits wide with a `29` bit app
 address, so the Smart Artix top uses `LINE_WORDS = 8` for one complete cache line

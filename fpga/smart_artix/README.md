@@ -19,8 +19,7 @@ board schematic and Vivado-generated IP before implementation.
 - Board oscillator: `50 MHz`.
 - Generated clock wizard: `clk_wiz_0`, currently `50 MHz` input to `200 MHz`
   output.
-- Generated MIG IP: `mig_7series_0` under
-  `music-box-fpga.srcs/sources_1/ip/mig_7series_0`.
+- Generated MIG IP source configuration: `vivado/ip/mig_7series_0`.
 
 Still required from the board documentation:
 
@@ -124,15 +123,20 @@ source material for later pin and constraint work, not as synthesis inputs.
 ## Current Vivado 2018.3 Status
 
 Vivado is installed locally under `/opt/Xilinx/Vivado/2018.3`. The batch flow in
-`scripts/vivado_synth.tcl` now creates a project for `xc7a50tfgg484-2`, reads
-`filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
-`smart_artix_top`, reads generated IP when present, writes
-`build/vivado/post_synth.dcp`, and emits utilization and timing reports.
+`vivado/scripts/synth.tcl` now creates a local project for `xc7a50tfgg484-2`,
+reads `filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
+`smart_artix_top`, reads source-controlled IP configuration from `vivado/ip`,
+writes reports and checkpoints under `../../build/fpga/smart_artix/vivado`, and
+keeps the board source directory free of generated Vivado output.
 
 Run the current synthesis check from this directory with:
 
 ```bash
-/opt/Xilinx/Vivado/2018.3/bin/vivado -mode batch -source scripts/vivado_synth.tcl
+mkdir -p ../../build/fpga/smart_artix/vivado/logs
+cd ../../build/fpga/smart_artix/vivado
+/opt/Xilinx/Vivado/2018.3/bin/vivado -mode batch \
+  -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
+  -journal logs/synth.jou -log logs/synth.log
 ```
 
 The non-DDR XDC currently contains temporary package pins selected only to let
@@ -148,10 +152,11 @@ pin configuration, then let MIG emit the final DDR3 XDC.
 
 The current board top instantiates `clk_wiz_0` and `mig_7series_0` when the
 generated IP configuration is present. The source-controlled IP inputs are the
-Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` file referenced by
-that `.xci`; generated Verilog, checkpoints, project files, and reports remain
-local Vivado output. `smart_artix_mig_stub` remains in the repository for unit
-tests and non-Vivado simulation, but it is no longer used by `smart_artix_top`.
+Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` file under
+`vivado/ip`; generated Verilog, checkpoints, project files, and reports remain
+local Vivado output under `../../build/fpga/smart_artix/vivado`.
+`smart_artix_mig_stub` remains in the repository for unit tests and non-Vivado
+simulation, but it is no longer used by `smart_artix_top`.
 
 Important clocking issue: the generated `clk_wiz_0` produces `200 MHz` from the
 board's `50 MHz` oscillator, but the generated MIG project currently records
@@ -271,19 +276,51 @@ Board-level optimization should now focus on these items, in order:
 
 ## Vivado Batch Flow
 
-Run:
+Source-controlled Vivado inputs live under `fpga/smart_artix/vivado/`.
+Generated Vivado projects, reports, checkpoints, bitstreams, logs, and IP output
+products live under `build/fpga/smart_artix/vivado/` at the repository root and
+should not be committed.
+
+Generate or refresh the local Vivado project:
 
 ```bash
-vivado -mode batch -source scripts/vivado_synth.tcl
+mkdir -p ../../build/fpga/smart_artix/vivado/logs
+cd ../../build/fpga/smart_artix/vivado
+vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/project.tcl \
+  -journal logs/project.jou -log logs/project.log
 ```
 
-Generated Vivado output should stay under `fpga/smart_artix/build/` and should
-not be committed.
+Run synthesis:
 
-The current flow stops after synthesis. Add `opt_design`, `place_design`,
-`route_design`, implementation reports, and bitstream generation only after the
-temporary pins are replaced with real schematic pins. Generating a bitstream with
-the temporary XDC is useful only as a tool-flow experiment, not for board use.
+```bash
+vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
+  -journal logs/synth.jou -log logs/synth.log
+```
+
+Run implementation or bitstream generation:
+
+```bash
+vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
+  -journal logs/impl.jou -log logs/impl.log
+vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/bitstream.tcl \
+  -journal logs/bitstream.jou -log logs/bitstream.log
+```
+
+Program hardware with the generated bitstream:
+
+```bash
+vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/program.tcl \
+  -journal logs/program.jou -log logs/program.log
+```
+
+For GUI work, open `../../build/fpga/smart_artix/vivado/smart_artix.xpr` from
+this directory. If IP settings are changed in the GUI, copy only the updated
+`.xci` or MIG `.prj` files back into `vivado/ip/`; do not commit the generated
+project, runs, checkpoints, or reports.
+
+Implementation and bitstream scripts are available for tool-flow experiments.
+Treat bitstreams built with the temporary XDC as non-hardware images until the
+temporary pins are replaced with schematic-verified Smart Artix pins.
 
 ## Local Checks
 

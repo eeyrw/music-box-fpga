@@ -27,8 +27,10 @@ fpga/<board-name>/
 ├── constraints/
 │   ├── <board-name>.xdc        # Vivado, if using Xilinx
 │   └── <board-name>.sdc        # Quartus/Yosys timing constraints, if needed
-├── scripts/
-│   ├── vivado_synth.tcl        # Optional Vivado batch flow
+├── vivado/                     # Optional Xilinx project inputs
+│   ├── ip/                     # Versioned .xci/.prj IP configuration
+│   └── scripts/                # Project generation, synthesis, implementation
+├── scripts/                    # Optional non-Vivado board scripts
 │   ├── quartus_project.tcl     # Optional Quartus project generation
 │   └── yosys_synth.ys          # Optional open-source synthesis flow
 └── assets/

@@ -21,6 +21,7 @@ obj_dir/
 *.rpt
 *.runs/
 *.cache/
+*.sim/
 *.gen/
 *.hw/
 *.ip_user_files/
