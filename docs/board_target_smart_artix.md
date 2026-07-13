@@ -19,9 +19,12 @@ files belong under `fpga/`.
 - Audio codec: simple I2S codec with no register initialization and no MCLK
   requirement.
 
-The board revision, I/O standards, DDR3 clock rate, SPI voltage, non-DDR pin
-locations, and I2S codec timing limits still need to be recorded from the board
-documentation or schematic before constraints are finalized.
+The current pin source is
+`fpga/smart_artix/docs/Smart_Artix_Pin_Assignment.txt`. The XDC binds the board
+`CLK_50M` and `RESET_N` pins directly. The current top-level SPI, I2S, and debug
+status signals do not have dedicated pins in that table, so they are temporarily
+exported on BANK15 expansion-header pins documented by that same table. I2S codec
+timing limits still need to be recorded before hardware connection.
 
 ## System Boundary
 
@@ -123,7 +126,7 @@ exercise the flow. These pins are not schematic-verified and must be replaced
 before any hardware connection. DDR3 pins remain owned by the future MIG-generated
 XDC.
 
-Latest post-synthesis result with the temporary `49.152 MHz` constraint:
+Earlier post-synthesis result with the temporary `49.152 MHz` constraint:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
@@ -134,7 +137,29 @@ Block RAM tiles: 0 / 75, 0.00%
 Timing WNS: -0.725 ns at 49.152 MHz
 ```
 
-This timing result is a useful early warning, not a final board result. The next
+Current post-synthesis result after the Q24.8 phase change, 48-bit filter state,
+active/shadow config split, and direct runtime state update, using the generated
+MIG and clock wizard:
+
+```text
+Vivado result: 0 errors, 0 critical warnings
+Slice LUTs: 26475 / 32600, 81.21%
+Slice registers: 39013 / 65200, 59.84%
+DSP48E1: 26 / 120, 21.67%
+Block RAM tiles: 0 / 75, 0.00%
+Timing WNS: -10.647 ns, WHS: -1.329 ns on clk_pll_i
+```
+
+The latest pass confirms that flip-flop pressure improved, but LUT pressure is
+now the limiting resource. The register bank still stores wide per-voice control
+state as flip-flop arrays selected by large muxes. The next resource pass should
+move low-rate voice fields such as base addresses, length/loop points, phase
+increments, gains, and filter coefficients into LUTRAM or a small RAM structure,
+while keeping hot flags and frame-boundary commit control in flops. That should
+reduce the large mux network in `voice_register_bank` more effectively than
+further shrinking field widths.
+
+This timing result is still an early warning, not a final board result. The next
 timing work is to run implementation after real pins and clocking are known, then
 pipeline the voice pipeline multiply/accumulation path if the violation remains.
 
@@ -159,10 +184,8 @@ or regenerate MIG for a `200 MHz` input clock if that mode is valid for the
 selected DDR3 rate.
 
 The current Vivado batch synthesis passes with the generated MIG and clock wizard
-connected: `0 errors`, `0 critical warnings`, and `105 warnings`. Most warnings
-come from generated Vivado IP and early board-level timing gaps; they are not yet
-filtered because the clocking and real external timing constraints are unsettled.
-Post-synthesis utilization is about `18723 / 32600` LUTs, `45282 / 65200`
-registers, and `26 / 120` DSPs. Timing is not yet clean, with
-`WNS = -7.605 ns` and `WHS = -1.329 ns`; treat that as a clocking/configuration
-issue until the MIG input frequency and final clock plan are confirmed.
+connected. Most warnings come from generated Vivado IP and early board-level
+timing gaps; they are not yet filtered because the clocking and real external
+timing constraints are unsettled. Treat the reported `clk_pll_i` setup and hold
+violations as clocking/configuration and microarchitecture issues until the MIG
+input frequency and final clock plan are confirmed.

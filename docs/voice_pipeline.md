@@ -380,32 +380,32 @@ Potential next steps, in increasing complexity:
 ## Resource Optimization Backlog
 
 The first Artix-7 resource pass removed the full per-frame `voice_config` and
-`voice_runtime` array copies from this module. That reduced Smart Artix
-post-synthesis utilization from about `26695` LUTs and `49965` registers to about
-`18723` LUTs and `45282` registers while preserving the output-frame update
-contract. Remaining resource pressure is now concentrated in the control-state
-storage and optional filter path.
+`voice_runtime` array copies from this module. A later pass changed playback to
+Q24.8 phase, widened sample-region length and loop points to 24 bits, narrowed
+per-voice biquad `z1/z2` state to signed 48 bits, split shadow and active
+configuration structs, and removed the duplicate pending runtime-state array.
+With the Smart Artix MIG synthesis wrapper, that reduced post-synthesis register
+use to about `39013 / 65200` registers, but LUT use rose to about
+`26475 / 32600` LUTs. Remaining resource pressure is now concentrated in the
+control-state storage and large per-voice mux networks in `voice_register_bank`.
 
 Recommended next optimization order:
 
-1. Make the biquad filter board-configurable. A `SYNTH_ENABLE_FILTER`-style build
-   option can compile out filter coefficients, filter state, and filter DSP logic
-   for board images that only need interpolation, envelope, and gain. This should
-   be the lowest-risk way to reduce DSP timing pressure and some LUT/FF use.
+1. Move wide, low-rate voice control fields out of flip-flop arrays. Good
+   candidates are base addresses, 24-bit length/loop points, phase increments,
+   gains, and filter coefficients. Keep small hot flags such as enable, valid,
+   released, and pending commit in flops; move wider fields toward LUTRAM or true
+   RAM while preserving commit-at-frame-boundary semantics. This is now more
+   important than shrinking bit widths because the latest synthesis is LUT-bound,
+   not FF-bound.
 2. If the filter must stay enabled, move it to a multi-cycle shared DSP block.
    The current left/right biquad evaluation still expands many multiplies in one
    state. A fixed-latency filter unit with explicit valid timing should reduce
    combinational depth and make timing closure more predictable.
-3. Move wide, low-rate voice control fields out of flip-flop arrays. Good
-   candidates are base addresses, loop points, filter coefficients, and other
-   fields that change only through the register bus. Keep small hot flags such as
-   enable, valid, released, and pending commit in flops; move wider fields toward
-   LUTRAM or true RAM only after preserving single-frame publish semantics.
-4. Re-evaluate filter state width. The current per-voice, per-channel `z1/z2`
-   state is 64 bits. Narrowing it to a documented fixed-point width such as 40 or
-   48 bits may save registers and muxing, but it changes numeric behavior and
-   requires exact regression updates for saturation and long-running filter cases.
-5. Run full implementation before treating remaining post-synthesis timing as the
+3. Keep the SF2 biquad filter feature in the generic core, but consider a board
+   build option only if a product image explicitly does not need it. The default
+   architecture should continue to support the documented filter registers.
+4. Run full implementation before treating remaining post-synthesis timing as the
    final bottleneck. After real pins, clocking, and implementation reports are
    available, add focused pipeline stages on the reported multiply/accumulate
    paths instead of changing constraints to hide them.

@@ -183,7 +183,15 @@ the generic RTL to one vendor flow.
    misses, I2S underruns, and sample drops. Next, fail longer full-system stress
    tests on steady-state deadline misses, underruns, or sample drops.
 
-2. Design a wavetable-optimized memory subsystem.
+2. Convert wide voice-control storage from flops to RAM-backed structures.
+   The latest Smart Artix synthesis reduced flip-flop usage but moved the design
+   into an LUT-bound state. The next register-bank pass should keep hot control
+   flags in flops, but store wide low-rate fields such as base addresses,
+   length/loop points, phase increments, gains, and filter coefficients in LUTRAM
+   or a small RAM structure. Preserve the documented configuration commit
+   behavior and runtime update behavior while reducing per-voice mux fan-in.
+
+3. Design a wavetable-optimized memory subsystem.
    The current `wave_memory_subsystem` is a minimal single-line cache. A later
    revision should exploit the predictable per-voice Q24.8 phase stride with
    per-voice small line caches, demand-priority fills, and low-priority prefetch
@@ -194,30 +202,30 @@ the generic RTL to one vendor flow.
    response-latency, render-latency, and deadline-miss counters to compare this
    against the current one-line baseline.
 
-3. Replace the C++ storage model with concrete DDR3 controller models.
+4. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a
    Xilinx MIG wrapper. Model burst alignment, calibration delay, cache misses,
    prefetch, and request backpressure before relying on hardware timing.
 
-4. Split board clocks and reset sequencing.
+5. Split board clocks and reset sequencing.
    Separate system/control, memory, and audio clocks where the board requires it,
    then add CDC or asynchronous FIFOs at each boundary.
 
-5. Harden SPI timing assumptions.
+6. Harden SPI timing assumptions.
    Define the supported SPI mode, SCLK-to-system-clock timing limits, CS
    setup/hold, read turnaround timing, and any board wrapper synchronizers.
 
-6. Extend the audio interface.
+7. Extend the audio interface.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-7. Implement the SD-to-DDR3 asset-loading path.
+8. Implement the SD-to-DDR3 asset-loading path.
    `docs/asset_loading.md` defines the first board contract: an SD raw image with
    a small header, FPGA-side sector reads and DDR3 write DMA, and host/MCU-owned
    SF2 metadata and voice policy. Runtime `.sf2` parsing remains outside the
    generic wavetable core.
 
-8. Strengthen full-system pass/fail checks.
+9. Strengthen full-system pass/fail checks.
    Compare I2S-decoded PCM against the `render-quick` reference on short exact
    cases, record SPI transaction counts and memory stall cycles, and run longer
    high-polyphony stress cases.
