@@ -96,6 +96,9 @@ The renderer now overlaps work inside a single output frame:
 - If that prefetch is ready at `DSP_START`, the front end jumps directly to the
   next voice's `START_VOICE` instead of paying `SCAN_VOICE`, `READ_VOICE`, and
   `WAIT_VOICE` after the DSP issue cycle.
+- During endpoint fetch, `WAIT_L0`, stereo `WAIT_L1`, and `WAIT_R0` can present
+  the next endpoint request in the same cycle that the previous endpoint response
+  is consumed when `mem_req_ready` is already high.
 - The front end continues scanning and fetching later voices instead of waiting
   for the issued voice to finish DSP.
 - DSP results return later on `dsp_valid`; the retire path updates the stereo
@@ -157,6 +160,8 @@ does not guarantee one voice per cycle because endpoint fetch is still serialize
 through the existing memory interface. The front end can overlap later voice
 register prefetch and endpoint fetch with earlier DSP work, but bubbles are
 expected when memory sequencing cannot supply a complete context every cycle.
+Consecutive endpoint requests are issued without an extra FSM bubble when the
+memory interface is ready on the response cycle.
 
 The current control flow for one output frame is:
 
@@ -246,22 +251,49 @@ sample_tick
 A typical overlap inside one output frame looks like this:
 
 ```text
-cycle:        N        N+1      N+2      N+3      N+4      N+5      N+6
+time ---->
 
-front end:    fetch V0  fetch V0  issue V0 start V1 fetch V1 fetch V1 issue V1
-prefetch:     scan V1   read V1   ready
+voice N front end:
+  START/PROCESS -> REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 + issue R0 -> WAIT_R0 + issue R1 -> WAIT_R1 -> DSP_START
 
-DSP pipe:                         V0 S0    V0 S1    V0 S2    V0 S3    V0 S4
+voice N+1 prefetch:
+                         scan next valid -> set render_index -> sync read wait -> prefetched ready
 
-retire:                                                                  V0 result
+voice N+1 front end:
+                                                                                                  START/PROCESS -> REQ_L0 -> ...
+
+DSP pipe:
+                                                                                                  N S0 -> N S1 -> N S2 -> N S3 -> N S4
+                                                                                                                       N+1 S0 -> ...
+
+retire:
+                                                                                                                                      N result -> accum/filter writeback
+```
+
+For a mono voice the right-channel endpoint states are skipped, so the overlap is
+shorter:
+
+```text
+time ---->
+
+voice N mono endpoint path:
+  REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 -> DSP_START
+
+next-valid prefetch:
+            scan/read next voice while L0/L1 endpoints are in flight
+
+DSP/retire:
+                                         N S0 -> N S1 -> N S2 -> N S3 -> N S4 -> N result
 ```
 
 This overlap hides the fixed DSP latency behind later front-end work, but it does
 not make the memory fetch path itself a one-voice-per-cycle pipeline. The current
-prefetch removes much of the register-read bubble between adjacent valid voices;
-a fuller CPU-like render pipeline would still need separate front-end stages or
-queues for slot scan, endpoint request/response assembly, DSP issue, and retire,
-plus enough memory bandwidth or tagging to keep those stages fed.
+prefetch removes much of the register-read bubble between adjacent valid voices,
+and endpoint request overlap removes one request-state bubble between consecutive
+endpoints when the memory interface can accept the next request. A fuller CPU-like
+render pipeline would still need separate front-end stages or queues for slot
+scan, endpoint request/response assembly, DSP issue, and retire, plus enough
+memory bandwidth or tagging to keep those stages fed.
 
 ## Pipeline Stages
 
@@ -279,11 +311,11 @@ Current front-end state sequence:
 | `START_VOICE` | Snapshot render config/runtime for the selected voice. | `current_*` config snapshot and current phase snapshot. |
 | `PROCESS_VOICE` | Skip disabled/done voices or derive endpoint frames and advance phase. | `frame_0`, `frame_1`, `fraction`, updated phase writeback. |
 | `REQ_L0` | Issue left or mono endpoint-0 memory request. | Memory request address for `frame_0`. |
-| `WAIT_L0` | Wait for endpoint-0 response. | `raw_l0`. |
+| `WAIT_L0` | Wait for endpoint-0 response and, when ready, issue endpoint-1 in the same cycle. | `raw_l0`. |
 | `REQ_L1` | Issue left or mono endpoint-1 memory request. | Memory request address for `frame_1`. |
-| `WAIT_L1` | Wait for endpoint-1 response. For mono, duplicate left samples into right raw registers. | `raw_l1`; mono also sets `raw_r0/raw_r1`. |
+| `WAIT_L1` | Wait for endpoint-1 response. For mono, duplicate left samples into right raw registers. For stereo, issue right endpoint-0 in the same cycle when ready. | `raw_l1`; mono also sets `raw_r0/raw_r1`. |
 | `REQ_R0` | Stereo only: issue right endpoint-0 memory request. | Memory request address for right `frame_0`. |
-| `WAIT_R0` | Stereo only: wait for right endpoint-0 response. | `raw_r0`. |
+| `WAIT_R0` | Stereo only: wait for right endpoint-0 response and, when ready, issue right endpoint-1 in the same cycle. | `raw_r0`. |
 | `REQ_R1` | Stereo only: issue right endpoint-1 memory request. | Memory request address for right `frame_1`. |
 | `WAIT_R1` | Stereo only: wait for right endpoint-1 response. | `raw_r1`. |
 | `DSP_START` | Issue a complete `voice_dsp_context_t` to the DSP pipe. | Increments outstanding context count and either starts a prefetched next voice, falls back to scanning, or advances to `DRAIN`. |
@@ -456,11 +488,14 @@ four.
 
 The single-entry next-valid prefetch reduces the register-read bubble between
 adjacent valid voices when endpoint fetch takes long enough to hide the
-prefetch-read latency. On the 30-second Hedwig/MS_Basic quick-render workload, the
-measured 32-voice render cost changed from `250.278` average and `375` maximum
-cycles per sample to `195.729` average and `282` maximum cycles per sample, with
-the same `32` maximum enabled and filtered voices and exact C++ reference audio
-match.
+prefetch-read latency. Endpoint request overlap then removes one cycle between
+consecutive endpoint reads when the memory interface is ready as the previous
+response is consumed. On the 30-second Hedwig/MS_Basic quick-render workload, the
+measured 32-voice render cost changed from the original `250.278` average and
+`375` maximum cycles per sample to `195.729` average and `282` maximum after
+next-valid prefetch, then to `167.710` average and `226` maximum after endpoint
+request overlap. All runs kept the same `32` maximum enabled and filtered voices
+and exact C++ reference audio match.
 
 The regression latency guard for the 32-voice mono render case remains
 `600 + NUM_VOICES` cycles. This is a structural regression limit, not a

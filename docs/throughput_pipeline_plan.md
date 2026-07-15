@@ -17,14 +17,17 @@ fetch and does not overlap multiple output frames. The current front end also ha
 a single-entry next-valid prefetch path: while the current voice is fetching wave
 endpoints, it can move `render_index` to one later valid voice and let the
 synchronous register-bank and local phase/filter RAM reads settle before the
-current voice reaches `DSP_START`.
+current voice reaches `DSP_START`. The endpoint FSM also issues the next endpoint
+request from `WAIT_L0`, stereo `WAIT_L1`, and `WAIT_R0` in the same cycle that the
+previous endpoint response is consumed when the memory interface is ready.
 
 The current implementation is therefore not a full CPU-style global N-stage
 pipeline. Only the extracted DSP math is a fixed-stage pipe. The surrounding
 renderer is still a variable-latency state machine that supplies complete DSP
 contexts when register-bank reads and memory endpoint fetches finish. The
 single-entry prefetch removes some register-read bubbles between adjacent valid
-voices, but it is not a multi-entry endpoint queue.
+voices, and endpoint request overlap removes some request-state bubbles between
+adjacent endpoint reads. This is still not a multi-entry endpoint queue.
 
 Current structure:
 
@@ -43,7 +46,8 @@ sample_tick
 | - phase/frame update     |
 | - next-valid prefetch    |
 | - one-at-a-time memory   |
-|   endpoint requests      |
+|   endpoint requests with |
+|   response-cycle overlap |
 +--------------------------+
   |
   | complete voice_dsp_context_t
@@ -87,10 +91,10 @@ The whole renderer does not currently sustain that pattern because endpoint
 assembly normally takes multiple cycles per voice:
 
 ```text
-front end:  fetch V0  issue V0/start prefetched V1  fetch V1  issue V1 ...
+front end:  L0 rsp + L1 req  L1 rsp  issue V0/start prefetched V1  fetch V1 ...
 prefetch:   scan/read V1 while V0 endpoints are being fetched
-DSP pipe:             V0 S0  V0 S1  V0 S2  V0 S3  V0 S4
-retire:                                             V0 result
+DSP pipe:                       V0 S0  V0 S1  V0 S2  V0 S3  V0 S4
+retire:                                                       V0 result
 ```
 
 The intended next architectural step is to make more of the front end look like a
@@ -136,8 +140,11 @@ voice context every cycle if the front end can provide one.
 `multi_voice_pipeline` also now separates issue from retire for one output frame:
 after a complete endpoint set is issued into `voice_dsp_pipeline`, the scheduler
 continues scanning and fetching later voices while earlier DSP results retire into
-the accumulator and filter-state arrays. This overlaps DSP latency with later
-register reads and endpoint fetches, but it is still bounded by the single
+the accumulator and filter-state arrays. The scheduler also overlaps the next
+valid voice's register read with the current voice's endpoint fetch, and it can
+launch the next endpoint request in the same cycle that it consumes the prior
+endpoint response. This overlaps DSP latency, register-read latency, and part of
+the request/response state overhead, but it is still bounded by the single
 outstanding memory request interface. The next larger gain still requires Option B
 style endpoint assembly/queueing or a memory path that can return interpolation
 endpoints faster.

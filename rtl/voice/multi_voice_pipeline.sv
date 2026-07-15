@@ -227,12 +227,24 @@ module multi_voice_pipeline (
         mem_req_valid = 1'b1;
         mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
       end
+      WAIT_L0: begin
+        mem_req_valid = mem_rsp_valid;
+        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
+      end
       REQ_R0: begin
         mem_req_valid = 1'b1;
         mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
       end
+      WAIT_L1: begin
+        mem_req_valid = mem_rsp_valid && current_stereo;
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
+      end
       REQ_R1: begin
         mem_req_valid = 1'b1;
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
+      end
+      WAIT_R0: begin
+        mem_req_valid = mem_rsp_valid;
         mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
       end
       default: begin
@@ -419,20 +431,26 @@ module multi_voice_pipeline (
           end
         end
         REQ_L0:  if (mem_req_ready) state <= WAIT_L0;
-        WAIT_L0: if (mem_rsp_valid) begin raw_l0 <= mem_rsp_data; state <= REQ_L1; end
+        WAIT_L0: if (mem_rsp_valid) begin
+          raw_l0 <= mem_rsp_data;
+          state <= mem_req_ready ? WAIT_L1 : REQ_L1;
+        end
         REQ_L1:  if (mem_req_ready) state <= WAIT_L1;
         WAIT_L1: if (mem_rsp_valid) begin
           raw_l1 <= mem_rsp_data;
-          if (current_stereo)
-            state <= REQ_R0;
-          else begin
+          if (current_stereo) begin
+            state <= mem_req_ready ? WAIT_R0 : REQ_R0;
+          end else begin
             raw_r0 <= raw_l0;
             raw_r1 <= mem_rsp_data;
             state <= DSP_START;
           end
         end
         REQ_R0:  if (mem_req_ready) state <= WAIT_R0;
-        WAIT_R0: if (mem_rsp_valid) begin raw_r0 <= mem_rsp_data; state <= REQ_R1; end
+        WAIT_R0: if (mem_rsp_valid) begin
+          raw_r0 <= mem_rsp_data;
+          state <= mem_req_ready ? WAIT_R1 : REQ_R1;
+        end
         REQ_R1:  if (mem_req_ready) state <= WAIT_R1;
         WAIT_R1: if (mem_rsp_valid) begin
           raw_r1 <= mem_rsp_data;
