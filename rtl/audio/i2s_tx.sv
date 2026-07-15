@@ -1,5 +1,5 @@
 module i2s_tx #(
-  parameter int SYS_CLK_HZ = 49_152_000,
+  parameter int SYS_CLK_HZ = 100_000_000,
   parameter int SAMPLE_RATE_HZ = 48_000
 ) (
   input  logic            clk,
@@ -16,13 +16,11 @@ module i2s_tx #(
   localparam int BITS_PER_SAMPLE = synth_pkg::PCM_WIDTH;
   localparam int CHANNELS = 2;
   localparam int BCLK_HZ = SAMPLE_RATE_HZ * CHANNELS * BITS_PER_SAMPLE;
-  localparam int BCLK_HALF_CYCLES = SYS_CLK_HZ / (BCLK_HZ * 2);
-  localparam int BCLK_DIV_WIDTH = $clog2(BCLK_HALF_CYCLES);
+  localparam int BCLK_EDGE_HZ = BCLK_HZ * 2;
   localparam int BIT_INDEX_WIDTH = $clog2(BITS_PER_SAMPLE);
-  localparam logic [BCLK_DIV_WIDTH-1:0] BCLK_DIV_LAST = BCLK_DIV_WIDTH'(BCLK_HALF_CYCLES - 1);
   localparam logic [BIT_INDEX_WIDTH-1:0] BIT_INDEX_LAST = BIT_INDEX_WIDTH'(BITS_PER_SAMPLE - 1);
 
-  logic [BCLK_DIV_WIDTH-1:0] bclk_div;
+  logic bclk_edge;
   logic [BIT_INDEX_WIDTH-1:0] bit_index;
   logic channel_right;
   synth_pkg::pcm_t current_l;
@@ -33,9 +31,17 @@ module i2s_tx #(
 
   assign sample_ready = !pending_valid;
 
+  fractional_tick_gen #(
+    .SYS_CLK_HZ(SYS_CLK_HZ),
+    .TICK_HZ(BCLK_EDGE_HZ)
+  ) bclk_edge_gen (
+    .clk,
+    .rst,
+    .tick(bclk_edge)
+  );
+
   always_ff @(posedge clk) begin
     if (rst) begin
-      bclk_div <= '0;
       bit_index <= '0;
       channel_right <= 1'b0;
       current_l <= '0;
@@ -56,8 +62,7 @@ module i2s_tx #(
         pending_valid <= 1'b1;
       end
 
-      if (bclk_div == BCLK_DIV_LAST) begin
-        bclk_div <= '0;
+      if (bclk_edge) begin
         i2s_bclk <= ~i2s_bclk;
 
         if (i2s_bclk) begin
@@ -86,8 +91,6 @@ module i2s_tx #(
             i2s_lrclk <= channel_right;
           end
         end
-      end else begin
-        bclk_div <= bclk_div + 1'b1;
       end
     end
   end

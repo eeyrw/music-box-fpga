@@ -6,6 +6,8 @@
 set board_name smart_artix
 set part_name xc7a50tfgg484-2
 set top_name smart_artix_top
+set synth_run_name synth_smart_artix_top
+set impl_run_name impl_smart_artix_top
 
 set script_dir [file dirname [file normalize [info script]]]
 set board_dir [file normalize [file join $script_dir ../..]]
@@ -49,8 +51,15 @@ if {[file exists $project_file]} {
 }
 set_property target_language Verilog [current_project]
 
+if {[llength [get_runs -quiet $synth_run_name]] == 0 && [llength [get_runs -quiet synth_1]] != 0} {
+  set_property NAME $synth_run_name [get_runs synth_1]
+}
+if {[llength [get_runs -quiet $impl_run_name]] == 0 && [llength [get_runs -quiet impl_1]] != 0} {
+  set_property NAME $impl_run_name [get_runs impl_1]
+}
+
 file mkdir $build_ip_root
-foreach ip_name [list clk_wiz_0 mig_7series_0] {
+foreach ip_name [list smart_artix_clk_50m_to_200m smart_artix_ddr3_mig] {
   set source_ip_dir [file join $source_ip_root $ip_name]
   set build_ip_dir [file join $build_ip_root $ip_name]
   if {$regenerate_ip || ![file exists $build_ip_dir]} {
@@ -60,8 +69,8 @@ foreach ip_name [list clk_wiz_0 mig_7series_0] {
 }
 
 foreach ip [list \
-  $build_ip_root/clk_wiz_0/clk_wiz_0.xci \
-  $build_ip_root/mig_7series_0/mig_7series_0.xci \
+  $build_ip_root/smart_artix_clk_50m_to_200m/smart_artix_clk_50m_to_200m.xci \
+  $build_ip_root/smart_artix_ddr3_mig/smart_artix_ddr3_mig.xci \
 ] {
   if {[file exists $ip]} {
     if {[llength [get_files -quiet $ip]] == 0} {

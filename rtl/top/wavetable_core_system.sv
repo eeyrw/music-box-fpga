@@ -1,7 +1,7 @@
 module wavetable_core_system #(
   parameter int LINE_WORDS = 8,
   parameter int OUTPUT_FIFO_DEPTH = 8,
-  parameter int SYS_CLK_HZ = 49_152_000,
+  parameter int SYS_CLK_HZ = 100_000_000,
   parameter int SAMPLE_RATE_HZ = 48_000
 ) (
   input  logic                     clk,
@@ -29,11 +29,6 @@ module wavetable_core_system #(
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles
 );
-  localparam int SAMPLE_TICK_CYCLES = SYS_CLK_HZ / SAMPLE_RATE_HZ;
-  localparam int SAMPLE_TICK_WIDTH = $clog2(SAMPLE_TICK_CYCLES);
-  localparam logic [SAMPLE_TICK_WIDTH-1:0] SAMPLE_TICK_LAST = SAMPLE_TICK_WIDTH'(SAMPLE_TICK_CYCLES - 1);
-
-  logic [SAMPLE_TICK_WIDTH-1:0] sample_tick_count;
   logic sample_tick;
   logic bus_valid;
   logic bus_write;
@@ -59,20 +54,14 @@ module wavetable_core_system #(
   logic render_pending;
   logic [15:0] render_latency_count;
 
-  always_ff @(posedge clk) begin
-    if (rst) begin
-      sample_tick_count <= '0;
-      sample_tick <= 1'b0;
-    end else begin
-      sample_tick <= 1'b0;
-      if (sample_tick_count == SAMPLE_TICK_LAST) begin
-        sample_tick_count <= '0;
-        sample_tick <= 1'b1;
-      end else begin
-        sample_tick_count <= sample_tick_count + 1'b1;
-      end
-    end
-  end
+  fractional_tick_gen #(
+    .SYS_CLK_HZ(SYS_CLK_HZ),
+    .TICK_HZ(SAMPLE_RATE_HZ)
+  ) sample_tick_gen (
+    .clk,
+    .rst,
+    .tick(sample_tick)
+  );
 
   always_ff @(posedge clk) begin
     if (rst) begin

@@ -283,7 +283,8 @@ wrapper that combines:
 - `spi_register_bridge` for control writes.
 - `wavetable_core_memory` and `wave_memory_subsystem` for the audio core and line
   memory interface.
-- A fixed 49.152 MHz / 48 kHz sample-tick generator.
+- A `100 MHz` system clock with `fractional_tick_gen` instances for sample ticks
+  and I2S BCLK edges.
 - `i2s_tx` for serial audio output.
 
 The C++ harness does not read internal PCM signals. It interacts only with the
@@ -315,18 +316,18 @@ counters, and the same register-write breakdown used by `render-quick`. The
 register counters are useful for separating pin-level SPI control overhead from
 audio rendering and memory traffic.
 
-This path currently supports only `SAMPLE_RATE=48000`, matching the fixed
-49.152 MHz system clock and 48 kHz audio wrapper. A small startup underrun can be
-reported before the first programmed sample is available; sample drops indicate
-the core produced a frame when the I2S transmitter could not accept it and should
-be treated as an integration bug.
+This path currently supports only `SAMPLE_RATE=48000`, using the default
+`100 MHz` system clock and fractional audio timing. A small startup underrun can
+be reported before the first programmed sample is available; sample drops
+indicate the core produced a frame when the I2S transmitter could not accept it
+and should be treated as an integration bug.
 
 Current full-system limitations are intentional:
 
 - The SPI master is a C++ test harness model, not RTL intended for synthesis.
 - The storage side is still a C++ line-memory model, not a parallel NOR, SPI
   Flash, SDRAM, or DDR controller.
-- The wrapper has one fixed 49.152 MHz clock and does not yet model board PLLs,
+- The wrapper has one fixed `100 MHz` clock and does not yet model board PLLs,
   clock-domain crossings, codec MCLK, or reset sequencing.
 - I2S RX exists only in the C++ harness and focused testbench; the synthesizable
   audio path is transmit-only.

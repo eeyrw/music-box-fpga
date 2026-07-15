@@ -186,7 +186,7 @@ or `parallel-nor`.
 an SPI master model to program the top-level SPI pins, serves the external line
 memory interface as a storage model, decodes the I2S output pins, and writes
 `build/render_full_system/out.wav` from that I2S receiver. The current full-system
-wrapper uses a fixed 49.152 MHz system clock and 48 kHz audio rate.
+wrapper uses a `100 MHz` system clock and fractional 48 kHz audio timing.
 
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.

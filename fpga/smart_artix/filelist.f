@@ -6,8 +6,10 @@
 ../../rtl/control/voice_bram_1w2r.sv
 ../../rtl/control/voice_register_bank.sv
 ../../rtl/memory/wave_memory_subsystem.sv
+../../rtl/dsp/biquad_filter_datapath.sv
 ../../rtl/dsp/linear_interpolator.sv
 ../../rtl/dsp/gain_saturate.sv
+../../rtl/audio/fractional_tick_gen.sv
 ../../rtl/audio/output_sample_fifo.sv
 ../../rtl/audio/i2s_tx.sv
 ../../rtl/voice/multi_voice_pipeline.sv

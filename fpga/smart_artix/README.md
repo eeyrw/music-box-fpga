@@ -17,9 +17,9 @@ board schematic and Vivado-generated IP before implementation.
 - Control interface: external MCU or PC USB-to-SPI adapter.
 - Audio codec: I2S only, no register initialization, no MCLK requirement.
 - Board oscillator: `50 MHz`.
-- Generated clock wizard: `clk_wiz_0`, currently `50 MHz` input to `200 MHz`
+- Generated clock wizard: `smart_artix_clk_50m_to_200m`, currently `50 MHz` input to `200 MHz`
   output.
-- Generated MIG IP source configuration: `vivado/ip/mig_7series_0`.
+- Generated MIG IP source configuration: `vivado/ip/smart_artix_ddr3_mig`.
 
 Still required from the board documentation:
 
@@ -120,9 +120,9 @@ hardware build that needs real DDR3 pins.
 Board reference files such as schematics belong under `docs/`. They are kept as
 source material for later pin and constraint work, not as synthesis inputs.
 
-## Current Vivado 2018.3 Status
+## Current Vivado 2025.2 Status
 
-Vivado is installed locally under `/opt/Xilinx/Vivado/2018.3`. The batch flow in
+Vivado is installed locally under `/opt/Xilinx2051.1/2025.2/Vivado`. The batch flow in
 `vivado/scripts/synth.tcl` now creates a local project for `xc7a50tfgg484-2`,
 reads `filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
 `smart_artix_top`, reads source-controlled IP configuration from `vivado/ip`,
@@ -150,7 +150,7 @@ confirmed `50 MHz` oscillator. DDR3 pins come from the generated MIG XDC.
 directly by the Vivado batch flow; use it when checking or regenerating the MIG
 pin configuration, then let MIG emit the final DDR3 XDC.
 
-The current board top instantiates `clk_wiz_0` and `mig_7series_0` when the
+The current board top instantiates `smart_artix_clk_50m_to_200m` and `smart_artix_ddr3_mig` when the
 generated IP configuration is present. The source-controlled IP inputs are the
 Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` file under
 `vivado/ip`; generated Verilog, checkpoints, project files, and reports remain
@@ -158,30 +158,25 @@ local Vivado output under `../../build/fpga/smart_artix/vivado`.
 `smart_artix_mig_stub` remains in the repository for unit tests and non-Vivado
 simulation, but it is no longer used by `smart_artix_top`.
 
-Important clocking issue: the generated `clk_wiz_0` produces `200 MHz` from the
-board's `50 MHz` oscillator, but the generated MIG project currently records
-`InputClkFreq = 333.333 MHz`, `TimePeriod = 3000 ps`, and `PHYRatio = 2:1`.
-The latest MIG wrapper has no separate `clk_ref_i` port, so `smart_artix_top`
-feeds the available `200 MHz` clock directly to MIG `sys_clk_i`. Before any real
-DDR3 bring-up, confirm whether this regenerated MIG is intended to use a
-`200 MHz` input despite the project file still recording `333.333 MHz`. If not,
-fix this one of two ways:
+Clocking status: the generated `smart_artix_clk_50m_to_200m` produces `200 MHz`
+from the board's `50 MHz` oscillator, and the generated MIG project records
+`InputClkFreq = 200 MHz`, `TimePeriod = 2500 ps`, and `PHYRatio = 4:1`. The
+latest MIG wrapper has no separate `clk_ref_i` port, so `smart_artix_top` feeds
+the available `200 MHz` clock directly to MIG `sys_clk_i`.
 
-1. Regenerate `clk_wiz_0` with two outputs: `333.333 MHz` for MIG `sys_clk_i`
-   if the MIG remains configured for that input frequency.
-2. Regenerate `mig_7series_0` so its input clock frequency matches the available
-   `200 MHz` system clock, if that is a valid MIG setting for the selected DDR3
-   rate.
-
-Do not expect DDR3 calibration to pass on hardware until the MIG `sys_clk_i`
-frequency matches the MIG project setting.
+The core does not run at the Clocking Wizard's `200 MHz` output. The MIG derives
+its DDR PHY clocks internally and exposes a `100 MHz` user interface clock
+(`ui_clk`, reported as `clk_pll_i`). `smart_artix_top` intentionally uses that
+clock as `clk_sys` and sets `SYS_CLK_HZ = 100_000_000`, keeping the wavetable core
+and MIG app interface in one clock domain.
 
 The latest generated MIG native app interface is `128` bits wide with a `29` bit
 app address. The board top therefore uses `LINE_WORDS = 8` so one MIG read beat
 contains one complete wavetable cache line.
 
-Latest post-synthesis result with `clk_wiz_0`, `mig_7series_0`, the generated MIG
-XDC, and the read-only line-reader path connected:
+Latest post-synthesis result with `smart_artix_clk_50m_to_200m`,
+`smart_artix_ddr3_mig`, the generated MIG XDC, the read-only line-reader path,
+and the voice snapshot timing stage connected:
 
 ```text
 Design: smart_artix_top
@@ -189,7 +184,7 @@ Device: 7a50tfgg484-2
 Vivado result: synth_design completed successfully
 Errors: 0
 Critical warnings: 0
-Warnings: 105
+Warnings: 310 during synth_design; 165 in final Vivado session summary
 ```
 
 The warning count is left visible instead of suppressed. It currently includes
@@ -199,34 +194,56 @@ input clock and external SPI/I2S timing contracts are still unresolved.
 Post-synthesis utilization:
 
 ```text
-Slice LUTs       18723 / 32600  57.43%
-Slice Registers 45282 / 65200  69.45%
+Slice LUTs        9905 / 32600  30.38%
+Slice Registers  13611 / 65200  20.88%
 DSP48E1             26 / 120    21.67%
-Block RAM tiles      0 / 75      0.00%
+Block RAM tiles      9 / 75     12.00%
 Bonded IOB          61 / 250    24.40%
 ```
 
-Post-synthesis timing does not meet constraints yet:
+Post-synthesis timing still reports hold violations in generated clocking paths:
 
 ```text
-WNS  -7.605 ns
-TNS  -1378.595 ns
-Failing setup endpoints: 546
-WHS  -1.329 ns
-THS  -23.799 ns
-Failing hold endpoints: 90
+WNS  +0.678 ns
+TNS  0.000 ns
+Failing setup endpoints: 0
+WHS  -1.345 ns
+THS  -23.952 ns
+Failing hold endpoints: 55
 No unclocked registers
 No unconstrained internal endpoints
 ```
 
-Treat this timing result as a clocking/configuration warning until the MIG input
-frequency and final audio/system clock plan are settled.
+Treat this post-synthesis timing result as an implementation-stage DDR PHY timing
+warning. The remaining hold violations are in MIG-generated clock domains such as
+`oserdes_clk` to `oserdes_clkdiv` and the Clocking Wizard output to MIG
+`clk_pll_i`, not in the generic wavetable core.
 
-The first timing pressure is expected around the voice pipeline multiply and wide
-accumulation paths. Vivado also reports that several wide multipliers do not have
-the two pipeline stages it recommends. Before treating this as a board-blocking
-failure, run full implementation after real pins and clocking are known; then, if
-timing still fails, prefer adding focused pipeline stages in
+Post-route timing closes after snapshotting the selected voice before phase
+advance:
+
+```text
+WNS  +0.428 ns
+TNS  0.000 ns
+Failing setup endpoints: 0
+WHS  +0.036 ns
+THS  0.000 ns
+Failing hold endpoints: 0
+```
+
+The previous worst routed setup path was in the core voice pipeline, from
+replicated `voice_index_reg` through configuration/runtime selection and phase
+carry-chain logic to `phase_reg`. The current `multi_voice_pipeline` keeps the
+external interface unchanged and adds a `PROCESS_VOICE` stage: `START_VOICE`
+captures the selected voice's config, runtime controls, commit bit, and phase;
+the next cycle computes frame indexes, loop wrap, and phase writeback from those
+registers. This costs one clock per visited voice and keeps the core at the MIG
+`100 MHz` `ui_clk`.
+
+The first remaining timing pressure to watch is around the voice pipeline
+multiply and wide accumulation paths. Vivado also reports that several wide
+multipliers do not have the two pipeline stages it recommends. If later feature
+work reintroduces timing pressure, prefer adding focused pipeline stages in
 `rtl/voice/multi_voice_pipeline.sv` over changing board constraints to hide the
 path.
 
@@ -257,12 +274,14 @@ Board-level optimization should now focus on these items, in order:
 
 1. Replace the temporary non-DDR XDC package pins with schematic-verified Smart Artix
    pins before connecting hardware.
-2. Fix or confirm the MIG clocking mismatch: provide `333.333 MHz` to MIG
-   `sys_clk_i` if the MIG expects it, or regenerate/verify MIG for the available
-   `200 MHz` input clock.
-3. Decide the final audio/system clock strategy. Running the synth core on MIG
-   `ui_clk` keeps the first integration single-clock but does not naturally
-   produce exact 48 kHz I2S unless `SYS_CLK_HZ` and dividers are adjusted.
+2. Run full implementation with the `200 MHz` MIG input clock and review
+   post-route MIG DDR PHY hold timing before treating post-synthesis hold as a
+   board-blocking failure.
+3. Keep the first audio/system clock strategy on MIG `ui_clk` unless hardware
+   measurements show a need to split domains. The board top now records
+   `SYS_CLK_HZ = 100_000_000`; `sample_tick` and I2S BCLK use fractional
+   phase-accumulator dividers from that clock. Recheck I2S output timing on
+   hardware before adding a separate audio clock or CDC bridge.
 4. Add real reset conditioning and document reset polarity.
 5. Add SPI mode, maximum SCLK, CDC, and input-delay constraints for the selected
    control source.

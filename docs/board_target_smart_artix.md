@@ -114,9 +114,9 @@ board constraints are added. The skeleton includes a first `smart_artix_ddr3_lin
 adapter for the 7-series MIG native read interface; it assumes a 128-bit MIG app
 read data beat returns one `LINE_WORDS = 8` PCM-word line.
 
-## Vivado 2018.3 Snapshot
+## Vivado 2025.2 Snapshot
 
-Vivado 2018.3 is installed under `/opt/Xilinx2051.1/2025.2/Vivado` on the local
+Vivado 2025.2 is installed under `/opt/Xilinx2051.1/2025.2/Vivado` on the local
 development machine. The Smart Artix batch flow is in
 `fpga/smart_artix/vivado/scripts/synth.tcl` and currently runs synthesis for
 `smart_artix_top` with `xc7a50tfgg484-2`.
@@ -137,19 +137,40 @@ Block RAM tiles: 0 / 75, 0.00%
 Timing WNS: -0.725 ns at 49.152 MHz
 ```
 
-Current post-synthesis result after the Q24.8 phase change, 48-bit filter state,
-active/shadow config split, staged readback, BRAM-backed active
-configuration/runtime filter/runtime scalar storage, and the pipelined filter
-datapath, using the generated MIG and clock wizard:
+Current post-synthesis result after upgrading the checked-in Clocking Wizard and
+MIG `.xci` files for Vivado 2025.2, using the generated MIG and clock wizard,
+and adding a one-cycle voice snapshot stage in `multi_voice_pipeline`:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
-Slice LUTs: 9723 / 32600, 29.83%
-Slice registers: 13766 / 65200, 21.11%
+Slice LUTs: 9905 / 32600, 30.38%
+Slice registers: 13611 / 65200, 20.88%
 DSP48E1: 26 / 120, 21.67%
 Block RAM tiles: 9 / 75, 12.00%
-Setup WNS: +0.670 ns, WHS: -1.329 ns
+Setup WNS: +0.678 ns, WHS: -1.345 ns
 ```
+
+Current post-route result with the same inputs:
+
+```text
+Vivado result: route_design completed successfully
+Slice LUTs: 9174 / 32600, 28.14%
+Slice registers: 13491 / 65200, 20.69%
+DSP48E1: 26 / 120, 21.67%
+Block RAM tiles: 9 / 75, 12.00%
+Setup WNS: +0.428 ns, TNS: 0.000 ns, failing endpoints: 0
+Hold WHS: +0.036 ns, THS: 0.000 ns, failing endpoints: 0
+```
+
+Implementation fixes the post-synthesis hold violations. The previous routed
+setup failure in the `clk_pll_i` domain was inside the core voice pipeline from
+`voice_index_reg` through configuration/runtime selection and phase carry-chain
+logic to `phase_reg`. The fix keeps the core on MIG `ui_clk` (`clk_pll_i`,
+`100 MHz`) and adds a `PROCESS_VOICE` stage: `START_VOICE` snapshots the selected
+voice's configuration, runtime controls, commit bit, and current phase into local
+registers; the next cycle performs phase advance, loop wrap, frame selection, and
+phase writeback from those registers. This costs one clock per visited voice and
+keeps the external core and memory interfaces unchanged.
 
 The latest pass confirms that the largest voice-register-bank muxes have been
 removed: active configuration is stored as a `32 x 172` BRAM-backed word and
@@ -160,10 +181,12 @@ configuration/runtime readback was intentionally removed from the main register
 path; low-rate inspection now uses the staged readback window, and software
 should still mirror write state on the host side for normal operation.
 
-The filter pipeline removed the previous `clk_pll_i` post-synthesis setup
-violation. Vivado still reports hold violations, primarily around generated
-MIG/clocking paths. Treat those as implementation/clocking-constraint work until
-the MIG input clock, real board pins, and final clock-domain plan are confirmed.
+The filter pipeline removed an earlier `clk_pll_i` post-synthesis setup
+violation. The later voice snapshot stage removed the routed phase-update setup
+failure while implementation continues to close the generated MIG/clocking hold
+paths. Remaining board-level timing gaps are the unconstrained external SPI, I2S,
+and debug I/O delays, which need real external timing contracts before hardware
+signoff.
 
 ## Vivado Project Reuse
 
@@ -173,13 +196,15 @@ The Smart Artix Tcl flow intentionally keeps the generated Vivado project under
 regenerating IP output products unless they are missing, and adds source and XDC
 files only if they are not already in the project.
 
-`synth.tcl` checks the `synth_1` run before launching synthesis:
+`synth.tcl` checks the `synth_smart_artix_top` run before launching synthesis:
 
 - If the run is complete and not marked `NEEDS_REFRESH`, the script reuses it,
   opens the existing run, and rewrites the post-synthesis checkpoint and reports.
 - If RTL, XDC, IP, or project inputs make the run stale, the script resets and
-  relaunches `synth_1` instead of failing with Vivado's `needs to be reset`
+  relaunches `synth_smart_artix_top` instead of failing with Vivado's `needs to be reset`
   message.
+- If a previous failed synthesis leaves `synth_smart_artix_top` in a non-startable state, the
+  script resets and relaunches the run.
 - If a clean rebuild is required, set `VIVADO_FORCE_REBUILD=1`. If IP output
   products need to be regenerated from the source `.xci` files, set
   `VIVADO_REGENERATE_IP=1`.
@@ -189,7 +214,7 @@ Source changes still require a synthesis rerun; unchanged inputs avoid a needles
 project/IP rebuild and avoid a needless synthesis rerun.
 
 The behavior was verified with three batch runs: an up-to-date run logged
-`synth_1 is complete and up-to-date; reusing existing run`, touching an RTL file
+`synth_smart_artix_top is complete and up-to-date; reusing existing run`, touching an RTL file
 caused an automatic reset/relaunch and completed synthesis, and
 `VIVADO_FORCE_REBUILD=1` rebuilt the project and completed synthesis.
 
@@ -198,24 +223,29 @@ caused an automatic reset/relaunch and completed synthesis, and
 Generated IP source configuration lives under `fpga/smart_artix/vivado/ip/`.
 Only the source-level IP configuration files are intended for version control:
 the Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` referenced by
-that `.xci`. Vivado-generated project files, checkpoints, netlists, and reports
-remain local build output under `build/fpga/smart_artix/vivado/`. `clk_wiz_0`
+that `.xci`. The checked-in `.xci` files were upgraded with Vivado 2025.2 so a
+clean build can generate output products without first unlocking old 2018.3 IP
+instances. Vivado-generated project files, checkpoints, netlists, and reports
+remain local build output under `build/fpga/smart_artix/vivado/`. `smart_artix_clk_50m_to_200m`
 converts the board `50 MHz` oscillator to `200 MHz`. The latest generated
-`mig_7series_0` native app interface is `128` bits wide with a `29` bit app
+`smart_artix_ddr3_mig` native app interface is `128` bits wide with a `29` bit app
 address, so the Smart Artix top uses `LINE_WORDS = 8` for one complete cache line
 per MIG read beat.
 
-The generated MIG project currently records `InputClkFreq = 333.333 MHz`,
-`TimePeriod = 3000 ps`, and `PHYRatio = 2:1`. The latest MIG wrapper exposes only
-`sys_clk_i`, with no separate `clk_ref_i`; the current top feeds the available
-`200 MHz` clock to `sys_clk_i`. Before hardware DDR3 bring-up, confirm that this
-is the intended MIG input clock, regenerate the clock wizard for `333.333 MHz`,
-or regenerate MIG for a `200 MHz` input clock if that mode is valid for the
-selected DDR3 rate.
+The generated MIG project records `InputClkFreq = 200 MHz`,
+`TimePeriod = 2500 ps`, and `PHYRatio = 4:1`. The latest MIG wrapper exposes only
+`sys_clk_i`, with no separate `clk_ref_i`; the current top feeds the
+Clocking Wizard's `200 MHz` output to MIG `sys_clk_i`.
 
-The current Vivado batch synthesis passes with the generated MIG and clock wizard
-connected. Most warnings come from generated Vivado IP and early board-level
-timing gaps; they are not yet filtered because the clocking and real external
-timing constraints are unsettled. Treat the reported `clk_pll_i` setup and hold
-violations as clocking/configuration and microarchitecture issues until the MIG
-input frequency and final clock plan are confirmed.
+The Clocking Wizard output is not the core clock. MIG derives the DDR PHY clocks
+and exposes `ui_clk` as `clk_pll_i`, currently `100 MHz`; `smart_artix_top` uses
+that clock as `clk_sys` and sets `SYS_CLK_HZ = 100_000_000`. This keeps the core
+and MIG app interface in one clock domain and avoids a CDC bridge on the memory
+request path.
+
+The current Vivado batch synthesis and implementation flows pass with the
+generated MIG and clock wizard connected. Most warnings come from generated
+Vivado IP and early board-level timing gaps; they are not yet filtered because
+the real external timing constraints are unsettled. Full implementation removes
+the post-synthesis hold violations and the core `clk_pll_i` phase-update setup
+path now meets timing.

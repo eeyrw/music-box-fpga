@@ -35,14 +35,14 @@ module smart_artix_top (
   localparam int OUTPUT_FIFO_DEPTH = 8;
   localparam int MIG_ADDR_WIDTH = 29;
   localparam int MIG_DATA_WIDTH = LINE_WORDS * 16;
-  localparam int SYS_CLK_HZ = 166_666_667;
+  localparam int SYS_CLK_HZ = 100_000_000;
   localparam int SAMPLE_RATE_HZ = 48_000;
 
   logic clk_sys;
   logic rst_sys;
   logic clk_mig_sys;
 
-  clk_wiz_0 board_clk_wiz (
+  smart_artix_clk_50m_to_200m board_clock_generator (
     .clk_out1(clk_mig_sys),
     .resetn(rst_n),
     .clk_in1(clk_in)
@@ -81,7 +81,7 @@ module smart_artix_top (
   assign clk_sys = mig_ui_clk;
   assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
 
-  mig_7series_0 mig_ddr3 (
+  smart_artix_ddr3_mig ddr3_memory_controller (
     .ddr3_dq(ddr3_dq),
     .ddr3_dqs_n(ddr3_dqs_n),
     .ddr3_dqs_p(ddr3_dqs_p),

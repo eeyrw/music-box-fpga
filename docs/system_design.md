@@ -61,8 +61,8 @@ SPI pins -> spi_register_bridge -> wavetable_core_memory -> i2s_tx -> I2S pins
                              external line-memory pins
 ```
 
-It uses a fixed `49.152 MHz` system clock and generates one `sample_tick` every
-1024 cycles for 48 kHz audio. It is a simulation integration wrapper, not a board
+It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
+from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
 
 ## Rendering Pipeline
@@ -70,9 +70,9 @@ constraint or PLL specification.
 `multi_voice_pipeline` is a time-multiplexed renderer. On each accepted
 `sample_tick`, the renderer scans voice slots in index order, reads each active
 configuration/runtime snapshot through the register bank's synchronous read path,
-skips disabled or invalid slots, fetches the needed interpolation endpoints,
-processes one voice through the shared DSP path, and accumulates into a signed
-32-bit stereo mixer.
+captures the selected voice into local timing registers, skips disabled or
+invalid slots, fetches the needed interpolation endpoints, processes one voice
+through the shared DSP path, and accumulates into a signed 32-bit stereo mixer.
 
 The core state sequence is:
 
@@ -81,6 +81,7 @@ IDLE
 READ_VOICE
 WAIT_VOICE
 START_VOICE
+PROCESS_VOICE
 REQ_L0  -> WAIT_L0
 REQ_L1  -> WAIT_L1
 REQ_R0  -> WAIT_R0   stereo only
@@ -103,9 +104,12 @@ enveloped    = saturate(gained * envelope_level >>> 15) otherwise
 mix_accum   += enveloped
 ```
 
-Phase is advanced after capturing the current frame indexes. Loop wrapping uses
-one subtraction, so valid V1 looped voices require `phase_inc < (loop_end -
-loop_start) << 8`.
+`START_VOICE` snapshots the selected voice's configuration, runtime controls,
+commit bit, and phase. `PROCESS_VOICE` advances phase after capturing the current
+frame indexes. Loop wrapping uses one subtraction, so valid V1 looped voices
+require `phase_inc < (loop_end - loop_start) << 8`. The extra stage keeps the
+Artix-7 board implementation on the MIG `100 MHz` `ui_clk` without adding a CDC
+bridge between the core and MIG app interface.
 
 ## Control Model
 
@@ -152,9 +156,22 @@ The hardware contract is register-level:
 
 ## Real-Time Budget
 
-At 49.152 MHz and 48 kHz, one output frame has a fixed budget of 1024 system
-clock cycles. The current renderer is sequential: more active voices and more
-memory misses increase the latency between `sample_tick` and `sample_valid`.
+The generic simulation wrapper and current Smart Artix board wrapper both use a
+`100 MHz` system clock by default. A 48 kHz output frame has about 2083 core
+cycles on average with the fractional sample-tick divider. The renderer is
+sequential: more active voices and more memory misses increase the latency
+between `sample_tick` and `sample_valid`.
+
+`fractional_tick_gen` owns the phase-accumulator divider used for both output
+frame ticks and I2S BCLK edges when `SYS_CLK_HZ` is not an integer multiple of
+the requested audio clocks. This keeps the long-term sample rate aligned to
+`SAMPLE_RATE_HZ` in the single `100 MHz` domain, at the cost of one-system-clock
+edge placement jitter.
+
+The optional biquad filter datapath is isolated in `biquad_filter_datapath`. The
+voice scheduler still owns the multi-cycle sequencing, per-voice filter state
+arrays, and state writeback; the filter module owns the coefficient multiplies,
+PCM saturation, and next-state arithmetic.
 
 The practical board question is whether all active voices can render before the
 I2S transmitter needs the next frame. If not, the next architecture work is an
@@ -223,11 +240,11 @@ the generic RTL to one vendor flow.
 
 7. Keep vendor build flows incremental where the tool benefits from it.
    The Smart Artix Vivado synthesis flow now preserves the generated project,
-   IP output products, and completed `synth_1` run under `build/` and reuses an
-   up-to-date run. Source changes still reset and rerun synthesis because Vivado
-   2018.3 requires that for stale completed runs. Future implementation scripts
-   should use checkpoint-based incremental implementation where it provides a
-   larger runtime benefit than synthesis project reuse.
+   IP output products, and completed `synth_smart_artix_top` run under `build/` and reuses an
+   up-to-date run. Source changes still reset and rerun stale completed synthesis
+   runs. Future implementation scripts should use checkpoint-based incremental
+   implementation where it provides a larger runtime benefit than synthesis
+   project reuse.
 
 8. Extend the audio interface.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,

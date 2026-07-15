@@ -48,9 +48,9 @@ fpga/<board-name>/
    and adapt external memory/audio/control ports to the board devices.
 
 3. Generate board clocks.
-   The simulation wrapper defaults to a 49.152 MHz system clock for 48 kHz audio.
-   The board project must either generate that clock with a PLL/MMCM or adjust
-   `SYS_CLK_HZ` and verify the resulting audio clocks.
+   The current wrappers default to a `100 MHz` system clock and derive audio
+   timing with fractional phase-accumulator dividers. The board project must set
+   `SYS_CLK_HZ` to the actual core clock and verify the resulting audio clocks.
 
 4. Add constraints.
    Define pin locations, I/O standards, drive strength where needed, primary

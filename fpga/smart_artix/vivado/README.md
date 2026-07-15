@@ -41,9 +41,9 @@ source directories and runs `generate_target` only when build-tree IP products a
 missing, or when forced. It also avoids repeatedly adding the same RTL and XDC
 files to the project.
 
-`synth.tcl` reuses an up-to-date completed `synth_1` run. If Vivado marks the run
+`synth.tcl` reuses an up-to-date completed `synth_smart_artix_top` run. If Vivado marks the run
 stale after source or constraint changes, the script resets and relaunches
-`synth_1` automatically. This avoids the common batch-flow failure where Vivado
+`synth_smart_artix_top` automatically. This avoids the common batch-flow failure where Vivado
 refuses to launch a completed stale run until it has been reset.
 
 Useful environment overrides:
