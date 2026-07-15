@@ -72,6 +72,7 @@ memory interface, but it separates these internal concerns:
 
 ```text
 active-slot scheduler and register snapshot
+  -> next-valid voice prefetch during endpoint fetch
   -> endpoint fetch FSM
   -> fixed-latency voice_dsp_pipeline
   -> retire accumulator and filter-state writeback
@@ -89,8 +90,14 @@ The renderer now overlaps work inside a single output frame:
 
 - After a voice's endpoints are assembled, `DSP_START` presents a complete
   immutable `voice_dsp_context_t` to `voice_dsp_pipeline`.
-- The front end immediately continues scanning and fetching later voices instead
-  of waiting for the issued voice to finish DSP.
+- While the current voice fetches endpoints, a single-entry prefetch scanner may
+  advance `render_index` to the next valid voice and let the synchronous
+  register-bank and local phase/filter RAM outputs settle early.
+- If that prefetch is ready at `DSP_START`, the front end jumps directly to the
+  next voice's `START_VOICE` instead of paying `SCAN_VOICE`, `READ_VOICE`, and
+  `WAIT_VOICE` after the DSP issue cycle.
+- The front end continues scanning and fetching later voices instead of waiting
+  for the issued voice to finish DSP.
 - DSP results return later on `dsp_valid`; the retire path updates the stereo
   accumulator and writes the result voice's filter state.
 - `DRAIN` waits until all issued contexts have retired before final mix
@@ -99,6 +106,162 @@ The renderer now overlaps work inside a single output frame:
 Only one output frame is in flight. The next `sample_tick` is accepted only after
 the prior frame has drained and `sample_valid` has been emitted. This keeps phase,
 filter-state, and accumulator ownership simple.
+
+This should not be read as a CPU-style global N-stage pipeline. The renderer has
+two different timing domains inside one clock domain:
+
+- The outer voice-render front end is an FSM with variable latency. It scans voice
+  slots, waits for synchronous register-bank reads, issues one wave-memory request
+  at a time, and assembles interpolation endpoints. It also has a single-entry
+  next-valid prefetch path that can prepare one later voice's register outputs
+  while the current voice is fetching endpoints.
+- The inner `voice_dsp_pipeline` is a fixed-latency valid pipeline. Once the front
+  end has a complete voice context, the DSP block can move that context through
+  its stages like a conventional pipeline.
+
+In other words, the current shape is:
+
+```text
+sample_tick
+  |
+  v
+variable-latency front end
+  scan slots
+  read voice config/runtime
+  advance phase
+  prefetch next valid slot during endpoint fetch
+  fetch L0/L1[/R0/R1] endpoints
+  package voice_dsp_context_t
+  |
+  v
+fixed-latency 5-stage DSP pipe
+  interpolate
+  filter products
+  filter output
+  filter state
+  gain/envelope
+  |
+  v
+retire/drain
+  accumulator update
+  filter-state writeback
+  wait for outstanding DSP contexts
+  final PCM16 saturation
+  |
+  v
+sample_valid
+```
+
+The DSP pipe can accept one complete context per cycle, but the whole renderer
+does not guarantee one voice per cycle because endpoint fetch is still serialized
+through the existing memory interface. The front end can overlap later voice
+register prefetch and endpoint fetch with earlier DSP work, but bubbles are
+expected when memory sequencing cannot supply a complete context every cycle.
+
+The current control flow for one output frame is:
+
+```text
+sample_tick
+   |
+   v
++--------+
+|  IDLE  |
++--------+
+   |
+   v
++-------------+      invalid slot
+| SCAN_VOICE  |--------------------+
++-------------+                    |
+   | valid slot                    |
+   v                               |
++-------------+                    |
+| READ_VOICE  |  set render_index  |
++-------------+                    |
+   |                               |
+   v                               |
++-------------+                    |
+| WAIT_VOICE  |  sync RAM outputs  |
++-------------+                    |
+   |                               |
+   v                               |
++-------------+
+| START_VOICE |  snapshot config/runtime/phase/filter state
++-------------+
+   |
+   v
++---------------+
+| PROCESS_VOICE |
++---------------+
+   | disabled/done
+   |------------------------------+
+   | enabled                      |
+   v                              |
++--------+    +---------+          |
+| REQ_L0 | -> | WAIT_L0 |          |
++--------+    +---------+          |
+                 |                 |
+                 v                 |
++--------+    +---------+          |
+| REQ_L1 | -> | WAIT_L1 |          |
++--------+    +---------+          |
+                 | mono            |
+                 |-------------------------+
+                 | stereo                  |
+                 v                         |
++--------+    +---------+                  |
+| REQ_R0 | -> | WAIT_R0 |                  |
++--------+    +---------+                  |
+                 |                         |
+                 v                         |
++--------+    +---------+                  |
+| REQ_R1 | -> | WAIT_R1 |                  |
++--------+    +---------+                  |
+                 |                         |
+                 +-----------+-------------+
+                             |
+                             v
+                      +-------------+
+                      |  DSP_START  | issue context
+                      +-------------+
+                             |
+                             v
+                      +-------------+
+                      | next voice? |
+                      +-------------+
+                  | prefetched     | scan needed       | no more
+                  v                v                   v
+             +-------------+  +------------+        +--------+
+             | START_VOICE |  | SCAN_VOICE |        | DRAIN  |
+             +-------------+  +------------+        +--------+
+                                                        |
+                                                        v
+                                                     +--------+
+                                                     | FINISH |
+                                                     +--------+
+                                                        |
+                                                        v
+                                                  sample_valid
+```
+
+A typical overlap inside one output frame looks like this:
+
+```text
+cycle:        N        N+1      N+2      N+3      N+4      N+5      N+6
+
+front end:    fetch V0  fetch V0  issue V0 start V1 fetch V1 fetch V1 issue V1
+prefetch:     scan V1   read V1   ready
+
+DSP pipe:                         V0 S0    V0 S1    V0 S2    V0 S3    V0 S4
+
+retire:                                                                  V0 result
+```
+
+This overlap hides the fixed DSP latency behind later front-end work, but it does
+not make the memory fetch path itself a one-voice-per-cycle pipeline. The current
+prefetch removes much of the register-read bubble between adjacent valid voices;
+a fuller CPU-like render pipeline would still need separate front-end stages or
+queues for slot scan, endpoint request/response assembly, DSP issue, and retire,
+plus enough memory bandwidth or tagging to keep those stages fed.
 
 ## Pipeline Stages
 
@@ -123,7 +286,7 @@ Current front-end state sequence:
 | `WAIT_R0` | Stereo only: wait for right endpoint-0 response. | `raw_r0`. |
 | `REQ_R1` | Stereo only: issue right endpoint-1 memory request. | Memory request address for right `frame_1`. |
 | `WAIT_R1` | Stereo only: wait for right endpoint-1 response. | `raw_r1`. |
-| `DSP_START` | Issue a complete `voice_dsp_context_t` to the DSP pipe. | Increments outstanding context count and advances to the next valid voice or `DRAIN`. |
+| `DSP_START` | Issue a complete `voice_dsp_context_t` to the DSP pipe. | Increments outstanding context count and either starts a prefetched next voice, falls back to scanning, or advances to `DRAIN`. |
 | `DRAIN` | Wait for issued DSP contexts to retire. | Holds until outstanding count reaches zero. |
 | `FINISH` | Saturate the 32-bit stereo accumulators to signed 16-bit PCM. | `sample_l/r`, `sample_valid`. |
 
@@ -139,6 +302,37 @@ registers.
 explicit `valid_i`/`valid_o` contract and no side effects on phase, filter state
 arrays, or the frame accumulator. Every stage carries enough immutable context to
 retire the result for the correct voice.
+
+The DSP submodule is the part that most closely matches a conventional fixed
+stage pipeline:
+
+```text
+valid_i / voice_dsp_context_t
+        |
+        v
++-----------+   +-------------+   +-------------+   +-----------------+   +---------+
+| S0_INTERP |-->| S1_FILTER_X |-->| S2_FILTER_Y |-->| S3_FILTER_STATE |-->| S4_GAIN |
++-----------+   +-------------+   +-------------+   +-----------------+   +---------+
+        |               |                |                    |                |
+        |               |                |                    |                v
+        |               |                |                    |       gain/envelope scale
+        |               |                |                    v
+        |               |                |          next z1/z2 and filter/bypass select
+        |               |                v
+        |               |       y = b0*x + z1, saturate y
+        |               v
+        |       b0*x, b1*x, b2*x, z1/z2 extend
+        v
+linear interpolation
+                                                                                |
+                                                                                v
+                                                                     valid_o / voice_dsp_result_t
+```
+
+Each valid context carries its voice index, gains, envelope, filter enable,
+coefficients, filter-state snapshot, and endpoint samples until the fields are no
+longer needed. The result returns the voice index, final signed contributions, and
+next filter state for retire-time writeback.
 
 | Stage | Operation | Context carried forward |
 | --- | --- | --- |
@@ -208,12 +402,15 @@ are copied into local `current_*` registers:
 - envelope level
 - filter enable
 - filter coefficients
+- filter-state snapshot
 
 Memory request address generation uses these per-voice `current_*` registers.
-When endpoint fetch completes, `multi_voice_pipeline` packages the current
-register snapshot, raw endpoints, fraction, voice index, and filter-state snapshot
-into `voice_dsp_context_t`. SPI or register-bus runtime writes that arrive while
-one output sample is being rendered may affect voices that have not yet reached
+The filter-state snapshot is captured before the prefetch path is allowed to move
+`render_index` toward the next valid voice. When endpoint fetch completes,
+`multi_voice_pipeline` packages the current register snapshot, raw endpoints,
+fraction, voice index, and captured filter-state snapshot into
+`voice_dsp_context_t`. SPI or register-bus runtime writes that arrive while one
+output sample is being rendered may affect voices that have not yet reached
 `START_VOICE`; they do not affect a voice after its context has been captured.
 
 Configuration writes still update shadow state. `COMMIT` writes the selected
@@ -256,6 +453,14 @@ to the next selected voice. The fixed-latency DSP pipe then retires the result i
 parallel with later voice fetch work. The remaining per-voice bottleneck is memory
 endpoint assembly: mono voices need two memory responses and stereo voices need
 four.
+
+The single-entry next-valid prefetch reduces the register-read bubble between
+adjacent valid voices when endpoint fetch takes long enough to hide the
+prefetch-read latency. On the 30-second Hedwig/MS_Basic quick-render workload, the
+measured 32-voice render cost changed from `250.278` average and `375` maximum
+cycles per sample to `195.729` average and `282` maximum cycles per sample, with
+the same `32` maximum enabled and filtered voices and exact C++ reference audio
+match.
 
 The regression latency guard for the 32-voice mono render case remains
 `600 + NUM_VOICES` cycles. This is a structural regression limit, not a

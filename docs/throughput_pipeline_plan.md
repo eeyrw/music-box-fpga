@@ -13,7 +13,89 @@ before the renderer becomes a fuller throughput engine.
 continue scanning and fetching later voices while previously issued contexts move
 through DSP and retire into the mix accumulator. This is a real single-frame
 throughput pipeline, but it is still bounded by one-request-at-a-time endpoint
-fetch and does not overlap multiple output frames.
+fetch and does not overlap multiple output frames. The current front end also has
+a single-entry next-valid prefetch path: while the current voice is fetching wave
+endpoints, it can move `render_index` to one later valid voice and let the
+synchronous register-bank and local phase/filter RAM reads settle before the
+current voice reaches `DSP_START`.
+
+The current implementation is therefore not a full CPU-style global N-stage
+pipeline. Only the extracted DSP math is a fixed-stage pipe. The surrounding
+renderer is still a variable-latency state machine that supplies complete DSP
+contexts when register-bank reads and memory endpoint fetches finish. The
+single-entry prefetch removes some register-read bubbles between adjacent valid
+voices, but it is not a multi-entry endpoint queue.
+
+Current structure:
+
+```text
+one output frame in flight
+
+sample_tick
+  |
+  v
++--------------------------+
+| variable-latency front   |
+| end FSM                  |
+|                          |
+| - scan active slots      |
+| - sync register read     |
+| - phase/frame update     |
+| - next-valid prefetch    |
+| - one-at-a-time memory   |
+|   endpoint requests      |
++--------------------------+
+  |
+  | complete voice_dsp_context_t
+  v
++--------------------------+
+| fixed-latency DSP pipe   |
+|                          |
+| S0 interpolate           |
+| S1 filter products       |
+| S2 filter output         |
+| S3 filter state          |
+| S4 gain/envelope         |
++--------------------------+
+  |
+  | voice_dsp_result_t
+  v
++--------------------------+
+| retire/drain             |
+|                          |
+| - accumulator update     |
+| - filter-state writeback |
+| - wait outstanding == 0  |
+| - final PCM saturation   |
++--------------------------+
+  |
+  v
+sample_valid
+```
+
+The DSP pipe has initiation interval 1 when complete contexts are available:
+
+```text
+cycle N:     V0 S0
+cycle N+1:   V0 S1 + V1 S0
+cycle N+2:   V0 S2 + V1 S1 + V2 S0
+cycle N+3:   V0 S3 + V1 S2 + V2 S1 + V3 S0
+cycle N+4:   V0 S4 + V1 S3 + V2 S2 + V3 S1 + V4 S0
+```
+
+The whole renderer does not currently sustain that pattern because endpoint
+assembly normally takes multiple cycles per voice:
+
+```text
+front end:  fetch V0  issue V0/start prefetched V1  fetch V1  issue V1 ...
+prefetch:   scan/read V1 while V0 endpoints are being fetched
+DSP pipe:             V0 S0  V0 S1  V0 S2  V0 S3  V0 S4
+retire:                                             V0 result
+```
+
+The intended next architectural step is to make more of the front end look like a
+pipeline by adding explicit fetch/context queues, not by changing the DSP math
+again first.
 
 ## Target Shape
 

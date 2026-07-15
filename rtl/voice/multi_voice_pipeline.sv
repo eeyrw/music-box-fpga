@@ -106,6 +106,16 @@ module multi_voice_pipeline (
   logic signed [31:0] current_filter_a1;
   logic signed [31:0] current_filter_a2;
   logic [PHASE_WIDTH-1:0] current_phase;
+  logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z1_l;
+  logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z2_l;
+  logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z1_r;
+  logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z2_r;
+  logic prefetch_active;
+  logic prefetch_done;
+  logic prefetch_ready;
+  logic [1:0] prefetch_wait;
+  logic [VOICE_INDEX_WIDTH-1:0] prefetch_scan_index;
+  logic [VOICE_INDEX_WIDTH-1:0] prefetch_index;
 
   function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
     if (value > 64'sd32767)
@@ -166,10 +176,10 @@ module multi_voice_pipeline (
     dsp_context.filter_b2 = current_filter_b2;
     dsp_context.filter_a1 = current_filter_a1;
     dsp_context.filter_a2 = current_filter_a2;
-    dsp_context.filter_z1_l = (current_commit || !filter_state_valid[voice_index]) ? '0 : filter_z1_l_read;
-    dsp_context.filter_z2_l = (current_commit || !filter_state_valid[voice_index]) ? '0 : filter_z2_l_read;
-    dsp_context.filter_z1_r = (current_commit || !filter_state_valid[voice_index]) ? '0 : filter_z1_r_read;
-    dsp_context.filter_z2_r = (current_commit || !filter_state_valid[voice_index]) ? '0 : filter_z2_r_read;
+    dsp_context.filter_z1_l = current_filter_z1_l;
+    dsp_context.filter_z2_l = current_filter_z2_l;
+    dsp_context.filter_z1_r = current_filter_z1_r;
+    dsp_context.filter_z2_r = current_filter_z2_r;
     dsp_context.fraction = fraction;
     dsp_context.raw_l0 = raw_l0;
     dsp_context.raw_l1 = raw_l1;
@@ -260,6 +270,16 @@ module multi_voice_pipeline (
       current_filter_b2 <= '0;
       current_filter_a1 <= '0;
       current_filter_a2 <= '0;
+      current_filter_z1_l <= '0;
+      current_filter_z2_l <= '0;
+      current_filter_z1_r <= '0;
+      current_filter_z2_r <= '0;
+      prefetch_active <= 1'b0;
+      prefetch_done <= 1'b0;
+      prefetch_ready <= 1'b0;
+      prefetch_wait <= '0;
+      prefetch_scan_index <= '0;
+      prefetch_index <= '0;
       raw_l0 <= '0;
       raw_l1 <= '0;
       raw_r0 <= '0;
@@ -284,6 +304,26 @@ module multi_voice_pipeline (
       end
       outstanding_count <= outstanding_next;
 
+      if (prefetch_active) begin
+        if (prefetch_wait != 2'd0) begin
+          prefetch_wait <= prefetch_wait - 2'd1;
+          if (prefetch_wait == 2'd1) begin
+            prefetch_ready <= 1'b1;
+            prefetch_done <= 1'b1;
+            prefetch_active <= 1'b0;
+          end
+        end else if (config_valid[prefetch_scan_index]) begin
+          prefetch_index <= prefetch_scan_index;
+          render_index <= prefetch_scan_index;
+          prefetch_wait <= 2'd2;
+        end else if (prefetch_scan_index == LAST_VOICE) begin
+          prefetch_done <= 1'b1;
+          prefetch_active <= 1'b0;
+        end else begin
+          prefetch_scan_index <= prefetch_scan_index + 1'b1;
+        end
+      end
+
       unique case (state)
         IDLE: begin
           if (sample_tick) begin
@@ -293,6 +333,10 @@ module multi_voice_pipeline (
             frame_commit <= config_commit;
             voice_index <= '0;
             render_index <= '0;
+            prefetch_active <= 1'b0;
+            prefetch_done <= 1'b0;
+            prefetch_ready <= 1'b0;
+            prefetch_wait <= '0;
             state <= SCAN_VOICE;
           end
         end
@@ -336,10 +380,23 @@ module multi_voice_pipeline (
           current_filter_b2 <= cfg_filter_b2;
           current_filter_a1 <= cfg_filter_a1;
           current_filter_a2 <= cfg_filter_a2;
+          current_filter_z1_l <= (frame_commit[voice_index] || !filter_state_valid[voice_index]) ? '0 : filter_z1_l_read;
+          current_filter_z2_l <= (frame_commit[voice_index] || !filter_state_valid[voice_index]) ? '0 : filter_z2_l_read;
+          current_filter_z1_r <= (frame_commit[voice_index] || !filter_state_valid[voice_index]) ? '0 : filter_z1_r_read;
+          current_filter_z2_r <= (frame_commit[voice_index] || !filter_state_valid[voice_index]) ? '0 : filter_z2_r_read;
+          prefetch_ready <= 1'b0;
+          prefetch_done <= (voice_index == LAST_VOICE);
+          prefetch_active <= (voice_index != LAST_VOICE);
+          prefetch_scan_index <= voice_index + 1'b1;
+          prefetch_wait <= '0;
           state <= PROCESS_VOICE;
         end
         PROCESS_VOICE: begin
           if (!current_enable || !current_config_valid || voice_done) begin
+            prefetch_active <= 1'b0;
+            prefetch_done <= 1'b0;
+            prefetch_ready <= 1'b0;
+            prefetch_wait <= '0;
             if (scan_at_last_voice) begin
               state <= DRAIN;
             end else begin
@@ -384,8 +441,22 @@ module multi_voice_pipeline (
         DSP_START: begin
           if (scan_at_last_voice)
             state <= DRAIN;
+          else if (prefetch_ready) begin
+            voice_index <= prefetch_index;
+            prefetch_active <= 1'b0;
+            prefetch_done <= 1'b0;
+            prefetch_ready <= 1'b0;
+            prefetch_wait <= '0;
+            state <= START_VOICE;
+          end else if (prefetch_done) begin
+            state <= DRAIN;
+          end
           else begin
             voice_index <= voice_index + 1'b1;
+            prefetch_active <= 1'b0;
+            prefetch_done <= 1'b0;
+            prefetch_ready <= 1'b0;
+            prefetch_wait <= '0;
             state <= SCAN_VOICE;
           end
         end
