@@ -67,17 +67,19 @@ constraint or PLL specification.
 
 ## Rendering Pipeline
 
-`multi_voice_pipeline` is a time-multiplexed renderer. On each accepted
-`sample_tick`, the renderer scans voice slots in index order, reads each active
-configuration/runtime snapshot through the register bank's synchronous read path,
-captures the selected voice into local timing registers, skips disabled or
-invalid slots, fetches the needed interpolation endpoints, processes one voice
-through the shared DSP path, and accumulates into a signed 32-bit stereo mixer.
+`multi_voice_pipeline` is a one-frame-at-a-time throughput renderer. On each
+accepted `sample_tick`, the renderer scans voice slots in index order, reads
+configuration/runtime snapshots through the register bank's synchronous read
+path, fetches interpolation endpoints, issues complete voice contexts into a
+fixed-latency DSP pipeline, and retires DSP results into a signed 32-bit stereo
+mixer. The scan is intentionally sequential: invalid voice slots cost a clock,
+but the renderer avoids a wide per-frame priority encoder and next-voice mux.
 
 The core state sequence is:
 
 ```text
 IDLE
+SCAN_VOICE
 READ_VOICE
 WAIT_VOICE
 START_VOICE
@@ -86,7 +88,8 @@ REQ_L0  -> WAIT_L0
 REQ_L1  -> WAIT_L1
 REQ_R0  -> WAIT_R0   stereo only
 REQ_R1  -> WAIT_R1   stereo only
-ACCUMULATE
+DSP_START
+DRAIN
 FINISH
 IDLE
 ```
@@ -109,7 +112,9 @@ commit bit, and phase. `PROCESS_VOICE` advances phase after capturing the curren
 frame indexes. Loop wrapping uses one subtraction, so valid V1 looped voices
 require `phase_inc < (loop_end - loop_start) << 8`. The extra stage keeps the
 Artix-7 board implementation on the MIG `100 MHz` `ui_clk` without adding a CDC
-bridge between the core and MIG app interface.
+bridge between the core and MIG app interface. Per-voice phase and biquad history
+are stored behind synchronous RAM-style read paths and valid bits, so reset and
+commit semantics do not force wide resettable flip-flop arrays.
 
 ## Control Model
 

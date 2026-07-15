@@ -316,6 +316,14 @@ vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl
   -journal logs/synth.jou -log logs/synth.log
 ```
 
+The synthesis script writes the flat utilization, hierarchical utilization, and
+timing reports under `../../build/fpga/smart_artix/vivado/reports/`. Use
+`post_synth_utilization_hier_depth4.rpt` first when checking resource ownership;
+it shows the major split between `core_system`, `multi_voice_pipeline`,
+`voice_register_bank`, memory, and the MIG wrapper without the full IP hierarchy
+noise. Use `post_synth_utilization_hier.rpt` when a deeper instance-level trace is
+needed.
+
 Run implementation or bitstream generation:
 
 ```bash

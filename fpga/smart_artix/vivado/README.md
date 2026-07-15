@@ -46,6 +46,16 @@ stale after source or constraint changes, the script resets and relaunches
 `synth_smart_artix_top` automatically. This avoids the common batch-flow failure where Vivado
 refuses to launch a completed stale run until it has been reset.
 
+Each synthesis run writes these stable report files under
+`../../build/fpga/smart_artix/vivado/reports/`:
+
+- `post_synth_utilization.rpt`: flat device utilization summary.
+- `post_synth_utilization_hier.rpt`: full hierarchical utilization report.
+- `post_synth_utilization_hier_depth4.rpt`: compact hierarchy report deep enough
+  to compare `core_system`, `voice_register_bank`, `multi_voice_pipeline`, memory,
+  and MIG resource ownership.
+- `post_synth_timing.rpt`: post-synthesis timing summary.
+
 Useful environment overrides:
 
 ```bash

@@ -12,6 +12,7 @@ package synth_pkg;
 `else
   localparam int NUM_VOICES = 32;
 `endif
+  localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
 
   localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
   localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;
@@ -73,4 +74,37 @@ package synth_pkg;
     logic signed [31:0]        filter_a1;
     logic signed [31:0]        filter_a2;
   } voice_runtime_t;
+
+  typedef struct packed {
+    logic [VOICE_ID_WIDTH-1:0]    voice_index;
+    logic                        filter_enable;
+    logic signed [15:0]          gain_l;
+    logic signed [15:0]          gain_r;
+    logic signed [15:0]          envelope_level;
+    logic signed [31:0]          filter_b0;
+    logic signed [31:0]          filter_b1;
+    logic signed [31:0]          filter_b2;
+    logic signed [31:0]          filter_a1;
+    logic signed [31:0]          filter_a2;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_r;
+    logic [PHASE_FRAC_WIDTH-1:0] fraction;
+    pcm_t                        raw_l0;
+    pcm_t                        raw_l1;
+    pcm_t                        raw_r0;
+    pcm_t                        raw_r1;
+  } voice_dsp_context_t;
+
+  typedef struct packed {
+    logic [VOICE_ID_WIDTH-1:0]    voice_index;
+    logic                        filter_enable;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_r;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
+    pcm_t                        contribution_l;
+    pcm_t                        contribution_r;
+  } voice_dsp_result_t;
 endpackage

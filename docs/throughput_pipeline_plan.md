@@ -1,20 +1,19 @@
 # Throughput Voice Pipeline Plan
 
-This note records a future architecture direction for turning the current
-latency-splitting voice renderer into a throughput pipeline. It is not the
-current RTL behavior.
+This note records the throughput-pipeline architecture direction and the current
+implementation status. The RTL now has a fixed-latency DSP throughput pipe,
+single-frame issue/retire overlap, and sequential active-slot scanning. The
+memory endpoint fetch path is still single-request and remains the main limiter
+before the renderer becomes a fuller throughput engine.
 
 ## Current Baseline
 
-`multi_voice_pipeline` now splits interpolation, biquad filter math, gain, and
-accumulation across registered states. This improves timing because one active
-voice no longer performs the full filtered DSP chain in one cycle.
-
-The current renderer is still not an overlapped throughput pipeline. One active
-voice owns the state machine from endpoint fetch through `ACCUMULATE`; only then
-does the scheduler advance to the next voice. The current design therefore trades
-extra per-voice latency for shorter combinational paths, but it does not retire
-one voice contribution per cycle.
+`multi_voice_pipeline` now issues complete voice contexts into
+`voice_dsp_pipeline`, a fixed-latency valid-shift DSP pipe. The front end can
+continue scanning and fetching later voices while previously issued contexts move
+through DSP and retire into the mix accumulator. This is a real single-frame
+throughput pipeline, but it is still bounded by one-request-at-a-time endpoint
+fetch and does not overlap multiple output frames.
 
 ## Target Shape
 
@@ -44,12 +43,37 @@ This preserves the existing external `sample_tick`/`sample_valid` contract while
 allowing the internal DSP section to accept a new ready voice every cycle once
 endpoint samples are available.
 
+Implementation note: the first extraction step now exists as
+`rtl/dsp/voice_dsp_pipeline.sv`. It keeps the top-level
+`multi_voice_pipeline` external interface and preserves the existing memory
+request ordering, but the interpolation, filter, gain, envelope, and DSP result
+record are isolated behind an explicit `valid_i`/`valid_o` boundary. The DSP
+block is now a fixed-latency valid-shift pipeline, so it can accept a new complete
+voice context every cycle if the front end can provide one.
+
+`multi_voice_pipeline` also now separates issue from retire for one output frame:
+after a complete endpoint set is issued into `voice_dsp_pipeline`, the scheduler
+continues scanning and fetching later voices while earlier DSP results retire into
+the accumulator and filter-state arrays. This overlaps DSP latency with later
+register reads and endpoint fetches, but it is still bounded by the single
+outstanding memory request interface. The next larger gain still requires Option B
+style endpoint assembly/queueing or a memory path that can return interpolation
+endpoints faster.
+
+The scheduler uses `config_valid` as an active-slot mask while it walks voice
+slots in index order. Empty voice slots cost one scan cycle but do not pay the
+synchronous register-read and process-state overhead. This area-oriented choice
+removes the earlier wide next-active priority encoder and mux. Disabled
+configured voices still require a context read because `enable` lives in the
+committed voice configuration.
+
 ## Expected Bottlenecks
 
-The current timing pipeline reduced the compute critical path, but it also made
-each enabled voice spend several cycles in DSP states. A throughput pipeline only
-improves frame latency if the front end can supply complete voice endpoints
-faster than the current one-voice-at-a-time state machine.
+The current DSP throughput pipeline can accept and retire one voice contribution
+per cycle after fill, but frame latency only improves when the front end supplies
+complete voice endpoints fast enough to keep useful contexts in the pipe. The
+memory front end is still one request at a time, so endpoint assembly remains the
+dominant limit for dense mono/stereo workloads.
 
 The likely bottlenecks, in order, are:
 
@@ -459,7 +483,7 @@ Ld = DSP pipeline latency from issue to retire
 Ii = average issue interval into DSP
 ```
 
-The current latency-splitting design is approximately:
+The former latency-splitting design was approximately:
 
 ```text
 frame_cycles ~= sum(memory_fetch_cycles_per_voice + fixed_compute_cycles_per_voice)
@@ -484,43 +508,50 @@ after the refactor:
 - memory request and response stalls,
 - frame cycles from `sample_tick` to `sample_valid`.
 
-## Suggested Implementation Phases
+## Implementation Phases
 
-1. Extract a fixed-latency `voice_dsp_pipeline` from the existing compute states.
-   Keep the current one-voice-at-a-time scheduler. This validates context packing
-   and preserves behavior with limited risk.
+Completed in the current RTL:
 
-   Acceptance criteria: exact existing tests pass, the DSP module has a documented
-   fixed latency, and no side-effect state is modified inside the DSP module.
+1. Extracted `voice_dsp_pipeline` from the old in-module compute states.
+   The DSP block owns interpolation, optional biquad math, gain, envelope, and
+   final per-voice contribution generation. It has no side effects on phase,
+   filter-state arrays, or the frame accumulator.
 
-2. Add per-stage valid/context propagation inside `voice_dsp_pipeline`. The module
-   should accept a new voice every cycle in isolation tests, even if the top-level
-   scheduler still feeds it sparsely.
+2. Added per-stage valid/context propagation inside `voice_dsp_pipeline`.
+   The DSP block is a fixed-latency valid-shift pipe and can accept a complete
+   context every cycle when the front end can provide one.
 
-   Acceptance criteria: a focused DSP-only test injects back-to-back contexts with
-   different coefficients, gains, and voice indices and observes correctly ordered
-   results.
+3. Split issue from retire inside `multi_voice_pipeline`.
+   Complete endpoint sets issue into DSP through `DSP_START`; later `dsp_valid`
+   results retire independently into the accumulator and filter-state arrays.
+   `DRAIN` waits for all outstanding contexts before `FINISH` emits `sample_valid`.
 
-3. Add an issue queue after register-bank reads and memory endpoint assembly.
-   Keep memory responses in order at first; allow DSP stages to overlap once a
-   complete endpoint pair is ready.
+4. Added area-oriented active-slot scanning.
+   `config_valid` skips invalid voice slots before the synchronous render-read
+   sequence. Invalid slots cost one scan cycle, but the renderer avoids a wide
+   next-active search and keeps the register-bank read timing conservative.
 
-   Acceptance criteria: full-core tests show adjacent active voices occupying
-   different DSP stages and final PCM remains exact.
+Remaining phases:
 
-4. Retire one contribution per cycle into the accumulator and filter-state
-   writeback path. Add ordering assertions so `sample_valid` fires only after the
-   last issued voice for the frame retires.
+1. Add focused observability for the throughput path.
+   Useful checks include contexts issued, retire count, DSP valid occupancy,
+   memory request/response stalls, invalid-slot scan cycles, and frame cycles from
+   `sample_tick` to `sample_valid`.
 
-   Acceptance criteria: filter history readback tests prove each voice receives
-   its own next state, including interleaved mono/stereo and disabled-voice cases.
+2. Add an endpoint assembly queue in front of the DSP pipe.
+   Keep memory responses in order at first. The queue should make stalls explicit
+   when endpoint fetch cannot supply a complete context, and it should allow the
+   DSP pipe to consume ready contexts without being coupled to front-end state
+   names.
 
-5. Only after the in-order design is stable, consider memory request tags and
-   multiple outstanding reads. This is the point where throughput gains can extend
-   beyond the DSP block and into the memory subsystem.
+3. Optimize endpoint memory bandwidth.
+   The highest-value options are paired endpoint reads, cache-line extraction that
+   returns both interpolation endpoints for common sequential access, or a wider
+   wave-memory response path.
 
-   Acceptance criteria: memory stress tests show improved frame latency or reduced
-   DSP bubbles compared with the in-order endpoint queue.
+4. Only after the in-order endpoint path is stable, consider request tags and
+   multiple outstanding reads. That change affects the memory subsystem, models,
+   and tests, so it should be justified by measured endpoint stalls.
 
 ## Verification Requirements
 

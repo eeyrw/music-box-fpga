@@ -66,61 +66,55 @@ add/subtract operations.
 
 ## Current Pipeline Shape
 
-The current implementation uses the same registered compute stages for every
-enabled voice. If the per-voice biquad filter is disabled, the filter stages act
-as a registered bypass from interpolation to gain. If the filter is enabled, the
-stages evaluate the biquad output, feedback products, and saturated next filter
-state over multiple cycles.
-
-Compute path after endpoint fetch:
+The current implementation is a one-frame-at-a-time throughput renderer. It keeps
+the external `sample_tick`/`sample_valid` contract and the one-request-at-a-time
+memory interface, but it separates these internal concerns:
 
 ```text
-WAIT_L1 or WAIT_R1
-  -> INTERPOLATE
-  -> FILTER_INPUT
-  -> FILTER_MUL_X
-  -> FILTER_Y
-  -> FILTER_MUL_Y
-  -> FILTER_ACC
-  -> GAIN
-  -> ACCUMULATE
+active-slot scheduler and register snapshot
+  -> endpoint fetch FSM
+  -> fixed-latency voice_dsp_pipeline
+  -> retire accumulator and filter-state writeback
+  -> DRAIN
+  -> FINISH
 ```
 
-The added registers are local to `multi_voice_pipeline`:
+The scheduler issues at most one complete voice context into DSP per cycle. The
+DSP pipeline can accept back-to-back contexts, and the retire path can consume one
+result per cycle. In practice, the endpoint fetch FSM usually feeds the DSP pipe
+more slowly because mono interpolation still needs two memory responses and stereo
+interpolation needs four.
 
-- `interp_stage_l/r` capture the linear interpolation result and are preserved as
-  explicit synthesis boundaries.
-- `filter_input_l/r` capture the filter input sample so the interpolator output
-  path is separated from the filter coefficient multipliers.
-- `filter_b*_x_*`, `filter_a*_y_*`, and `filter_y_pcm_ext_*` capture biquad
-  product and feedback inputs across the filter sub-states.
-- `gain_stage_input_l/r` capture the selected post-filter sample.
-- `gained_stage_l/r` capture the channel-gain result.
-- `filter_next_z1/z2_l/r` hold the next biquad state until the voice reaches
-  `ACCUMULATE`; these registers are only committed to the per-voice state arrays
-  when `current_filter_enable` is set.
+The renderer now overlaps work inside a single output frame:
 
-The active `voice_index` is not advanced while a voice moves through these
-stages. Because of that, the pipeline is currently a latency-splitting pipeline
-inside one voice, not a throughput pipeline processing multiple voices at once.
-This is intentional for the first step: it reduces the longest compute timing
-paths without changing memory ordering, filter state ownership, or the external
-sample contract.
+- After a voice's endpoints are assembled, `DSP_START` presents a complete
+  immutable `voice_dsp_context_t` to `voice_dsp_pipeline`.
+- The front end immediately continues scanning and fetching later voices instead
+  of waiting for the issued voice to finish DSP.
+- DSP results return later on `dsp_valid`; the retire path updates the stereo
+  accumulator and writes the result voice's filter state.
+- `DRAIN` waits until all issued contexts have retired before final mix
+  saturation in `FINISH`.
+
+Only one output frame is in flight. The next `sample_tick` is accepted only after
+the prior frame has drained and `sample_valid` has been emitted. This keeps phase,
+filter-state, and accumulator ownership simple.
 
 ## Pipeline Stages
 
-One `sample_tick` starts one complete output-frame render. The pipeline scans
-`voice_index` from zero through `NUM_VOICES - 1`, then emits one mixed stereo
-sample in `FINISH`.
+One `sample_tick` starts one complete output-frame render. The pipeline selects
+valid voice slots in increasing index order, skipping invalid entries through the
+`config_valid` active-slot mask, then emits one mixed stereo sample in `FINISH`.
 
-Current state sequence:
+Current front-end state sequence:
 
 | Stage | Purpose | Main registered outputs |
 | --- | --- | --- |
-| `IDLE` | Wait for `sample_tick`. | Clears `accum_l/r`, selects voice 0, enters `READ_VOICE`. |
-| `READ_VOICE` | Present `voice_read_index` to the register bank and runtime filter coefficient RAM. | Holds `voice_index` stable for synchronous storage reads. |
-| `WAIT_VOICE` | Wait one cycle for synchronous RAM-backed fields to reach the register-bank render outputs. | Holds `voice_index` stable before `START_VOICE` samples `voice_config` and `voice_runtime`. |
-| `START_VOICE` | Qualify the current voice, snapshot render config, calculate endpoint frame numbers, and advance phase. | `current_*` config snapshot, `frame_0`, `frame_1`, `fraction`, updated `phase[voice_index]`. |
+| `IDLE` | Wait for `sample_tick`. | Clears `accum_l/r`, latches `config_commit`, finds the first valid voice slot, and presents its render read index. |
+| `READ_VOICE` | Give the register bank a stable `voice_read_index`. | Starts the conservative synchronous render-read sequence. |
+| `WAIT_VOICE` | Wait for RAM-backed fields to reach the register-bank render outputs. | Holds the selected read index before context capture. |
+| `START_VOICE` | Snapshot render config/runtime for the selected voice. | `current_*` config snapshot and current phase snapshot. |
+| `PROCESS_VOICE` | Skip disabled/done voices or derive endpoint frames and advance phase. | `frame_0`, `frame_1`, `fraction`, updated phase writeback. |
 | `REQ_L0` | Issue left or mono endpoint-0 memory request. | Memory request address for `frame_0`. |
 | `WAIT_L0` | Wait for endpoint-0 response. | `raw_l0`. |
 | `REQ_L1` | Issue left or mono endpoint-1 memory request. | Memory request address for `frame_1`. |
@@ -129,34 +123,79 @@ Current state sequence:
 | `WAIT_R0` | Stereo only: wait for right endpoint-0 response. | `raw_r0`. |
 | `REQ_R1` | Stereo only: issue right endpoint-1 memory request. | Memory request address for right `frame_1`. |
 | `WAIT_R1` | Stereo only: wait for right endpoint-1 response. | `raw_r1`. |
-| `INTERPOLATE` | Evaluate left/right linear interpolation from raw endpoints and the captured fraction. | `interp_stage_l/r`. |
-| `FILTER_INPUT` | Register the interpolated sample before it feeds the filter coefficient multipliers. | `filter_input_l/r`. |
-| `FILTER_MUL_X` | Multiply filter input by `b0`, `b1`, and `b2` and capture current filter state as sign-extended values. | `filter_b*_x_*`, `filter_z*_ext_*`. |
-| `FILTER_Y` | Add `b0*x + z1`, saturate to PCM, and select filtered or bypass sample for gain. | `gain_stage_input_l/r`, `filter_y_pcm_ext_l/r`. |
-| `FILTER_MUL_Y` | Multiply saturated filter output by feedback coefficients `a1` and `a2`. | `filter_a*_y_*`. |
-| `FILTER_ACC` | Saturate the next biquad state from registered products. | `filter_next_z1/z2_l/r`. |
-| `GAIN` | Apply left/right channel gain. | `gained_stage_l/r`. |
-| `ACCUMULATE` | Apply envelope or full-level bypass, update filter state when enabled, and add the voice contribution into the stereo accumulator. | `accum_l/r`, optional `filter_z*_*[voice_index]`; advances to next voice or `FINISH`. |
+| `DSP_START` | Issue a complete `voice_dsp_context_t` to the DSP pipe. | Increments outstanding context count and advances to the next valid voice or `DRAIN`. |
+| `DRAIN` | Wait for issued DSP contexts to retire. | Holds until outstanding count reaches zero. |
 | `FINISH` | Saturate the 32-bit stereo accumulators to signed 16-bit PCM. | `sample_l/r`, `sample_valid`. |
 
-Disabled, invalid, and completed voices skip directly from `START_VOICE` to the
-next voice or to `FINISH`. For enabled mono voices, `REQ_R0`, `WAIT_R0`,
-`REQ_R1`, and `WAIT_R1` are skipped because `WAIT_L1` duplicates the mono raw
-samples into the right-channel raw registers.
+Disabled and completed voices skip from `PROCESS_VOICE` to the next active slot
+or to `DRAIN`. Invalid slots are not selected by the active-slot scanner. For
+enabled mono voices, `REQ_R0`, `WAIT_R0`, `REQ_R1`, and `WAIT_R1` are skipped
+because `WAIT_L1` duplicates the mono raw samples into the right-channel raw
+registers.
+
+## DSP Pipeline Stages
+
+`rtl/dsp/voice_dsp_pipeline.sv` owns pure per-voice sample math. It has an
+explicit `valid_i`/`valid_o` contract and no side effects on phase, filter state
+arrays, or the frame accumulator. Every stage carries enough immutable context to
+retire the result for the correct voice.
+
+| Stage | Operation | Context carried forward |
+| --- | --- | --- |
+| `S0_INTERP` | Interpolate left and right raw endpoints using the captured fraction. | Voice index, gains, envelope, filter enable, coefficients, filter state. |
+| `S1_FILTER_X` | Multiply `x` by `b0`, `b1`, and `b2`; sign-extend `z1/z2`. | Filter coefficients, filter state products, raw/bypass sample. |
+| `S2_FILTER_Y` | Compute `y = b0*x + z1`, saturate to PCM, and preserve feed-forward products for feedback state. | Saturated `y`, bypass sample, feedback inputs. |
+| `S3_FILTER_STATE` | Compute and saturate next `z1/z2`; select filtered or bypass sample for gain. | Next filter state, selected post-filter sample, gain/envelope context. |
+| `S4_GAIN` | Apply left/right channel gain. | Gained samples and next filter state. |
+| Output | Apply envelope or full-level bypass and emit `voice_dsp_result_t`. | Voice index, filter enable, next filter state, final contribution. |
+
+The DSP pipe can accept a new complete context every cycle when the front end can
+provide one. With the current memory interface it normally sees bubbles, but the
+valid-shift structure is already in place for a future endpoint queue.
+
+## Issue, Retire, And Drain
+
+`multi_voice_pipeline` tracks issued-but-not-retired contexts with
+`outstanding_count`. `DSP_START` adds one outstanding context and `dsp_valid`
+subtracts one. The retire path is independent of the front-end state machine:
+
+```text
+if dsp_valid:
+  if result.filter_enable:
+    filter_z*[result.voice_index] <= result.next_z*
+  accum_l/r <= accum_l/r + result.contribution_l/r
+```
+
+Because endpoint fetch remains in order and the DSP pipe is fixed latency,
+results retire in issue order. The accumulator is shared for one output frame, so
+`DRAIN` must observe `outstanding_count == 0` before `FINISH` saturates the final
+PCM output.
 
 ## Config Snapshot
 
 The render pipeline drives a single `voice_read_index`, and the register bank
-returns only that voice's active configuration and runtime control snapshot. The
-scheduler uses `READ_VOICE` and `WAIT_VOICE` before `START_VOICE` so synchronous
-BRAM-backed fields, including active configuration, runtime phase/gain/envelope,
-and runtime filter coefficients, are stable before they are captured. `wavetable_core` only asserts
-the frame-boundary input when `sample_tick` arrives while the pipeline is idle;
-that boundary pulse reloads committed phase and clears filter history for voices
-that were committed by the register bus. Runtime registers are live state and are
-sampled when `START_VOICE` accepts each voice. The pipeline latches only the
-per-frame commit bitmap; it does not receive or duplicate the full `voice_config`
-and `voice_runtime` arrays.
+returns only that voice's active configuration and runtime control snapshot.
+`voice_read_index` is driven from a registered `render_index` selected by the
+active-slot scanner. This keeps the register-bank synchronous read address stable
+through `READ_VOICE` and `WAIT_VOICE` before `START_VOICE` captures the returned
+configuration/runtime snapshot.
+
+The renderer uses `READ_VOICE` and `WAIT_VOICE` before `START_VOICE` so
+synchronous BRAM-backed fields, including active configuration, runtime
+phase/gain/envelope, and runtime filter coefficients, are stable before they are
+captured.
+
+`wavetable_core` only asserts the frame-boundary input when `sample_tick` arrives
+while the pipeline is idle; that boundary pulse reloads committed phase and clears
+filter history for voices that were committed by the register bus. Runtime
+registers are live state and are sampled when `START_VOICE` accepts each voice.
+The pipeline latches only the per-frame commit bitmap; it does not receive or
+duplicate the full `voice_config` and `voice_runtime` arrays.
+
+The active-slot scanner uses `config_valid` while it walks voice slots in index
+order. Empty slots cost one scan cycle but skip the render-read sequence.
+Configured-but-disabled voices still require a context read because the `enable`
+bit lives in the committed active configuration, not in `config_valid`.
 
 `START_VOICE` reads the selected stable active entry to decide whether a voice is
 enabled, whether it is valid, whether it is done, and which phase/frame addresses
@@ -170,11 +209,12 @@ are copied into local `current_*` registers:
 - filter enable
 - filter coefficients
 
-Memory request address generation and all DSP stages use these per-voice
-`current_*` registers. SPI or register-bus runtime writes that arrive while one
-output sample is being rendered may affect voices that have not yet reached
-`START_VOICE`; they do not affect a voice after its `current_*` registers have
-been captured.
+Memory request address generation uses these per-voice `current_*` registers.
+When endpoint fetch completes, `multi_voice_pipeline` packages the current
+register snapshot, raw endpoints, fraction, voice index, and filter-state snapshot
+into `voice_dsp_context_t`. SPI or register-bus runtime writes that arrive while
+one output sample is being rendered may affect voices that have not yet reached
+`START_VOICE`; they do not affect a voice after its context has been captured.
 
 Configuration writes still update shadow state. `COMMIT` writes the selected
 shadow entry into active configuration storage immediately and stages a
@@ -194,48 +234,46 @@ filter_z1_r[voice]
 filter_z2_r[voice]
 ```
 
-The filter sub-states compute the next state from the captured filter input and
-current coefficients. `FILTER_MUL_X` captures the feed-forward products,
-`FILTER_Y` derives the saturated output sample, `FILTER_MUL_Y` captures feedback
-products, and `FILTER_ACC` stores the saturated next state in `filter_next_*`
-registers. The actual per-voice filter state arrays are updated only in
-`ACCUMULATE`, and only when `current_filter_enable` is set.
+The DSP pipeline computes the next filter state from the captured filter input,
+coefficients, and filter-state snapshot carried in `voice_dsp_context_t`. The
+actual per-voice filter state arrays are updated only by the retire path when
+`dsp_valid` is asserted, and only when `result.filter_enable` is set.
 
 This preserves the rule that a voice's IIR state advances exactly once per
-rendered output sample contribution. It also keeps filter state aligned with the
-same `voice_index` that produced the interpolated sample.
+rendered output sample contribution. The result carries `voice_index`, so filter
+state writeback remains aligned with the same voice that produced the interpolated
+sample even while later voices are already in the front end.
 
 ## Latency Impact
 
-All scanned voices spend two scheduler cycles in `READ_VOICE`/`WAIT_VOICE` before
-`START_VOICE`, which allows synchronous RAM-backed register-bank fields to be
-used without changing the external render contract. All enabled voices then add
-seven deterministic compute cycles after endpoint fetch: `INTERPOLATE`, the five
-filter sub-states, and `GAIN` before `ACCUMULATE`. The latency is hidden behind
-the existing `sample_valid` completion handshake, and output sample values remain
-numerically equivalent at the completed `sample_valid` boundary.
+Each selected valid voice spends two scheduler cycles in `READ_VOICE` and
+`WAIT_VOICE` before `START_VOICE`. Invalid slots cost one scan cycle and skip the
+render-read sequence.
 
-The regression latency guard for the 32-voice mono render case is now
+Enabled voices no longer block the front end while they traverse DSP. Once
+endpoints are available, `DSP_START` issues the context and the scheduler moves on
+to the next selected voice. The fixed-latency DSP pipe then retires the result in
+parallel with later voice fetch work. The remaining per-voice bottleneck is memory
+endpoint assembly: mono voices need two memory responses and stereo voices need
+four.
+
+The regression latency guard for the 32-voice mono render case remains
 `600 + NUM_VOICES` cycles. This is a structural regression limit, not a
-board-level real-time deadline. It allows the fixed multi-stage compute pipeline
-plus the synchronous register-bank read cycle while still catching accidental
-large latency regressions in the scheduler or memory handshake. On the current
-simulation memory model, the all-voice path has been observed around 545 cycles
-for the 32-voice mono case.
+board-level real-time deadline. It allows the fixed DSP pipeline, synchronous
+register-bank reads, and memory handshakes while still catching accidental large
+latency regressions.
 
 ## Timing Benefit
 
-For filtered voices, the long DSP calculation is now split across stages:
+For filtered voices, the long DSP calculation is now split across
+`voice_dsp_pipeline` stages:
 
-- `INTERPOLATE` registers the interpolation result.
-- `FILTER_INPUT` preserves a register boundary between interpolation and filter
-  coefficient multiplication.
-- `FILTER_MUL_X`, `FILTER_Y`, `FILTER_MUL_Y`, and `FILTER_ACC` split biquad
-  feed-forward multiplication, output saturation, feedback multiplication, and
-  next-state saturation.
-- `GAIN` isolates channel gain from envelope scaling and final accumulation.
-- `ACCUMULATE` applies envelope/full-level bypass, updates filter state, and
-  adds the final voice sample into the stereo mix accumulator.
+- interpolation is separated from filter coefficient multiplication,
+- feed-forward multiplication, output saturation, feedback multiplication, and
+  next-state saturation occupy separate pipeline stages,
+- channel gain is isolated from envelope scaling,
+- envelope scaling and final contribution generation happen at the DSP output,
+- accumulator update and filter-state writeback happen only in the retire path.
 
 Post-synthesis Smart Artix timing improved from a `clk_pll_i` setup WNS of
 `-10.650 ns` before filter pipelining to `+0.670 ns` after preserving the
@@ -311,7 +349,9 @@ requires a target system clock and the final memory profile.
 
 These counters make it possible to separate the main costs:
 
-- More enabled voices increase scheduler and DSP-stage cycles.
+- More enabled voices increase scheduler, endpoint-fetch, and retire work. DSP
+  latency is overlapped after issue, but the pipe still needs a valid context for
+  each rendered voice.
 - More filtered voices do not add extra states in the current fixed pipeline, but
   they exercise the heavier `FILTER` combinational path and therefore matter for
   Fmax.
@@ -343,25 +383,28 @@ the C++ reference for that configured voice count.
 | 16 | 38.47 | 114 | 5.12 | 24 | 12 | 12 |
 | 32 | 54.47 | 130 | 5.12 | 24 | 12 | 12 |
 
-The 16- and 32-voice builds have the same maximum active workload for this MIDI,
-but the 32-voice build still spends more cycles because the current scheduler
-scans every configured voice slot, including empty slots. This identifies active
-voice scheduling, such as an active bitmap or active voice list, as a better next
-cycle-reduction target than adding more compute-stage registers.
+These measurements predate the current area-oriented active-slot scanner. At that
+time the 16- and 32-voice builds had the same maximum active
+workload for this MIDI, but the 32-voice build still spent more cycles because
+the scheduler scanned every configured voice slot, including empty slots. The
+current scheduler uses `config_valid` to skip invalid slots, so these numbers are
+historical baseline data rather than current throughput measurements. Re-run the
+same `render-quick` commands after throughput changes before using this table for
+new cycle comparisons.
 
 ## Limitations
 
-This is not yet a full streaming multi-voice pipeline. The state machine still
-holds one `voice_index` until that voice has completed fetch, DSP evaluation, and
-accumulation. Therefore:
+This is not yet a fully streaming multi-frame audio engine. It is a throughput
+pipeline only within one output frame and only after complete endpoint samples are
+available. Therefore:
 
-- It reduces the filtered DSP critical path.
-- It does not increase the number of voices completed per cycle.
-- It does not overlap memory fetch for voice `N + 1` with DSP evaluation for
-  voice `N`.
+- It can overlap DSP execution for voice `N` with scanning and endpoint fetch for
+  voice `N + 1`.
+- It can retire one DSP result per cycle when the DSP pipe is full.
+- It does not overlap frame `N + 1` with frame `N`; `DRAIN` must complete first.
 - It does not change the one-outstanding-request memory interface.
 
-In the current architecture, memory traffic remains a major throughput limiter.
+In the current architecture, memory traffic remains the major throughput limiter.
 Mono interpolation needs two sample reads per active voice, and stereo
 interpolation needs four sample reads per active voice. Without prefetching,
 multiple outstanding requests, a wider memory path, or a cache that can return
@@ -400,11 +443,11 @@ deterministic.
 
 Potential next steps, in increasing complexity:
 
-1. Move the biquad function into a dedicated registered DSP module with an
-   explicit valid/ready or fixed-latency valid pipeline.
+1. Add focused throughput counters for issued contexts, retired contexts,
+   DSP-stage occupancy, invalid-slot scan cycles, and memory stalls.
 2. Add a small endpoint FIFO between memory fetch and DSP compute.
-3. Allow the scheduler to request endpoints for the next voice while the current
-   voice is in DSP stages.
+3. Decouple endpoint assembly from front-end state names so ready contexts can
+   feed `voice_dsp_pipeline` whenever the pipe can accept them.
 4. Rework the memory subsystem for paired endpoint reads or cache-line extraction
    that returns both interpolation endpoints for common sequential access.
 
@@ -469,15 +512,25 @@ memory, `9 / 75` Block RAM tiles, and `26 / 120` DSPs. Post-synthesis timing is 
 `-10.650 ns`, so this storage change fixes the major voice-bank resource pressure
 but not the remaining DSP/timing architecture.
 
+The area-oriented renderer pass replaces the combinational next-valid-voice
+search with sequential slot scanning, moves per-voice phase into a `32 x 32`
+distributed RAM, and moves per-voice biquad history into four `32 x 48`
+distributed RAMs plus valid bitmaps. This trades extra clocks for invalid voice
+slots and RAM-read staging for a much smaller voice renderer. The Smart Artix
+Vivado 2025.2 post-synthesis run reports `8272 / 32600` slice LUTs, `7882 /
+65200` slice registers, `628` LUTs as distributed RAM, `9 / 75` Block RAM tiles,
+and `26 / 120` DSPs. The core `ui_clk` timing group remains clean, while the
+overall post-synthesis summary still includes MIG/DDR PHY timing violations.
+
 Recommended next optimization order:
 
 1. Consider whether runtime release and filter-enable bits are worth moving out
    of flip-flops. They are only one bit per voice, so the likely win is small
    compared with the extra read-modify-write and readback complexity.
-2. If the filter must stay enabled, move it to a multi-cycle shared DSP block.
-   The current left/right biquad evaluation still expands many multiplies in one
-   state. A fixed-latency filter unit with explicit valid timing should reduce
-   combinational depth and make timing closure more predictable.
+2. If the product can afford lower filter throughput, consider sharing one
+   biquad datapath between left and right channels. This is the next large DSP
+   reduction, but it requires scheduler changes because one voice would occupy
+   the filter datapath for more cycles.
 3. Keep the SF2 biquad filter feature in the generic core, but consider a board
    build option only if a product image explicitly does not need it. The default
    architecture should continue to support the documented filter registers.

@@ -150,6 +150,19 @@ Block RAM tiles: 9 / 75, 12.00%
 Setup WNS: +0.678 ns, WHS: -1.345 ns
 ```
 
+Latest area-oriented post-synthesis result after changing `multi_voice_pipeline`
+to sequential slot scanning and RAM-backed per-voice phase/filter history:
+
+```text
+Vivado result: 0 errors, 0 critical warnings
+Slice LUTs: 8272 / 32600, 25.37%
+Slice registers: 7882 / 65200, 12.09%
+DSP48E1: 26 / 120, 21.67%
+Block RAM tiles: 9 / 75, 12.00%
+Setup WNS: -0.371 ns, WHS: -1.345 ns
+Core ui-clock group: setup slack +2.669 ns, hold slack +0.037 ns
+```
+
 Current post-route result with the same inputs:
 
 ```text
@@ -180,6 +193,13 @@ so readback does not steal the renderer read port. Direct per-voice
 configuration/runtime readback was intentionally removed from the main register
 path; low-rate inspection now uses the staged readback window, and software
 should still mirror write state on the host side for normal operation.
+
+The area-oriented pass also removes the renderer's combinational next-valid-voice
+search. Invalid voice slots are scanned sequentially, trading frame-render cycles
+for a much smaller `multi_voice_pipeline`. Per-voice phase is held in a `32 x 32`
+distributed RAM plus a valid bit, and per-voice biquad history is held in four
+`32 x 48` distributed RAMs plus a valid bit, rather than resettable flip-flop
+arrays.
 
 The filter pipeline removed an earlier `clk_pll_i` post-synthesis setup
 violation. The later voice snapshot stage removed the routed phase-update setup
@@ -212,6 +232,16 @@ files only if they are not already in the project.
 This is project/run reuse, not Vivado implementation incremental checkpointing.
 Source changes still require a synthesis rerun; unchanged inputs avoid a needless
 project/IP rebuild and avoid a needless synthesis rerun.
+
+After opening the synthesized run, `synth.tcl` also writes a fixed set of
+post-synthesis reports under `build/fpga/smart_artix/vivado/reports/`:
+
+- `post_synth_utilization.rpt` for the flat utilization summary.
+- `post_synth_utilization_hier.rpt` for full hierarchy ownership.
+- `post_synth_utilization_hier_depth4.rpt` for the quick resource-hotspot view
+  used to compare `multi_voice_pipeline`, `voice_register_bank`, memory, and MIG
+  usage.
+- `post_synth_timing.rpt` for timing summary and path details.
 
 The behavior was verified with three batch runs: an up-to-date run logged
 `synth_smart_artix_top is complete and up-to-date; reusing existing run`, touching an RTL file

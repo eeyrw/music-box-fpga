@@ -33,6 +33,7 @@ RTL_SOURCES := \
 	rtl/dsp/biquad_filter_datapath.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
+	rtl/dsp/voice_dsp_pipeline.sv \
 	rtl/audio/fractional_tick_gen.sv \
 	rtl/audio/output_sample_fifo.sv \
 	rtl/audio/i2s_tx.sv \
