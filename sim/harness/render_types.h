@@ -44,6 +44,9 @@ constexpr int kRegGainRuntime = 0x50;
 constexpr int kRegReleaseControl = 0x54;
 constexpr int kRegBaseAddrR = 0x58;
 constexpr int kRegFilterCommit = 0x5c;
+constexpr int kRegLengthR = 0x60;
+constexpr int kRegLoopStartR = 0x64;
+constexpr int kRegLoopEndR = 0x68;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
@@ -95,8 +98,11 @@ struct Region {
   uint32_t base_addr = 0;
   uint32_t base_addr_r = 0;
   uint32_t length = 0;
+  uint32_t length_r = 0;
   uint32_t loop_start = 0;
+  uint32_t loop_start_r = 0;
   uint32_t loop_end = 0;
+  uint32_t loop_end_r = 0;
   uint32_t phase_inc = 1;
   int gain_l = 0x4000;
   int gain_r = 0x4000;

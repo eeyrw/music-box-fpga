@@ -82,9 +82,11 @@ valid, not-completed voice into one stereo output.
 For each contributing voice:
 
 ```text
-phase_now = phase[voice]
-frame_0   = phase_now[31:8]
-fraction  = phase_now[7:0]
+phase_l  = phase[voice]
+phase_r  = phase_right[voice]      // stereo only; mono duplicates left samples
+frame_l0 = phase_l[31:8]
+frame_r0 = phase_r[31:8]
+fraction = phase_l[7:0]
 ```
 
 Endpoint frame selection uses the active loop mode:
@@ -94,40 +96,49 @@ loop_active = (loop_mode == continuous) ||
               ((loop_mode == until_release) && (released == 0))
 
 if loop_active:
-  frame_1 = (frame_0 + 1 >= loop_end) ? loop_start : frame_0 + 1
+  frame_l1 = (frame_l0 + 1 >= loop_end) ? loop_start : frame_l0 + 1
+  frame_r1 = (frame_r0 + 1 >= loop_end_r) ? loop_start_r : frame_r0 + 1
 else:
-  frame_1 = (frame_0 + 1 >= length) ? frame_0 : frame_0 + 1
+  frame_l1 = (frame_l0 + 1 >= length) ? frame_l0 : frame_l0 + 1
+  frame_r1 = (frame_r0 + 1 >= length_r) ? frame_r0 : frame_r0 + 1
 ```
 
 The phase advances after `frame_0`, `frame_1`, and `fraction` are captured:
 
 ```text
-phase_sum = phase_now + phase_inc_runtime
+phase_l_sum = phase_l + phase_inc_runtime
+phase_r_sum = phase_r + phase_inc_runtime
 
-if loop_active && phase_sum >= (loop_end << 8):
-  phase_next = phase_sum - ((loop_end - loop_start) << 8)
+if loop_active && phase_l_sum >= (loop_end << 8):
+  phase_l_next = phase_l_sum - ((loop_end - loop_start) << 8)
 else:
-  phase_next = phase_sum[31:0]
+  phase_l_next = phase_l_sum[31:0]
+
+if stereo && loop_active && phase_r_sum >= (loop_end_r << 8):
+  phase_r_next = phase_r_sum - ((loop_end_r - loop_start_r) << 8)
+else:
+  phase_r_next = phase_r_sum[31:0]
 ```
 
-V1 requires `phase_inc_runtime < ((loop_end - loop_start) << 8)` for looped
-voices so this single subtraction is sufficient. No-loop voices and released
-loop-until-release voices stop contributing when `phase_now[31:8] >= length`.
+V1 requires `phase_inc_runtime` to be smaller than each active channel's loop
+length in Q24.8 units, so this single subtraction is sufficient. No-loop voices
+and released loop-until-release voices stop contributing when all active channels
+have reached their configured length.
 
 Memory addressing is in signed 16-bit words using 32-bit base addresses and
 24-bit frame offsets:
 
 ```text
 if stereo == 0:
-  l0 = mem[base_addr + frame_0]
-  l1 = mem[base_addr + frame_1]
+  l0 = mem[base_addr + frame_l0]
+  l1 = mem[base_addr + frame_l1]
   r0 = l0
   r1 = l1
 else:
-  l0 = mem[base_addr + frame_0]
-  l1 = mem[base_addr + frame_1]
-  r0 = mem[base_addr_r + frame_0]
-  r1 = mem[base_addr_r + frame_1]
+  l0 = mem[base_addr + frame_l0]
+  l1 = mem[base_addr + frame_l1]
+  r0 = mem[base_addr_r + frame_r0]
+  r1 = mem[base_addr_r + frame_r1]
 ```
 
 Interpolation is applied independently per channel:

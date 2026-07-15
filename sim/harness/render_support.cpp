@@ -84,7 +84,9 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << r.sample_left << "\", \"stereo\": " << (r.stereo ? "true" : "false")
       << ", \"base_addr\": " << r.base_addr
       << ", \"base_addr_r\": " << r.base_addr_r << ", \"length\": " << r.length
-      << ", \"loop_start\": " << r.loop_start << ", \"loop_end\": " << r.loop_end
+      << ", \"length_r\": " << r.length_r
+      << ", \"loop_start\": " << r.loop_start << ", \"loop_start_r\": " << r.loop_start_r
+      << ", \"loop_end\": " << r.loop_end << ", \"loop_end_r\": " << r.loop_end_r
       << ", \"phase_inc\": " << r.phase_inc
       << ", \"filter_enable\": " << (r.filter_enable ? "true" : "false")
       << ", \"filter_b0\": " << r.filter_b0
@@ -164,8 +166,9 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 
   for (const auto& r : regions) {
     uint32_t last_l = r.base_addr + (r.length ? r.length - 1 : 0);
-    uint32_t last_r = r.base_addr_r + (r.length ? r.length - 1 : 0);
-    if (r.length != 0 && (last_l >= wave_memory.size() || (r.stereo && last_r >= wave_memory.size()))) {
+    uint32_t last_r = r.base_addr_r + (r.length_r ? r.length_r - 1 : 0);
+    if (r.length != 0 && (last_l >= wave_memory.size() ||
+        (r.stereo && (r.length_r == 0 || last_r >= wave_memory.size())))) {
       throw std::runtime_error("selected SF2 region points outside the wave memory image");
     }
   }

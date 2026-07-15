@@ -237,7 +237,9 @@ base_addr = (smpl_payload_byte_offset / 2) + sample_start_frame
 ```
 
 For linked stereo samples, `BASE_ADDR` and `BASE_ADDR_R` are independent absolute
-word addresses for the left and right sample data.
+word addresses for the left and right sample data. Software also writes the
+right-channel `LENGTH_R`, `LOOP_START_R`, and `LOOP_END_R` from the linked right
+sample header; the left channel uses `LENGTH`, `LOOP_START`, and `LOOP_END`.
 
 ## Capacity Policy
 

@@ -34,15 +34,22 @@ void ReferenceSynth::set_filter(int voice, const FilterConfig& filter) {
 void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   VoiceConfig& v = voices_.at(voice);
   v.enable = enable != 0;
-  v.valid = r.length != 0 && (r.loop_mode == 0 || (r.loop_start < r.loop_end && r.loop_end <= r.length));
+  v.valid = r.length != 0 && (!r.stereo || r.length_r != 0) &&
+            (r.loop_mode == 0 ||
+             ((r.loop_start < r.loop_end && r.loop_end <= r.length) &&
+              (!r.stereo || (r.loop_start_r < r.loop_end_r && r.loop_end_r <= r.length_r))));
   v.stereo = r.stereo;
   v.released = false;
   v.base_addr = r.base_addr;
   v.base_addr_r = r.base_addr_r;
   v.length = r.length & kPhaseFrameMask;
+  v.length_r = r.length_r & kPhaseFrameMask;
   v.loop_start = r.loop_start & kPhaseFrameMask;
+  v.loop_start_r = r.loop_start_r & kPhaseFrameMask;
   v.loop_end = r.loop_end & kPhaseFrameMask;
+  v.loop_end_r = r.loop_end_r & kPhaseFrameMask;
   v.phase = 0;
+  v.phase_r = 0;
   v.phase_inc = phase_inc;
   v.gain_l = int16_t(r.gain_l);
   v.gain_r = int16_t(r.gain_r);
@@ -71,15 +78,31 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
   for (VoiceConfig& v : voices_) {
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
-    bool voice_done = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
+    bool done_l = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
+    bool done_r = !v.stereo || ((v.loop_mode == 0 || !loop_active) && ((v.phase_r >> kPhaseFracBits) >= v.length_r));
+    bool voice_done = done_l && done_r;
     if (!v.enable || !v.valid || voice_done) continue;
 
-    uint32_t frame_0 = (v.phase >> kPhaseFracBits) & kPhaseFrameMask;
-    uint32_t frame_1 = 0;
-    if (loop_active) {
+    uint32_t frame_0 = done_l ? v.length - 1 : ((v.phase >> kPhaseFracBits) & kPhaseFrameMask);
+    uint32_t frame_1 = frame_0;
+    if (!done_l && loop_active) {
       frame_1 = ((frame_0 + 1) >= v.loop_end) ? v.loop_start : frame_0 + 1;
-    } else {
+    } else if (!done_l) {
       frame_1 = ((frame_0 + 1) >= v.length) ? frame_0 : frame_0 + 1;
+    }
+    uint32_t frame_r0 = 0;
+    uint32_t frame_r1 = 0;
+    if (v.stereo) {
+      frame_r0 = done_r ? v.length_r - 1 : ((v.phase_r >> kPhaseFracBits) & kPhaseFrameMask);
+      frame_r1 = frame_r0;
+      if (!done_r && loop_active) {
+        frame_r1 = ((frame_r0 + 1) >= v.loop_end_r) ? v.loop_start_r : frame_r0 + 1;
+      } else if (!done_r) {
+        frame_r1 = ((frame_r0 + 1) >= v.length_r) ? frame_r0 : frame_r0 + 1;
+      }
+    } else {
+      frame_r0 = frame_0;
+      frame_r1 = frame_1;
     }
     uint32_t fraction = v.phase & kPhaseFracMask;
 
@@ -90,11 +113,20 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
       v.phase = uint32_t(phase_sum) - loop_length_phase;
     else
       v.phase = uint32_t(phase_sum);
+    if (v.stereo) {
+      uint64_t phase_r_sum = uint64_t(v.phase_r) + uint64_t(v.phase_inc);
+      uint64_t loop_end_phase_r = uint64_t(v.loop_end_r) << kPhaseFracBits;
+      uint32_t loop_length_phase_r = uint32_t(v.loop_end_r - v.loop_start_r) << kPhaseFracBits;
+      if (loop_active && phase_r_sum >= loop_end_phase_r)
+        v.phase_r = uint32_t(phase_r_sum) - loop_length_phase_r;
+      else
+        v.phase_r = uint32_t(phase_r_sum);
+    }
 
     int16_t raw_l0 = read_word(v.base_addr + uint32_t(frame_0));
     int16_t raw_l1 = read_word(v.base_addr + uint32_t(frame_1));
-    int16_t raw_r0 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_0)) : raw_l0;
-    int16_t raw_r1 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_1)) : raw_l1;
+    int16_t raw_r0 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_r0)) : raw_l0;
+    int16_t raw_r1 = v.stereo ? read_word(v.base_addr_r + uint32_t(frame_r1)) : raw_l1;
 
     int16_t interp_l = interpolate(raw_l0, raw_l1, fraction);
     int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);

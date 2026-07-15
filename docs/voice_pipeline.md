@@ -536,7 +536,8 @@ The change preserves these contracts:
 - Filter state is cleared on voice commit and is not updated for disabled filter
   voices.
 - Mono samples are still duplicated before independent left/right gain.
-- Stereo samples are fetched from independent absolute left/right sample regions.
+- Stereo samples are fetched from independent absolute left/right sample regions
+  with independent channel length and loop metadata.
 - Final mix saturation still occurs once, after all voice contributions have been
   accumulated.
 

@@ -29,9 +29,13 @@ class ReferenceSynth : public VoiceControlSink {
     uint32_t base_addr = 0;
     uint32_t base_addr_r = 0;
     uint32_t length = 0;
+    uint32_t length_r = 0;
     uint32_t loop_start = 0;
+    uint32_t loop_start_r = 0;
     uint32_t loop_end = 0;
+    uint32_t loop_end_r = 0;
     uint32_t phase = 0;
+    uint32_t phase_r = 0;
     uint32_t phase_inc = 0;
     int16_t gain_l = 0;
     int16_t gain_r = 0;

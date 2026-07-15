@@ -23,7 +23,8 @@ Implemented RTL pieces:
 - Separate per-voice configuration state and runtime control state, with runtime
   updates sampled at output-frame boundaries.
 - Unsigned Q24.8 playback phase and runtime phase-increment updates.
-- Mono and linked-stereo sample playback with independent left/right base addresses.
+- Mono and linked-stereo sample playback with independent left/right base addresses
+  and sample-window metadata.
 - Loop modes: no loop, continuous loop, and loop-until-release.
 - Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
   saturated stereo mixing.
@@ -148,7 +149,8 @@ items.
 
 The hardware contract is register-level:
 
-- Note On writes wave address or linked-stereo addresses, length, loop range, phase increment, gains,
+- Note On writes wave address or linked-stereo addresses, per-channel length and
+  loop range, phase increment, gains,
   runtime envelope, `LOOP_MODE`, then commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
 - Runtime gain, pitch, release, and committed filter updates do not reload phase

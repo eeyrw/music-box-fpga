@@ -205,12 +205,41 @@ module tb_wavetable_core;
     bus_write_word(16'h0104, 32'd16);
     bus_write_word(16'h0158, 32'd24);
     bus_write_word(16'h0108, 32'd4);
+    bus_write_word(16'h0160, 32'd4);
     bus_write_word(16'h010c, 32'd1);
+    bus_write_word(16'h0164, 32'd1);
     bus_write_word(16'h0110, 32'd3);
+    bus_write_word(16'h0168, 32'd3);
     bus_write_word(16'h0114, 32'h0000_0280);
     bus_write_word(16'h0118, 32'h0000_0100);
     bus_write_word(16'h011c, 32'h0000_4000);
     bus_write_word(16'h0120, 32'h0000_4000);
+    bus_write_word(16'h012c, 32'h0000_7fff);
+    bus_write_word(16'h0134, 32'h0000_0001);
+    bus_write_word(16'h0138, 32'h0000_0000);
+    bus_write_word(16'h013c, 32'h1000_0000);
+    bus_write_word(16'h0140, 32'h0000_0000);
+    bus_write_word(16'h0144, 32'h0000_0000);
+    bus_write_word(16'h0148, 32'h0000_0000);
+    bus_write_word(16'h014c, 32'h0000_0000);
+    bus_write_word(16'h0124, 32'd1);
+    repeat (2) @(negedge clk);
+  endtask
+
+  task automatic configure_stereo_independent_right_loop;
+    bus_write_word(16'h0100, 32'h0000_0003);
+    bus_write_word(16'h0104, 32'd16);
+    bus_write_word(16'h0158, 32'd24);
+    bus_write_word(16'h0108, 32'd4);
+    bus_write_word(16'h0160, 32'd5);
+    bus_write_word(16'h010c, 32'd1);
+    bus_write_word(16'h0164, 32'd2);
+    bus_write_word(16'h0110, 32'd3);
+    bus_write_word(16'h0168, 32'd5);
+    bus_write_word(16'h0114, 32'h0000_0200);
+    bus_write_word(16'h0118, 32'h0000_0100);
+    bus_write_word(16'h011c, 32'h0000_7fff);
+    bus_write_word(16'h0120, 32'h0000_7fff);
     bus_write_word(16'h012c, 32'h0000_7fff);
     bus_write_word(16'h0134, 32'h0000_0001);
     bus_write_word(16'h0138, 32'h0000_0000);
@@ -316,6 +345,7 @@ module tb_wavetable_core;
     memory_model.memory[25] = -16'sd2000;
     memory_model.memory[26] = -16'sd3000;
     memory_model.memory[27] = -16'sd4000;
+    memory_model.memory[28] = -16'sd5000;
 
     // Second mono test wave for multi-voice mixing. With gain=0.5 and
     // envelope=0.5 each frame contributes 500 to the mix.
@@ -354,6 +384,12 @@ module tb_wavetable_core;
     configure_stereo_loop();
     request_and_check(1250, -1250);
     request_and_check(1250, -1250);
+
+    // Linked stereo samples can carry different right-channel loop metadata.
+    configure_stereo_independent_right_loop();
+    request_and_check(2999, -3000);
+    request_and_check(1999, -4000);
+    request_and_check(2999, -5000);
 
     // Runtime PHASE_INC writes retune playback without reloading phase.
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,

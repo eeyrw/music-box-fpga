@@ -47,6 +47,9 @@ module voice_register_bank (
   localparam logic [15:0] OFF_RELEASE     = 16'h0054;
   localparam logic [15:0] OFF_BASE_R      = 16'h0058;
   localparam logic [15:0] OFF_FILTER_COMMIT = 16'h005c;
+  localparam logic [15:0] OFF_LENGTH_R    = 16'h0060;
+  localparam logic [15:0] OFF_LOOP_START_R = 16'h0064;
+  localparam logic [15:0] OFF_LOOP_END_R  = 16'h0068;
   localparam logic [15:0] ADDR_VERSION    = 16'h3000;
   localparam logic [15:0] ADDR_READBACK_ADDR = 16'h3004;
   localparam logic [15:0] ADDR_READBACK_DATA = 16'h3008;
@@ -62,7 +65,7 @@ module voice_register_bank (
   localparam int FILTER_B2_LSB = 64;
   localparam int FILTER_A1_LSB = 32;
   localparam int FILTER_A2_LSB = 0;
-  localparam int VOICE_COMMIT_LAST_SEQ = 17;
+  localparam int VOICE_COMMIT_LAST_SEQ = 20;
   localparam int FILTER_COMMIT_LAST_SEQ = 5;
   localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
     32'sh1000_0000,
@@ -78,8 +81,11 @@ module voice_register_bank (
     input logic [ADDR_WIDTH-1:0] base_addr,
     input logic [ADDR_WIDTH-1:0] base_addr_r,
     input logic [PHASE_FRAME_WIDTH-1:0] length,
+    input logic [PHASE_FRAME_WIDTH-1:0] length_r,
     input logic [PHASE_FRAME_WIDTH-1:0] loop_start,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_start_r,
     input logic [PHASE_FRAME_WIDTH-1:0] loop_end,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_end_r,
     input logic [PHASE_WIDTH-1:0] phase_init,
     input logic [1:0] loop_mode
   );
@@ -89,8 +95,11 @@ module voice_register_bank (
       base_addr,
       base_addr_r,
       length,
+      length_r,
       loop_start,
+      loop_start_r,
       loop_end,
+      loop_end_r,
       phase_init,
       loop_mode
     };
@@ -113,7 +122,7 @@ module voice_register_bank (
       OFF_STATUS, OFF_ENVELOPE, OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL,
       OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
       OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
-      OFF_FILTER_COMMIT: known_voice_offset = 1'b1;
+      OFF_FILTER_COMMIT, OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: known_voice_offset = 1'b1;
       default: known_voice_offset = 1'b0;
     endcase
   endfunction
@@ -124,7 +133,8 @@ module voice_register_bank (
       OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_ENVELOPE,
       OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL, OFF_FILTER_B0,
       OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1, OFF_FILTER_A2,
-      OFF_GAIN_RT, OFF_BASE_R: shadow_offset = 1'b1;
+      OFF_GAIN_RT, OFF_BASE_R, OFF_LENGTH_R, OFF_LOOP_START_R,
+      OFF_LOOP_END_R: shadow_offset = 1'b1;
       default: shadow_offset = 1'b0;
     endcase
   endfunction
@@ -149,6 +159,9 @@ module voice_register_bank (
       5'd15: voice_commit_offset = OFF_FILTER_A1;
       5'd16: voice_commit_offset = OFF_FILTER_A2;
       5'd17: voice_commit_offset = OFF_BASE_R;
+      5'd18: voice_commit_offset = OFF_LENGTH_R;
+      5'd19: voice_commit_offset = OFF_LOOP_START_R;
+      5'd20: voice_commit_offset = OFF_LOOP_END_R;
       default: voice_commit_offset = OFF_CONTROL;
     endcase
   endfunction
@@ -232,8 +245,11 @@ module voice_register_bank (
   logic [ADDR_WIDTH-1:0] staged_base_addr;
   logic [ADDR_WIDTH-1:0] staged_base_addr_r;
   logic [PHASE_FRAME_WIDTH-1:0] staged_length;
+  logic [PHASE_FRAME_WIDTH-1:0] staged_length_r;
   logic [PHASE_FRAME_WIDTH-1:0] staged_loop_start;
+  logic [PHASE_FRAME_WIDTH-1:0] staged_loop_start_r;
   logic [PHASE_FRAME_WIDTH-1:0] staged_loop_end;
+  logic [PHASE_FRAME_WIDTH-1:0] staged_loop_end_r;
   logic [PHASE_WIDTH-1:0] staged_phase_init;
   logic [PHASE_WIDTH-1:0] staged_phase_inc;
   logic signed [15:0] staged_gain_l;
@@ -250,8 +266,11 @@ module voice_register_bank (
     staged_base_addr,
     staged_base_addr_r,
     staged_length,
+    staged_length_r,
     staged_loop_start,
+    staged_loop_start_r,
     staged_loop_end,
+    staged_loop_end_r,
     staged_phase_init,
     staged_loop_mode
   );
@@ -402,7 +421,8 @@ module voice_register_bank (
       OFF_CONTROL: begin
         shadow_write_data = {30'd0, bus_wdata[1:0]};
       end
-      OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END: begin
+      OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
+      OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: begin
         shadow_write_data = {8'd0, bus_wdata[PHASE_FRAME_WIDTH-1:0]};
       end
       OFF_GAIN_L, OFF_GAIN_R: begin
@@ -442,7 +462,7 @@ module voice_register_bank (
         default:      readback_data = shadow_read_data;
       endcase
     end else if (readback_address == ADDR_VERSION) begin
-      readback_data = 32'h0004_0000;
+      readback_data = 32'h0005_0000;
     end
 
     address_valid = (voice_address && known_voice_offset(selected_offset)) || global_address;
@@ -453,7 +473,8 @@ module voice_register_bank (
         OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_COMMIT,
         OFF_ENVELOPE, OFF_PHASE_RT, OFF_LOOP_MODE, OFF_FILTER_CTL,
         OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
-        OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R: begin
+        OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
+        OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: begin
           bus_rdata = 32'd0;
         end
         OFF_FILTER_COMMIT: begin
@@ -466,7 +487,7 @@ module voice_register_bank (
         end
       endcase
     end else if (bus_address == ADDR_VERSION) begin
-      bus_rdata = 32'h0004_0000;
+      bus_rdata = 32'h0005_0000;
     end else if (bus_address == ADDR_READBACK_ADDR) begin
       bus_rdata = {16'd0, readback_address};
     end else if (bus_address == ADDR_READBACK_DATA) begin
@@ -509,8 +530,11 @@ module voice_register_bank (
       staged_base_addr <= '0;
       staged_base_addr_r <= '0;
       staged_length <= '0;
+      staged_length_r <= '0;
       staged_loop_start <= '0;
+      staged_loop_start_r <= '0;
       staged_loop_end <= '0;
+      staged_loop_end_r <= '0;
       staged_phase_init <= '0;
       staged_phase_inc <= '0;
       staged_gain_l <= '0;
@@ -551,8 +575,11 @@ module voice_register_bank (
             staged_base_addr <= '0;
             staged_base_addr_r <= '0;
             staged_length <= '0;
+            staged_length_r <= '0;
             staged_loop_start <= '0;
+            staged_loop_start_r <= '0;
             staged_loop_end <= '0;
+            staged_loop_end_r <= '0;
             staged_phase_init <= '0;
             staged_phase_inc <= '0;
             staged_gain_l <= '0;
@@ -589,8 +616,11 @@ module voice_register_bank (
             OFF_BASE:       staged_base_addr <= shadow_read_data;
             OFF_BASE_R:     staged_base_addr_r <= shadow_read_data;
             OFF_LENGTH:     staged_length <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
+            OFF_LENGTH_R:   staged_length_r <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
             OFF_LOOP_START: staged_loop_start <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
+            OFF_LOOP_START_R: staged_loop_start_r <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
             OFF_LOOP_END:   staged_loop_end <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
+            OFF_LOOP_END_R: staged_loop_end_r <= shadow_read_data[PHASE_FRAME_WIDTH-1:0];
             OFF_PHASE_INIT: staged_phase_init <= shadow_read_data;
             OFF_PHASE_INC:  staged_phase_inc <= shadow_read_data;
             OFF_GAIN_L:     staged_gain_l <= $signed(shadow_read_data[15:0]);
@@ -619,9 +649,13 @@ module voice_register_bank (
           if (commit_mode == COMMIT_VOICE) begin
             pending_commit[commit_voice] <= 1'b1;
             active_config_valid[commit_voice] <= (staged_length != '0) &&
+                                                 (!staged_stereo || (staged_length_r != '0)) &&
                                                  ((staged_loop_mode == LOOP_MODE_NONE) ||
-                                                  ((staged_loop_start < staged_loop_end) &&
-                                                   (staged_loop_end <= staged_length)));
+                                                  (((staged_loop_start < staged_loop_end) &&
+                                                    (staged_loop_end <= staged_length)) &&
+                                                   (!staged_stereo ||
+                                                    ((staged_loop_start_r < staged_loop_end_r) &&
+                                                     (staged_loop_end_r <= staged_length_r)))));
             runtime_released[commit_voice] <= 1'b0;
           end
           runtime_filter_enable[commit_voice] <= staged_filter_enable;

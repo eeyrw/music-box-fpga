@@ -32,10 +32,13 @@ module multi_voice_pipeline (
   logic [VOICE_INDEX_WIDTH-1:0] render_index;
   logic [NUM_VOICES-1:0] frame_commit;
   (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0] phase [NUM_VOICES];
+  (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0] phase_r [NUM_VOICES];
   logic [NUM_VOICES-1:0] phase_valid;
   logic [PHASE_WIDTH-1:0] phase_read;
+  logic [PHASE_WIDTH-1:0] phase_r_read;
   logic phase_write_en;
   logic [PHASE_WIDTH-1:0] phase_write_data;
+  logic [PHASE_WIDTH-1:0] phase_r_write_data;
   (* ram_style = "distributed" *) logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l [NUM_VOICES];
   (* ram_style = "distributed" *) logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l [NUM_VOICES];
   (* ram_style = "distributed" *) logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r [NUM_VOICES];
@@ -47,6 +50,8 @@ module multi_voice_pipeline (
   logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_r_read;
   logic [PHASE_FRAME_WIDTH-1:0] frame_0;
   logic [PHASE_FRAME_WIDTH-1:0] frame_1;
+  logic [PHASE_FRAME_WIDTH-1:0] frame_r0;
+  logic [PHASE_FRAME_WIDTH-1:0] frame_r1;
   logic [PHASE_FRAC_WIDTH-1:0] fraction;
   pcm_t raw_l0, raw_l1, raw_r0, raw_r1;
   voice_dsp_context_t dsp_context;
@@ -60,18 +65,27 @@ module multi_voice_pipeline (
   logic signed [31:0] next_accum_r;
   logic scan_at_last_voice;
   logic [32:0] phase_sum;
+  logic [32:0] phase_r_sum;
   logic [32:0] loop_end_phase;
+  logic [32:0] loop_end_phase_r;
   logic [31:0] loop_length_phase;
+  logic [31:0] loop_length_phase_r;
   logic [31:0] wrapped_phase;
+  logic [31:0] wrapped_phase_r;
   logic loop_active;
+  logic voice_done_l;
+  logic voice_done_r;
   logic voice_done;
   logic cfg_enable;
   logic cfg_stereo;
   logic [ADDR_WIDTH-1:0] cfg_base_addr;
   logic [ADDR_WIDTH-1:0] cfg_base_addr_r;
   logic [PHASE_FRAME_WIDTH-1:0] cfg_length;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_length_r;
   logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_start;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_start_r;
   logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_end;
+  logic [PHASE_FRAME_WIDTH-1:0] cfg_loop_end_r;
   logic [PHASE_WIDTH-1:0] cfg_phase_inc;
   logic signed [15:0] cfg_gain_l;
   logic signed [15:0] cfg_gain_r;
@@ -91,8 +105,11 @@ module multi_voice_pipeline (
   logic [ADDR_WIDTH-1:0] current_base_addr;
   logic [ADDR_WIDTH-1:0] current_base_addr_r;
   logic [PHASE_FRAME_WIDTH-1:0] current_length;
+  logic [PHASE_FRAME_WIDTH-1:0] current_length_r;
   logic [PHASE_FRAME_WIDTH-1:0] current_loop_start;
+  logic [PHASE_FRAME_WIDTH-1:0] current_loop_start_r;
   logic [PHASE_FRAME_WIDTH-1:0] current_loop_end;
+  logic [PHASE_FRAME_WIDTH-1:0] current_loop_end_r;
   logic [PHASE_WIDTH-1:0] current_phase_inc;
   logic signed [15:0] current_gain_l;
   logic signed [15:0] current_gain_r;
@@ -106,6 +123,7 @@ module multi_voice_pipeline (
   logic signed [31:0] current_filter_a1;
   logic signed [31:0] current_filter_a2;
   logic [PHASE_WIDTH-1:0] current_phase;
+  logic [PHASE_WIDTH-1:0] current_phase_r;
   logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z1_l;
   logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z2_l;
   logic signed [FILTER_STATE_WIDTH-1:0] current_filter_z1_r;
@@ -132,8 +150,11 @@ module multi_voice_pipeline (
   assign cfg_base_addr = voice_config.base_addr;
   assign cfg_base_addr_r = voice_config.base_addr_r;
   assign cfg_length = voice_config.length;
+  assign cfg_length_r = voice_config.length_r;
   assign cfg_loop_start = voice_config.loop_start;
+  assign cfg_loop_start_r = voice_config.loop_start_r;
   assign cfg_loop_end = voice_config.loop_end;
+  assign cfg_loop_end_r = voice_config.loop_end_r;
   assign cfg_phase_inc = voice_runtime.phase_inc;
   assign cfg_gain_l = voice_runtime.gain_l;
   assign cfg_gain_r = voice_runtime.gain_r;
@@ -148,13 +169,20 @@ module multi_voice_pipeline (
   assign cfg_filter_a2 = voice_runtime.filter_a2;
   always_comb begin
     phase_sum = {1'b0, current_phase} + {1'b0, current_phase_inc};
+    phase_r_sum = {1'b0, current_phase_r} + {1'b0, current_phase_inc};
     loop_end_phase = {1'b0, current_loop_end, {PHASE_FRAC_WIDTH{1'b0}}};
+    loop_end_phase_r = {1'b0, current_loop_end_r, {PHASE_FRAC_WIDTH{1'b0}}};
     loop_length_phase = {(current_loop_end - current_loop_start), {PHASE_FRAC_WIDTH{1'b0}}};
+    loop_length_phase_r = {(current_loop_end_r - current_loop_start_r), {PHASE_FRAC_WIDTH{1'b0}}};
     wrapped_phase = phase_sum[31:0] - loop_length_phase;
+    wrapped_phase_r = phase_r_sum[31:0] - loop_length_phase_r;
     loop_active = (current_loop_mode == LOOP_MODE_CONTINUOUS) ||
                   ((current_loop_mode == LOOP_MODE_UNTIL_RELEASE) && !current_released);
-    voice_done = (current_loop_mode == LOOP_MODE_NONE || !loop_active) &&
-                 (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] >= current_length);
+    voice_done_l = (current_loop_mode == LOOP_MODE_NONE || !loop_active) &&
+                   (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] >= current_length);
+    voice_done_r = !current_stereo || ((current_loop_mode == LOOP_MODE_NONE || !loop_active) &&
+                   (current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] >= current_length_r));
+    voice_done = voice_done_l && voice_done_r;
     next_accum_l = accum_l + $signed({{16{dsp_result.contribution_l[15]}}, dsp_result.contribution_l});
     next_accum_r = accum_r + $signed({{16{dsp_result.contribution_r[15]}}, dsp_result.contribution_r});
     outstanding_next = outstanding_count + {{VOICE_INDEX_WIDTH{1'b0}}, (state == DSP_START)} -
@@ -162,6 +190,7 @@ module multi_voice_pipeline (
     scan_at_last_voice = (voice_index == LAST_VOICE);
     phase_write_en = (state == PROCESS_VOICE) && current_enable && current_config_valid && !voice_done;
     phase_write_data = (loop_active && phase_sum >= loop_end_phase) ? wrapped_phase : phase_sum[31:0];
+    phase_r_write_data = (loop_active && phase_r_sum >= loop_end_phase_r) ? wrapped_phase_r : phase_r_sum[31:0];
   end
 
   always_comb begin
@@ -198,8 +227,11 @@ module multi_voice_pipeline (
 
   always_ff @(posedge clk) begin
     phase_read <= phase[render_index];
+    phase_r_read <= phase_r[render_index];
     if (phase_write_en)
       phase[voice_index] <= phase_write_data;
+    if (phase_write_en && current_stereo)
+      phase_r[voice_index] <= phase_r_write_data;
 
     filter_z1_l_read <= filter_z1_l[render_index];
     filter_z2_l_read <= filter_z2_l[render_index];
@@ -233,19 +265,19 @@ module multi_voice_pipeline (
       end
       REQ_R0: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r0};
       end
       WAIT_L1: begin
         mem_req_valid = mem_rsp_valid && current_stereo;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r0};
       end
       REQ_R1: begin
         mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r1};
       end
       WAIT_R0: begin
         mem_req_valid = mem_rsp_valid;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
+        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r1};
       end
       default: begin
       end
@@ -259,6 +291,8 @@ module multi_voice_pipeline (
       render_index <= '0;
       frame_0 <= '0;
       frame_1 <= '0;
+      frame_r0 <= '0;
+      frame_r1 <= '0;
       fraction <= '0;
       current_stereo <= 1'b0;
       current_base_addr <= '0;
@@ -267,9 +301,13 @@ module multi_voice_pipeline (
       current_config_valid <= 1'b0;
       current_commit <= 1'b0;
       current_length <= '0;
+      current_length_r <= '0;
       current_loop_start <= '0;
+      current_loop_start_r <= '0;
       current_loop_end <= '0;
+      current_loop_end_r <= '0;
       current_phase <= '0;
+      current_phase_r <= '0;
       current_phase_inc <= '0;
       current_gain_l <= '0;
       current_gain_r <= '0;
@@ -376,10 +414,15 @@ module multi_voice_pipeline (
           current_base_addr <= cfg_base_addr;
           current_base_addr_r <= cfg_base_addr_r;
           current_length <= cfg_length;
+          current_length_r <= cfg_length_r;
           current_loop_start <= cfg_loop_start;
+          current_loop_start_r <= cfg_loop_start_r;
           current_loop_end <= cfg_loop_end;
+          current_loop_end_r <= cfg_loop_end_r;
           current_phase <= frame_commit[voice_index] ? voice_config.phase_init :
                            (phase_valid[voice_index] ? phase_read : '0);
+          current_phase_r <= frame_commit[voice_index] ? voice_config.phase_init :
+                             (phase_valid[voice_index] ? phase_r_read : '0);
           current_phase_inc <= cfg_phase_inc;
           current_gain_l <= cfg_gain_l;
           current_gain_r <= cfg_gain_r;
@@ -418,13 +461,31 @@ module multi_voice_pipeline (
           end else begin
             if (current_commit)
               filter_state_valid[voice_index] <= 1'b0;
-            frame_0 <= current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH];
-            if (loop_active)
-              frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_loop_end) ?
-                         current_loop_start : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
-            else
-              frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_length) ?
-                         current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+            if (voice_done_l) begin
+              frame_0 <= current_length - 24'd1;
+              frame_1 <= current_length - 24'd1;
+            end else begin
+              frame_0 <= current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH];
+              if (loop_active)
+                frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_loop_end) ?
+                           current_loop_start : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+              else
+                frame_1 <= (current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_length) ?
+                           current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] : current_phase[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+            end
+
+            if (!current_stereo || voice_done_r) begin
+              frame_r0 <= current_stereo ? (current_length_r - 24'd1) : '0;
+              frame_r1 <= current_stereo ? (current_length_r - 24'd1) : '0;
+            end else begin
+              frame_r0 <= current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH];
+              if (loop_active)
+                frame_r1 <= (current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_loop_end_r) ?
+                            current_loop_start_r : current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+              else
+                frame_r1 <= (current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_length_r) ?
+                            current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] : current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
+            end
             fraction <= current_phase[PHASE_FRAC_WIDTH-1:0];
             phase_valid[voice_index] <= 1'b1;
             state <= REQ_L0;

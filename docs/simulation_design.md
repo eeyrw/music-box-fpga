@@ -442,9 +442,12 @@ ENVELOPE_LEVEL = 0
 CONTROL        = enable + mono/stereo
 BASE_ADDR      = selected left/mono memory word address
 BASE_ADDR_R    = selected right memory word address for stereo
-LENGTH         = sample frames
-LOOP_START     = first loop frame
-LOOP_END       = exclusive loop end
+LENGTH         = left/mono sample frames
+LENGTH_R       = right sample frames for stereo
+LOOP_START     = left/mono first loop frame
+LOOP_START_R   = right first loop frame for stereo
+LOOP_END       = left/mono exclusive loop end
+LOOP_END_R     = right exclusive loop end for stereo
 PHASE_INIT     = 0
 PHASE_INC      = generated Q24.8 increment
 GAIN_L/R       = selected Q1.15 channel gains
@@ -494,7 +497,7 @@ Current SF2 support:
   instrument-level generators treated as absolute and preset-level value
   generators treated as additive where supported.
 - Mono samples and common linked-stereo samples. Linked stereo keeps separate
-  left/right absolute sample addresses.
+  left/right absolute sample addresses, lengths, and loop points.
 - Sample header `start`, `end`, `startLoop`, `endLoop`, `sampleRate`,
   `originalPitch`, and `pitchCorrection` fields.
 - Sample-address offset generators `startAddrsOffset`, `endAddrsOffset`,

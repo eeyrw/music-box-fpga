@@ -117,8 +117,11 @@ void print_usage(const char* argv0) {
       << "  --base ADDR             Left/mono wave-memory base word address\n"
       << "  --base-r ADDR           Right-channel wave-memory base word address\n"
       << "  --length FRAMES         Sample-frame length\n"
+      << "  --length-r FRAMES       Right-channel sample-frame length, default length\n"
       << "  --loop-start FRAME      Default 0\n"
+      << "  --loop-start-r FRAME    Right-channel loop start, default loop-start\n"
       << "  --loop-end FRAME        Default length\n"
+      << "  --loop-end-r FRAME      Right-channel loop end, default length-r\n"
       << "  --loop-mode MODE        0 none, 1 continuous, 2 until release\n"
       << "  --phase-inc Q16_16      Default 0x00010000\n"
       << "  --gain-l Q1_15          Default 0x4000\n"
@@ -138,6 +141,9 @@ Args parse_args(int argc, char** argv) {
   auto flush_commit = [&]() {
     if (!have_commit) return;
     if (current_commit.region.loop_end == 0) current_commit.region.loop_end = current_commit.region.length;
+    if (current_commit.region.length_r == 0) current_commit.region.length_r = current_commit.region.length;
+    if (current_commit.region.loop_start_r == 0) current_commit.region.loop_start_r = current_commit.region.loop_start;
+    if (current_commit.region.loop_end_r == 0) current_commit.region.loop_end_r = current_commit.region.length_r;
     Action action;
     action.type = Action::CommitAction;
     action.commit = current_commit;
@@ -212,12 +218,21 @@ Args parse_args(int argc, char** argv) {
     } else if (a == "--length") {
       have_commit = true;
       current_commit.region.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");
+    } else if (a == "--length-r") {
+      have_commit = true;
+      current_commit.region.length_r = parse_u32(need_arg(argc, argv, i, "--length-r"), "length-r");
     } else if (a == "--loop-start") {
       have_commit = true;
       current_commit.region.loop_start = parse_u32(need_arg(argc, argv, i, "--loop-start"), "loop-start");
+    } else if (a == "--loop-start-r") {
+      have_commit = true;
+      current_commit.region.loop_start_r = parse_u32(need_arg(argc, argv, i, "--loop-start-r"), "loop-start-r");
     } else if (a == "--loop-end") {
       have_commit = true;
       current_commit.region.loop_end = parse_u32(need_arg(argc, argv, i, "--loop-end"), "loop-end");
+    } else if (a == "--loop-end-r") {
+      have_commit = true;
+      current_commit.region.loop_end_r = parse_u32(need_arg(argc, argv, i, "--loop-end-r"), "loop-end-r");
     } else if (a == "--loop-mode") {
       have_commit = true;
       current_commit.region.loop_mode = parse_int(need_arg(argc, argv, i, "--loop-mode"), "loop-mode");

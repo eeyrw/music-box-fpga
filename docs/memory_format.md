@@ -4,7 +4,8 @@ Addresses identify 16-bit words in the external wave-memory image. For SF2-backe
 flows, word address zero is the first 16-bit word of the complete SF2 file image;
 sample addresses therefore include the `smpl` chunk payload offset. A voice
 configuration gives 32-bit `base_addr` and `base_addr_r` in words and gives
-24-bit `length`, `loop_start`, and `loop_end` in sample frames.
+24-bit per-channel `length`, `loop_start`, and `loop_end` values in sample
+frames.
 A single mono 16-bit sample region can therefore span up to `0x00ff_ffff`
 frames, or just under 32 MiB of PCM data. Linked-stereo regions have that limit
 per channel because the left and right channels use independent base addresses.
@@ -23,16 +24,17 @@ The fetched sample is used for both channels before channel gain is applied.
 ## Stereo
 
 When `stereo` is set, left and right channels use independent absolute base
-addresses:
+addresses and independent sample windows:
 
 ```text
-left(n)  = base_addr + n
-right(n) = base_addr_r + n
+left(n)  = base_addr + n_l, where n_l is wrapped or clamped by LENGTH/LOOP_*
+right(n) = base_addr_r + n_r, where n_r is wrapped or clamped by LENGTH_R/LOOP_*_R
 ```
 
 This matches normal SF2 linked-stereo storage, where left and right samples are
 separate sample headers linked by `sampleLink`. Interpolation operates
-independently on each channel.
+independently on each channel, while both channels use the same phase increment
+so the pair is triggered and pitched as one stereo voice.
 
 ## Abstract Memory Handshake
 

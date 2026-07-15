@@ -56,7 +56,8 @@ package code. A DSP primitive must not depend on a voice controller.
 - V1 requires `phase_inc < (loop_end - loop_start) << 16`; phase wrapping
   therefore needs at most one subtraction per output sample.
 - Mono samples are duplicated before independent left/right gain is applied.
-- Stereo samples use independent absolute left and right base addresses.
+- Stereo samples use independent absolute left/right base addresses, lengths, and
+  loop points while sharing one runtime phase increment.
 - Configuration register writes update shadow state only. A commit copies the
   complete shadow configuration to active state atomically. Runtime register
   writes update runtime state without reloading phase and are sampled by the

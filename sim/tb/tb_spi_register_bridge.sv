@@ -152,7 +152,7 @@ module tb_spi_register_bridge;
       $error("SPI write unexpectedly reported error");
       errors++;
     end
-    expect_read(16'h3000, 32'h0004_0000);
+    expect_read(16'h3000, 32'h0005_0000);
     expect_read(16'h0104, 32'h0000_0000);
     expect_readback(16'h0104, 32'h1234_5678);
 

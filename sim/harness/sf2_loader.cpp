@@ -762,15 +762,17 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
     const auto& right = sf2.samples.at(pair.second);
     SampleWindow right_window = sample_window(sf2, right, zone);
-    uint32_t frames = std::min<uint32_t>({left_window.end - left_window.start,
-                                          right_window.end - right_window.start,
-                                          kPhaseFrameMask});
+    uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
+    uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
     region.stereo = true;
     region.sample_right = right.name;
     region.base_addr_r = sf2.smpl_word_offset + right_window.start;
-    region.length = frames;
-    region.loop_start = std::min<uint32_t>({rel(left_window.start_loop, left_window.start), rel(right_window.start_loop, right_window.start), frames ? frames - 1 : 0});
-    region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>({rel(left_window.end_loop, left_window.start), rel(right_window.end_loop, right_window.start), frames}));
+    region.length = frames_l;
+    region.length_r = frames_r;
+    region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames_l ? frames_l - 1 : 0);
+    region.loop_start_r = std::min<uint32_t>(rel(right_window.start_loop, right_window.start), frames_r ? frames_r - 1 : 0);
+    region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames_l));
+    region.loop_end_r = std::max<uint32_t>(region.loop_start_r + 1, std::min<uint32_t>(rel(right_window.end_loop, right_window.start), frames_r));
     return;
   }
 
@@ -778,11 +780,16 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   region.stereo = false;
   region.base_addr_r = region.base_addr;
   region.length = frames;
+  region.length_r = frames;
   region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
+  region.loop_start_r = region.loop_start;
   region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames));
+  region.loop_end_r = region.loop_end;
   if (region.loop_start >= region.loop_end || region.loop_end > frames) {
     region.loop_start = 0;
     region.loop_end = frames;
+    region.loop_start_r = 0;
+    region.loop_end_r = frames;
   }
 }
 

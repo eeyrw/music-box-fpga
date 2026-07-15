@@ -58,8 +58,8 @@ Shadow Registers -> Commit -> Active Voice Configurations
 
 PCM data is signed 16-bit. Playback phase uses unsigned Q16.16 sample-frame
 units, and channel gains use signed Q1.15. Mono waves contain one word per frame;
-stereo waves use independent absolute left/right base addresses. Detailed contracts are documented
-in [`docs/`](docs/).
+stereo waves use independent absolute left/right base addresses and sample-window
+metadata. Detailed contracts are documented in [`docs/`](docs/).
 
 ## Repository Layout
 

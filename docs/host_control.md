@@ -65,7 +65,9 @@ build/ch347_control --dry-run \
 ```
 
 For stereo regions, pass `--base` for the left sample and `--base-r` for the
-right sample.
+right sample. If the right sample header has different bounds, also pass
+`--length-r`, `--loop-start-r`, and `--loop-end-r`; otherwise the tool mirrors the
+left-channel values.
 
 `Ch347RegisterTransport::write_register` emits the SPI frame documented in
 `docs/register_map.md`:
