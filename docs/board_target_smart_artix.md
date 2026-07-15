@@ -116,7 +116,7 @@ read data beat returns one `LINE_WORDS = 8` PCM-word line.
 
 ## Vivado 2018.3 Snapshot
 
-Vivado 2018.3 is installed under `/opt/Xilinx/Vivado/2018.3` on the local
+Vivado 2018.3 is installed under `/opt/Xilinx2051.1/2025.2/Vivado` on the local
 development machine. The Smart Artix batch flow is in
 `fpga/smart_artix/vivado/scripts/synth.tcl` and currently runs synthesis for
 `smart_artix_top` with `xc7a50tfgg484-2`.

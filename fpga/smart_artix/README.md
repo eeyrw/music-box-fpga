@@ -134,7 +134,7 @@ Run the current synthesis check from this directory with:
 ```bash
 mkdir -p ../../build/fpga/smart_artix/vivado/logs
 cd ../../build/fpga/smart_artix/vivado
-/opt/Xilinx/Vivado/2018.3/bin/vivado -mode batch \
+/opt/Xilinx2051.1/2025.2/Vivado/bin/vivado -mode batch \
   -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
   -journal logs/synth.jou -log logs/synth.log
 ```
