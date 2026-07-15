@@ -55,9 +55,22 @@ module multi_voice_pipeline (
   } rsp_meta_t;
 
   typedef struct packed {
-    voice_dsp_context_t ctx;
-    logic [2:0] pending;
-  } fetch_slot_t;
+    logic [VOICE_ID_WIDTH-1:0] voice_index;
+    logic filter_enable;
+    logic signed [15:0] gain_l;
+    logic signed [15:0] gain_r;
+    logic signed [15:0] envelope_level;
+    logic signed [31:0] filter_b0;
+    logic signed [31:0] filter_b1;
+    logic signed [31:0] filter_b2;
+    logic signed [31:0] filter_a1;
+    logic signed [31:0] filter_a2;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_r;
+    logic [PHASE_FRAC_WIDTH-1:0] fraction;
+  } slot_base_context_t;
 
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
@@ -86,10 +99,15 @@ module multi_voice_pipeline (
   logic [PHASE_FRAME_WIDTH-1:0] frame_r1;
   voice_dsp_context_t dsp_context;
   voice_dsp_context_t fetch_context;
-  voice_dsp_context_t fetch_queue [FETCH_QUEUE_DEPTH];
-  fetch_slot_t fetch_slots [FETCH_SLOT_DEPTH];
-  word_req_t word_req_queue [WORD_REQ_DEPTH];
-  rsp_meta_t rsp_meta_queue [WORD_REQ_DEPTH];
+  (* ram_style = "distributed" *) voice_dsp_context_t fetch_queue [FETCH_QUEUE_DEPTH];
+  (* ram_style = "distributed" *) slot_base_context_t fetch_slot_base_context [FETCH_SLOT_DEPTH];
+  (* ram_style = "distributed" *) pcm_t fetch_slot_raw_l0 [FETCH_SLOT_DEPTH];
+  (* ram_style = "distributed" *) pcm_t fetch_slot_raw_l1 [FETCH_SLOT_DEPTH];
+  (* ram_style = "distributed" *) pcm_t fetch_slot_raw_r0 [FETCH_SLOT_DEPTH];
+  (* ram_style = "distributed" *) pcm_t fetch_slot_raw_r1 [FETCH_SLOT_DEPTH];
+  logic [2:0] fetch_slot_pending [FETCH_SLOT_DEPTH];
+  (* ram_style = "distributed" *) word_req_t word_req_queue [WORD_REQ_DEPTH];
+  (* ram_style = "distributed" *) rsp_meta_t rsp_meta_queue [WORD_REQ_DEPTH];
   voice_dsp_result_t dsp_result;
   logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_rd;
   logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_wr;
@@ -116,7 +134,7 @@ module multi_voice_pipeline (
   logic enqueue_word_req;
   word_req_t enqueue_word_req_data;
   rsp_meta_t rsp_meta_head;
-  voice_dsp_context_t allocated_fetch_context;
+  slot_base_context_t allocated_slot_base_context;
   voice_dsp_context_t completed_fetch_context;
   logic fetch_context_push;
   logic fetch_queue_pop;
@@ -265,32 +283,50 @@ module multi_voice_pipeline (
     fetch_slot_alloc = (state == PROCESS_VOICE) && current_enable && current_config_valid &&
                        !voice_done && !fetch_slot_full;
 
-    allocated_fetch_context = '0;
-    allocated_fetch_context.voice_index = voice_index;
-    allocated_fetch_context.filter_enable = current_filter_enable;
-    allocated_fetch_context.gain_l = current_gain_l;
-    allocated_fetch_context.gain_r = current_gain_r;
-    allocated_fetch_context.envelope_level = current_envelope_level;
-    allocated_fetch_context.filter_b0 = current_filter_b0;
-    allocated_fetch_context.filter_b1 = current_filter_b1;
-    allocated_fetch_context.filter_b2 = current_filter_b2;
-    allocated_fetch_context.filter_a1 = current_filter_a1;
-    allocated_fetch_context.filter_a2 = current_filter_a2;
-    allocated_fetch_context.filter_z1_l = current_filter_z1_l;
-    allocated_fetch_context.filter_z2_l = current_filter_z2_l;
-    allocated_fetch_context.filter_z1_r = current_filter_z1_r;
-    allocated_fetch_context.filter_z2_r = current_filter_z2_r;
-    allocated_fetch_context.fraction = current_phase[PHASE_FRAC_WIDTH-1:0];
+    allocated_slot_base_context.voice_index = voice_index;
+    allocated_slot_base_context.filter_enable = current_filter_enable;
+    allocated_slot_base_context.gain_l = current_gain_l;
+    allocated_slot_base_context.gain_r = current_gain_r;
+    allocated_slot_base_context.envelope_level = current_envelope_level;
+    allocated_slot_base_context.filter_b0 = current_filter_b0;
+    allocated_slot_base_context.filter_b1 = current_filter_b1;
+    allocated_slot_base_context.filter_b2 = current_filter_b2;
+    allocated_slot_base_context.filter_a1 = current_filter_a1;
+    allocated_slot_base_context.filter_a2 = current_filter_a2;
+    allocated_slot_base_context.filter_z1_l = current_filter_z1_l;
+    allocated_slot_base_context.filter_z2_l = current_filter_z2_l;
+    allocated_slot_base_context.filter_z1_r = current_filter_z1_r;
+    allocated_slot_base_context.filter_z2_r = current_filter_z2_r;
+    allocated_slot_base_context.fraction = current_phase[PHASE_FRAC_WIDTH-1:0];
 
     rsp_meta_head = rsp_meta_queue[rsp_meta_rd];
-    completed_fetch_context = fetch_slots[rsp_meta_head.slot].ctx;
+    completed_fetch_context = '0;
+    completed_fetch_context.voice_index = fetch_slot_base_context[rsp_meta_head.slot].voice_index;
+    completed_fetch_context.filter_enable = fetch_slot_base_context[rsp_meta_head.slot].filter_enable;
+    completed_fetch_context.gain_l = fetch_slot_base_context[rsp_meta_head.slot].gain_l;
+    completed_fetch_context.gain_r = fetch_slot_base_context[rsp_meta_head.slot].gain_r;
+    completed_fetch_context.envelope_level = fetch_slot_base_context[rsp_meta_head.slot].envelope_level;
+    completed_fetch_context.filter_b0 = fetch_slot_base_context[rsp_meta_head.slot].filter_b0;
+    completed_fetch_context.filter_b1 = fetch_slot_base_context[rsp_meta_head.slot].filter_b1;
+    completed_fetch_context.filter_b2 = fetch_slot_base_context[rsp_meta_head.slot].filter_b2;
+    completed_fetch_context.filter_a1 = fetch_slot_base_context[rsp_meta_head.slot].filter_a1;
+    completed_fetch_context.filter_a2 = fetch_slot_base_context[rsp_meta_head.slot].filter_a2;
+    completed_fetch_context.filter_z1_l = fetch_slot_base_context[rsp_meta_head.slot].filter_z1_l;
+    completed_fetch_context.filter_z2_l = fetch_slot_base_context[rsp_meta_head.slot].filter_z2_l;
+    completed_fetch_context.filter_z1_r = fetch_slot_base_context[rsp_meta_head.slot].filter_z1_r;
+    completed_fetch_context.filter_z2_r = fetch_slot_base_context[rsp_meta_head.slot].filter_z2_r;
+    completed_fetch_context.fraction = fetch_slot_base_context[rsp_meta_head.slot].fraction;
+    completed_fetch_context.raw_l0 = fetch_slot_raw_l0[rsp_meta_head.slot];
+    completed_fetch_context.raw_l1 = fetch_slot_raw_l1[rsp_meta_head.slot];
+    completed_fetch_context.raw_r0 = fetch_slot_raw_r0[rsp_meta_head.slot];
+    completed_fetch_context.raw_r1 = fetch_slot_raw_r1[rsp_meta_head.slot];
 
     unique case (rsp_meta_head.endpoint)
       ENDPOINT_L0: completed_fetch_context.raw_l0 = mem_rsp_data;
       ENDPOINT_L1: begin
         completed_fetch_context.raw_l1 = mem_rsp_data;
-        if (fetch_slots[rsp_meta_head.slot].pending == 3'd1) begin
-          completed_fetch_context.raw_r0 = fetch_slots[rsp_meta_head.slot].ctx.raw_l0;
+        if (fetch_slot_pending[rsp_meta_head.slot] == 3'd1) begin
+          completed_fetch_context.raw_r0 = fetch_slot_raw_l0[rsp_meta_head.slot];
           completed_fetch_context.raw_r1 = mem_rsp_data;
         end
       end
@@ -301,15 +337,15 @@ module multi_voice_pipeline (
     endcase
 
     fetch_context_push = rsp_meta_pop &&
-                         (fetch_slots[rsp_meta_head.slot].pending == 3'd1);
+                         (fetch_slot_pending[rsp_meta_head.slot] == 3'd1);
     fetch_slot_complete = fetch_context_push;
     fetch_queue_pop = !fetch_queue_empty;
-    fetch_queue_store = fetch_context_push && !fetch_queue_empty;
-    dsp_issue_valid = fetch_queue_pop || (fetch_context_push && fetch_queue_empty);
+    fetch_queue_store = fetch_context_push;
+    dsp_issue_valid = fetch_queue_pop;
 
     fetch_context = completed_fetch_context;
 
-    dsp_context = fetch_queue_empty ? fetch_context : fetch_queue[fetch_queue_rd];
+    dsp_context = fetch_queue[fetch_queue_rd];
   end
 
   voice_dsp_pipeline dsp_pipeline (
@@ -426,23 +462,17 @@ module multi_voice_pipeline (
       fetch_queue_rd <= '0;
       fetch_queue_wr <= '0;
       fetch_queue_count <= '0;
-      for (int q = 0; q < FETCH_QUEUE_DEPTH; q++)
-        fetch_queue[q] <= '0;
       fetch_slot_wr <= '0;
       fetch_slot_count <= '0;
       current_fetch_slot <= '0;
       for (int s = 0; s < FETCH_SLOT_DEPTH; s++)
-        fetch_slots[s] <= '0;
+        fetch_slot_pending[s] <= '0;
       word_req_rd <= '0;
       word_req_wr <= '0;
       word_req_count <= '0;
-      for (int w = 0; w < WORD_REQ_DEPTH; w++)
-        word_req_queue[w] <= '0;
       rsp_meta_rd <= '0;
       rsp_meta_wr <= '0;
       rsp_meta_count <= '0;
-      for (int m = 0; m < WORD_REQ_DEPTH; m++)
-        rsp_meta_queue[m] <= '0;
       prefetch_active <= 1'b0;
       prefetch_done <= 1'b0;
       prefetch_ready <= 1'b0;
@@ -476,13 +506,20 @@ module multi_voice_pipeline (
 
       if (fetch_slot_alloc) begin
         current_fetch_slot <= fetch_slot_wr;
-        fetch_slots[fetch_slot_wr].ctx <= allocated_fetch_context;
-        fetch_slots[fetch_slot_wr].pending <= current_stereo ? 3'd4 : 3'd2;
+        fetch_slot_base_context[fetch_slot_wr] <= allocated_slot_base_context;
+        fetch_slot_pending[fetch_slot_wr] <= current_stereo ? 3'd4 : 3'd2;
         fetch_slot_wr <= fetch_slot_wr + 1'b1;
       end
       if (rsp_meta_pop) begin
-        fetch_slots[rsp_meta_head.slot].ctx <= completed_fetch_context;
-        fetch_slots[rsp_meta_head.slot].pending <= fetch_slots[rsp_meta_head.slot].pending - 3'd1;
+        unique case (rsp_meta_head.endpoint)
+          ENDPOINT_L0: fetch_slot_raw_l0[rsp_meta_head.slot] <= mem_rsp_data;
+          ENDPOINT_L1: fetch_slot_raw_l1[rsp_meta_head.slot] <= mem_rsp_data;
+          ENDPOINT_R0: fetch_slot_raw_r0[rsp_meta_head.slot] <= mem_rsp_data;
+          ENDPOINT_R1: fetch_slot_raw_r1[rsp_meta_head.slot] <= mem_rsp_data;
+          default: begin
+          end
+        endcase
+        fetch_slot_pending[rsp_meta_head.slot] <= fetch_slot_pending[rsp_meta_head.slot] - 3'd1;
         rsp_meta_rd <= rsp_meta_rd + 1'b1;
       end
       unique case ({fetch_slot_alloc, fetch_slot_complete})

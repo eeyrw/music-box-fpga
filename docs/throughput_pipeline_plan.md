@@ -13,12 +13,12 @@ request and endpoint assembly path, then feeds them into `voice_dsp_pipeline`, a
 fixed-latency valid-shift DSP pipe. The renderer keeps the generic one-word memory
 contract, but internally separates request issue from response assembly: a fetch
 slot captures the immutable voice context, `L0`, `L1`, `R0`, and `R1` word reads
-are queued in order, response metadata fills the matching endpoint fields, and the
-completed context enters a small DSP context queue with an empty-queue bypass. The
-front end can continue scanning and enqueueing later voices while previous voice
-endpoints are still waiting on memory and while earlier contexts move through DSP
-and retire into the mix accumulator. This is a real single-frame throughput
-pipeline, but it does not overlap multiple output frames.
+are queued in order, response metadata fills the matching RAM-backed endpoint
+fields, and the completed context enters a small DSP context queue. The front end
+can continue scanning and enqueueing later voices while previous voice endpoints
+are still waiting on memory and while earlier contexts move through DSP and
+retire into the mix accumulator. This is a real single-frame throughput pipeline,
+but it does not overlap multiple output frames.
 
 The current implementation is therefore not a full CPU-style global N-stage
 pipeline. Only the extracted DSP math is a fixed-stage pipe. The surrounding
@@ -622,15 +622,21 @@ Completed in the current RTL:
 
 5. Added an in-order DSP context queue at the endpoint boundary.
    The last required endpoint response builds an immutable `voice_dsp_context_t`.
-   If the queue is empty, that context bypasses directly into the fixed-latency
-   DSP pipe on the response cycle; otherwise it is stored in order. `DSP_START`
-   is now a scheduler-advance state rather than the only DSP issue point.
+   Completed contexts are stored in order and issued from the registered queue;
+   direct response-to-DSP bypass was removed to cut the long response assembly to
+   interpolator/DSP timing path. `DSP_START` is now a scheduler-advance state
+   rather than the only DSP issue point.
 
 6. Added a word-request FIFO and in-order endpoint assembly slots.
    The generic core memory contract remains one ordered 16-bit word response per
    request. The endpoint path can enqueue `L0`, `L1`, `R0`, and `R1` reads for
    later voices, track accepted request metadata, fill fetch slots as responses
    arrive, and issue completed contexts into the DSP context queue.
+
+7. Mapped internal fetch/context payload storage to distributed RAM.
+   The DSP context queue, fetch-slot base context, fetch-slot raw endpoint
+   samples, word-request queue, and response-metadata queue are RAM-backed where
+   Vivado can infer it. Control counts, pointers, and pending bits remain FFs.
 
 Remaining phases:
 

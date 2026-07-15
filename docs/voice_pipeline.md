@@ -92,10 +92,12 @@ The renderer now overlaps work inside a single output frame:
   then the request states enqueue ordered `L0`, `L1`, `R0`, and `R1` word reads
   without waiting for each response.
 - Accepted requests push compact response metadata. Later `mem_rsp_valid` pulses
-  fill the corresponding endpoint field in the fetch slot. The final endpoint
-  response produces a complete `voice_dsp_context_t`.
-- If the DSP context queue is empty, a completed context bypasses directly into
-  `voice_dsp_pipeline` on the response cycle.
+  fill RAM-backed fetch-slot endpoint fields. The final endpoint response
+  assembles a complete `voice_dsp_context_t` and pushes it into the DSP context
+  queue.
+- The DSP context queue is the only source for `voice_dsp_pipeline`. Completed
+  contexts no longer bypass directly into DSP, which keeps the response assembly
+  path registered before the interpolator/DSP chain.
 - While the current voice enqueues endpoints, a single-entry prefetch scanner may
   advance `render_index` to the next valid voice and let the synchronous
   register-bank and local phase/filter RAM outputs settle early.
@@ -139,10 +141,11 @@ variable-latency front end
   prefetch next valid slot during endpoint fetch
   enqueue L0/L1[/R0/R1] word requests
   assemble endpoint responses into fetch slots
-  package or queue voice_dsp_context_t
+  queue voice_dsp_context_t
   |
   v
-fixed-latency 5-stage DSP pipe
+fixed-latency 6-stage DSP pipe
+  register DSP input context
   interpolate
   filter products
   filter output
@@ -318,7 +321,7 @@ Current front-end state sequence:
 | `REQ_L1` | Enqueue left or mono endpoint-1 word request. | Word request FIFO entry for `frame_1`; mono then advances to `DSP_START`. |
 | `REQ_R0` | Stereo only: enqueue right endpoint-0 word request. | Word request FIFO entry for right `frame_0`. |
 | `REQ_R1` | Stereo only: enqueue right endpoint-1 word request. | Word request FIFO entry for right `frame_1`. |
-| response assembly | Runs alongside the FSM, using accepted-request metadata to fill fetch-slot endpoint fields from ordered `mem_rsp_valid` pulses. | Completed mono/stereo contexts enter or bypass the DSP context queue. |
+| response assembly | Runs alongside the FSM, using accepted-request metadata to fill RAM-backed fetch-slot endpoint fields from ordered `mem_rsp_valid` pulses. | Completed mono/stereo contexts enter the DSP context queue. |
 | `DSP_START` | Advance the scheduler after the current voice's endpoint requests have been queued. | Starts a prefetched next voice, falls back to scanning, or advances to `DRAIN`. |
 | `DRAIN` | Wait for request FIFO, response metadata, fetch slots, context queue, and issued DSP contexts to empty. | Holds until all frame work has retired. |
 | `FINISH` | Saturate the 32-bit stereo accumulators to signed 16-bit PCM. | `sample_l/r`, `sample_valid`. |
@@ -487,8 +490,8 @@ render-read sequence.
 Enabled voices no longer block the front end while they traverse DSP. Once the
 current voice's endpoint word requests are queued, `DSP_START` can move the
 scheduler on to the next selected voice while ordered responses fill fetch slots
-in the background. When a fetch slot completes, the complete context can enter the
-DSP pipe from the final endpoint response cycle through the empty-queue bypass.
+in the background. When a fetch slot completes, the complete context enters the
+DSP context queue and is issued to DSP on a later registered queue read.
 The fixed-latency DSP pipe retires the result in parallel with later voice fetch
 work. The remaining per-voice bottleneck is memory service: mono voices still need
 two word responses and stereo voices still need four.

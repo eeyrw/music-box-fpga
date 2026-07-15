@@ -150,17 +150,19 @@ Block RAM tiles: 9 / 75, 12.00%
 Setup WNS: +0.678 ns, WHS: -1.345 ns
 ```
 
-Latest area-oriented post-synthesis result after changing `multi_voice_pipeline`
-to sequential slot scanning and RAM-backed per-voice phase/filter history:
+Current post-synthesis result after overlapping word endpoint assembly, adding a
+registered DSP input stage, and mapping the internal fetch/context queues to
+distributed RAM:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
-Slice LUTs: 8272 / 32600, 25.37%
-Slice registers: 7882 / 65200, 12.09%
+Slice LUTs: 10138 / 32600, 31.10%
+Slice registers: 11095 / 65200, 17.02%
 DSP48E1: 26 / 120, 21.67%
-Block RAM tiles: 9 / 75, 12.00%
-Setup WNS: -0.371 ns, WHS: -1.345 ns
-Core ui-clock group: setup slack +2.669 ns, hold slack +0.037 ns
+Block RAM tiles: 10 / 75, 13.33%
+Setup WNS: -0.371 ns, TNS: -127.829 ns, failing endpoints: 480
+Hold WHS: -1.345 ns, THS: -23.952 ns, failing endpoints: 55
+Core clk_pll_i group: setup slack -0.371 ns, hold slack +0.029 ns
 ```
 
 Current post-route result with the same inputs:
