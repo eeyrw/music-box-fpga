@@ -165,6 +165,34 @@ Hold WHS: -1.345 ns, THS: -23.952 ns, failing endpoints: 55
 Core clk_pll_i group: setup slack -0.371 ns, hold slack +0.029 ns
 ```
 
+Timing constraint triage for this result:
+
+- The `clk_pll_i` setup failure is a real 100 MHz core datapath, not a missing
+  board constraint. The worst path starts in
+  `core_system/core/core/voices/dsp_pipeline/s0_context_reg[raw_l1][15]`, runs
+  through `linear_interpolator`, and ends at a DSP48E1 `B` input. The reported
+  data path is 9.789 ns with 9 logic levels and `-0.371 ns` slack. This should be
+  fixed by retiming the interpolation/DSP input path rather than by adding an
+  exception.
+- The worst hold failure is inside the MIG temperature-monitor CDC from the
+  clock-wizard `clk_out1_smart_artix_clk_50m_to_200m` domain to the MIG
+  `clk_pll_i` UI domain. MIG's generated XDC applies `set_max_delay 20` to
+  `temp_mon_enabled.u_tempmon/device_temp_sync_r1_reg[*]/D`, which relaxes setup
+  but still leaves Vivado checking a 0 ns hold relationship between the two
+  related clocks. If this remains after implementation, add a targeted false path
+  only for the temperature synchronizer launch-to-first-sync-flop path; do not
+  asynchronous-group the whole clock pair because the MIG also contains real
+  related-clock paths.
+- The remaining post-synthesis hold failures are in MIG OSERDES/PHASER PHY paths
+  covered by generated MIG multicycle constraints. Treat these as post-route
+  questions before hand-editing vendor PHY timing.
+- The checked-in Smart Artix XDC still only constrains pins and I/O standards for
+  SPI, I2S, and debug outputs. The current SPI bridge samples external SPI pins
+  with the system clock through synchronizers, so no internal SPI clock is
+  declared yet. Hardware signoff still needs explicit SPI and I2S external timing
+  contracts, such as input/output delays or a documented asynchronous sampling
+  speed limit.
+
 Current post-route result with the same inputs:
 
 ```text
