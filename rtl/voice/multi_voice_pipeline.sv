@@ -26,6 +26,38 @@ module multi_voice_pipeline (
 
   localparam int VOICE_INDEX_WIDTH = synth_pkg::VOICE_ID_WIDTH;
   localparam logic [VOICE_INDEX_WIDTH-1:0] LAST_VOICE = VOICE_INDEX_WIDTH'(NUM_VOICES - 1);
+  localparam int FETCH_QUEUE_DEPTH = 2;
+  localparam int FETCH_QUEUE_PTR_WIDTH = $clog2(FETCH_QUEUE_DEPTH);
+  localparam int FETCH_QUEUE_COUNT_WIDTH = $clog2(FETCH_QUEUE_DEPTH + 1);
+  localparam int FETCH_SLOT_DEPTH = 4;
+  localparam int FETCH_SLOT_PTR_WIDTH = $clog2(FETCH_SLOT_DEPTH);
+  localparam int FETCH_SLOT_COUNT_WIDTH = $clog2(FETCH_SLOT_DEPTH + 1);
+  localparam int WORD_REQ_DEPTH = 16;
+  localparam int WORD_REQ_PTR_WIDTH = $clog2(WORD_REQ_DEPTH);
+  localparam int WORD_REQ_COUNT_WIDTH = $clog2(WORD_REQ_DEPTH + 1);
+
+  typedef enum logic [1:0] {
+    ENDPOINT_L0,
+    ENDPOINT_L1,
+    ENDPOINT_R0,
+    ENDPOINT_R1
+  } endpoint_kind_t;
+
+  typedef struct packed {
+    logic [31:0] addr;
+    logic [FETCH_SLOT_PTR_WIDTH-1:0] slot;
+    endpoint_kind_t endpoint;
+  } word_req_t;
+
+  typedef struct packed {
+    logic [FETCH_SLOT_PTR_WIDTH-1:0] slot;
+    endpoint_kind_t endpoint;
+  } rsp_meta_t;
+
+  typedef struct packed {
+    voice_dsp_context_t ctx;
+    logic [2:0] pending;
+  } fetch_slot_t;
 
   state_t state;
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
@@ -52,10 +84,44 @@ module multi_voice_pipeline (
   logic [PHASE_FRAME_WIDTH-1:0] frame_1;
   logic [PHASE_FRAME_WIDTH-1:0] frame_r0;
   logic [PHASE_FRAME_WIDTH-1:0] frame_r1;
-  logic [PHASE_FRAC_WIDTH-1:0] fraction;
-  pcm_t raw_l0, raw_l1, raw_r0, raw_r1;
   voice_dsp_context_t dsp_context;
+  voice_dsp_context_t fetch_context;
+  voice_dsp_context_t fetch_queue [FETCH_QUEUE_DEPTH];
+  fetch_slot_t fetch_slots [FETCH_SLOT_DEPTH];
+  word_req_t word_req_queue [WORD_REQ_DEPTH];
+  rsp_meta_t rsp_meta_queue [WORD_REQ_DEPTH];
   voice_dsp_result_t dsp_result;
+  logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_rd;
+  logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_wr;
+  logic [FETCH_QUEUE_COUNT_WIDTH-1:0] fetch_queue_count;
+  logic [FETCH_SLOT_PTR_WIDTH-1:0] fetch_slot_wr;
+  logic [FETCH_SLOT_COUNT_WIDTH-1:0] fetch_slot_count;
+  logic [FETCH_SLOT_PTR_WIDTH-1:0] current_fetch_slot;
+  logic [WORD_REQ_PTR_WIDTH-1:0] word_req_rd;
+  logic [WORD_REQ_PTR_WIDTH-1:0] word_req_wr;
+  logic [WORD_REQ_COUNT_WIDTH-1:0] word_req_count;
+  logic [WORD_REQ_PTR_WIDTH-1:0] rsp_meta_rd;
+  logic [WORD_REQ_PTR_WIDTH-1:0] rsp_meta_wr;
+  logic [WORD_REQ_COUNT_WIDTH-1:0] rsp_meta_count;
+  logic fetch_queue_empty;
+  logic fetch_slot_full;
+  logic fetch_slot_alloc;
+  logic fetch_slot_complete;
+  logic word_req_empty;
+  logic word_req_full;
+  logic rsp_meta_empty;
+  logic rsp_meta_full;
+  logic word_req_accept;
+  logic rsp_meta_pop;
+  logic enqueue_word_req;
+  word_req_t enqueue_word_req_data;
+  rsp_meta_t rsp_meta_head;
+  voice_dsp_context_t allocated_fetch_context;
+  voice_dsp_context_t completed_fetch_context;
+  logic fetch_context_push;
+  logic fetch_queue_pop;
+  logic fetch_queue_store;
+  logic dsp_issue_valid;
   logic dsp_valid;
   logic [VOICE_INDEX_WIDTH:0] outstanding_count;
   logic [VOICE_INDEX_WIDTH:0] outstanding_next;
@@ -185,41 +251,71 @@ module multi_voice_pipeline (
     voice_done = voice_done_l && voice_done_r;
     next_accum_l = accum_l + $signed({{16{dsp_result.contribution_l[15]}}, dsp_result.contribution_l});
     next_accum_r = accum_r + $signed({{16{dsp_result.contribution_r[15]}}, dsp_result.contribution_r});
-    outstanding_next = outstanding_count + {{VOICE_INDEX_WIDTH{1'b0}}, (state == DSP_START)} -
-                       {{VOICE_INDEX_WIDTH{1'b0}}, dsp_valid};
+    outstanding_next = outstanding_count + {{VOICE_INDEX_WIDTH{1'b0}}, dsp_issue_valid} -
+                        {{VOICE_INDEX_WIDTH{1'b0}}, dsp_valid};
     scan_at_last_voice = (voice_index == LAST_VOICE);
-    phase_write_en = (state == PROCESS_VOICE) && current_enable && current_config_valid && !voice_done;
+    phase_write_en = fetch_slot_alloc;
     phase_write_data = (loop_active && phase_sum >= loop_end_phase) ? wrapped_phase : phase_sum[31:0];
     phase_r_write_data = (loop_active && phase_r_sum >= loop_end_phase_r) ? wrapped_phase_r : phase_r_sum[31:0];
   end
 
   always_comb begin
-    dsp_context = '0;
-    dsp_context.voice_index = voice_index;
-    dsp_context.filter_enable = current_filter_enable;
-    dsp_context.gain_l = current_gain_l;
-    dsp_context.gain_r = current_gain_r;
-    dsp_context.envelope_level = current_envelope_level;
-    dsp_context.filter_b0 = current_filter_b0;
-    dsp_context.filter_b1 = current_filter_b1;
-    dsp_context.filter_b2 = current_filter_b2;
-    dsp_context.filter_a1 = current_filter_a1;
-    dsp_context.filter_a2 = current_filter_a2;
-    dsp_context.filter_z1_l = current_filter_z1_l;
-    dsp_context.filter_z2_l = current_filter_z2_l;
-    dsp_context.filter_z1_r = current_filter_z1_r;
-    dsp_context.filter_z2_r = current_filter_z2_r;
-    dsp_context.fraction = fraction;
-    dsp_context.raw_l0 = raw_l0;
-    dsp_context.raw_l1 = raw_l1;
-    dsp_context.raw_r0 = raw_r0;
-    dsp_context.raw_r1 = raw_r1;
+    fetch_queue_empty = (fetch_queue_count == '0);
+    fetch_slot_full = (fetch_slot_count == FETCH_SLOT_COUNT_WIDTH'(FETCH_SLOT_DEPTH));
+    fetch_slot_alloc = (state == PROCESS_VOICE) && current_enable && current_config_valid &&
+                       !voice_done && !fetch_slot_full;
+
+    allocated_fetch_context = '0;
+    allocated_fetch_context.voice_index = voice_index;
+    allocated_fetch_context.filter_enable = current_filter_enable;
+    allocated_fetch_context.gain_l = current_gain_l;
+    allocated_fetch_context.gain_r = current_gain_r;
+    allocated_fetch_context.envelope_level = current_envelope_level;
+    allocated_fetch_context.filter_b0 = current_filter_b0;
+    allocated_fetch_context.filter_b1 = current_filter_b1;
+    allocated_fetch_context.filter_b2 = current_filter_b2;
+    allocated_fetch_context.filter_a1 = current_filter_a1;
+    allocated_fetch_context.filter_a2 = current_filter_a2;
+    allocated_fetch_context.filter_z1_l = current_filter_z1_l;
+    allocated_fetch_context.filter_z2_l = current_filter_z2_l;
+    allocated_fetch_context.filter_z1_r = current_filter_z1_r;
+    allocated_fetch_context.filter_z2_r = current_filter_z2_r;
+    allocated_fetch_context.fraction = current_phase[PHASE_FRAC_WIDTH-1:0];
+
+    rsp_meta_head = rsp_meta_queue[rsp_meta_rd];
+    completed_fetch_context = fetch_slots[rsp_meta_head.slot].ctx;
+
+    unique case (rsp_meta_head.endpoint)
+      ENDPOINT_L0: completed_fetch_context.raw_l0 = mem_rsp_data;
+      ENDPOINT_L1: begin
+        completed_fetch_context.raw_l1 = mem_rsp_data;
+        if (fetch_slots[rsp_meta_head.slot].pending == 3'd1) begin
+          completed_fetch_context.raw_r0 = fetch_slots[rsp_meta_head.slot].ctx.raw_l0;
+          completed_fetch_context.raw_r1 = mem_rsp_data;
+        end
+      end
+      ENDPOINT_R0: completed_fetch_context.raw_r0 = mem_rsp_data;
+      ENDPOINT_R1: completed_fetch_context.raw_r1 = mem_rsp_data;
+      default: begin
+      end
+    endcase
+
+    fetch_context_push = rsp_meta_pop &&
+                         (fetch_slots[rsp_meta_head.slot].pending == 3'd1);
+    fetch_slot_complete = fetch_context_push;
+    fetch_queue_pop = !fetch_queue_empty;
+    fetch_queue_store = fetch_context_push && !fetch_queue_empty;
+    dsp_issue_valid = fetch_queue_pop || (fetch_context_push && fetch_queue_empty);
+
+    fetch_context = completed_fetch_context;
+
+    dsp_context = fetch_queue_empty ? fetch_context : fetch_queue[fetch_queue_rd];
   end
 
   voice_dsp_pipeline dsp_pipeline (
     .clk,
     .rst,
-    .valid_i(state == DSP_START),
+    .valid_i(dsp_issue_valid),
     .context_i(dsp_context),
     .valid_o(dsp_valid),
     .result_o(dsp_result)
@@ -237,7 +333,6 @@ module multi_voice_pipeline (
     filter_z2_l_read <= filter_z2_l[render_index];
     filter_z1_r_read <= filter_z1_r[render_index];
     filter_z2_r_read <= filter_z2_r[render_index];
-
     if (dsp_valid && dsp_result.filter_enable) begin
       filter_z1_l[dsp_result.voice_index] <= dsp_result.next_z1_l;
       filter_z2_l[dsp_result.voice_index] <= dsp_result.next_z2_l;
@@ -247,37 +342,42 @@ module multi_voice_pipeline (
   end
 
   always_comb begin
+    word_req_empty = (word_req_count == '0);
+    word_req_full = (word_req_count == WORD_REQ_COUNT_WIDTH'(WORD_REQ_DEPTH));
+    rsp_meta_empty = (rsp_meta_count == '0);
+    rsp_meta_full = (rsp_meta_count == WORD_REQ_COUNT_WIDTH'(WORD_REQ_DEPTH));
+    word_req_accept = !word_req_empty && !rsp_meta_full && mem_req_ready;
+    rsp_meta_pop = mem_rsp_valid && !rsp_meta_empty;
+
     busy = (state != IDLE);
-    mem_req_valid = 1'b0;
+    mem_req_valid = !word_req_empty && !rsp_meta_full;
     mem_req_addr = 32'd0;
+    if (!word_req_empty)
+      mem_req_addr = word_req_queue[word_req_rd].addr;
+
+    enqueue_word_req = 1'b0;
+    enqueue_word_req_data = '0;
+    enqueue_word_req_data.slot = current_fetch_slot;
     unique case (state)
       REQ_L0: begin
-        mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
+        enqueue_word_req = !word_req_full;
+        enqueue_word_req_data.endpoint = ENDPOINT_L0;
+        enqueue_word_req_data.addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_0};
       end
       REQ_L1: begin
-        mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
-      end
-      WAIT_L0: begin
-        mem_req_valid = mem_rsp_valid;
-        mem_req_addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
+        enqueue_word_req = !word_req_full;
+        enqueue_word_req_data.endpoint = ENDPOINT_L1;
+        enqueue_word_req_data.addr = current_base_addr + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_1};
       end
       REQ_R0: begin
-        mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r0};
-      end
-      WAIT_L1: begin
-        mem_req_valid = mem_rsp_valid && current_stereo;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r0};
+        enqueue_word_req = !word_req_full;
+        enqueue_word_req_data.endpoint = ENDPOINT_R0;
+        enqueue_word_req_data.addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r0};
       end
       REQ_R1: begin
-        mem_req_valid = 1'b1;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r1};
-      end
-      WAIT_R0: begin
-        mem_req_valid = mem_rsp_valid;
-        mem_req_addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r1};
+        enqueue_word_req = !word_req_full;
+        enqueue_word_req_data.endpoint = ENDPOINT_R1;
+        enqueue_word_req_data.addr = current_base_addr_r + {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, frame_r1};
       end
       default: begin
       end
@@ -293,7 +393,6 @@ module multi_voice_pipeline (
       frame_1 <= '0;
       frame_r0 <= '0;
       frame_r1 <= '0;
-      fraction <= '0;
       current_stereo <= 1'b0;
       current_base_addr <= '0;
       current_base_addr_r <= '0;
@@ -324,16 +423,32 @@ module multi_voice_pipeline (
       current_filter_z2_l <= '0;
       current_filter_z1_r <= '0;
       current_filter_z2_r <= '0;
+      fetch_queue_rd <= '0;
+      fetch_queue_wr <= '0;
+      fetch_queue_count <= '0;
+      for (int q = 0; q < FETCH_QUEUE_DEPTH; q++)
+        fetch_queue[q] <= '0;
+      fetch_slot_wr <= '0;
+      fetch_slot_count <= '0;
+      current_fetch_slot <= '0;
+      for (int s = 0; s < FETCH_SLOT_DEPTH; s++)
+        fetch_slots[s] <= '0;
+      word_req_rd <= '0;
+      word_req_wr <= '0;
+      word_req_count <= '0;
+      for (int w = 0; w < WORD_REQ_DEPTH; w++)
+        word_req_queue[w] <= '0;
+      rsp_meta_rd <= '0;
+      rsp_meta_wr <= '0;
+      rsp_meta_count <= '0;
+      for (int m = 0; m < WORD_REQ_DEPTH; m++)
+        rsp_meta_queue[m] <= '0;
       prefetch_active <= 1'b0;
       prefetch_done <= 1'b0;
       prefetch_ready <= 1'b0;
       prefetch_wait <= '0;
       prefetch_scan_index <= '0;
       prefetch_index <= '0;
-      raw_l0 <= '0;
-      raw_l1 <= '0;
-      raw_r0 <= '0;
-      raw_r1 <= '0;
       accum_l <= 32'sd0;
       accum_r <= 32'sd0;
       outstanding_count <= '0;
@@ -345,6 +460,60 @@ module multi_voice_pipeline (
       filter_state_valid <= '0;
     end else begin
       sample_valid <= 1'b0;
+
+      if (fetch_queue_pop)
+        fetch_queue_rd <= fetch_queue_rd + 1'b1;
+      if (fetch_queue_store) begin
+        fetch_queue[fetch_queue_wr] <= fetch_context;
+        fetch_queue_wr <= fetch_queue_wr + 1'b1;
+      end
+      unique case ({fetch_queue_store, fetch_queue_pop})
+        2'b10: fetch_queue_count <= fetch_queue_count + 1'b1;
+        2'b01: fetch_queue_count <= fetch_queue_count - 1'b1;
+        default: begin
+        end
+      endcase
+
+      if (fetch_slot_alloc) begin
+        current_fetch_slot <= fetch_slot_wr;
+        fetch_slots[fetch_slot_wr].ctx <= allocated_fetch_context;
+        fetch_slots[fetch_slot_wr].pending <= current_stereo ? 3'd4 : 3'd2;
+        fetch_slot_wr <= fetch_slot_wr + 1'b1;
+      end
+      if (rsp_meta_pop) begin
+        fetch_slots[rsp_meta_head.slot].ctx <= completed_fetch_context;
+        fetch_slots[rsp_meta_head.slot].pending <= fetch_slots[rsp_meta_head.slot].pending - 3'd1;
+        rsp_meta_rd <= rsp_meta_rd + 1'b1;
+      end
+      unique case ({fetch_slot_alloc, fetch_slot_complete})
+        2'b10: fetch_slot_count <= fetch_slot_count + 1'b1;
+        2'b01: fetch_slot_count <= fetch_slot_count - 1'b1;
+        default: begin
+        end
+      endcase
+
+      if (enqueue_word_req) begin
+        word_req_queue[word_req_wr] <= enqueue_word_req_data;
+        word_req_wr <= word_req_wr + 1'b1;
+      end
+      if (word_req_accept) begin
+        rsp_meta_queue[rsp_meta_wr].slot <= word_req_queue[word_req_rd].slot;
+        rsp_meta_queue[rsp_meta_wr].endpoint <= word_req_queue[word_req_rd].endpoint;
+        rsp_meta_wr <= rsp_meta_wr + 1'b1;
+        word_req_rd <= word_req_rd + 1'b1;
+      end
+      unique case ({enqueue_word_req, word_req_accept})
+        2'b10: word_req_count <= word_req_count + 1'b1;
+        2'b01: word_req_count <= word_req_count - 1'b1;
+        default: begin
+        end
+      endcase
+      unique case ({word_req_accept, rsp_meta_pop})
+        2'b10: rsp_meta_count <= rsp_meta_count + 1'b1;
+        2'b01: rsp_meta_count <= rsp_meta_count - 1'b1;
+        default: begin
+        end
+      endcase
 
       if (dsp_valid) begin
         if (dsp_result.filter_enable)
@@ -458,7 +627,7 @@ module multi_voice_pipeline (
               voice_index <= voice_index + 1'b1;
               state <= SCAN_VOICE;
             end
-          end else begin
+          end else if (!fetch_slot_full) begin
             if (current_commit)
               filter_state_valid[voice_index] <= 1'b0;
             if (voice_done_l) begin
@@ -486,37 +655,14 @@ module multi_voice_pipeline (
                 frame_r1 <= (current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1 >= current_length_r) ?
                             current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] : current_phase_r[PHASE_WIDTH-1:PHASE_FRAC_WIDTH] + 24'd1;
             end
-            fraction <= current_phase[PHASE_FRAC_WIDTH-1:0];
             phase_valid[voice_index] <= 1'b1;
             state <= REQ_L0;
           end
         end
-        REQ_L0:  if (mem_req_ready) state <= WAIT_L0;
-        WAIT_L0: if (mem_rsp_valid) begin
-          raw_l0 <= mem_rsp_data;
-          state <= mem_req_ready ? WAIT_L1 : REQ_L1;
-        end
-        REQ_L1:  if (mem_req_ready) state <= WAIT_L1;
-        WAIT_L1: if (mem_rsp_valid) begin
-          raw_l1 <= mem_rsp_data;
-          if (current_stereo) begin
-            state <= mem_req_ready ? WAIT_R0 : REQ_R0;
-          end else begin
-            raw_r0 <= raw_l0;
-            raw_r1 <= mem_rsp_data;
-            state <= DSP_START;
-          end
-        end
-        REQ_R0:  if (mem_req_ready) state <= WAIT_R0;
-        WAIT_R0: if (mem_rsp_valid) begin
-          raw_r0 <= mem_rsp_data;
-          state <= mem_req_ready ? WAIT_R1 : REQ_R1;
-        end
-        REQ_R1:  if (mem_req_ready) state <= WAIT_R1;
-        WAIT_R1: if (mem_rsp_valid) begin
-          raw_r1 <= mem_rsp_data;
-          state <= DSP_START;
-        end
+        REQ_L0: if (enqueue_word_req) state <= REQ_L1;
+        REQ_L1: if (enqueue_word_req) state <= current_stereo ? REQ_R0 : DSP_START;
+        REQ_R0: if (enqueue_word_req) state <= REQ_R1;
+        REQ_R1: if (enqueue_word_req) state <= DSP_START;
         DSP_START: begin
           if (scan_at_last_voice)
             state <= DRAIN;
@@ -540,7 +686,8 @@ module multi_voice_pipeline (
           end
         end
         DRAIN: begin
-          if (outstanding_next == '0)
+          if (outstanding_next == '0 && fetch_slot_count == '0 && fetch_queue_count == '0 &&
+              word_req_count == '0 && rsp_meta_count == '0)
             state <= FINISH;
         end
         FINISH: begin

@@ -43,6 +43,15 @@ when `mem_req_valid && mem_req_ready`. A response transfers when
 `mem_rsp_valid`; responses must arrive in request order. The initial simulation
 model accepts every request and returns its signed 16-bit value one cycle later.
 
+This single-word core-side contract is intentional. The renderer must not require
+a line, burst, pair-endpoint, or cache-line extraction interface because future
+board targets may use DDR, SDRAM, parallel NOR, SPI/QSPI NOR, SRAM, or another
+adapter with different natural access granularity. Wider reads, line fills,
+paired interpolation endpoints, and speculative prefetch are allowed inside an
+optional memory adapter such as `wave_memory_subsystem`, but they must remain
+implementation details behind the same one-word request/response interface unless
+a later project milestone explicitly changes this external contract.
+
 ## Minimal Line Memory Subsystem
 
 `rtl/memory/wave_memory_subsystem.sv` adapts the core's one-word read interface
@@ -160,6 +169,13 @@ A later memory subsystem should evaluate these improvements:
   controller benefits from longer aligned reads.
 - Optional multi-request tracking so cache fills and prefetches can overlap with
   sequential voice rendering.
+
+The generic core-side memory port should still remain a one-word in-order read
+interface. Throughput work in the renderer should first use a word-request FIFO
+and in-order endpoint assembly queue so voice scanning, register snapshots, and
+memory response waits can overlap without assuming line-oriented storage. If an
+adapter can internally return both interpolation endpoints from one line fill, it
+may do so while still presenting ordered 16-bit word responses to the core.
 
 The likely interface change is to carry `voice_id` with each core memory request,
 or to move the optimized cache into/near `multi_voice_pipeline` where the current

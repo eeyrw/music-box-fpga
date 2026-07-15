@@ -8,26 +8,25 @@ before the renderer becomes a fuller throughput engine.
 
 ## Current Baseline
 
-`multi_voice_pipeline` now issues complete voice contexts into
-`voice_dsp_pipeline`, a fixed-latency valid-shift DSP pipe. The front end can
-continue scanning and fetching later voices while previously issued contexts move
-through DSP and retire into the mix accumulator. This is a real single-frame
-throughput pipeline, but it is still bounded by one-request-at-a-time endpoint
-fetch and does not overlap multiple output frames. The current front end also has
-a single-entry next-valid prefetch path: while the current voice is fetching wave
-endpoints, it can move `render_index` to one later valid voice and let the
-synchronous register-bank and local phase/filter RAM reads settle before the
-current voice reaches `DSP_START`. The endpoint FSM also issues the next endpoint
-request from `WAIT_L0`, stereo `WAIT_L1`, and `WAIT_R0` in the same cycle that the
-previous endpoint response is consumed when the memory interface is ready.
+`multi_voice_pipeline` now forms complete voice contexts through an in-order word
+request and endpoint assembly path, then feeds them into `voice_dsp_pipeline`, a
+fixed-latency valid-shift DSP pipe. The renderer keeps the generic one-word memory
+contract, but internally separates request issue from response assembly: a fetch
+slot captures the immutable voice context, `L0`, `L1`, `R0`, and `R1` word reads
+are queued in order, response metadata fills the matching endpoint fields, and the
+completed context enters a small DSP context queue with an empty-queue bypass. The
+front end can continue scanning and enqueueing later voices while previous voice
+endpoints are still waiting on memory and while earlier contexts move through DSP
+and retire into the mix accumulator. This is a real single-frame throughput
+pipeline, but it does not overlap multiple output frames.
 
 The current implementation is therefore not a full CPU-style global N-stage
 pipeline. Only the extracted DSP math is a fixed-stage pipe. The surrounding
-renderer is still a variable-latency state machine that supplies complete DSP
-contexts when register-bank reads and memory endpoint fetches finish. The
-single-entry prefetch removes some register-read bubbles between adjacent valid
-voices, and endpoint request overlap removes some request-state bubbles between
-adjacent endpoint reads. This is still not a multi-entry endpoint queue.
+renderer is still a variable-latency state machine, but memory endpoint requests
+and responses are now buffered explicitly. The single-entry prefetch removes some
+register-read bubbles between adjacent valid voices, and the word-request FIFO
+lets endpoint reads for later voices proceed without waiting for each earlier
+endpoint response to return.
 
 Current structure:
 
@@ -45,9 +44,9 @@ sample_tick
 | - sync register read     |
 | - phase/frame update     |
 | - next-valid prefetch    |
-| - one-at-a-time memory   |
-|   endpoint requests with |
-|   response-cycle overlap |
+| - word-request FIFO      |
+| - in-order endpoint     |
+|   response assembly      |
 +--------------------------+
   |
   | complete voice_dsp_context_t
@@ -611,14 +610,27 @@ Completed in the current RTL:
    context every cycle when the front end can provide one.
 
 3. Split issue from retire inside `multi_voice_pipeline`.
-   Complete endpoint sets issue into DSP through `DSP_START`; later `dsp_valid`
-   results retire independently into the accumulator and filter-state arrays.
-   `DRAIN` waits for all outstanding contexts before `FINISH` emits `sample_valid`.
+   Complete endpoint sets issue into DSP through an explicit context issue
+   boundary; later `dsp_valid` results retire independently into the accumulator
+   and filter-state arrays. `DRAIN` waits for all outstanding contexts before
+   `FINISH` emits `sample_valid`.
 
 4. Added area-oriented active-slot scanning.
    `config_valid` skips invalid voice slots before the synchronous render-read
    sequence. Invalid slots cost one scan cycle, but the renderer avoids a wide
    next-active search and keeps the register-bank read timing conservative.
+
+5. Added an in-order DSP context queue at the endpoint boundary.
+   The last required endpoint response builds an immutable `voice_dsp_context_t`.
+   If the queue is empty, that context bypasses directly into the fixed-latency
+   DSP pipe on the response cycle; otherwise it is stored in order. `DSP_START`
+   is now a scheduler-advance state rather than the only DSP issue point.
+
+6. Added a word-request FIFO and in-order endpoint assembly slots.
+   The generic core memory contract remains one ordered 16-bit word response per
+   request. The endpoint path can enqueue `L0`, `L1`, `R0`, and `R1` reads for
+   later voices, track accepted request metadata, fill fetch slots as responses
+   arrive, and issue completed contexts into the DSP context queue.
 
 Remaining phases:
 
@@ -627,18 +639,13 @@ Remaining phases:
    memory request/response stalls, invalid-slot scan cycles, and frame cycles from
    `sample_tick` to `sample_valid`.
 
-2. Add an endpoint assembly queue in front of the DSP pipe.
-   Keep memory responses in order at first. The queue should make stalls explicit
-   when endpoint fetch cannot supply a complete context, and it should allow the
-   DSP pipe to consume ready contexts without being coupled to front-end state
-   names.
+2. Optimize adapter-internal memory bandwidth.
+   A board or simulation memory adapter may use paired endpoint extraction,
+   cache-line hits, bursts, or prefetch internally, but those optimizations must
+   remain behind the core's one-word request/response interface unless a future
+   milestone explicitly changes the memory contract.
 
-3. Optimize endpoint memory bandwidth.
-   The highest-value options are paired endpoint reads, cache-line extraction that
-   returns both interpolation endpoints for common sequential access, or a wider
-   wave-memory response path.
-
-4. Only after the in-order endpoint path is stable, consider request tags and
+3. Only after the in-order endpoint path is stable, consider request tags and
    multiple outstanding reads. That change affects the memory subsystem, models,
    and tests, so it should be justified by measured endpoint stalls.
 

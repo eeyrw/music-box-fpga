@@ -82,23 +82,26 @@ active-slot scheduler and register snapshot
 
 The scheduler issues at most one complete voice context into DSP per cycle. The
 DSP pipeline can accept back-to-back contexts, and the retire path can consume one
-result per cycle. In practice, the endpoint fetch FSM usually feeds the DSP pipe
-more slowly because mono interpolation still needs two memory responses and stereo
-interpolation needs four.
+result per cycle. Mono interpolation still needs two ordered word responses and
+stereo interpolation needs four, but the frontend can now enqueue endpoint word
+requests for later voices while earlier endpoint responses are still pending.
 
 The renderer now overlaps work inside a single output frame:
 
-- After a voice's endpoints are assembled, `DSP_START` presents a complete
-  immutable `voice_dsp_context_t` to `voice_dsp_pipeline`.
-- While the current voice fetches endpoints, a single-entry prefetch scanner may
+- `PROCESS_VOICE` allocates a fetch slot containing the immutable voice context,
+  then the request states enqueue ordered `L0`, `L1`, `R0`, and `R1` word reads
+  without waiting for each response.
+- Accepted requests push compact response metadata. Later `mem_rsp_valid` pulses
+  fill the corresponding endpoint field in the fetch slot. The final endpoint
+  response produces a complete `voice_dsp_context_t`.
+- If the DSP context queue is empty, a completed context bypasses directly into
+  `voice_dsp_pipeline` on the response cycle.
+- While the current voice enqueues endpoints, a single-entry prefetch scanner may
   advance `render_index` to the next valid voice and let the synchronous
   register-bank and local phase/filter RAM outputs settle early.
 - If that prefetch is ready at `DSP_START`, the front end jumps directly to the
   next voice's `START_VOICE` instead of paying `SCAN_VOICE`, `READ_VOICE`, and
-  `WAIT_VOICE` after the DSP issue cycle.
-- During endpoint fetch, `WAIT_L0`, stereo `WAIT_L1`, and `WAIT_R0` can present
-  the next endpoint request in the same cycle that the previous endpoint response
-  is consumed when `mem_req_ready` is already high.
+  `WAIT_VOICE` after the current voice's endpoint requests have been enqueued.
 - The front end continues scanning and fetching later voices instead of waiting
   for the issued voice to finish DSP.
 - DSP results return later on `dsp_valid`; the retire path updates the stereo
@@ -114,10 +117,11 @@ This should not be read as a CPU-style global N-stage pipeline. The renderer has
 two different timing domains inside one clock domain:
 
 - The outer voice-render front end is an FSM with variable latency. It scans voice
-  slots, waits for synchronous register-bank reads, issues one wave-memory request
-  at a time, and assembles interpolation endpoints. It also has a single-entry
-  next-valid prefetch path that can prepare one later voice's register outputs
-  while the current voice is fetching endpoints.
+  slots, waits for synchronous register-bank reads, allocates fetch slots, queues
+  one-word memory requests, and assembles interpolation endpoints from ordered
+  responses. It also has a single-entry next-valid prefetch path that can prepare
+  one later voice's register outputs while current endpoint requests are being
+  enqueued or served by memory.
 - The inner `voice_dsp_pipeline` is a fixed-latency valid pipeline. Once the front
   end has a complete voice context, the DSP block can move that context through
   its stages like a conventional pipeline.
@@ -133,8 +137,9 @@ variable-latency front end
   read voice config/runtime
   advance phase
   prefetch next valid slot during endpoint fetch
-  fetch L0/L1[/R0/R1] endpoints
-  package voice_dsp_context_t
+  enqueue L0/L1[/R0/R1] word requests
+  assemble endpoint responses into fetch slots
+  package or queue voice_dsp_context_t
   |
   v
 fixed-latency 5-stage DSP pipe
@@ -156,12 +161,11 @@ sample_valid
 ```
 
 The DSP pipe can accept one complete context per cycle, but the whole renderer
-does not guarantee one voice per cycle because endpoint fetch is still serialized
-through the existing memory interface. The front end can overlap later voice
-register prefetch and endpoint fetch with earlier DSP work, but bubbles are
-expected when memory sequencing cannot supply a complete context every cycle.
-Consecutive endpoint requests are issued without an extra FSM bubble when the
-memory interface is ready on the response cycle.
+does not guarantee one voice per cycle because endpoint responses still arrive
+through the existing ordered one-word memory interface. The front end can overlap
+later voice register prefetch, endpoint request enqueueing, memory response waits,
+and earlier DSP work, but bubbles are expected when memory cannot return complete
+contexts fast enough.
 
 The current control flow for one output frame is:
 
@@ -226,7 +230,7 @@ sample_tick
                              |
                              v
                       +-------------+
-                      |  DSP_START  | issue context
+                      |  DSP_START  | advance scheduler
                       +-------------+
                              |
                              v
@@ -254,7 +258,7 @@ A typical overlap inside one output frame looks like this:
 time ---->
 
 voice N front end:
-  START/PROCESS -> REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 + issue R0 -> WAIT_R0 + issue R1 -> WAIT_R1 -> DSP_START
+  START/PROCESS -> REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 + issue R0 -> WAIT_R0 + issue R1 -> WAIT_R1 + issue context -> DSP_START
 
 voice N+1 prefetch:
                          scan next valid -> set render_index -> sync read wait -> prefetched ready
@@ -263,8 +267,8 @@ voice N+1 front end:
                                                                                                   START/PROCESS -> REQ_L0 -> ...
 
 DSP pipe:
-                                                                                                  N S0 -> N S1 -> N S2 -> N S3 -> N S4
-                                                                                                                       N+1 S0 -> ...
+                                                                                      N S0 -> N S1 -> N S2 -> N S3 -> N S4
+                                                                                                                   N+1 S0 -> ...
 
 retire:
                                                                                                                                       N result -> accum/filter writeback
@@ -277,13 +281,13 @@ shorter:
 time ---->
 
 voice N mono endpoint path:
-  REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 -> DSP_START
+  REQ_L0 -> WAIT_L0 + issue L1 -> WAIT_L1 + issue context -> DSP_START
 
 next-valid prefetch:
             scan/read next voice while L0/L1 endpoints are in flight
 
 DSP/retire:
-                                         N S0 -> N S1 -> N S2 -> N S3 -> N S4 -> N result
+                            N S0 -> N S1 -> N S2 -> N S3 -> N S4 -> N result
 ```
 
 This overlap hides the fixed DSP latency behind later front-end work, but it does
@@ -309,24 +313,21 @@ Current front-end state sequence:
 | `READ_VOICE` | Give the register bank a stable `voice_read_index`. | Starts the conservative synchronous render-read sequence. |
 | `WAIT_VOICE` | Wait for RAM-backed fields to reach the register-bank render outputs. | Holds the selected read index before context capture. |
 | `START_VOICE` | Snapshot render config/runtime for the selected voice. | `current_*` config snapshot and current phase snapshot. |
-| `PROCESS_VOICE` | Skip disabled/done voices or derive endpoint frames and advance phase. | `frame_0`, `frame_1`, `fraction`, updated phase writeback. |
-| `REQ_L0` | Issue left or mono endpoint-0 memory request. | Memory request address for `frame_0`. |
-| `WAIT_L0` | Wait for endpoint-0 response and, when ready, issue endpoint-1 in the same cycle. | `raw_l0`. |
-| `REQ_L1` | Issue left or mono endpoint-1 memory request. | Memory request address for `frame_1`. |
-| `WAIT_L1` | Wait for endpoint-1 response. For mono, duplicate left samples into right raw registers. For stereo, issue right endpoint-0 in the same cycle when ready. | `raw_l1`; mono also sets `raw_r0/raw_r1`. |
-| `REQ_R0` | Stereo only: issue right endpoint-0 memory request. | Memory request address for right `frame_0`. |
-| `WAIT_R0` | Stereo only: wait for right endpoint-0 response and, when ready, issue right endpoint-1 in the same cycle. | `raw_r0`. |
-| `REQ_R1` | Stereo only: issue right endpoint-1 memory request. | Memory request address for right `frame_1`. |
-| `WAIT_R1` | Stereo only: wait for right endpoint-1 response. | `raw_r1`. |
-| `DSP_START` | Issue a complete `voice_dsp_context_t` to the DSP pipe. | Increments outstanding context count and either starts a prefetched next voice, falls back to scanning, or advances to `DRAIN`. |
-| `DRAIN` | Wait for issued DSP contexts to retire. | Holds until outstanding count reaches zero. |
+| `PROCESS_VOICE` | Skip disabled/done voices or derive endpoint frames, allocate a fetch slot, and advance phase. | `frame_0`, `frame_1`, fetch-slot context, updated phase writeback. |
+| `REQ_L0` | Enqueue left or mono endpoint-0 word request. | Word request FIFO entry for `frame_0`. |
+| `REQ_L1` | Enqueue left or mono endpoint-1 word request. | Word request FIFO entry for `frame_1`; mono then advances to `DSP_START`. |
+| `REQ_R0` | Stereo only: enqueue right endpoint-0 word request. | Word request FIFO entry for right `frame_0`. |
+| `REQ_R1` | Stereo only: enqueue right endpoint-1 word request. | Word request FIFO entry for right `frame_1`. |
+| response assembly | Runs alongside the FSM, using accepted-request metadata to fill fetch-slot endpoint fields from ordered `mem_rsp_valid` pulses. | Completed mono/stereo contexts enter or bypass the DSP context queue. |
+| `DSP_START` | Advance the scheduler after the current voice's endpoint requests have been queued. | Starts a prefetched next voice, falls back to scanning, or advances to `DRAIN`. |
+| `DRAIN` | Wait for request FIFO, response metadata, fetch slots, context queue, and issued DSP contexts to empty. | Holds until all frame work has retired. |
 | `FINISH` | Saturate the 32-bit stereo accumulators to signed 16-bit PCM. | `sample_l/r`, `sample_valid`. |
 
 Disabled and completed voices skip from `PROCESS_VOICE` to the next active slot
 or to `DRAIN`. Invalid slots are not selected by the active-slot scanner. For
-enabled mono voices, `REQ_R0`, `WAIT_R0`, `REQ_R1`, and `WAIT_R1` are skipped
-because `WAIT_L1` duplicates the mono raw samples into the right-channel raw
-registers.
+enabled mono voices, `REQ_R0` and `REQ_R1` are skipped. The response assembler
+duplicates the left raw endpoints into the right-channel fields when the mono
+fetch slot completes.
 
 ## DSP Pipeline Stages
 
@@ -377,13 +378,16 @@ next filter state for retire-time writeback.
 
 The DSP pipe can accept a new complete context every cycle when the front end can
 provide one. With the current memory interface it normally sees bubbles, but the
-valid-shift structure is already in place for a future endpoint queue.
+valid-shift structure, word-request FIFO, in-order response assembly, and
+complete-context queue make those stalls explicit and allow later voice setup to
+overlap memory waits.
 
 ## Issue, Retire, And Drain
 
 `multi_voice_pipeline` tracks issued-but-not-retired contexts with
-`outstanding_count`. `DSP_START` adds one outstanding context and `dsp_valid`
-subtracts one. The retire path is independent of the front-end state machine:
+`outstanding_count`. A context issue into `voice_dsp_pipeline` increments the
+count, and `dsp_valid` subtracts one. The retire path is independent of the
+front-end state machine:
 
 ```text
 if dsp_valid:
@@ -394,8 +398,9 @@ if dsp_valid:
 
 Because endpoint fetch remains in order and the DSP pipe is fixed latency,
 results retire in issue order. The accumulator is shared for one output frame, so
-`DRAIN` must observe `outstanding_count == 0` before `FINISH` saturates the final
-PCM output.
+`DRAIN` waits for the word-request FIFO, response metadata FIFO, fetch slots, DSP
+context queue, and `outstanding_count` to all empty before `FINISH` saturates the
+final PCM output.
 
 ## Config Snapshot
 
@@ -479,12 +484,14 @@ Each selected valid voice spends two scheduler cycles in `READ_VOICE` and
 `WAIT_VOICE` before `START_VOICE`. Invalid slots cost one scan cycle and skip the
 render-read sequence.
 
-Enabled voices no longer block the front end while they traverse DSP. Once
-endpoints are available, `DSP_START` issues the context and the scheduler moves on
-to the next selected voice. The fixed-latency DSP pipe then retires the result in
-parallel with later voice fetch work. The remaining per-voice bottleneck is memory
-endpoint assembly: mono voices need two memory responses and stereo voices need
-four.
+Enabled voices no longer block the front end while they traverse DSP. Once the
+current voice's endpoint word requests are queued, `DSP_START` can move the
+scheduler on to the next selected voice while ordered responses fill fetch slots
+in the background. When a fetch slot completes, the complete context can enter the
+DSP pipe from the final endpoint response cycle through the empty-queue bypass.
+The fixed-latency DSP pipe retires the result in parallel with later voice fetch
+work. The remaining per-voice bottleneck is memory service: mono voices still need
+two word responses and stereo voices still need four.
 
 The single-entry next-valid prefetch reduces the register-read bubble between
 adjacent valid voices when endpoint fetch takes long enough to hide the
@@ -494,8 +501,12 @@ response is consumed. On the 30-second Hedwig/MS_Basic quick-render workload, th
 measured 32-voice render cost changed from the original `250.278` average and
 `375` maximum cycles per sample to `195.729` average and `282` maximum after
 next-valid prefetch, then to `167.710` average and `226` maximum after endpoint
-request overlap. All runs kept the same `32` maximum enabled and filtered voices
-and exact C++ reference audio match.
+request overlap. Adding the complete-context queue changed that same workload to
+`167.389` average and `225` maximum cycles. Adding the word-request FIFO and
+in-order endpoint assembly queue reduced it further to `149.209` average and
+`195` maximum cycles while preserving the same `46.9586` average and `88` maximum
+memory word reads per sample. All runs kept the same `32` maximum enabled and
+filtered voices and exact C++ reference audio match.
 
 The regression latency guard for the 32-voice mono render case remains
 `600 + NUM_VOICES` cycles. This is a structural regression limit, not a
