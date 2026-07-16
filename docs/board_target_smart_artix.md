@@ -5,6 +5,9 @@ XC7A50T integration path. The generic synthesizable wavetable core remains under
 `rtl/`; board-specific clocks, constraints, DDR3 IP, pin binding, and bring-up
 files belong under `fpga/`.
 
+For the step-by-step hardware procedure, see
+[`smart_artix_bringup.md`](smart_artix_bringup.md).
+
 ## Fixed Board Assumptions
 
 - FPGA target: Xilinx Artix-7 `XC7A50T-2FGG484I`.

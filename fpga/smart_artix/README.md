@@ -6,6 +6,9 @@ DDR3-backed wavetable reads, and I2S output. Pin locations, exact clocking, and
 DDR3 MIG files must still be verified against the board schematic and
 Vivado-generated IP before hardware implementation.
 
+Use [`../../docs/smart_artix_bringup.md`](../../docs/smart_artix_bringup.md) as
+the practical hardware bring-up checklist.
+
 ## Known Board Facts
 
 - FPGA family target: Xilinx Artix-7, planned as `XC7A50T`.

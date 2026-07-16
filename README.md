@@ -91,6 +91,8 @@ Useful learning documents:
   boundary for future PC/CH347 SPI control.
 - [`docs/board_target_smart_artix.md`](docs/board_target_smart_artix.md): current
   XC7A50T Smart Artix board assumptions and board integration direction.
+- [`docs/smart_artix_bringup.md`](docs/smart_artix_bringup.md): practical Smart
+  Artix hardware bring-up sequence and debug checklist.
 - [`fpga/smart_artix/`](fpga/smart_artix/): Smart Artix XC7A50T synthesis and
   bring-up skeleton.
 
