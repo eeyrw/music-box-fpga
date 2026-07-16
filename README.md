@@ -65,18 +65,44 @@ metadata. Detailed contracts are documented in [`docs/`](docs/).
 ## Repository Layout
 
 ```text
-rtl/pkg/       Shared types and constants
-rtl/bus/       Register-bus protocol declarations
-rtl/control/   Shadow and active control registers
-rtl/voice/     Playback phase and sample-fetch sequencing
-rtl/dsp/       Interpolation and gain processing
-rtl/audio/     Audio serializers and output timing blocks
-rtl/top/       Core and full-system simulation integration
-fpga/          Board-specific synthesis and bring-up templates
-sim/models/    Simulation-only behavioral models
-sim/tb/        Self-checking SystemVerilog testbenches
-docs/          Fixed-point, memory, and register contracts
+rtl/                    Generic synthesizable SystemVerilog core
+  pkg/                  Shared types and constants
+  bus/                  Register-bus protocol declarations and SPI bridge
+  control/              Shadow, active, and runtime voice register storage
+  memory/               Abstract line-cache memory subsystem
+  voice/                Multi-voice phase, fetch, and render sequencing
+  dsp/                  Interpolation, filters, gain, envelope, and mixing
+  audio/                Output FIFO, sample timing, and I2S transmitter
+  top/                  Reusable core wrappers for simulation and integration
+
+sim/                    Simulation-only code
+  models/               Behavioral models that are not synthesis sources
+  tb/                   Self-checking SystemVerilog testbenches
+  harness/              C++ SF2/MIDI/reference render and RTL harness code
+
+fpga/                   Board-specific FPGA integration workspace
+  board_template/       Starting point for future board ports
+  smart_artix/          XC7A50T Smart Artix board path
+    rtl/                Board adapters for SD, DDR3, debug, and top level
+    constraints/        Board XDC constraints
+    vivado/             Versioned Vivado IP configs and batch scripts
+    docs/               Local pin assignment and schematic reference files
+    sim/                Smart Artix board-level simulation models/tests
+    assets/             Board asset notes; generated images stay in build/
+
+docs/                   Stable contracts and design/verification notes
+assets/                 Small checked-in SF2/MIDI inputs for simulation
+host/                   PC-side CH347/SPI control utility code
+tools/                  Python utilities for SF2/WTSF/WAV/Vivado summaries
+third_party/            External vendor support files kept separate
+build/                  Generated outputs only; ignored by Git
 ```
+
+Production RTL lives under `rtl/`. Board wrappers under `fpga/` may instantiate
+vendor IP and physical interfaces, but simulation models stay under `sim/` or the
+board-specific `fpga/<board>/sim/` directory and must not be added to synthesis
+file lists. Generated Vivado projects, reports, bitstreams, render output, and SD
+images are written below `build/`.
 
 Useful learning documents start at [`docs/README.md`](docs/README.md). Key entry
 points:
