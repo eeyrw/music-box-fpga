@@ -125,33 +125,134 @@ system simulations, the platform fields read zero unless the testbench drives th
 platform status inputs. The debug window remains available while the playback
 core/audio path is held in `core_rst`; non-debug core register accesses during
 that reset return a bus error instead of stalling the SPI bridge.
-`SYSTEM_STATUS` bits are: bit 0 core busy, bit 1 render pending, bit 2 core
-sample valid, bit 3 output FIFO sample valid, bit 4 I2S sample ready, bit 5
-external memory request valid, bit 6 external memory request ready, and bit 7
-external memory response valid.
 
-`DEBUG_EVENT_FLAGS` bits are sticky: bit 0 I2S underrun, bit 1 output sample
-drop, bit 2 render deadline miss, bit 3 memory cache hit, bit 4 memory cache
-miss, and bit 5 memory response. Write ones to clear selected bits; events that
-occur in the same cycle as a clear remain set. The associated counters saturate
-at `0xffff_ffff` and are not cleared through the register map.
+All unspecified or reserved bits in the system debug registers read as zero. The
+status bits below are live snapshots unless explicitly marked sticky or counted.
 
-`AUDIO_STATUS` has output FIFO level in bits 15:0, sticky underrun in bit 16,
-and sticky sample drop in bit 17. `RENDER_STATUS` has last render latency in
-bits 15:0, render pending in bit 16, and sticky deadline miss in bit 17.
-`MEMORY_STATUS` has last memory response latency in bits 15:0, external memory
-request valid/ready/response valid in bits 16, 17, and 18, and sticky memory
-hit/miss/response flags in bits 19, 20, and 21.
+`SYSTEM_STATUS` (`0x3010`) is the main live activity snapshot:
 
-`PLATFORM_STATUS` is intended for the Smart Artix board top: bit 0 platform
-debug window present, bit 1 SD or loader error present, bit 2 DDR calibration
-complete, bit 3 DDR UI reset, bit 4 SD initialized, bit 5 asset loaded, bit 6
-asset loader busy, bit 7 MIG app ready, bit 8 MIG write-data ready, bit 9 MIG
-read-data valid, bit 10 MIG read-data end, and bits 14:11 asset loader state.
-`PLATFORM_ERRORS` packs `sd_error_code` in bits 7:0, `loader_error_code` in bits
-15:8, and asset loader state in bits 19:16. `PLATFORM_DDR_STATUS` reports DDR
-calibration/UI reset/MIG ready flags in bits 0 through 5 and MIG `device_temp` in
-bits 27:16.
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `core_busy` | `wavetable_core_memory` is currently rendering or servicing work. |
+| `1` | `render_pending` | A sample tick has been accepted and the wrapper is waiting for `core_sample_valid`. |
+| `2` | `core_sample_valid` | The core produced a stereo sample in the current cycle. |
+| `3` | `fifo_sample_valid` | The output FIFO contains at least one sample for I2S. |
+| `4` | `i2s_sample_ready` | The I2S transmitter is ready to accept the next stereo sample. |
+| `5` | `ext_req_valid` | The line-memory subsystem is requesting an external memory line. |
+| `6` | `ext_req_ready` | The board memory adapter can accept the line request. |
+| `7` | `ext_rsp_valid` | A packed external memory-line response is valid in this cycle. |
+| `31:8` | reserved | Reads zero. |
+
+`DEBUG_EVENT_FLAGS` (`0x3014`) contains sticky event flags. Write ones to clear
+selected bits. Events that occur in the same cycle as a clear remain set.
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `underrun` | I2S needed a sample when the output FIFO was empty. |
+| `1` | `sample_drop` | The core produced a sample when the output FIFO could not accept it. |
+| `2` | `render_deadline_miss` | A new sample tick arrived while the previous render was still pending. |
+| `3` | `mem_hit` | The wave-memory subsystem served a word from its line cache. |
+| `4` | `mem_miss` | The wave-memory subsystem missed its line cache and requested an external line. |
+| `5` | `mem_response` | The wrapper observed an external memory-line response. |
+| `31:6` | reserved | Reads zero. |
+
+The matching counters at `0x3024` through `0x3038` increment on the same events
+and saturate at `0xffff_ffff`. They are reset only by system reset and are not
+cleared by writes to `DEBUG_EVENT_FLAGS`.
+
+`AUDIO_STATUS` (`0x3018`) summarizes the output FIFO and audio sticky flags:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `15:0` | `output_fifo_level` | Current number of samples stored in the output FIFO. |
+| `16` | `underrun` | Mirror of sticky `DEBUG_EVENT_FLAGS[0]`. |
+| `17` | `sample_drop` | Mirror of sticky `DEBUG_EVENT_FLAGS[1]`. |
+| `31:18` | reserved | Reads zero. |
+
+`RENDER_STATUS` (`0x301c`) reports render scheduling state:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `15:0` | `render_latency_cycles` | Last completed render latency in `clk` cycles, measured from `sample_tick` until `core_sample_valid`. Saturates internally while pending at `0xffff`. |
+| `16` | `render_pending` | Same live pending bit as `SYSTEM_STATUS[1]`. |
+| `17` | `render_deadline_miss` | Mirror of sticky `DEBUG_EVENT_FLAGS[2]`. |
+| `31:18` | reserved | Reads zero. |
+
+`MEMORY_STATUS` (`0x3020`) reports line-memory activity:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `15:0` | `mem_response_latency` | Last measured latency from an external line request to its response, in `clk` cycles. |
+| `16` | `ext_req_valid` | Same live request-valid bit as `SYSTEM_STATUS[5]`. |
+| `17` | `ext_req_ready` | Same live request-ready bit as `SYSTEM_STATUS[6]`. |
+| `18` | `ext_rsp_valid` | Same live response-valid bit as `SYSTEM_STATUS[7]`. |
+| `19` | `mem_hit` | Mirror of sticky `DEBUG_EVENT_FLAGS[3]`. |
+| `20` | `mem_miss` | Mirror of sticky `DEBUG_EVENT_FLAGS[4]`. |
+| `21` | `mem_response` | Mirror of sticky `DEBUG_EVENT_FLAGS[5]`. |
+| `31:22` | reserved | Reads zero. |
+
+The event counters are direct 32-bit saturating reads:
+
+| Address | Name | Event counted |
+| --- | --- | --- |
+| `0x3024` | `UNDERRUN_COUNT` | I2S underrun pulses. |
+| `0x3028` | `SAMPLE_DROP_COUNT` | Output FIFO sample-drop pulses. |
+| `0x302c` | `RENDER_DEADLINE_MISS_COUNT` | New sample ticks that arrive while a previous render is pending. |
+| `0x3030` | `MEM_HIT_COUNT` | Wave-memory line-cache hit pulses. |
+| `0x3034` | `MEM_MISS_COUNT` | Wave-memory line-cache miss pulses. |
+| `0x3038` | `MEM_RESPONSE_COUNT` | External memory-line response pulses. |
+
+`PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. In generic
+system simulations without platform inputs, most bits read zero.
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `platform_debug_present` | Always `1` in `wavetable_core_system`, so software can detect this debug window. |
+| `1` | `platform_error_present` | `sd_error_code != 0` or `loader_error_code != 0`. |
+| `2` | `ddr_init_calib_complete` | MIG DDR3 calibration complete. This must be `1` before normal DDR-backed playback. |
+| `3` | `ddr_ui_rst` | MIG UI-clock reset is asserted. This should be `0` for normal operation. |
+| `4` | `sd_initialized` | The SD initialization sequence completed. |
+| `5` | `asset_loaded` | The raw SD asset image has been copied into DDR3 and playback reset can release. |
+| `6` | `asset_loader_busy` | The SD-to-DDR loader is active. |
+| `7` | `mig_app_rdy` | MIG app command channel can accept a command. |
+| `8` | `mig_app_wdf_rdy` | MIG app write-data channel can accept write data. |
+| `9` | `mig_app_rd_data_valid` | MIG read-data beat is valid in this cycle. |
+| `10` | `mig_app_rd_data_end` | MIG read-data beat marks the end of the read response. |
+| `14:11` | `asset_loader_state` | Board loader state code, useful for locating SD/header/write progress or failure. |
+| `31:15` | reserved | Reads zero. |
+
+`PLATFORM_ERRORS` (`0x3044`) captures board loader error detail:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `7:0` | `sd_error_code` | SD command/data path error code from the board loader. Zero means no SD error. |
+| `15:8` | `loader_error_code` | Raw-image header, bounds, CRC, or DDR writer-side loader error code. Zero means no loader error. |
+| `19:16` | `asset_loader_state` | Same loader state code as `PLATFORM_STATUS[14:11]`. |
+| `31:20` | reserved | Reads zero. |
+
+`PLATFORM_BYTES_LOADED_LO` (`0x3048`) and `PLATFORM_BYTES_LOADED_HI` (`0x304c`)
+form the 64-bit count of SF2 asset bytes written to DDR3. `PLATFORM_SF2_SIZE_LO`
+(`0x3050`) and `PLATFORM_SF2_SIZE_HI` (`0x3054`) form the 64-bit SF2 byte size
+read from the raw SD image header. A successful load should end with
+`bytes_loaded == sf2_size_bytes` and `PLATFORM_STATUS[5] = 1`.
+
+`PLATFORM_CURRENT_LBA` (`0x3058`) reports the current SD logical block address the
+loader is reading or most recently requested. During bring-up it helps distinguish
+SD initialization, sector-0 header parsing, and later SF2 data-copy progress.
+
+`PLATFORM_DDR_STATUS` (`0x305c`) gives a DDR/MIG-focused view:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `ddr_init_calib_complete` | Same as `PLATFORM_STATUS[2]`. |
+| `1` | `ddr_ui_rst` | Same as `PLATFORM_STATUS[3]`. |
+| `2` | `mig_app_rdy` | Same as `PLATFORM_STATUS[7]`. |
+| `3` | `mig_app_wdf_rdy` | Same as `PLATFORM_STATUS[8]`. |
+| `4` | `mig_app_rd_data_valid` | Same as `PLATFORM_STATUS[9]`. |
+| `5` | `mig_app_rd_data_end` | Same as `PLATFORM_STATUS[10]`. |
+| `15:6` | reserved | Reads zero. |
+| `27:16` | `ddr_device_temp` | MIG `device_temp` field, passed through from the generated DDR3 controller. |
+| `31:28` | reserved | Reads zero. |
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a

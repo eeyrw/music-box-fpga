@@ -82,15 +82,20 @@ Required checks:
 - Add real constraints for all top-level ports before generating a hardware
   bitstream.
 
-Pay special attention to currently incomplete XDC coverage:
+Pay special attention to XDC coverage that must still be checked against the
+actual board wiring:
 
-- `sd_clk`, `sd_cmd`, and `sd_dat[3:0]` are top-level ports and need active pin
-  constraints for the native SD loader.
+- The SD connector may be marked by SPI-mode names. For native SD mode, map
+  `SCK` to `sd_clk`, `MOSI` to `sd_cmd`, `MISO` to `sd_dat[0]`, and `CS` to
+  `sd_dat[3]`. Native 4-bit mode also requires `sd_dat[1]` and `sd_dat[2]`.
+- The current native SD path is read-only: the card drives `DAT[3:0]` during data
+  blocks and the FPGA samples those pins as inputs. Do not make the FPGA actively
+  drive `DAT[3:0]` unless a later write-capable SD PHY adds explicit output-enable
+  control.
 - `sd_cmd` and every `sd_dat` line need pull-ups unless the board already provides
   suitable external pull-ups.
-- `led_asset_loaded` and `led_loader_error` are top-level ports and need pins, or
-  they must be intentionally merged into existing debug outputs for the first
-  image.
+- `led_asset_loaded` and `led_loader_error` are assigned to spare BANK15 expansion
+  pins in the current XDC; move them if those pins are needed for lab wiring.
 - SPI and I2S external input/output delays are not final until the selected host
   adapter and codec timing are known.
 
