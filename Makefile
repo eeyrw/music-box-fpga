@@ -20,6 +20,10 @@ RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
 RENDER_QUICK_OUT_DIR ?= $(BUILD_DIR)/render_quick
 RENDER_FULL_SYSTEM_OUT_DIR ?= $(BUILD_DIR)/render_full_system
 RENDER_BOARD_LOADER_OUT_DIR ?= $(BUILD_DIR)/render_board_loader
+WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
+WTSF_SF2_START_LBA ?= 1
+WTSF_CRC ?=
+SD_DEVICE ?=
 RENDER_OPT_FAST ?= -O3
 RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
@@ -97,7 +101,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_sd_spi_block_reader \
 	tb_smart_artix_sd_spi_byte_master
 
-.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments render-instrument render-quick render-memory render-full-system render-board-loader clean
+.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader clean
 
 all: test
 
@@ -171,6 +175,20 @@ host-ch347:
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.
 	python3 tools/sf2_extract.py --sf2 "$(SF2)" --list-instruments
+
+wtsf-image:
+	python3 tools/make_wtsf_image.py build --sf2 "$(SF2)" --out "$(WTSF_IMAGE)" \
+		--sf2-start-lba $(WTSF_SF2_START_LBA) $(if $(WTSF_CRC),--crc,)
+
+verify-wtsf-image:
+	python3 tools/make_wtsf_image.py verify "$(WTSF_IMAGE)"
+
+flash-wtsf-sd: verify-wtsf-image
+	@if [ -z "$(SD_DEVICE)" ]; then \
+		echo "Set SD_DEVICE=/dev/sdX or /dev/mmcblkX" >&2; \
+		exit 2; \
+	fi
+	tools/flash_wtsf_sd.sh --image "$(WTSF_IMAGE)" --device "$(SD_DEVICE)" --yes
 
 render-instrument:
 	# 1. Extract one instrument zone to wave.memh plus render_config.svh.

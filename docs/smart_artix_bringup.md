@@ -260,6 +260,24 @@ The loader currently targets SDHC and SDXC cards:
 Do not use SDSC cards for the first bring-up path. The RTL intentionally does not
 implement the byte-addressed SDSC fallback.
 
+Generate and check the raw image on the host before inserting the card:
+
+```bash
+make wtsf-image SF2=assets/soundfonts/MT6276.sf2
+make verify-wtsf-image
+```
+
+The default output is `build/assets/wavetable.wtsf.img`. To write an SDHC/SDXC
+card, pass the whole-card block device, not a partition:
+
+```bash
+make flash-wtsf-sd SD_DEVICE=/dev/sdX
+```
+
+The burn script refuses mounted devices and requires `SD_DEVICE` because the write
+destroys the target card contents. Use `lsblk` before running it if more than one
+removable drive is connected.
+
 Expected successful load signs:
 
 - `PLATFORM_STATUS[2] = 1`: DDR calibration complete.

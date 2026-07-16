@@ -200,6 +200,23 @@ sample against the C++ fixed-point reference. The output WAV is
 `build/render_board_loader/out.wav`, and the summary JSON is
 `build/render_board_loader/board_loader_render_config.json`.
 
+For board bring-up, generate and verify the raw SD image expected by the Smart
+Artix loader:
+
+```bash
+make wtsf-image SF2=assets/soundfonts/MT6276.sf2
+make verify-wtsf-image
+```
+
+To write it to an SDHC/SDXC card, pass the whole-card block device explicitly:
+
+```bash
+make flash-wtsf-sd SD_DEVICE=/dev/sdX
+```
+
+See `docs/smart_artix_bringup.md` for the full hardware checklist and loader
+status registers.
+
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.
 

@@ -235,6 +235,25 @@ the C++ fixed-point reference. It intentionally uses a command-level SD model fo
 large SF2 images; pin-level SD behavior is kept in focused small tests because a
 full multi-megabyte pin-level SD load would be much slower.
 
+## Host Image Tools
+
+Generate the same raw-image format for hardware with:
+
+```bash
+make wtsf-image SF2=assets/soundfonts/MT6276.sf2
+make verify-wtsf-image
+```
+
+This writes `build/assets/wavetable.wtsf.img` by default. To burn an SDHC/SDXC
+card, pass the whole-card block device, not a partition:
+
+```bash
+make flash-wtsf-sd SD_DEVICE=/dev/sdX
+```
+
+The burn script refuses mounted devices and requires the explicit `SD_DEVICE`
+argument because it overwrites the target device.
+
 ## SD Mode Choice
 
 The loader interface should abstract sector reads so the physical SD mode can be
