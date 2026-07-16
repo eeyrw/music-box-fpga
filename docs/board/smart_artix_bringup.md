@@ -244,6 +244,12 @@ bits 15:8   loader error code
 bits 19:16  asset-loader state
 ```
 
+For the current native-SD Smart Artix top, decode `SD error code` and `loader
+error code` with the `PLATFORM_ERRORS` tables in `docs/register_map.md`. The SD
+code identifies the failed native card command or data transfer stage; the loader
+code identifies raw `WTSF` header validation, size/range checks, or DDR writer
+failure.
+
 After `PLATFORM_DDR_STATUS[0]` reports calibration complete and
 `DDR_DEBUG_STATUS.ready` is set, use the DDR debug wrapper in the CH347 tool to
 prove direct DDR access before depending on SD-loaded data:

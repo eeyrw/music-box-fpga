@@ -236,6 +236,38 @@ system simulations without platform inputs, most bits read zero.
 | `19:16` | `asset_loader_state` | Same loader state code as `PLATFORM_STATUS[14:11]`. |
 | `31:20` | reserved | Reads zero. |
 
+In the current Smart Artix top, `sd_error_code` is produced by the native-mode SD
+block reader:
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `0` | `ERROR_NONE` | No SD error. |
+| `1` | `ERROR_CMD8` | SD v2 interface-condition command failed or returned an unexpected response. |
+| `2` | `ERROR_ACMD41` | Card did not complete high-capacity initialization before the retry limit. |
+| `3` | `ERROR_NOT_SDHC` | Card initialized but did not report SDHC/SDXC high-capacity addressing. |
+| `4` | `ERROR_CMD2` | Card-identification command failed. |
+| `5` | `ERROR_CMD3` | Relative-card-address assignment failed. |
+| `6` | `ERROR_CMD7` | Card-select command failed. |
+| `7` | `ERROR_ACMD6` | 4-bit bus-width selection failed. |
+| `8` | `ERROR_CMD17` | Single-block read command failed. |
+| `9` | `ERROR_DATA` | Read data stream ended with a nonzero PHY data status. |
+
+`loader_error_code` is produced by the raw SD-to-DDR asset loader:
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `0` | `ERROR_NONE` | No loader error. |
+| `1` | `ERROR_BAD_MAGIC` | Sector-0 raw-image header magic was not `WTSF`. |
+| `2` | `ERROR_BAD_VERSION` | Raw-image header version was unsupported. |
+| `3` | `ERROR_EMPTY_IMAGE` | Header reported an SF2 byte size of zero. |
+| `4` | `ERROR_WRITER` | DDR writer reported an error while copying the asset payload. |
+| `5` | `ERROR_LBA_RANGE` | Header SF2 start LBA could not fit the configured SD LBA width. |
+| `6` | `ERROR_SIZE_RANGE` | Header reserved size word was nonzero, so the SF2 size exceeded the current 32-bit loader limit. |
+
+The optional SPI-mode SD asset-loader wrapper uses the same `loader_error_code`
+values, but its `sd_error_code` values come from the SPI-mode block reader rather
+than the native-mode table above.
+
 `PLATFORM_BYTES_LOADED` (`0x3048`) reports the 32-bit count of SF2 asset bytes
 written to DDR3. `PLATFORM_SF2_SIZE` (`0x3050`) reports the 32-bit SF2 byte size
 read from the raw SD image header. For the current board-loading flow, assets are
