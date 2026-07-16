@@ -85,7 +85,7 @@ module voice_dsp_pipeline (
     logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
   } gain_stage_t;
 
-  logic [5:0] valid_pipe;
+  logic [6:0] valid_pipe;
   pcm_t interp_l_out, interp_r_out;
   voice_dsp_context_t s0_context;
   interp_stage_t s0_interp;
@@ -125,6 +125,8 @@ module voice_dsp_pipeline (
   endfunction
 
   linear_interpolator interp_l (
+    .clk(clk),
+    .rst(rst),
     .sample_0(s0_context.raw_l0),
     .sample_1(s0_context.raw_l1),
     .fraction(s0_context.fraction),
@@ -132,6 +134,8 @@ module voice_dsp_pipeline (
   );
 
   linear_interpolator interp_r (
+    .clk(clk),
+    .rst(rst),
     .sample_0(s0_context.raw_r0),
     .sample_1(s0_context.raw_r1),
     .fraction(s0_context.fraction),
@@ -183,7 +187,7 @@ module voice_dsp_pipeline (
                     $signed({{32{a2_y_r[63]}}, a2_y_r});
   end
 
-  assign valid_o = valid_pipe[5];
+  assign valid_o = valid_pipe[6];
   assign result_o.voice_index = s4_gain.base.voice_index;
   assign result_o.filter_enable = s4_gain.base.filter_enable;
   assign result_o.next_z1_l = s4_gain.next_z1_l;
@@ -203,13 +207,13 @@ module voice_dsp_pipeline (
       s3_filter_state <= '0;
       s4_gain <= '0;
     end else begin
-      valid_pipe <= {valid_pipe[4:0], valid_i};
+      valid_pipe <= {valid_pipe[5:0], valid_i};
 
       if (valid_i) begin
         s0_context <= context_i;
       end
 
-      if (valid_pipe[0]) begin
+      if (valid_pipe[1]) begin
         s0_interp.base.voice_index <= s0_context.voice_index;
         s0_interp.base.filter_enable <= s0_context.filter_enable;
         s0_interp.base.gain_l <= s0_context.gain_l;
@@ -228,7 +232,7 @@ module voice_dsp_pipeline (
         s0_interp.x_r <= interp_r_out;
       end
 
-      if (valid_pipe[1]) begin
+      if (valid_pipe[2]) begin
         s1_filter_x.base <= s0_interp.base;
         s1_filter_x.filter_a1 <= s0_interp.filter_a1;
         s1_filter_x.filter_a2 <= s0_interp.filter_a2;
@@ -246,7 +250,7 @@ module voice_dsp_pipeline (
         s1_filter_x.z2_ext_r <= {{(64-FILTER_STATE_WIDTH){s0_interp.filter_z2_r[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z2_r};
       end
 
-      if (valid_pipe[2]) begin
+      if (valid_pipe[3]) begin
         s2_filter_y.base <= s1_filter_x.base;
         s2_filter_y.filter_a1 <= s1_filter_x.filter_a1;
         s2_filter_y.filter_a2 <= s1_filter_x.filter_a2;
@@ -262,7 +266,7 @@ module voice_dsp_pipeline (
         s2_filter_y.z2_ext_r <= s1_filter_x.z2_ext_r;
       end
 
-      if (valid_pipe[3]) begin
+      if (valid_pipe[4]) begin
         s3_filter_state.base <= s2_filter_y.base;
         s3_filter_state.selected_l <= s2_filter_y.base.filter_enable ? s2_filter_y.y_l : s2_filter_y.x_l;
         s3_filter_state.selected_r <= s2_filter_y.base.filter_enable ? s2_filter_y.y_r : s2_filter_y.x_r;
@@ -272,7 +276,7 @@ module voice_dsp_pipeline (
         s3_filter_state.next_z2_raw_r <= next_z2_raw_r;
       end
 
-      if (valid_pipe[4]) begin
+      if (valid_pipe[5]) begin
         s4_gain.base <= s3_filter_state.base;
         s4_gain.gained_l <= gained_l_out;
         s4_gain.gained_r <= gained_r_out;

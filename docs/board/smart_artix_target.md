@@ -156,42 +156,37 @@ Block RAM tiles: 9 / 75, 12.00%
 Setup WNS: +0.678 ns, WHS: -1.345 ns
 ```
 
-Post-synthesis result after overlapping word endpoint assembly, adding a
-registered DSP input stage, and mapping the internal fetch/context queues to
-distributed RAM:
+Post-synthesis result after registering the interpolation product stage and
+adding targeted MIG hold exceptions for generated temperature-monitor and PHY
+reset-control paths:
 
 ```text
 Vivado result: 0 errors, 0 critical warnings
-Slice LUTs: 10138 / 32600, 31.10%
-Slice registers: 11095 / 65200, 17.02%
+Slice LUTs: 11674 / 32600, 35.81%
+Slice registers: 12952 / 65200, 19.87%
 DSP48E1: 26 / 120, 21.67%
 Block RAM tiles: 10 / 75, 13.33%
-Setup WNS: -0.371 ns, TNS: -127.829 ns, failing endpoints: 480
-Hold WHS: -1.345 ns, THS: -23.952 ns, failing endpoints: 55
-Core clk_pll_i group: setup slack -0.371 ns, hold slack +0.029 ns
+Setup WNS: +0.983 ns, TNS: 0.000 ns, failing endpoints: 0
+Hold WHS: +0.009 ns, THS: 0.000 ns, failing endpoints: 0
+Core clk_pll_i group: setup slack +2.056 ns, hold slack +0.029 ns
 ```
 
-Timing constraint triage for this older result:
+Timing notes for this result:
 
-- The `clk_pll_i` setup failure is a real 100 MHz core datapath, not a missing
-  board constraint. The worst path starts in
-  `core_system/core/core/voices/dsp_pipeline/s0_context_reg[raw_l1][15]`, runs
-  through `linear_interpolator`, and ends at a DSP48E1 `B` input. The reported
-  data path is 9.789 ns with 9 logic levels and `-0.371 ns` slack. This should be
-  fixed by retiming the interpolation/DSP input path rather than by adding an
-  exception.
-- The worst hold failure is inside the MIG temperature-monitor CDC from the
+- The former `clk_pll_i` setup failure was a real 100 MHz core datapath through
+  `linear_interpolator` into a DSP48E1 input. The interpolation product is now
+  registered and `voice_dsp_pipeline` carries the extra valid stage, so the core
+  setup path has positive slack without a timing exception.
+- One hold exception covers the MIG temperature-monitor CDC from the
   clock-wizard `clk_out1_smart_artix_clk_50m_to_200m` domain to the MIG
   `clk_pll_i` UI domain. MIG's generated XDC applies `set_max_delay 20` to
   `temp_mon_enabled.u_tempmon/device_temp_sync_r1_reg[*]/D`, which relaxes setup
-  but still leaves Vivado checking a 0 ns hold relationship between the two
-  related clocks. If this remains after implementation, add a targeted false path
-  only for the temperature synchronizer launch-to-first-sync-flop path; do not
-  asynchronous-group the whole clock pair because the MIG also contains real
-  related-clock paths.
-- The remaining post-synthesis hold failures are in MIG OSERDES/PHASER PHY paths
-  covered by generated MIG multicycle constraints. Treat these as post-route
-  questions before hand-editing vendor PHY timing.
+  but otherwise leaves Vivado checking a 0 ns hold relationship between related
+  clocks. The board XDC false path is hold-only and scoped to the first
+  synchronizer stage.
+- Additional hold-only exceptions cover MIG PHASER-to-OSERDES reset-control pins
+  inside the generated DDR PHY. They do not relax data, address, command, or UI
+  timing paths.
 - The checked-in Smart Artix XDC still only constrains pins and I/O standards for
   SPI, I2S, and debug outputs. The current SPI bridge samples external SPI pins
   with the system clock through synchronizers, so no internal SPI clock is
@@ -244,29 +239,35 @@ paths. Remaining board-level timing gaps are the unconstrained external SPI, I2S
 and debug I/O delays, which need real external timing contracts before hardware
 signoff.
 
-Current post-route result after integrating the complete Smart Artix board top,
-including native SD loading, DDR asset writes, debug status readback, and the
-latest DSP filter-state timing fix:
+Current post-route and bitstream result after registering the interpolation
+product stage and adding targeted MIG hold-only exceptions:
 
 ```text
-Vivado result: route_design completed successfully
-Slice LUTs: 11160 / 32600, 34.23%
-Slice registers: 12636 / 65200, 19.38%
+Vivado result: route_design and write_bitstream completed successfully
+Slice LUTs: 11097 / 32600, 34.04%
+Slice registers: 12857 / 65200, 19.72%
 DSP48E1: 26 / 120, 21.67%
 Block RAM tiles: 10 / 75, 13.33%
-Setup WNS: +0.066 ns, TNS: 0.000 ns, failing endpoints: 0
-Hold WHS: +0.036 ns, THS: 0.000 ns, failing endpoints: 0
+Setup WNS: +0.982 ns, TNS: 0.000 ns, failing endpoints: 0
+Hold WHS: +0.045 ns, THS: 0.000 ns, failing endpoints: 0
+Route status: 23619 / 23619 routable nets fully routed, 0 routing errors
+Bitstream: build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 ```
 
-The full board top initially routed but failed setup at `100 MHz` with
-`WNS=-0.453 ns` and `TNS=-47.096 ns`. The worst path was no longer a board or MIG
-constraint issue; it was inside `voice_dsp_pipeline`, from a DSP48 cascade output
-through the wide filter-state saturation compare/carry chain into the next filter
-history register. The fix keeps the public DSP pipeline latency unchanged: stage 3
-now registers the raw 96-bit `z1`/`z2` state expressions, and stage 4 performs the
-48-bit saturation while the gain path is already registered. `make render-quick`
-matched the C++ reference after this retiming, confirming that only the internal
-timing boundary changed.
+The full board top had previously routed after the filter-state timing fix, but a
+later complete build exposed a post-synthesis setup failure through
+`linear_interpolator` into the next DSP48E1 input. The interpolation product is
+now registered, and `voice_dsp_pipeline` carries one additional valid stage to
+preserve result alignment. `make test` and `make render-quick` matched the C++
+reference after this retiming, confirming that the externally visible sample
+stream is unchanged.
+
+Routed DRC has `0` errors. Remaining non-blocking warnings include generated MIG
+PHY/reset structure warnings, DSP48 pipeline recommendations, shallow BRAM
+recommendations for some voice register RAMs, and a missing
+`CFGBVS`/`CONFIG_VOLTAGE` design property. Do not set the configuration voltage in
+XDC until the Smart Artix configuration bank voltage is verified from the board
+schematic or vendor documentation.
 
 The Smart Artix reset tree keeps the SPI debug window alive once the MIG UI clock
 is calibrated. Asset-loading state no longer holds `wavetable_core_system` in full
@@ -347,9 +348,9 @@ that clock as `clk_sys` and sets `SYS_CLK_HZ = 100_000_000`. This keeps the core
 and MIG app interface in one clock domain and avoids a CDC bridge on the memory
 request path.
 
-The current Vivado batch synthesis and implementation flows pass with the
-generated MIG and clock wizard connected. Most warnings come from generated
+The current Vivado batch synthesis, implementation, and bitstream flows pass with
+the generated MIG and clock wizard connected. Most warnings come from generated
 Vivado IP and early board-level timing gaps; they are not yet filtered because
-the real external timing constraints are unsettled. Full implementation removes
-the post-synthesis hold violations and the core `clk_pll_i` phase-update setup
-path now meets timing.
+the real external timing constraints and configuration-bank voltage are
+unsettled. Full implementation removes the post-synthesis hold violations and the
+core `clk_pll_i` datapaths now meet timing.

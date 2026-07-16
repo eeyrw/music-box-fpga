@@ -58,6 +58,25 @@ set_property IOSTANDARD LVCMOS33 [get_ports {led_spi_error led_underrun led_samp
 # DDR3 pins belong to the Vivado MIG-generated XDC once the MT41K256M16TW
 # controller is generated for BANK34. Do not hand-write incomplete DDR timing here.
 
+# MIG temperature monitor crosses from the 200 MHz clock-wizard domain into the
+# 100 MHz MIG UI domain through device_temp_sync_r1_reg[*]. MIG's generated XDC
+# relaxes setup with a max-delay constraint; this hold-only exception prevents
+# Vivado from treating the first synchronizer stage as a same-edge related-clock
+# hold path.
+set_false_path -hold \
+  -from [get_pins -hier -quiet -regexp {.*temp_mon_enabled\.u_tempmon/xadc_supplied_temperature\.temperature_reg\[[0-9]+\]/C}] \
+  -to [get_pins -hier -quiet -regexp {.*temp_mon_enabled\.u_tempmon/device_temp_sync_r1_reg\[[0-9]+\]/D}]
+
+# The MIG 7-series PHY contains generated PHASER-to-OSERDES reset paths that
+# share related clocks but are reset-control paths inside the vendor PHY. Keep
+# this hold exception scoped to OSERDES reset pins only.
+set_false_path -hold \
+  -from [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/phaser_out/OCLK}] \
+  -to [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/ddr_byte_group_io/output_\[[0-9]+\]\.oserdes_dq_\.(sdr|ddr)\.oserdes_dq_i/RST}]
+set_false_path -hold \
+  -from [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/phaser_out/OCLK}] \
+  -to [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/ddr_byte_group_io/slave_ts\.oserdes_slave_ts/RST}]
+
 # TODO: Add generated clock constraints after selecting the MMCM/PLL clocking.
 # TODO: Add SPI external timing or CDC constraints after the SPI timing contract is fixed.
 # TODO: Add I2S output timing constraints if required by the codec datasheet.

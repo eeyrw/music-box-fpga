@@ -21,6 +21,7 @@
 
 # Board-specific RTL.
 rtl/smart_artix_mig_stub.sv
+rtl/smart_artix_ddr3_debug_master.sv
 rtl/smart_artix_ddr3_line_reader.sv
 rtl/smart_artix_ddr3_rw_arbiter.sv
 rtl/smart_artix_ddr3_asset_writer.sv
