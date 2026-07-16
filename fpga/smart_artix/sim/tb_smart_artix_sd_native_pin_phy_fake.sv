@@ -132,6 +132,7 @@ module tb_smart_artix_sd_native_pin_phy_fake;
 
     wait (rsp_valid);
     check(rsp_status == 3'd0, "pin fake response status mismatch");
+    check(rsp_data[31:0] == 32'h1357_9bdf, "pin fake response payload mismatch");
     wait (data_seen == 4);
     repeat (2) @(posedge clk);
     check(saw_cmd17, "pin fake did not observe CMD17");

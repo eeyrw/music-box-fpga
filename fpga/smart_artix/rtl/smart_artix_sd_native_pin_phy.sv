@@ -102,15 +102,27 @@ module smart_artix_sd_native_pin_phy #(
     end
   endfunction
 
-  function automatic logic [6:0] crc7_command(input logic [5:0] index, input logic [31:0] arg);
+  function automatic logic [6:0] crc7_payload(input logic [39:0] payload);
     logic [6:0] crc;
-    logic [39:0] payload;
     begin
       crc = 7'd0;
-      payload = {2'b01, index, arg};
       for (int i = 39; i >= 0; i--)
         crc = crc7_next(crc, payload[i]);
-      crc7_command = crc;
+      crc7_payload = crc;
+    end
+  endfunction
+
+  function automatic logic [6:0] crc7_command(input logic [5:0] index, input logic [31:0] arg);
+    begin
+      crc7_command = crc7_payload({2'b01, index, arg});
+    end
+  endfunction
+
+  function automatic logic response_crc_ok(input logic [47:0] response, input logic [5:0] index);
+    begin
+      // R3 responses do not include a CRC7 field; native ACMD41 is the only R3 user here.
+      response_crc_ok = (response[47:46] == 2'b00) && response[0]
+          && ((index == 6'd41) || (crc7_payload(response[47:8]) == response[7:1]));
     end
   endfunction
 
@@ -219,7 +231,7 @@ module smart_artix_sd_native_pin_phy #(
             div_count <= '0;
             sd_clk <= 1'b1;
             if (sd_cmd_i == 1'b0) begin
-              rsp_shift <= '0;
+              rsp_shift <= 136'(1'b0);
               rsp_bit_count <= 8'd1;
               state <= STATE_RESP_HIGH;
             end else if (timeout_count == 16'(RESPONSE_TIMEOUT_CYCLES - 1)) begin
@@ -253,8 +265,9 @@ module smart_artix_sd_native_pin_phy #(
             div_count <= '0;
             sd_clk <= 1'b0;
             if (rsp_bit_count == response_bits) begin
-              rsp_status <= STATUS_OK;
-              rsp_data <= rsp_shift[119:0];
+              rsp_status <= (cmd_resp_type == RESP_LONG || response_crc_ok(rsp_shift[47:0], cmd_index))
+                  ? STATUS_OK : STATUS_CRC_ERROR;
+              rsp_data <= (cmd_resp_type == RESP_LONG) ? rsp_shift[120:1] : {88'd0, rsp_shift[39:8]};
               rsp_valid <= 1'b1;
               state <= cmd_data_read ? STATE_DATA_WAIT : STATE_DONE;
             end else begin

@@ -21,10 +21,30 @@ module fake_sd_native_pin_model (
     end
   endfunction
 
+  function automatic logic [6:0] crc7_next(input logic [6:0] crc, input logic bit_in);
+    logic feedback;
+    begin
+      feedback = bit_in ^ crc[6];
+      crc7_next = {crc[5:3], crc[2] ^ feedback, crc[1:0], feedback};
+    end
+  endfunction
+
+  function automatic logic [6:0] crc7_response(input logic [5:0] index, input logic [31:0] payload);
+    logic [6:0] crc;
+    logic [39:0] crc_payload;
+    begin
+      crc = 7'd0;
+      crc_payload = {2'b00, index, payload};
+      for (int i = 39; i >= 0; i--)
+        crc = crc7_next(crc, crc_payload[i]);
+      crc7_response = crc;
+    end
+  endfunction
+
   task automatic drive_response_short(input logic [31:0] payload);
     logic [47:0] response;
     begin
-      response = {1'b0, 1'b0, last_cmd_index, payload, 7'h7f, 1'b1};
+      response = {1'b0, 1'b0, last_cmd_index, payload, crc7_response(last_cmd_index, payload), 1'b1};
       for (int i = 47; i >= 0; i--) begin
         @(negedge sd_clk);
         sd_cmd_i = response[i];
@@ -97,7 +117,7 @@ module fake_sd_native_pin_model (
           saw_cmd17 = 1'b1;
           fork
             begin
-              drive_response_short(32'd0);
+              drive_response_short(32'h1357_9bdf);
               drive_idle_clocks(24);
               drive_block(4);
             end
