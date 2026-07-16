@@ -33,8 +33,9 @@ filtering, and saturated mixing.
 The current core intentionally does not implement board-level SPI electrical
 timing, physical NOR Flash timing, complete SF2 preset/modulator/velocity
 behavior, filter coefficient calculation, or vendor-specific FPGA logic.
-See [the design specification](WaveTable_Synth_FPGA_Design_Spec_V1.md) for the
-long-term architecture and roadmap.
+See [`docs/README.md`](docs/README.md) for the current documentation map and
+[`docs/design/system_design.md`](docs/design/system_design.md) for the architecture
+and roadmap notes.
 
 ## Data Path
 
@@ -77,21 +78,22 @@ sim/tb/        Self-checking SystemVerilog testbenches
 docs/          Fixed-point, memory, and register contracts
 ```
 
-Useful learning documents:
+Useful learning documents start at [`docs/README.md`](docs/README.md). Key entry
+points:
 
-- [`docs/system_design.md`](docs/system_design.md): current RTL architecture and
+- [`docs/design/system_design.md`](docs/design/system_design.md): current RTL architecture and
   board-level backlog.
-- [`docs/simulation_design.md`](docs/simulation_design.md): self-checking tests
+- [`docs/verification/simulation_design.md`](docs/verification/simulation_design.md): self-checking tests
   SoundFont render flows, and MIDI/SF2 render calculations.
 - [`docs/fixed_point.md`](docs/fixed_point.md): fixed-point arithmetic contracts.
 - [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
   external line-memory interface.
 - [`docs/register_map.md`](docs/register_map.md): software-visible register map.
-- [`docs/host_control.md`](docs/host_control.md): reusable host-side C++ control
+- [`docs/host/host_control.md`](docs/host/host_control.md): reusable host-side C++ control
   boundary for future PC/CH347 SPI control.
-- [`docs/board_target_smart_artix.md`](docs/board_target_smart_artix.md): current
+- [`docs/board/smart_artix_target.md`](docs/board/smart_artix_target.md): current
   XC7A50T Smart Artix board assumptions and board integration direction.
-- [`docs/smart_artix_bringup.md`](docs/smart_artix_bringup.md): practical Smart
+- [`docs/board/smart_artix_bringup.md`](docs/board/smart_artix_bringup.md): practical Smart
   Artix hardware bring-up sequence and debug checklist.
 - [`fpga/smart_artix/`](fpga/smart_artix/): Smart Artix XC7A50T synthesis and
   bring-up skeleton.
@@ -169,7 +171,7 @@ make host-ch347
 
 It reuses the same C++ register-control sequence as the simulation harnesses and
 loads the CH347 vendor library at runtime. See
-[`docs/host_control.md`](docs/host_control.md) for usage and integration notes.
+[`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
 
 With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
 render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_core`
@@ -214,7 +216,7 @@ To write it to an SDHC/SDXC card, pass the whole-card block device explicitly:
 make flash-wtsf-sd SD_DEVICE=/dev/sdX
 ```
 
-See `docs/smart_artix_bringup.md` for the full hardware checklist and loader
+See `docs/board/smart_artix_bringup.md` for the full hardware checklist and loader
 status registers.
 
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older

@@ -74,7 +74,7 @@ schematic-verified SD pins, timing constraints, and load-status visibility.
 ## Asset Loading Direction
 
 SD card storage is treated as an asset source, not as the real-time audio read
-path. The first contract is documented in `docs/asset_loading.md`: the SD card
+path. The first contract is documented in `asset_loading.md`: the SD card
 stores a raw image with a small header, the FPGA copies the SF2 byte image into
 DDR3 before playback, and the MCU or host owns SF2 metadata and voice policy. The
 Smart Artix top uses the native 4-bit SD loader for this path. A practical flow
@@ -111,7 +111,7 @@ is better owned by an MCU or soft core than by the wavetable datapath RTL.
 4. Generate a MIG configuration for `MT41K256M16TW` and connect a read-only DDR3
    line-reader adapter to `wave_memory_subsystem`.
 5. Play a small known wave image from DDR3 through I2S.
-6. Verify the SD raw-image to DDR3 asset-loading path from `docs/asset_loading.md`
+6. Verify the SD raw-image to DDR3 asset-loading path from `asset_loading.md`
    on real pins and generated MIG hardware.
 
 The initial skeleton lives in `fpga/smart_artix/`. It intentionally keeps DDR3

@@ -11,7 +11,8 @@ self-checking tests.
 
 Read these documents before changing interfaces:
 
-- `WaveTable_Synth_FPGA_Design_Spec_V1.md`: product architecture and roadmap.
+- `docs/README.md`: documentation map and category entry points.
+- `docs/design/system_design.md`: current architecture and roadmap notes.
 - `docs/fixed_point.md`: numeric formats and arithmetic rules.
 - `docs/memory_format.md`: mono/stereo wave storage layout.
 - `docs/register_map.md`: control register addresses and commit behavior.
@@ -27,7 +28,8 @@ Read these documents before changing interfaces:
 - `rtl/audio`: audio serializers and output timing blocks.
 - `sim/models`: behavioral models that must never appear in synthesis sources.
 - `sim/tb`: self-checking SystemVerilog testbenches.
-- `docs`: stable external contracts and design decisions.
+- `docs`: stable external contracts, design notes, verification flows, host notes,
+  and board integration documentation.
 
 Dependencies must flow from top-level/voice code toward control, DSP, bus, and
 package code. A DSP primitive must not depend on a voice controller.

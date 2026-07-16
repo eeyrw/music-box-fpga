@@ -327,7 +327,7 @@ Start with:
 - left and right gain around `0x2000` or lower for external audio safety.
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
-The minimal write order is documented in `docs/register_map.md` under `Note On`.
+The minimal write order is documented in `../register_map.md` under `Note On`.
 For board debug, keep a host-side mirror of the written state because the main
 per-voice register map is write-dominant; use the `READBACK_ADDR` and
 `READBACK_DATA` window only for low-rate inspection.
@@ -359,7 +359,7 @@ Use this order when a stage fails:
 
 ## Suggested Milestones
 
-Record each board result in `docs/board_target_smart_artix.md` or a dated lab log.
+Record each board result in `smart_artix_target.md` or a dated lab log.
 Use these milestones as the first checklist:
 
 1. Bitstream generated with all top-level I/O constrained.

@@ -3,7 +3,7 @@
 This document explains how the repository verifies and renders the current
 multi-voice wavetable core.
 
-For stable fixed-point arithmetic rules, see `docs/fixed_point.md`.
+For stable fixed-point arithmetic rules, see `../fixed_point.md`.
 
 There are six simulation intents:
 
@@ -336,13 +336,13 @@ Current full-system limitations are intentional:
   audio path is transmit-only.
 - Full-system runs are smoke/integration tests today. Longer high-polyphony
   stress tests and exact I2S-decoded PCM comparisons against `render-quick` are
-  tracked in `docs/system_design.md`.
+  tracked in `../design/system_design.md`.
 
 ## C++ Board-Loader Render Flow
 
 `make render-board-loader` verifies the Smart Artix asset-loading path and the
 wavetable render path in one run. The harness builds a raw SD image at runtime:
-sector 0 contains the `WTSF` header from `docs/asset_loading.md`, and the selected
+sector 0 contains the `WTSF` header from `../board/asset_loading.md`, and the selected
 SF2 byte image starts at the configured LBA. It then drives a Verilated wrapper
 containing:
 

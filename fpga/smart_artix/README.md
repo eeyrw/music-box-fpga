@@ -6,7 +6,7 @@ DDR3-backed wavetable reads, and I2S output. Pin locations, exact clocking, and
 DDR3 MIG files must still be verified against the board schematic and
 Vivado-generated IP before hardware implementation.
 
-Use [`../../docs/smart_artix_bringup.md`](../../docs/smart_artix_bringup.md) as
+Use [`../../docs/board/smart_artix_bringup.md`](../../docs/board/smart_artix_bringup.md) as
 the practical hardware bring-up checklist.
 
 ## Known Board Facts
@@ -61,7 +61,7 @@ wavetable_core_system external line-read pins
   -> MT41K256M16TW
 ```
 
-The raw-image asset format is documented in `docs/asset_loading.md`. Sector 0
+The raw-image asset format is documented in `../../docs/board/asset_loading.md`. Sector 0
 contains the `WTSF` header; the SF2 byte image is copied into DDR3 without byte
 repacking so software can keep using absolute SF2 `smpl` offsets when programming
 voice registers.

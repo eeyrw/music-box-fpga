@@ -3,11 +3,11 @@
 This document summarizes the current RTL architecture and the next board-facing
 work. Stable external contracts live in the focused documents:
 
-- `docs/fixed_point.md`: integer formats and arithmetic rules.
-- `docs/memory_format.md`: wave-memory layout and line-memory interface.
-- `docs/register_map.md`: software-visible register contract.
-- `docs/simulation_design.md`: test and render harness behavior.
-- `docs/asset_loading.md`: planned SD raw-image to DDR3 loading contract.
+- `../fixed_point.md`: integer formats and arithmetic rules.
+- `../memory_format.md`: wave-memory layout and line-memory interface.
+- `../register_map.md`: software-visible register contract.
+- `../verification/simulation_design.md`: test and render harness behavior.
+- `../board/asset_loading.md`: planned SD raw-image to DDR3 loading contract.
 
 ## Current Scope
 
@@ -149,7 +149,7 @@ The current C++ render harness keeps this policy in reusable host-side code.
 `RegisterVoiceControl` converts voice operations into register writes through a
 small `RegisterWriteSink` interface. A PC tool using CH347 USB-to-SPI should
 reuse that policy layer and provide only the hardware-backed register transport.
-See `docs/host_control.md` for the intended split.
+See `../host/host_control.md` for the intended split.
 
 The SF2 feature boundary is intentionally split by update rate and audio-path
 ownership. SF2 filter audio processing belongs in RTL because it operates on each

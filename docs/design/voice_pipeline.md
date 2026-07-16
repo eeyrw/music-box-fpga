@@ -698,6 +698,38 @@ Potential next steps, in increasing complexity:
 4. Consider tagged request/response support only if DDR/cache profiling shows that
    ordered responses are blocking useful endpoint overlap.
 
+## Throughput Plan Status
+
+The older standalone throughput plan has been folded into this document. The
+current RTL has already completed the low-risk pipeline phases:
+
+1. Extracted `voice_dsp_pipeline` from the old in-module compute states.
+2. Added fixed-latency valid/context propagation inside `voice_dsp_pipeline`.
+3. Split issue from retire inside `multi_voice_pipeline`; `DRAIN` waits for all
+   outstanding contexts before `FINISH` emits `sample_valid`.
+4. Added area-oriented active-slot scanning using `config_valid`.
+5. Added an in-order DSP context queue at the endpoint boundary.
+6. Added a word-request FIFO and in-order endpoint assembly slots while preserving
+   the one-word ordered memory contract.
+7. Mapped internal fetch/context payload storage to distributed RAM where Vivado
+   can infer it.
+
+Remaining throughput work should be measurement-driven:
+
+1. Add observability for context issue/retire counts, DSP occupancy, memory stalls,
+   invalid-slot scan cycles, queue depth, and frame latency.
+2. Improve adapter-internal memory bandwidth with paired endpoint extraction,
+   cache-line reuse, bursts, or prefetch behind the existing core memory interface.
+3. Consider request tags and multiple outstanding reads only after measured
+   endpoint stalls justify the broader memory-model and test impact.
+
+Focused tests should still compare exact integer output and cover consecutive
+active voices, disabled-voice bubbles, interleaved mono/stereo voices,
+filter-state writeback to the correct voice, phase/loop behavior with overlapped
+DSP execution, memory stalls before DSP issue, deterministic accumulator ordering,
+single `sample_valid` emission per frame, and reset while valid contexts are in
+flight.
+
 ## Resource Optimization Notes
 
 The first Artix-7 resource pass removed the full per-frame `voice_config` and

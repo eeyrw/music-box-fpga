@@ -83,7 +83,7 @@ right sample. If the right sample header has different bounds, also pass
 left-channel values.
 
 `Ch347RegisterTransport` emits the SPI frames documented in
-`docs/register_map.md`. Writes use:
+`../register_map.md`. Writes use:
 
 ```text
 command byte: 0x80 for write
@@ -103,7 +103,7 @@ data clocks:  32-bit readback, most-significant bit first on MISO
 
 Most per-voice configuration registers are write-dominant and read back as zero
 through their normal addresses. Use `READBACK_ADDR` and `READBACK_DATA` from
-`docs/register_map.md` when inspecting per-voice shadow or runtime state.
+`../register_map.md` when inspecting per-voice shadow or runtime state.
 
 The current RTL transport is intentionally simple and simulation-friendly. Before
 using CH347 against hardware, the board-level SPI contract still needs to define:
