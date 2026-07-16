@@ -226,18 +226,45 @@ The project flow is under:
 fpga/smart_artix/vivado/scripts/
 ```
 
-Preferred reports after synthesis live under:
+The Vivado Tcl flow now emits compact JSON summaries in addition to text reports.
+For a quick status read, prefer:
+
+```bash
+make vivado-summary
+python3 tools/vivado_report_summary.py show
+python3 tools/vivado_report_summary.py compare \
+  build/fpga/smart_artix/vivado/reports/post_synth_summary.json \
+  build/fpga/smart_artix/vivado/reports/post_route_summary.json
+```
+
+These summaries are generated inside Vivado by
+`fpga/smart_artix/vivado/scripts/report_summary.tcl`, then read by
+`tools/vivado_report_summary.py`. They include top-level timing slack, failing
+endpoint counts, utilization, route status when available, and DRC severity
+counts. Use them first for status and comparisons.
+
+Stable report files after synthesis live under:
 
 ```text
+build/fpga/smart_artix/vivado/reports/post_synth_summary.json
 build/fpga/smart_artix/vivado/reports/post_synth_utilization.rpt
 build/fpga/smart_artix/vivado/reports/post_synth_utilization_hier.rpt
 build/fpga/smart_artix/vivado/reports/post_synth_utilization_hier_depth4.rpt
 build/fpga/smart_artix/vivado/reports/post_synth_timing.rpt
 ```
 
-Read `post_synth_utilization_hier_depth4.rpt` first when looking for resource
-ownership. Read `post_synth_timing.rpt` to distinguish core `ui_clk` timing from
-MIG/DDR PHY or board-level timing groups.
+Post-route summaries and detailed reports live at:
+
+```text
+build/fpga/smart_artix/vivado/reports/post_route_summary.json
+build/fpga/smart_artix/vivado/reports/post_route_utilization.rpt
+build/fpga/smart_artix/vivado/reports/post_route_timing.rpt
+```
+
+Read `post_synth_utilization_hier_depth4.rpt` when looking for resource ownership.
+Read `post_synth_timing.rpt` or `post_route_timing.rpt` when the JSON summary
+shows a regression and you need path details such as launch/capture pins, clocks,
+logic levels, or path groups.
 
 Post-synthesis timing is useful for architecture feedback, but hardware signoff
 requires implementation with real pins, external I/O timing constraints, and the
