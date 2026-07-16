@@ -103,7 +103,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_sd_spi_block_reader \
 	tb_smart_artix_sd_spi_byte_master
 
-.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader clean
+.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 
 all: test
 
@@ -296,6 +296,9 @@ render-board-loader:
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
+
+vivado-summary:
+	python3 tools/vivado_report_summary.py show
 
 clean:
 	rm -rf $(BUILD_DIR)

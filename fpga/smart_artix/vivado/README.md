@@ -55,6 +55,33 @@ Each synthesis run writes these stable report files under
   to compare `core_system`, `voice_register_bank`, `multi_voice_pipeline`, memory,
   and MIG resource ownership.
 - `post_synth_timing.rpt`: post-synthesis timing summary.
+- `post_synth_summary.json`: compact machine-readable summary generated inside
+  Vivado from timing, utilization, route-status, and DRC queries.
+
+Implementation writes matching post-route files:
+
+- `post_route_utilization.rpt`: flat routed utilization summary.
+- `post_route_timing.rpt`: routed timing summary.
+- `post_route_summary.json`: compact machine-readable routed summary.
+
+Read the JSON summaries from the repository root with:
+
+```bash
+make vivado-summary
+python3 tools/vivado_report_summary.py show
+python3 tools/vivado_report_summary.py compare \
+  build/fpga/smart_artix/vivado/reports/post_synth_summary.json \
+  build/fpga/smart_artix/vivado/reports/post_route_summary.json
+```
+
+The JSON format is intentionally small and project-owned. The Tcl exporter uses
+Vivado object/report queries and avoids depending on Vivado's internal `.rpx` or
+`.pb` files as a long-term parsing interface.
+
+`impl.tcl` and `bitstream.tcl` also reuse an up-to-date completed
+`impl_smart_artix_top` run. If implementation inputs become stale, the scripts
+reset and relaunch that run before writing post-route reports or copying the
+bitstream.
 
 Useful environment overrides:
 

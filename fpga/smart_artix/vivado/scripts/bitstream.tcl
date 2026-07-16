@@ -20,8 +20,17 @@ if {![string match "*Complete*" $synth_status]} {
   error "$synth_run_name failed with status: $synth_status"
 }
 
-launch_runs $impl_run_name -to_step write_bitstream -jobs 4
-wait_on_run $impl_run_name
+set impl_run [get_runs $impl_run_name]
+set impl_status [get_property STATUS $impl_run]
+if {[string match "*Complete*" $impl_status] && ![get_property NEEDS_REFRESH $impl_run]} {
+  puts "INFO: $impl_run_name is complete and up-to-date; reusing existing run."
+} else {
+  if {![string match "*Not started*" $impl_status]} {
+    reset_run $impl_run_name
+  }
+  launch_runs $impl_run_name -to_step write_bitstream -jobs 4
+  wait_on_run $impl_run_name
+}
 
 set impl_status [get_property STATUS [get_runs $impl_run_name]]
 if {![string match "*Complete*" $impl_status]} {

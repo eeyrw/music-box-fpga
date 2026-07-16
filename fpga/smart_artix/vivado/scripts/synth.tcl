@@ -4,6 +4,7 @@
 #   vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl
 
 source [file join [file dirname [file normalize [info script]]] project.tcl]
+source [file join [file dirname [file normalize [info script]]] report_summary.tcl]
 
 set synth_run [get_runs $synth_run_name]
 set synth_status [get_property STATUS $synth_run]
@@ -29,3 +30,4 @@ report_utilization -file $report_dir/post_synth_utilization.rpt
 report_utilization -hierarchical -file $report_dir/post_synth_utilization_hier.rpt
 report_utilization -hierarchical -hierarchical_depth 4 -file $report_dir/post_synth_utilization_hier_depth4.rpt
 report_timing_summary -file $report_dir/post_synth_timing.rpt
+write_vivado_summary post_synth [file join $report_dir post_synth_summary.json]
