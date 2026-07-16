@@ -79,6 +79,7 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_sd_spi_pin_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_fat_file_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv
 
@@ -89,6 +90,7 @@ SMART_ARTIX_SIM_MODELS := \
 SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_asset_loader \
 	tb_smart_artix_ddr3_asset_writer \
+	tb_smart_artix_ddr3_debug_master \
 	tb_smart_artix_ddr3_line_reader \
 	tb_smart_artix_ddr3_rw_arbiter \
 	tb_smart_artix_fat_file_reader \

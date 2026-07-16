@@ -40,6 +40,16 @@ module tb_wavetable_core_system_debug;
   logic [63:0] platform_bytes_loaded;
   logic [63:0] platform_sf2_size_bytes;
   logic [31:0] platform_current_lba;
+  logic platform_ddr_debug_start;
+  logic platform_ddr_debug_write;
+  logic [31:0] platform_ddr_debug_addr;
+  logic [127:0] platform_ddr_debug_wdata;
+  logic [15:0] platform_ddr_debug_byte_enable;
+  logic platform_ddr_debug_ready;
+  logic platform_ddr_debug_busy;
+  logic platform_ddr_debug_done;
+  logic platform_ddr_debug_error;
+  logic [127:0] platform_ddr_debug_rdata;
   int errors = 0;
 
   always #5 clk = ~clk;
@@ -90,7 +100,17 @@ module tb_wavetable_core_system_debug;
     .platform_loader_error_code,
     .platform_bytes_loaded,
     .platform_sf2_size_bytes,
-    .platform_current_lba
+    .platform_current_lba,
+    .platform_ddr_debug_start,
+    .platform_ddr_debug_write,
+    .platform_ddr_debug_addr,
+    .platform_ddr_debug_wdata,
+    .platform_ddr_debug_byte_enable,
+    .platform_ddr_debug_ready,
+    .platform_ddr_debug_busy,
+    .platform_ddr_debug_done,
+    .platform_ddr_debug_error,
+    .platform_ddr_debug_rdata
   );
 
   task automatic spi_clock_bit(input logic bit_value);
@@ -180,6 +200,11 @@ module tb_wavetable_core_system_debug;
     platform_bytes_loaded = 64'h1122_3344_5566_7788;
     platform_sf2_size_bytes = 64'h99aa_bbcc_ddee_ff00;
     platform_current_lba = 32'h1234_5678;
+    platform_ddr_debug_ready = 1'b1;
+    platform_ddr_debug_busy = 1'b0;
+    platform_ddr_debug_done = 1'b0;
+    platform_ddr_debug_error = 1'b0;
+    platform_ddr_debug_rdata = 128'hfedc_ba98_7654_3210_89ab_cdef_0123_4567;
     core_rst = 1'b0;
 
     repeat (5) @(negedge clk);
@@ -219,6 +244,37 @@ module tb_wavetable_core_system_debug;
     expect_read(16'h3054, 32'h99aa_bbcc);
     expect_read(16'h3058, 32'h1234_5678);
     expect_read(16'h305c, 32'h02a5_0015);
+    expect_read(16'h3064, 32'h0000_0003);
+    spi_write_word(16'h3068, 32'h0000_0100);
+    spi_write_word(16'h306c, 32'h0000_00ff);
+    spi_write_word(16'h3070, 32'h0123_4567);
+    spi_write_word(16'h3074, 32'h89ab_cdef);
+    spi_write_word(16'h3078, 32'h7654_3210);
+    spi_write_word(16'h307c, 32'hfedc_ba98);
+    spi_write_word(16'h3060, 32'h0000_0003);
+    if (!platform_ddr_debug_write || platform_ddr_debug_addr != 32'h0000_0100 ||
+        platform_ddr_debug_byte_enable != 16'h00ff ||
+        platform_ddr_debug_wdata != 128'hfedc_ba98_7654_3210_89ab_cdef_0123_4567) begin
+      $error("DDR debug register write state mismatch write=%0b addr=0x%08x be=0x%04x wdata=0x%032x",
+             platform_ddr_debug_write, platform_ddr_debug_addr,
+             platform_ddr_debug_byte_enable, platform_ddr_debug_wdata);
+      errors++;
+    end
+    platform_ddr_debug_ready = 1'b0;
+    platform_ddr_debug_busy = 1'b1;
+    expect_read(16'h3064, 32'h0000_0025);
+    platform_ddr_debug_ready = 1'b1;
+    platform_ddr_debug_busy = 1'b0;
+    platform_ddr_debug_done = 1'b1;
+    @(negedge clk);
+    platform_ddr_debug_done = 1'b0;
+    expect_read(16'h3064, 32'h0000_002b);
+    expect_read(16'h3070, 32'h0123_4567);
+    expect_read(16'h3074, 32'h89ab_cdef);
+    expect_read(16'h3078, 32'h7654_3210);
+    expect_read(16'h307c, 32'hfedc_ba98);
+    spi_write_word(16'h3060, 32'h0000_0004);
+    expect_read(16'h3064, 32'h0000_0023);
     spi_write_word(16'h3014, 32'h0000_003f);
     if (spi_error) begin
       $error("system debug flag clear unexpectedly reported error");
@@ -239,5 +295,5 @@ module tb_wavetable_core_system_debug;
   assign unused_outputs = ext_req_valid | (|ext_req_addr) | i2s_bclk | i2s_lrclk | i2s_sdata |
       underrun_pulse | sample_drop_pulse | mem_debug_hit_pulse | mem_debug_miss_pulse |
       mem_debug_response_pulse | (|mem_debug_response_latency) | (|output_fifo_level) |
-      render_deadline_miss_pulse | (|render_latency_cycles);
+      render_deadline_miss_pulse | (|render_latency_cycles) | platform_ddr_debug_start;
 endmodule

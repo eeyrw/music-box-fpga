@@ -12,6 +12,18 @@ module tb_smart_artix_ddr3_rw_arbiter;
   logic [MIG_DATA_WIDTH-1:0] read_app_rd_data;
   logic read_app_rd_data_valid;
   logic read_app_rd_data_end;
+  logic [MIG_ADDR_WIDTH-1:0] debug_app_addr;
+  logic [2:0] debug_app_cmd;
+  logic debug_app_en;
+  logic debug_app_rdy;
+  logic [MIG_DATA_WIDTH-1:0] debug_app_rd_data;
+  logic debug_app_rd_data_valid;
+  logic debug_app_rd_data_end;
+  logic [MIG_DATA_WIDTH-1:0] debug_app_wdf_data;
+  logic [MASK_WIDTH-1:0] debug_app_wdf_mask;
+  logic debug_app_wdf_wren;
+  logic debug_app_wdf_end;
+  logic debug_app_wdf_rdy;
   logic [MIG_ADDR_WIDTH-1:0] write_app_addr;
   logic [2:0] write_app_cmd;
   logic write_app_en;
@@ -48,6 +60,18 @@ module tb_smart_artix_ddr3_rw_arbiter;
     .read_app_rd_data,
     .read_app_rd_data_valid,
     .read_app_rd_data_end,
+    .debug_app_addr,
+    .debug_app_cmd,
+    .debug_app_en,
+    .debug_app_rdy,
+    .debug_app_rd_data,
+    .debug_app_rd_data_valid,
+    .debug_app_rd_data_end,
+    .debug_app_wdf_data,
+    .debug_app_wdf_mask,
+    .debug_app_wdf_wren,
+    .debug_app_wdf_end,
+    .debug_app_wdf_rdy,
     .write_app_addr,
     .write_app_cmd,
     .write_app_en,
@@ -90,6 +114,13 @@ module tb_smart_artix_ddr3_rw_arbiter;
     read_app_addr = '0;
     read_app_cmd = 3'b001;
     read_app_en = 1'b0;
+    debug_app_addr = '0;
+    debug_app_cmd = 3'b001;
+    debug_app_en = 1'b0;
+    debug_app_wdf_data = '0;
+    debug_app_wdf_mask = '0;
+    debug_app_wdf_wren = 1'b0;
+    debug_app_wdf_end = 1'b0;
     write_app_addr = '0;
     write_app_cmd = 3'b000;
     write_app_en = 1'b0;
@@ -139,12 +170,46 @@ module tb_smart_artix_ddr3_rw_arbiter;
     check(mig_app_wdf_wren, "arbiter should still forward independent write-data channel");
 
     @(negedge clk);
+    read_app_en = 1'b0;
+    debug_app_addr = 28'h000_0180;
+    debug_app_cmd = 3'b001;
+    debug_app_en = 1'b1;
+    write_app_addr = 28'h000_0200;
+    write_app_en = 1'b1;
+    #1;
+    check(mig_app_en, "arbiter did not forward debug command");
+    check(mig_app_addr == 28'h000_0180, "arbiter debug address mismatch");
+    check(mig_app_cmd == 3'b001, "arbiter debug command mismatch");
+    check(debug_app_rdy, "arbiter did not return debug ready");
+    check(!write_app_rdy, "arbiter returned write ready while debug had priority");
+
+    @(negedge clk);
+    debug_app_en = 1'b0;
+    debug_app_wdf_data = 128'h1111_2222_3333_4444_5555_6666_7777_8888;
+    debug_app_wdf_mask = 16'h0f0f;
+    debug_app_wdf_wren = 1'b1;
+    debug_app_wdf_end = 1'b1;
+    write_app_wdf_data = 128'haaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111;
+    write_app_wdf_mask = 16'hf0f0;
+    write_app_wdf_wren = 1'b1;
+    write_app_wdf_end = 1'b1;
+    #1;
+    check(mig_app_wdf_data == debug_app_wdf_data, "arbiter debug write data mismatch");
+    check(mig_app_wdf_mask == debug_app_wdf_mask, "arbiter debug write mask mismatch");
+    check(debug_app_wdf_rdy, "arbiter did not return debug write-data ready");
+    check(!write_app_wdf_rdy, "arbiter returned loader write-data ready while debug write data active");
+
+    @(negedge clk);
+    debug_app_wdf_wren = 1'b0;
     mig_app_rd_data_valid = 1'b1;
     mig_app_rd_data_end = 1'b1;
     #1;
     check(read_app_rd_data_valid, "arbiter did not route read data valid");
     check(read_app_rd_data_end, "arbiter did not route read data end");
     check(read_app_rd_data == mig_app_rd_data, "arbiter read data mismatch");
+    check(debug_app_rd_data_valid, "arbiter did not route debug read data valid");
+    check(debug_app_rd_data_end, "arbiter did not route debug read data end");
+    check(debug_app_rd_data == mig_app_rd_data, "arbiter debug read data mismatch");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_rw_arbiter errors=%0d", errors);

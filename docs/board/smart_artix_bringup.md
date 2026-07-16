@@ -219,6 +219,7 @@ The useful first reads are:
 | `0x3054` | `PLATFORM_SF2_SIZE_HI` | High word of SF2 byte count from the raw header. |
 | `0x3058` | `PLATFORM_CURRENT_LBA` | Current sector being loaded. |
 | `0x305c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
+| `0x3060`..`0x307c` | `DDR_DEBUG_*` | Single-beat DDR read/write debug window. |
 
 `PLATFORM_STATUS` bit meanings:
 
@@ -244,6 +245,29 @@ bits 7:0    SD error code
 bits 15:8   loader error code
 bits 19:16  asset-loader state
 ```
+
+After `PLATFORM_DDR_STATUS[0]` reports calibration complete and
+`DDR_DEBUG_STATUS.ready` is set, use the DDR debug wrapper in the CH347 tool to
+prove direct DDR access before depending on SD-loaded data:
+
+```bash
+# Write 16 bytes at DDR byte address 0x100.
+build/ch347_control --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --ddr-byte-enable 0xffff \
+  --ddr-write 0x00000100 0x01234567 0x89abcdef 0x76543210 0xfedcba98
+
+# Read back the same 16-byte beat.
+build/ch347_control --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --ddr-read 0x00000100
+```
+
+Each DDR debug command accesses one 128-bit MIG beat, which is 16 bytes in the
+current Smart Artix build. To inspect or patch 128 bytes, run eight commands and
+increment the address by `0x10` each time. The address must be 16-byte aligned;
+an unaligned command or a write with `--ddr-byte-enable 0` reports an error and
+does not access DDR.
 
 ## SD Raw Image Bring-Up
 

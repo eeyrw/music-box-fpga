@@ -44,7 +44,17 @@ module wavetable_core_system #(
   input  logic [7:0]               platform_loader_error_code,
   input  logic [63:0]              platform_bytes_loaded,
   input  logic [63:0]              platform_sf2_size_bytes,
-  input  logic [31:0]              platform_current_lba
+  input  logic [31:0]              platform_current_lba,
+  output logic                     platform_ddr_debug_start,
+  output logic                     platform_ddr_debug_write,
+  output logic [31:0]              platform_ddr_debug_addr,
+  output logic [LINE_WORDS*16-1:0] platform_ddr_debug_wdata,
+  output logic [LINE_WORDS*2-1:0]  platform_ddr_debug_byte_enable,
+  input  logic                     platform_ddr_debug_ready,
+  input  logic                     platform_ddr_debug_busy,
+  input  logic                     platform_ddr_debug_done,
+  input  logic                     platform_ddr_debug_error,
+  input  logic [LINE_WORDS*16-1:0] platform_ddr_debug_rdata
 );
   logic sample_tick;
   logic spi_bus_valid;
@@ -98,6 +108,14 @@ module wavetable_core_system #(
   localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE_HI = 16'h3054;
   localparam logic [15:0] ADDR_PLATFORM_CURRENT_LBA = 16'h3058;
   localparam logic [15:0] ADDR_PLATFORM_DDR_STATUS = 16'h305c;
+  localparam logic [15:0] ADDR_DDR_DEBUG_CONTROL = 16'h3060;
+  localparam logic [15:0] ADDR_DDR_DEBUG_STATUS = 16'h3064;
+  localparam logic [15:0] ADDR_DDR_DEBUG_ADDR = 16'h3068;
+  localparam logic [15:0] ADDR_DDR_DEBUG_BYTE_ENABLE = 16'h306c;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA0 = 16'h3070;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA1 = 16'h3074;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA2 = 16'h3078;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA3 = 16'h307c;
 
   logic system_debug_access;
   logic [31:0] system_debug_rdata;
@@ -109,6 +127,9 @@ module wavetable_core_system #(
   logic [31:0] mem_miss_count;
   logic [31:0] mem_response_count;
   logic [31:0] debug_event_set_mask;
+  logic ddr_debug_write_latched;
+  logic ddr_debug_done_latched;
+  logic ddr_debug_error_latched;
 
   function automatic logic is_system_debug_address(input logic [15:0] address);
     unique case (address)
@@ -119,7 +140,11 @@ module wavetable_core_system #(
       ADDR_PLATFORM_STATUS, ADDR_PLATFORM_ERRORS, ADDR_PLATFORM_BYTES_LOADED_LO,
       ADDR_PLATFORM_BYTES_LOADED_HI, ADDR_PLATFORM_SF2_SIZE_LO,
       ADDR_PLATFORM_SF2_SIZE_HI, ADDR_PLATFORM_CURRENT_LBA,
-      ADDR_PLATFORM_DDR_STATUS: begin
+      ADDR_PLATFORM_DDR_STATUS, ADDR_DDR_DEBUG_CONTROL,
+      ADDR_DDR_DEBUG_STATUS, ADDR_DDR_DEBUG_ADDR,
+      ADDR_DDR_DEBUG_BYTE_ENABLE, ADDR_DDR_DEBUG_DATA0,
+      ADDR_DDR_DEBUG_DATA1, ADDR_DDR_DEBUG_DATA2,
+      ADDR_DDR_DEBUG_DATA3: begin
         is_system_debug_address = 1'b1;
       end
       default: is_system_debug_address = 1'b0;
@@ -227,6 +252,28 @@ module wavetable_core_system #(
         system_debug_rdata[5] = platform_mig_app_rd_data_end;
         system_debug_rdata[27:16] = platform_ddr_device_temp;
       end
+      ADDR_DDR_DEBUG_CONTROL: begin
+        system_debug_rdata[1] = ddr_debug_write_latched;
+      end
+      ADDR_DDR_DEBUG_STATUS: begin
+        system_debug_rdata = {
+          26'd0,
+          ddr_debug_write_latched,
+          ddr_debug_error_latched,
+          ddr_debug_done_latched,
+          platform_ddr_debug_busy,
+          platform_ddr_debug_ready,
+          1'b1
+        };
+      end
+      ADDR_DDR_DEBUG_ADDR: system_debug_rdata = platform_ddr_debug_addr;
+      ADDR_DDR_DEBUG_BYTE_ENABLE: begin
+        system_debug_rdata = {16'd0, platform_ddr_debug_byte_enable};
+      end
+      ADDR_DDR_DEBUG_DATA0: system_debug_rdata = platform_ddr_debug_rdata[31:0];
+      ADDR_DDR_DEBUG_DATA1: system_debug_rdata = platform_ddr_debug_rdata[63:32];
+      ADDR_DDR_DEBUG_DATA2: system_debug_rdata = platform_ddr_debug_rdata[95:64];
+      ADDR_DDR_DEBUG_DATA3: system_debug_rdata = platform_ddr_debug_rdata[127:96];
       default: system_debug_rdata = 32'd0;
     endcase
   end
@@ -253,8 +300,48 @@ module wavetable_core_system #(
       mem_hit_count <= 32'd0;
       mem_miss_count <= 32'd0;
       mem_response_count <= 32'd0;
+      platform_ddr_debug_start <= 1'b0;
+      platform_ddr_debug_write <= 1'b0;
+      platform_ddr_debug_addr <= 32'd0;
+      platform_ddr_debug_wdata <= '0;
+      platform_ddr_debug_byte_enable <= '1;
+      ddr_debug_write_latched <= 1'b0;
+      ddr_debug_done_latched <= 1'b0;
+      ddr_debug_error_latched <= 1'b0;
     end else begin
       render_deadline_miss_pulse <= 1'b0;
+      platform_ddr_debug_start <= 1'b0;
+
+      if (platform_ddr_debug_done)
+        ddr_debug_done_latched <= 1'b1;
+      if (platform_ddr_debug_error)
+        ddr_debug_error_latched <= 1'b1;
+
+      if (system_debug_access && spi_bus_write) begin
+        unique case (spi_bus_address)
+          ADDR_DDR_DEBUG_CONTROL: begin
+            if (spi_bus_wdata[0] && platform_ddr_debug_ready) begin
+              platform_ddr_debug_start <= 1'b1;
+              platform_ddr_debug_write <= spi_bus_wdata[1];
+              ddr_debug_write_latched <= spi_bus_wdata[1];
+              ddr_debug_done_latched <= 1'b0;
+              ddr_debug_error_latched <= 1'b0;
+            end
+            if (spi_bus_wdata[2]) begin
+              ddr_debug_done_latched <= 1'b0;
+              ddr_debug_error_latched <= 1'b0;
+            end
+          end
+          ADDR_DDR_DEBUG_ADDR: platform_ddr_debug_addr <= spi_bus_wdata;
+          ADDR_DDR_DEBUG_BYTE_ENABLE: platform_ddr_debug_byte_enable <= spi_bus_wdata[LINE_WORDS*2-1:0];
+          ADDR_DDR_DEBUG_DATA0: platform_ddr_debug_wdata[31:0] <= spi_bus_wdata;
+          ADDR_DDR_DEBUG_DATA1: platform_ddr_debug_wdata[63:32] <= spi_bus_wdata;
+          ADDR_DDR_DEBUG_DATA2: platform_ddr_debug_wdata[95:64] <= spi_bus_wdata;
+          ADDR_DDR_DEBUG_DATA3: platform_ddr_debug_wdata[127:96] <= spi_bus_wdata;
+          default: begin
+          end
+        endcase
+      end
 
       if (system_debug_access && spi_bus_write && (spi_bus_address == ADDR_DEBUG_EVENT_FLAGS)) begin
         debug_event_flags <= (debug_event_flags & ~spi_bus_wdata) | debug_event_set_mask;

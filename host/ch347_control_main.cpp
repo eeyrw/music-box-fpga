@@ -41,6 +41,18 @@ struct CommitVoice {
   render::Region region;
 };
 
+struct DdrDebugWrite {
+  uint32_t byte_addr = 0;
+  uint32_t data[4] = {};
+  uint16_t byte_enable = 0xffff;
+  uint32_t timeout_polls = 10000;
+};
+
+struct DdrDebugRead {
+  uint32_t byte_addr = 0;
+  uint32_t timeout_polls = 10000;
+};
+
 struct Action {
   enum Type {
     WriteRegisterAction,
@@ -48,6 +60,8 @@ struct Action {
     SetEnvelopeAction,
     ReleaseAction,
     CommitAction,
+    DdrDebugWriteAction,
+    DdrDebugReadAction,
   } type = WriteRegisterAction;
 
   RegisterWrite write;
@@ -55,13 +69,29 @@ struct Action {
   SetEnvelope envelope;
   ReleaseVoice release;
   CommitVoice commit;
+  DdrDebugWrite ddr_write;
+  DdrDebugRead ddr_read;
 };
 
 struct Args {
   host::Ch347Options ch347;
   bool dry_run = false;
+  uint16_t ddr_byte_enable = 0xffff;
+  uint32_t ddr_timeout_polls = 10000;
   std::vector<Action> actions;
 };
+
+constexpr uint16_t kDdrDebugControl = 0x3060;
+constexpr uint16_t kDdrDebugStatus = 0x3064;
+constexpr uint16_t kDdrDebugAddr = 0x3068;
+constexpr uint16_t kDdrDebugByteEnable = 0x306c;
+constexpr uint16_t kDdrDebugData0 = 0x3070;
+constexpr uint32_t kDdrDebugControlStart = 1u << 0;
+constexpr uint32_t kDdrDebugControlWrite = 1u << 1;
+constexpr uint32_t kDdrDebugControlClear = 1u << 2;
+constexpr uint32_t kDdrDebugStatusReady = 1u << 1;
+constexpr uint32_t kDdrDebugStatusDone = 1u << 3;
+constexpr uint32_t kDdrDebugStatusError = 1u << 4;
 
 class DryRunTransport : public render::RegisterWriteSink {
  public:
@@ -142,6 +172,8 @@ void print_usage(const char* argv0) {
       << "  --mode N                SPI mode 0..3, default 0\n"
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
       << "  --dry-run               Print register frames without opening CH347\n"
+      << "  --ddr-byte-enable MASK  Byte-enable mask for later --ddr-write, default 0xffff\n"
+      << "  --ddr-timeout N         Poll limit for later DDR debug commands, default 10000\n"
       << "\nVoice options for --commit-voice:\n"
       << "  --enable 0|1            Default 1\n"
       << "  --stereo 0|1            Default 0\n"
@@ -158,7 +190,10 @@ void print_usage(const char* argv0) {
       << "  --gain-l Q1_15          Default 0x4000\n"
       << "  --gain-r Q1_15          Default 0x4000\n"
       << "\nOther operations:\n"
-      << "  --release VOICE         Set RELEASE_CONTROL.released\n";
+      << "  --release VOICE         Set RELEASE_CONTROL.released\n"
+      << "  --ddr-write ADDR D0 D1 D2 D3\n"
+      << "                          Write one 16-byte DDR beat through the debug window\n"
+      << "  --ddr-read ADDR         Read one 16-byte DDR beat through the debug window\n";
 }
 
 Args parse_args(int argc, char** argv) {
@@ -203,6 +238,10 @@ Args parse_args(int argc, char** argv) {
       args.ch347.chip_select_mask = parse_u8(need_arg(argc, argv, i, "--cs-mask"), "cs-mask");
     } else if (a == "--dry-run") {
       args.dry_run = true;
+    } else if (a == "--ddr-byte-enable") {
+      args.ddr_byte_enable = parse_u16(need_arg(argc, argv, i, "--ddr-byte-enable"), "ddr-byte-enable");
+    } else if (a == "--ddr-timeout") {
+      args.ddr_timeout_polls = parse_u32(need_arg(argc, argv, i, "--ddr-timeout"), "ddr-timeout");
     } else if (a == "--write") {
       flush_commit();
       RegisterWrite write;
@@ -219,6 +258,30 @@ Args parse_args(int argc, char** argv) {
       Action action;
       action.type = Action::ReadRegisterAction;
       action.read = read;
+      args.actions.push_back(action);
+    } else if (a == "--ddr-write") {
+      flush_commit();
+      DdrDebugWrite write;
+      write.byte_addr = parse_u32(need_arg(argc, argv, i, "--ddr-write address"), "ddr address");
+      for (int word = 0; word < 4; ++word) {
+        std::ostringstream name;
+        name << "--ddr-write data" << word;
+        write.data[word] = parse_u32(need_arg(argc, argv, i, name.str().c_str()), name.str().c_str());
+      }
+      write.byte_enable = args.ddr_byte_enable;
+      write.timeout_polls = args.ddr_timeout_polls;
+      Action action;
+      action.type = Action::DdrDebugWriteAction;
+      action.ddr_write = write;
+      args.actions.push_back(action);
+    } else if (a == "--ddr-read") {
+      flush_commit();
+      DdrDebugRead read;
+      read.byte_addr = parse_u32(need_arg(argc, argv, i, "--ddr-read address"), "ddr address");
+      read.timeout_polls = args.ddr_timeout_polls;
+      Action action;
+      action.type = Action::DdrDebugReadAction;
+      action.ddr_read = read;
       args.actions.push_back(action);
     } else if (a == "--set-envelope") {
       flush_commit();
@@ -296,6 +359,99 @@ void validate_voice(int voice) {
   if (voice < 0 || voice >= render::kNumVoices) throw std::runtime_error("voice index out of range");
 }
 
+void validate_ddr_addr(uint32_t byte_addr) {
+  if ((byte_addr & 0xfu) != 0) throw std::runtime_error("DDR debug address must be 16-byte aligned");
+}
+
+void write_debug_register(render::RegisterWriteSink& sink, uint16_t address, uint32_t data) {
+  sink.write_register(address, data);
+}
+
+uint32_t wait_ddr_debug_done(host::Ch347RegisterTransport& transport, uint32_t timeout_polls) {
+  for (uint32_t poll = 0; poll < timeout_polls; ++poll) {
+    uint32_t status = transport.read_register(kDdrDebugStatus);
+    if (status & kDdrDebugStatusError) {
+      std::ostringstream msg;
+      msg << "DDR debug command failed, status=0x" << std::hex << std::setw(8)
+          << std::setfill('0') << status;
+      throw std::runtime_error(msg.str());
+    }
+    if (status & kDdrDebugStatusDone) return status;
+  }
+  throw std::runtime_error("DDR debug command timed out");
+}
+
+void emit_dry_run_ddr_write(DryRunTransport& dry_run, const DdrDebugWrite& write) {
+  dry_run.write_register(kDdrDebugControl, kDdrDebugControlClear);
+  dry_run.write_register(kDdrDebugAddr, write.byte_addr);
+  dry_run.write_register(kDdrDebugByteEnable, write.byte_enable);
+  for (int word = 0; word < 4; ++word) {
+    dry_run.write_register(uint16_t(kDdrDebugData0 + word * 4), write.data[word]);
+  }
+  dry_run.write_register(kDdrDebugControl, kDdrDebugControlStart | kDdrDebugControlWrite);
+  dry_run.read_register(kDdrDebugStatus);
+}
+
+void emit_dry_run_ddr_read(DryRunTransport& dry_run, const DdrDebugRead& read) {
+  dry_run.write_register(kDdrDebugControl, kDdrDebugControlClear);
+  dry_run.write_register(kDdrDebugAddr, read.byte_addr);
+  dry_run.write_register(kDdrDebugControl, kDdrDebugControlStart);
+  dry_run.read_register(kDdrDebugStatus);
+  for (int word = 0; word < 4; ++word) {
+    dry_run.read_register(uint16_t(kDdrDebugData0 + word * 4));
+  }
+}
+
+void execute_ddr_write(render::RegisterWriteSink& sink, host::Ch347RegisterTransport* transport,
+                       DryRunTransport& dry_run, bool dry_run_mode, const DdrDebugWrite& write) {
+  validate_ddr_addr(write.byte_addr);
+  if (write.byte_enable == 0) throw std::runtime_error("DDR debug write byte-enable mask must be nonzero");
+  if (dry_run_mode) {
+    emit_dry_run_ddr_write(dry_run, write);
+    return;
+  }
+  write_debug_register(sink, kDdrDebugControl, kDdrDebugControlClear);
+  uint32_t status = transport->read_register(kDdrDebugStatus);
+  if ((status & kDdrDebugStatusReady) == 0) {
+    throw std::runtime_error("DDR debug window is not ready");
+  }
+  write_debug_register(sink, kDdrDebugAddr, write.byte_addr);
+  write_debug_register(sink, kDdrDebugByteEnable, write.byte_enable);
+  for (int word = 0; word < 4; ++word) {
+    write_debug_register(sink, uint16_t(kDdrDebugData0 + word * 4), write.data[word]);
+  }
+  write_debug_register(sink, kDdrDebugControl, kDdrDebugControlStart | kDdrDebugControlWrite);
+  status = wait_ddr_debug_done(*transport, write.timeout_polls);
+  std::cout << "ddr-write addr=0x" << std::hex << std::setw(8) << std::setfill('0')
+            << write.byte_addr << " byte-enable=0x" << std::setw(4) << write.byte_enable
+            << " status=0x" << std::setw(8) << status << std::dec << std::setfill(' ') << "\n";
+}
+
+void execute_ddr_read(render::RegisterWriteSink& sink, host::Ch347RegisterTransport* transport,
+                      DryRunTransport& dry_run, bool dry_run_mode, const DdrDebugRead& read) {
+  validate_ddr_addr(read.byte_addr);
+  if (dry_run_mode) {
+    emit_dry_run_ddr_read(dry_run, read);
+    return;
+  }
+  write_debug_register(sink, kDdrDebugControl, kDdrDebugControlClear);
+  uint32_t status = transport->read_register(kDdrDebugStatus);
+  if ((status & kDdrDebugStatusReady) == 0) {
+    throw std::runtime_error("DDR debug window is not ready");
+  }
+  write_debug_register(sink, kDdrDebugAddr, read.byte_addr);
+  write_debug_register(sink, kDdrDebugControl, kDdrDebugControlStart);
+  status = wait_ddr_debug_done(*transport, read.timeout_polls);
+  uint32_t data[4] = {};
+  for (int word = 0; word < 4; ++word) {
+    data[word] = transport->read_register(uint16_t(kDdrDebugData0 + word * 4));
+  }
+  std::cout << "ddr-read addr=0x" << std::hex << std::setw(8) << std::setfill('0')
+            << read.byte_addr << " data=0x" << std::setw(8) << data[3] << '_' << std::setw(8)
+            << data[2] << '_' << std::setw(8) << data[1] << '_' << std::setw(8) << data[0]
+            << " status=0x" << std::setw(8) << status << std::dec << std::setfill(' ') << "\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -340,6 +496,10 @@ int main(int argc, char** argv) {
         validate_voice(action.release.voice);
         render::Region r;
         voice_control.release_voice(action.release.voice, r);
+      } else if (action.type == Action::DdrDebugWriteAction) {
+        execute_ddr_write(sink, transport.get(), dry_run, args.dry_run, action.ddr_write);
+      } else if (action.type == Action::DdrDebugReadAction) {
+        execute_ddr_read(sink, transport.get(), dry_run, args.dry_run, action.ddr_read);
       }
     }
   } catch (const std::exception& e) {

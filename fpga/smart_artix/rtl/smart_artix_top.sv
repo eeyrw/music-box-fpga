@@ -98,6 +98,18 @@ module smart_artix_top (
   logic [MIG_DATA_WIDTH-1:0] read_app_rd_data;
   logic                     read_app_rd_data_valid;
   logic                     read_app_rd_data_end;
+  logic [MIG_ADDR_WIDTH-1:0] debug_app_addr;
+  logic [2:0]               debug_app_cmd;
+  logic                     debug_app_en;
+  logic                     debug_app_rdy;
+  logic [MIG_DATA_WIDTH-1:0] debug_app_rd_data;
+  logic                     debug_app_rd_data_valid;
+  logic                     debug_app_rd_data_end;
+  logic [MIG_DATA_WIDTH-1:0] debug_app_wdf_data;
+  logic [MIG_DATA_WIDTH/8-1:0] debug_app_wdf_mask;
+  logic                     debug_app_wdf_wren;
+  logic                     debug_app_wdf_end;
+  logic                     debug_app_wdf_rdy;
   logic [MIG_ADDR_WIDTH-1:0] write_app_addr;
   logic [2:0]               write_app_cmd;
   logic                     write_app_en;
@@ -119,6 +131,16 @@ module smart_artix_top (
   logic [63:0]              bytes_loaded;
   logic [63:0]              sf2_size_bytes;
   logic [31:0]              current_lba;
+  logic                     ddr_debug_start;
+  logic                     ddr_debug_write;
+  logic [31:0]              ddr_debug_addr;
+  logic [MIG_DATA_WIDTH-1:0] ddr_debug_wdata;
+  logic [MIG_DATA_WIDTH/8-1:0] ddr_debug_byte_enable;
+  logic                     ddr_debug_ready;
+  logic                     ddr_debug_busy;
+  logic                     ddr_debug_done;
+  logic                     ddr_debug_error;
+  logic [MIG_DATA_WIDTH-1:0] ddr_debug_rdata;
 
   assign clk_sys = mig_ui_clk;
   assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
@@ -217,6 +239,18 @@ module smart_artix_top (
     .read_app_rd_data,
     .read_app_rd_data_valid,
     .read_app_rd_data_end,
+    .debug_app_addr,
+    .debug_app_cmd,
+    .debug_app_en,
+    .debug_app_rdy,
+    .debug_app_rd_data,
+    .debug_app_rd_data_valid,
+    .debug_app_rd_data_end,
+    .debug_app_wdf_data,
+    .debug_app_wdf_mask,
+    .debug_app_wdf_wren,
+    .debug_app_wdf_end,
+    .debug_app_wdf_rdy,
     .write_app_addr,
     .write_app_cmd,
     .write_app_en,
@@ -238,6 +272,36 @@ module smart_artix_top (
     .mig_app_wdf_wren,
     .mig_app_wdf_end,
     .mig_app_wdf_rdy
+  );
+
+  smart_artix_ddr3_debug_master #(
+    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
+    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
+  ) ddr3_debug_master (
+    .clk(clk_sys),
+    .rst(rst_sys),
+    .start(ddr_debug_start),
+    .write(ddr_debug_write),
+    .byte_addr(ddr_debug_addr),
+    .wdata(ddr_debug_wdata),
+    .byte_enable(ddr_debug_byte_enable),
+    .ready(ddr_debug_ready),
+    .busy(ddr_debug_busy),
+    .done_pulse(ddr_debug_done),
+    .error_pulse(ddr_debug_error),
+    .rdata(ddr_debug_rdata),
+    .mig_app_addr(debug_app_addr),
+    .mig_app_cmd(debug_app_cmd),
+    .mig_app_en(debug_app_en),
+    .mig_app_rdy(debug_app_rdy),
+    .mig_app_rd_data(debug_app_rd_data),
+    .mig_app_rd_data_valid(debug_app_rd_data_valid),
+    .mig_app_rd_data_end(debug_app_rd_data_end),
+    .mig_app_wdf_data(debug_app_wdf_data),
+    .mig_app_wdf_mask(debug_app_wdf_mask),
+    .mig_app_wdf_wren(debug_app_wdf_wren),
+    .mig_app_wdf_end(debug_app_wdf_end),
+    .mig_app_wdf_rdy(debug_app_wdf_rdy)
   );
 
   smart_artix_ddr3_line_reader #(
@@ -309,7 +373,17 @@ module smart_artix_top (
     .platform_loader_error_code(loader_error_code),
     .platform_bytes_loaded(bytes_loaded),
     .platform_sf2_size_bytes(sf2_size_bytes),
-    .platform_current_lba(current_lba)
+    .platform_current_lba(current_lba),
+    .platform_ddr_debug_start(ddr_debug_start),
+    .platform_ddr_debug_write(ddr_debug_write),
+    .platform_ddr_debug_addr(ddr_debug_addr),
+    .platform_ddr_debug_wdata(ddr_debug_wdata),
+    .platform_ddr_debug_byte_enable(ddr_debug_byte_enable),
+    .platform_ddr_debug_ready(ddr_debug_ready),
+    .platform_ddr_debug_busy(ddr_debug_busy),
+    .platform_ddr_debug_done(ddr_debug_done),
+    .platform_ddr_debug_error(ddr_debug_error),
+    .platform_ddr_debug_rdata(ddr_debug_rdata)
   );
 
   assign led_underrun = underrun_pulse;

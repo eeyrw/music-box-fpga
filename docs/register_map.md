@@ -76,6 +76,14 @@ register_addr    = voice_base(slot) + offset
 | `0x3054` | PLATFORM_SF2_SIZE_HI | high 32 bits of SF2 byte size from the SD image header |
 | `0x3058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
 | `0x305c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
+| `0x3060` | DDR_DEBUG_CONTROL | single-beat DDR debug command control |
+| `0x3064` | DDR_DEBUG_STATUS | single-beat DDR debug command status |
+| `0x3068` | DDR_DEBUG_ADDR | 128-bit-beat-aligned DDR byte address |
+| `0x306c` | DDR_DEBUG_BYTE_ENABLE | write byte-enable bits, bit 0 controls byte 0 |
+| `0x3070` | DDR_DEBUG_DATA0 | write data/readback bits 31:0 |
+| `0x3074` | DDR_DEBUG_DATA1 | write data/readback bits 63:32 |
+| `0x3078` | DDR_DEBUG_DATA2 | write data/readback bits 95:64 |
+| `0x307c` | DDR_DEBUG_DATA3 | write data/readback bits 127:96 |
 
 A mono configuration is valid when `length != 0`. A stereo configuration is valid
 when both `length != 0` and `length_r != 0`. `length`, `length_r`, loop starts,
@@ -253,6 +261,41 @@ SD initialization, sector-0 header parsing, and later SF2 data-copy progress.
 | `15:6` | reserved | Reads zero. |
 | `27:16` | `ddr_device_temp` | MIG `device_temp` field, passed through from the generated DDR3 controller. |
 | `31:28` | reserved | Reads zero. |
+
+The DDR debug window at `0x3060` through `0x307c` is a Smart Artix bring-up path
+for single 128-bit DDR beat reads and writes through the same SPI register
+transport. It is not part of the generic playback memory interface. The address
+is a MIG byte address and must be 16-byte aligned for the current 128-bit board
+configuration. Unaligned commands report `error` and do not access DDR.
+
+`DDR_DEBUG_CONTROL` (`0x3060`) starts and clears a command:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `start` | Write one to start one DDR debug command when `DDR_DEBUG_STATUS.ready = 1`. |
+| `1` | `write` | Command direction sampled with `start`: one writes DDR, zero reads DDR. |
+| `2` | `clear` | Write one to clear latched `done` and `error` status bits. |
+| `31:3` | reserved | Reads zero. |
+
+`DDR_DEBUG_STATUS` (`0x3064`) reports command state:
+
+| Bits | Field | Meaning |
+| --- | --- | --- |
+| `0` | `present` | DDR debug window is implemented. |
+| `1` | `ready` | A new command can be accepted. |
+| `2` | `busy` | A command is in progress. |
+| `3` | `done` | Sticky completion flag; clear through `DDR_DEBUG_CONTROL.clear`. |
+| `4` | `error` | Sticky command error flag; clear through `DDR_DEBUG_CONTROL.clear`. |
+| `5` | `write` | Direction of the most recently accepted command. |
+| `31:6` | reserved | Reads zero. |
+
+For writes, load `DDR_DEBUG_ADDR`, `DDR_DEBUG_BYTE_ENABLE`, and the four
+`DDR_DEBUG_DATA*` words, then write `DDR_DEBUG_CONTROL = 0x3`. `BYTE_ENABLE`
+uses one bit per byte, where one means the byte is written; the board wrapper
+converts it to the MIG active-high write-data mask. A write with no enabled bytes
+reports `error` and does not access DDR. For reads, load `DDR_DEBUG_ADDR`, write
+`DDR_DEBUG_CONTROL = 0x1`, poll `DDR_DEBUG_STATUS.done`, then read
+`DDR_DEBUG_DATA0` through `DDR_DEBUG_DATA3`.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a

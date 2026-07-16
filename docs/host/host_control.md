@@ -69,6 +69,16 @@ build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
   --write 0x3014 0x3f
 
+# Print the SPI register sequence for one 16-byte DDR debug write.
+build/ch347_control --dry-run \
+  --ddr-byte-enable 0xffff \
+  --ddr-write 0x00000100 0x01234567 0x89abcdef 0x76543210 0xfedcba98
+
+# Read one 16-byte DDR debug beat through CH347 device 0.
+build/ch347_control --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --ddr-read 0x00000100
+
 # Program and commit voice 0 from command-line region parameters.
 build/ch347_control --dry-run \
   --set-envelope 0 0 \
@@ -104,6 +114,27 @@ data clocks:  32-bit readback, most-significant bit first on MISO
 Most per-voice configuration registers are write-dominant and read back as zero
 through their normal addresses. Use `READBACK_ADDR` and `READBACK_DATA` from
 `../register_map.md` when inspecting per-voice shadow or runtime state.
+
+The command-line tool also wraps the Smart Artix DDR debug register window:
+
+```bash
+build/ch347_control --ddr-write ADDR D0 D1 D2 D3
+build/ch347_control --ddr-read ADDR
+```
+
+`ADDR` is a DDR byte address and must be 16-byte aligned. `D0` through `D3` map to
+`DDR_DEBUG_DATA0` through `DDR_DEBUG_DATA3`; `D0` is the lowest-address 32-bit
+word. Each operation transfers one 128-bit DDR beat, so writing 128 bytes takes
+eight `--ddr-write` operations with addresses incremented by `0x10`. Use
+`--ddr-byte-enable MASK` before `--ddr-write` to select which bytes in later
+writes are updated; the default `0xffff` writes all 16 bytes. The mask uses one
+bit per byte, where bit 0 controls the byte at `ADDR + 0`.
+
+For real hardware, the tool clears sticky DDR debug status, checks `ready`, starts
+the command, polls `DDR_DEBUG_STATUS.done`, and fails on `error` or timeout. Use
+`--ddr-timeout N` to change the poll limit for later DDR debug operations. In
+`--dry-run` mode, DDR commands print the underlying register read/write frames;
+no status can be observed without hardware.
 
 The current RTL transport is intentionally simple and simulation-friendly. Before
 using CH347 against hardware, the board-level SPI contract still needs to define:
