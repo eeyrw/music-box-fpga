@@ -57,6 +57,25 @@ register_addr    = voice_base(slot) + offset
 | `0x3000` | VERSION | design version, currently `0x0005_0000` |
 | `0x3004` | READBACK_ADDR | write a 16-bit register address to sample through the readback window |
 | `0x3008` | READBACK_DATA | read sampled 32-bit data for `READBACK_ADDR` |
+| `0x3010` | SYSTEM_STATUS | system wrapper status bits |
+| `0x3014` | DEBUG_EVENT_FLAGS | sticky event flags, write one to clear |
+| `0x3018` | AUDIO_STATUS | output FIFO and audio flags |
+| `0x301c` | RENDER_STATUS | render pending, deadline flag, and last latency |
+| `0x3020` | MEMORY_STATUS | memory request/cache status and last response latency |
+| `0x3024` | UNDERRUN_COUNT | saturating I2S underrun counter |
+| `0x3028` | SAMPLE_DROP_COUNT | saturating output FIFO overflow/drop counter |
+| `0x302c` | RENDER_DEADLINE_MISS_COUNT | saturating render deadline miss counter |
+| `0x3030` | MEM_HIT_COUNT | saturating line-cache hit counter |
+| `0x3034` | MEM_MISS_COUNT | saturating line-cache miss counter |
+| `0x3038` | MEM_RESPONSE_COUNT | saturating external memory response counter |
+| `0x3040` | PLATFORM_STATUS | Smart Artix SD/DDR/asset-loader status bits |
+| `0x3044` | PLATFORM_ERRORS | SD error, loader error, and loader state |
+| `0x3048` | PLATFORM_BYTES_LOADED_LO | low 32 bits of SD asset bytes loaded |
+| `0x304c` | PLATFORM_BYTES_LOADED_HI | high 32 bits of SD asset bytes loaded |
+| `0x3050` | PLATFORM_SF2_SIZE_LO | low 32 bits of SF2 byte size from the SD image header |
+| `0x3054` | PLATFORM_SF2_SIZE_HI | high 32 bits of SF2 byte size from the SD image header |
+| `0x3058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
+| `0x305c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
 
 A mono configuration is valid when `length != 0`. A stereo configuration is valid
 when both `length != 0` and `length_r != 0`. `length`, `length_r`, loop starts,
@@ -99,6 +118,40 @@ registers, the sampled value is the shadow state. For `ENVELOPE_LEVEL`,
 `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and `RELEASE_CONTROL`, the sampled value is
 the live runtime scalar state. `STATUS` and `VERSION` can be read either directly
 or through the readback window. Unsupported readback addresses return zero.
+
+The system debug registers are implemented by `wavetable_core_system`, so they
+are visible through SPI in system-level and Smart Artix builds. In non-board
+system simulations, the platform fields read zero unless the testbench drives the
+platform status inputs. The debug window remains available while the playback
+core/audio path is held in `core_rst`; non-debug core register accesses during
+that reset return a bus error instead of stalling the SPI bridge.
+`SYSTEM_STATUS` bits are: bit 0 core busy, bit 1 render pending, bit 2 core
+sample valid, bit 3 output FIFO sample valid, bit 4 I2S sample ready, bit 5
+external memory request valid, bit 6 external memory request ready, and bit 7
+external memory response valid.
+
+`DEBUG_EVENT_FLAGS` bits are sticky: bit 0 I2S underrun, bit 1 output sample
+drop, bit 2 render deadline miss, bit 3 memory cache hit, bit 4 memory cache
+miss, and bit 5 memory response. Write ones to clear selected bits; events that
+occur in the same cycle as a clear remain set. The associated counters saturate
+at `0xffff_ffff` and are not cleared through the register map.
+
+`AUDIO_STATUS` has output FIFO level in bits 15:0, sticky underrun in bit 16,
+and sticky sample drop in bit 17. `RENDER_STATUS` has last render latency in
+bits 15:0, render pending in bit 16, and sticky deadline miss in bit 17.
+`MEMORY_STATUS` has last memory response latency in bits 15:0, external memory
+request valid/ready/response valid in bits 16, 17, and 18, and sticky memory
+hit/miss/response flags in bits 19, 20, and 21.
+
+`PLATFORM_STATUS` is intended for the Smart Artix board top: bit 0 platform
+debug window present, bit 1 SD or loader error present, bit 2 DDR calibration
+complete, bit 3 DDR UI reset, bit 4 SD initialized, bit 5 asset loaded, bit 6
+asset loader busy, bit 7 MIG app ready, bit 8 MIG write-data ready, bit 9 MIG
+read-data valid, bit 10 MIG read-data end, and bits 14:11 asset loader state.
+`PLATFORM_ERRORS` packs `sd_error_code` in bits 7:0, `loader_error_code` in bits
+15:8, and asset loader state in bits 19:16. `PLATFORM_DDR_STATUS` reports DDR
+calibration/UI reset/MIG ready flags in bits 0 through 5 and MIG `device_temp` in
+bits 27:16.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a

@@ -265,6 +265,20 @@ now registers the raw 96-bit `z1`/`z2` state expressions, and stage 4 performs t
 matched the C++ reference after this retiming, confirming that only the internal
 timing boundary changed.
 
+The Smart Artix reset tree keeps the SPI debug window alive once the MIG UI clock
+is calibrated. Asset-loading state no longer holds `wavetable_core_system` in full
+reset; instead, `core_rst` gates only playback, line reads, FIFO, and I2S until
+the SD-to-DDR loader reports `asset_loaded`. This lets firmware inspect loader
+state, byte counters, SD errors, and DDR status over SPI while the sample asset is
+still loading or has failed to load.
+
+This is not yet an always-on debug island. The board top still clocks
+`wavetable_core_system` and its SPI bridge from the MIG `ui_clk`, so the SPI debug
+window is unavailable before the MIG UI clock is present and the system reset is
+released. Full power-on debug will require a separate always-on clock domain for a
+minimal SPI/debug block, plus CDC snapshots from the MIG, SD loader, and audio
+core domains.
+
 ## Vivado Project Reuse
 
 The Smart Artix Tcl flow intentionally keeps the generated Vivado project under

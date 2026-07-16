@@ -56,15 +56,22 @@ leaving the core memory and sample interfaces abstract.
 `rtl/top/wavetable_core_system.sv` is the current pin-level simulation wrapper:
 
 ```text
-SPI pins -> spi_register_bridge -> wavetable_core_memory -> i2s_tx -> I2S pins
-                                      |
-                                      v
-                             external line-memory pins
+SPI pins -> spi_register_bridge -> debug/readback window
+                              \-> wavetable_core_memory -> i2s_tx -> I2S pins
+                                                    |
+                                                    v
+                                           external line-memory pins
 ```
 
 It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
 from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
+
+The wrapper has two reset levels. `rst` resets the SPI bridge and system debug
+registers. `core_rst` resets only playback-facing blocks: sample tick generation,
+the memory-backed core, output FIFO, I2S transmitter, and render-latency state.
+Debug registers remain readable while `core_rst` is asserted; non-debug core
+register accesses return a bus error rather than holding the SPI transaction open.
 
 ## Rendering Pipeline
 

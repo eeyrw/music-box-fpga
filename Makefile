@@ -58,6 +58,9 @@ MEMORY_SIM_SOURCES := \
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
+SYSTEM_DEBUG_SIM_SOURCES := \
+	sim/tb/tb_wavetable_core_system_debug.sv
+
 SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
@@ -143,6 +146,10 @@ test:
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/system_debug_obj_dir --top-module tb_wavetable_core_system_debug \
+		$(RTL_SOURCES) $(SYSTEM_DEBUG_SIM_SOURCES)
+	$(BUILD_DIR)/system_debug_obj_dir/Vtb_wavetable_core_system_debug
 
 smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
 

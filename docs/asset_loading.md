@@ -118,7 +118,10 @@ The first Smart Artix implementation provides the board-side middle of this path
   `SD_CLK`, bidirectional `CMD` through `cmd_o/cmd_oe/cmd_i`, and `DAT[3:0]` read
   sampling. It generates command CRC7, captures short/long responses, and converts
   4-bit data nibbles into the reader's byte stream, and validates the four
-  DAT-line CRC16 values before releasing the final byte of a block.
+  DAT-line CRC16 values before releasing the final byte of a block. After reset it
+  emits the SD-required idle clocks before accepting commands, checks the data-block
+  end bit on all four DAT lines, and emits idle clocks after each transaction so
+  the card has bus-turnaround clocks before the next command.
 - `smart_artix_sd_native_pin_asset_loader` wires the native pin layer through the
   native block reader into the raw image loader and DDR3 writer.
 - `smart_artix_fat_file_reader` is an optional FAT layer above the same
@@ -161,6 +164,7 @@ SPI mode:
   CMD17           -> single-block reads by LBA
 
 Native mode:
+  power-up idle clocks with CMD released and DAT idle
   CMD0            -> idle
   CMD8            -> SD v2 voltage/check pattern
   CMD55/ACMD41    -> retry until ready, request HCS

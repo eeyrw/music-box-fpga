@@ -49,6 +49,7 @@ module smart_artix_top (
 
   logic clk_sys;
   logic rst_sys;
+  logic core_rst_sys;
   logic clk_mig_sys;
 
   smart_artix_clk_50m_to_200m board_clock_generator (
@@ -120,7 +121,8 @@ module smart_artix_top (
   logic [31:0]              current_lba;
 
   assign clk_sys = mig_ui_clk;
-  assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete || !asset_loaded;
+  assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
+  assign core_rst_sys = rst_sys || !asset_loaded;
   assign sd_cmd = sd_cmd_oe ? sd_cmd_o : 1'bz;
   assign sd_cmd_i = sd_cmd;
 
@@ -245,7 +247,7 @@ module smart_artix_top (
     .WORD_ADDR_SHIFT(1)
   ) ddr3_line_reader (
     .clk(clk_sys),
-    .rst(rst_sys),
+    .rst(core_rst_sys),
     .line_req_valid(ext_req_valid),
     .line_req_ready(ext_req_ready),
     .line_req_addr(ext_req_addr),
@@ -269,6 +271,7 @@ module smart_artix_top (
   ) core_system (
     .clk(clk_sys),
     .rst(rst_sys),
+    .core_rst(core_rst_sys),
     .spi_sclk(spi_sclk),
     .spi_cs_n(spi_cs_n),
     .spi_mosi(spi_mosi),
@@ -290,7 +293,23 @@ module smart_artix_top (
     .mem_debug_response_latency(mem_debug_response_latency),
     .output_fifo_level(output_fifo_level),
     .render_deadline_miss_pulse(render_deadline_miss_pulse),
-    .render_latency_cycles(render_latency_cycles)
+    .render_latency_cycles(render_latency_cycles),
+    .platform_ddr_init_calib_complete(mig_init_calib_complete),
+    .platform_ddr_ui_rst(mig_ui_clk_sync_rst),
+    .platform_ddr_device_temp(mig_device_temp),
+    .platform_mig_app_rdy(mig_app_rdy),
+    .platform_mig_app_wdf_rdy(mig_app_wdf_rdy),
+    .platform_mig_app_rd_data_valid(mig_app_rd_data_valid),
+    .platform_mig_app_rd_data_end(mig_app_rd_data_end),
+    .platform_sd_initialized(sd_initialized),
+    .platform_asset_loaded(asset_loaded),
+    .platform_asset_loader_busy(loader_busy),
+    .platform_asset_loader_state(loader_status_state),
+    .platform_sd_error_code(sd_error_code),
+    .platform_loader_error_code(loader_error_code),
+    .platform_bytes_loaded(bytes_loaded),
+    .platform_sf2_size_bytes(sf2_size_bytes),
+    .platform_current_lba(current_lba)
   );
 
   assign led_underrun = underrun_pulse;

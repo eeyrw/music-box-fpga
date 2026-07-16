@@ -24,6 +24,7 @@ module tb_smart_artix_sd_native_pin_phy;
   logic sd_cmd_i;
   logic [3:0] sd_dat_i;
   int errors;
+  int phase;
   int cmd_bits_seen;
   logic [47:0] cmd_seen;
   int data_seen;
@@ -32,7 +33,9 @@ module tb_smart_artix_sd_native_pin_phy;
   smart_artix_sd_native_pin_phy #(
     .DIV_WIDTH(4),
     .RESPONSE_TIMEOUT_CYCLES(32),
-    .DATA_TIMEOUT_CYCLES(64)
+    .DATA_TIMEOUT_CYCLES(64),
+    .POWER_UP_CLOCKS(4),
+    .POST_TRANSACTION_CLOCKS(2)
   ) dut (
     .clk,
     .rst,
@@ -147,6 +150,7 @@ module tb_smart_artix_sd_native_pin_phy;
     sd_cmd_i = 1'b1;
     sd_dat_i = 4'hf;
     errors = 0;
+    phase = 0;
     cmd_bits_seen = 0;
     cmd_seen = 48'd0;
     for (int line = 0; line < 4; line++)
@@ -154,6 +158,10 @@ module tb_smart_artix_sd_native_pin_phy;
 
     repeat (3) @(posedge clk);
     rst = 1'b0;
+    phase = 1;
+    repeat (2) @(posedge clk);
+    check(!cmd_ready, "native pin PHY command ready before power-up clocks complete");
+    wait (cmd_ready);
     @(negedge clk);
     cmd_index = 6'd8;
     cmd_arg = 32'h0000_01aa;
@@ -163,7 +171,9 @@ module tb_smart_artix_sd_native_pin_phy;
     @(posedge clk);
     @(negedge clk);
     cmd_valid = 1'b0;
+    phase = 2;
     wait (rsp_valid);
+    check(!cmd_ready, "native pin PHY command ready before post-command clocks complete");
     @(negedge clk);
     check(rsp_status == 3'd0, "native pin PHY no-response command status mismatch");
     check(cmd_bits_seen == 48, "native pin PHY did not emit 48 command bits");
@@ -172,6 +182,8 @@ module tb_smart_artix_sd_native_pin_phy;
 
     cmd_bits_seen = 0;
     cmd_seen = 48'd0;
+    phase = 3;
+    wait (cmd_ready);
     @(negedge clk);
     cmd_index = 6'd17;
     cmd_arg = 32'h0000_0004;
@@ -184,6 +196,7 @@ module tb_smart_artix_sd_native_pin_phy;
     @(negedge clk);
     cmd_valid = 1'b0;
 
+    phase = 4;
     wait (rsp_valid);
     @(negedge clk);
     sd_dat_i = 4'h0;
@@ -201,6 +214,7 @@ module tb_smart_artix_sd_native_pin_phy;
     @(negedge sd_clk);
     sd_dat_i = 4'hf;
 
+    phase = 5;
     wait (data_seen == 4);
     repeat (2) @(posedge clk);
 
@@ -209,6 +223,11 @@ module tb_smart_artix_sd_native_pin_phy;
 
     $display("PASS: smart_artix_sd_native_pin_phy");
     $finish;
+  end
+
+  initial begin
+    repeat (20000) @(posedge clk);
+    $fatal(1, "FAIL: smart_artix_sd_native_pin_phy timed out phase=%0d data_seen=%0d cmd_bits_seen=%0d", phase, data_seen, cmd_bits_seen);
   end
 
 /* verilator lint_off UNUSEDSIGNAL */

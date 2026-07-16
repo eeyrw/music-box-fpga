@@ -1,7 +1,9 @@
 module smart_artix_sd_native_pin_phy #(
   parameter int DIV_WIDTH = 16,
   parameter int RESPONSE_TIMEOUT_CYCLES = 4096,
-  parameter int DATA_TIMEOUT_CYCLES = 65535
+  parameter int DATA_TIMEOUT_CYCLES = 65535,
+  parameter int POWER_UP_CLOCKS = 80,
+  parameter int POST_TRANSACTION_CLOCKS = 8
 ) (
   input  logic                 clk,
   input  logic                 rst,
@@ -40,8 +42,10 @@ module smart_artix_sd_native_pin_phy #(
   localparam logic [2:0] STATUS_TIMEOUT = 3'd1;
   localparam logic [2:0] STATUS_CRC_ERROR = 3'd2;
 
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     STATE_IDLE,
+    STATE_POWER_LOW,
+    STATE_POWER_HIGH,
     STATE_CMD_LOW,
     STATE_CMD_HIGH,
     STATE_RESP_WAIT,
@@ -53,8 +57,12 @@ module smart_artix_sd_native_pin_phy #(
     STATE_DATA_HOLD,
     STATE_DATA_CRC_LOW,
     STATE_DATA_CRC_HIGH,
+    STATE_DATA_END_LOW,
+    STATE_DATA_END_HIGH,
     STATE_DATA_EMIT_FINAL,
     STATE_DATA_FINAL_HOLD,
+    STATE_POST_LOW,
+    STATE_POST_HIGH,
     STATE_DONE
   } state_t;
 
@@ -68,6 +76,8 @@ module smart_artix_sd_native_pin_phy #(
   logic data_half;
   logic [3:0] data_high_nibble;
   logic [15:0] timeout_count;
+  logic [15:0] power_clock_count;
+  logic [15:0] post_clock_count;
   logic [15:0] crc_skip_count;
   logic [15:0] crc_dat0;
   logic [15:0] crc_dat1;
@@ -86,8 +96,9 @@ module smart_artix_sd_native_pin_phy #(
   logic data_done;
   logic [7:0] response_bits;
   logic unused_rsp_shift_msb;
+  logic power_clocks_done;
 
-  assign cmd_ready = state == STATE_IDLE;
+  assign cmd_ready = (state == STATE_IDLE) && power_clocks_done;
   assign half_tick = div_count == clk_div;
   assign response_bits = (cmd_resp_type == RESP_LONG) ? 8'd136 : 8'd48;
   assign unused_rsp_shift_msb = rsp_shift[135];
@@ -136,7 +147,7 @@ module smart_artix_sd_native_pin_phy #(
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      state <= STATE_IDLE;
+      state <= STATE_POWER_LOW;
       div_count <= '0;
       cmd_frame <= '1;
       cmd_bit_index <= '0;
@@ -153,6 +164,8 @@ module smart_artix_sd_native_pin_phy #(
       data_last <= 1'b0;
       data_status <= STATUS_OK;
       timeout_count <= '0;
+      power_clock_count <= '0;
+      post_clock_count <= '0;
       crc_skip_count <= '0;
       crc_dat0 <= '0;
       crc_dat1 <= '0;
@@ -167,6 +180,7 @@ module smart_artix_sd_native_pin_phy #(
       sd_clk <= 1'b0;
       sd_cmd_o <= 1'b1;
       sd_cmd_oe <= 1'b0;
+      power_clocks_done <= 1'b0;
     end else begin
       rsp_valid <= 1'b0;
       if (data_valid && data_ready) begin
@@ -186,6 +200,34 @@ module smart_artix_sd_native_pin_phy #(
             sd_cmd_o <= 1'b0;
             sd_cmd_oe <= 1'b1;
             state <= STATE_CMD_LOW;
+          end
+        end
+
+        STATE_POWER_LOW: begin
+          sd_cmd_o <= 1'b1;
+          sd_cmd_oe <= 1'b0;
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b1;
+            state <= STATE_POWER_HIGH;
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
+          end
+        end
+
+        STATE_POWER_HIGH: begin
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b0;
+            if (power_clock_count == 16'(POWER_UP_CLOCKS - 1)) begin
+              power_clocks_done <= 1'b1;
+              state <= STATE_IDLE;
+            end else begin
+              power_clock_count <= power_clock_count + 16'd1;
+              state <= STATE_POWER_LOW;
+            end
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
           end
         end
 
@@ -213,7 +255,7 @@ module smart_artix_sd_native_pin_phy #(
                 rsp_status <= STATUS_OK;
                 rsp_data <= '0;
                 rsp_valid <= 1'b1;
-                state <= cmd_data_read ? STATE_DATA_WAIT : STATE_DONE;
+                state <= cmd_data_read ? STATE_DATA_WAIT : STATE_POST_LOW;
               end else begin
                 state <= STATE_RESP_WAIT;
               end
@@ -238,7 +280,7 @@ module smart_artix_sd_native_pin_phy #(
               rsp_status <= STATUS_TIMEOUT;
               rsp_data <= '0;
               rsp_valid <= 1'b1;
-              state <= STATE_DONE;
+              state <= STATE_POST_LOW;
             end else begin
               timeout_count <= timeout_count + 16'd1;
               state <= STATE_RESP_HIGH;
@@ -269,7 +311,7 @@ module smart_artix_sd_native_pin_phy #(
                   ? STATUS_OK : STATUS_CRC_ERROR;
               rsp_data <= (cmd_resp_type == RESP_LONG) ? rsp_shift[120:1] : {88'd0, rsp_shift[39:8]};
               rsp_valid <= 1'b1;
-              state <= cmd_data_read ? STATE_DATA_WAIT : STATE_DONE;
+              state <= cmd_data_read ? STATE_DATA_WAIT : STATE_POST_LOW;
             end else begin
               state <= STATE_RESP_LOW;
             end
@@ -294,13 +336,14 @@ module smart_artix_sd_native_pin_phy #(
               crc_rx2 <= '0;
               crc_rx3 <= '0;
               crc_bit_count <= '0;
+              data_status <= STATUS_OK;
               state <= STATE_DATA_HIGH;
             end else if (timeout_count == 16'(DATA_TIMEOUT_CYCLES - 1)) begin
               data_status <= STATUS_TIMEOUT;
               data <= '0;
               data_last <= 1'b1;
               data_valid <= 1'b1;
-              state <= STATE_DONE;
+              state <= STATE_POST_LOW;
             end else begin
               timeout_count <= timeout_count + 16'd1;
               state <= STATE_DATA_HIGH;
@@ -385,7 +428,29 @@ module smart_artix_sd_native_pin_phy #(
           if (half_tick) begin
             div_count <= '0;
             sd_clk <= 1'b0;
-            state <= (crc_bit_count == 5'd16) ? STATE_DATA_EMIT_FINAL : STATE_DATA_CRC_LOW;
+            state <= (crc_bit_count == 5'd16) ? STATE_DATA_END_LOW : STATE_DATA_CRC_LOW;
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
+          end
+        end
+
+        STATE_DATA_END_LOW: begin
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b1;
+            state <= STATE_DATA_END_HIGH;
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
+          end
+        end
+
+        STATE_DATA_END_HIGH: begin
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b0;
+            if (sd_dat_i != 4'hf)
+              data_status <= STATUS_CRC_ERROR;
+            state <= STATE_DATA_EMIT_FINAL;
           end else begin
             div_count <= div_count + DIV_WIDTH'(1);
           end
@@ -394,7 +459,7 @@ module smart_artix_sd_native_pin_phy #(
         STATE_DATA_EMIT_FINAL: begin
           if (!data_valid) begin
             data <= pending_final_data;
-            data_status <= crc_match ? STATUS_OK : STATUS_CRC_ERROR;
+            data_status <= (crc_match && (data_status == STATUS_OK)) ? STATUS_OK : STATUS_CRC_ERROR;
             data_last <= 1'b1;
             data_valid <= 1'b1;
             state <= STATE_DATA_FINAL_HOLD;
@@ -403,7 +468,35 @@ module smart_artix_sd_native_pin_phy #(
 
         STATE_DATA_FINAL_HOLD: begin
           if (data_valid && data_ready)
-            state <= STATE_DONE;
+            state <= STATE_POST_LOW;
+        end
+
+        STATE_POST_LOW: begin
+          sd_cmd_o <= 1'b1;
+          sd_cmd_oe <= 1'b0;
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b1;
+            state <= STATE_POST_HIGH;
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
+          end
+        end
+
+        STATE_POST_HIGH: begin
+          if (half_tick) begin
+            div_count <= '0;
+            sd_clk <= 1'b0;
+            if (post_clock_count == 16'(POST_TRANSACTION_CLOCKS - 1)) begin
+              post_clock_count <= '0;
+              state <= STATE_DONE;
+            end else begin
+              post_clock_count <= post_clock_count + 16'd1;
+              state <= STATE_POST_LOW;
+            end
+          end else begin
+            div_count <= div_count + DIV_WIDTH'(1);
+          end
         end
 
         STATE_DONE: begin

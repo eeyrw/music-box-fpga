@@ -32,7 +32,9 @@ module tb_smart_artix_sd_native_pin_phy_fake;
   smart_artix_sd_native_pin_phy #(
     .DIV_WIDTH(4),
     .RESPONSE_TIMEOUT_CYCLES(64),
-    .DATA_TIMEOUT_CYCLES(128)
+    .DATA_TIMEOUT_CYCLES(128),
+    .POWER_UP_CLOCKS(4),
+    .POST_TRANSACTION_CLOCKS(2)
   ) dut (
     .clk,
     .rst,
@@ -118,6 +120,9 @@ module tb_smart_artix_sd_native_pin_phy_fake;
 
     repeat (3) @(posedge clk);
     rst = 1'b0;
+    repeat (2) @(posedge clk);
+    check(!cmd_ready, "pin fake command ready before power-up clocks complete");
+    wait (cmd_ready);
     @(negedge clk);
     cmd_index = 6'd17;
     cmd_arg = 32'h0000_1234;
