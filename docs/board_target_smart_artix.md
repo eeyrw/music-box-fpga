@@ -62,18 +62,20 @@ wavetable_core word reads
   -> MIG application interface
 ```
 
-The first hardware milestone should support read-only wavetable playback from
-DDR3. DDR3 asset loading, write arbitration, SD-card loading, and Ethernet upload
-are separate board-system tasks and should not be mixed into the first playback
-bring-up unless the selected load path requires them.
+The current board RTL connects read-only wavetable playback from DDR3 with a
+pre-playback SD-to-DDR3 asset-loading path. The loader owns DDR writes before
+`asset_loaded`; playback line reads use the same MIG app port through a simple
+read/write arbiter. Hardware bring-up still needs the generated MIG instance,
+schematic-verified SD pins, timing constraints, and load-status visibility.
 
 ## Asset Loading Direction
 
 SD card storage is treated as an asset source, not as the real-time audio read
-path. The planned first contract is documented in `docs/asset_loading.md`: the SD
-card stores a raw image with a small header, the FPGA copies the SF2 byte image
-into DDR3 before playback, and the MCU or host owns SF2 metadata and voice policy.
-A practical flow is:
+path. The first contract is documented in `docs/asset_loading.md`: the SD card
+stores a raw image with a small header, the FPGA copies the SF2 byte image into
+DDR3 before playback, and the MCU or host owns SF2 metadata and voice policy. The
+Smart Artix top uses the native 4-bit SD loader for this path. A practical flow
+is:
 
 ```text
 PC preprocessing tool
@@ -85,9 +87,9 @@ PC preprocessing tool
 
 SPI is acceptable for register control and small diagnostics. Loading large
 wave-memory images through the low-speed SPI control link will be slow, so the
-board design should use a dedicated SD load path or another faster asset upload
-path. SD SPI mode is acceptable for initial bring-up, but native 4-bit SD is the
-more practical path for a roughly 500 MB image.
+board top uses a dedicated native 4-bit SD load path. SD SPI mode remains in the
+RTL as a bring-up/debug alternative behind the same sector-stream and DDR writer
+contracts.
 
 ## Ethernet Direction
 
@@ -106,7 +108,8 @@ is better owned by an MCU or soft core than by the wavetable datapath RTL.
 4. Generate a MIG configuration for `MT41K256M16TW` and connect a read-only DDR3
    line-reader adapter to `wave_memory_subsystem`.
 5. Play a small known wave image from DDR3 through I2S.
-6. Add the SD raw-image to DDR3 asset-loading path from `docs/asset_loading.md`.
+6. Verify the SD raw-image to DDR3 asset-loading path from `docs/asset_loading.md`
+   on real pins and generated MIG hardware.
 
 The initial skeleton lives in `fpga/smart_artix/`. It intentionally keeps DDR3
 stubbed so the first synthesis pass can measure core resource use before MIG and

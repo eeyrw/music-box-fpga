@@ -154,6 +154,7 @@ Render a simple MIDI-driven score through one of the C++ harnesses:
 make render-quick SECONDS=1
 make render-memory SECONDS=2
 make render-full-system SECONDS=0.1
+make render-board-loader SECONDS=0.1
 make render-memory MIDI=song.mid SECONDS=20
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 ```
@@ -171,7 +172,8 @@ loads the CH347 vendor library at runtime. See
 With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
 render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_core`
 with a direct word-memory model and compares every RTL output sample against a C++
-fixed-point reference implementation. It does not write a WAV file.
+fixed-point reference implementation. It also writes `build/render_quick/out.wav`
+for quick listening after the exact comparison passes.
 
 `make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
 runtime, models MCU-side note allocation and Q1.15 ADSR envelope writes, and
@@ -187,6 +189,14 @@ an SPI master model to program the top-level SPI pins, serves the external line
 memory interface as a storage model, decodes the I2S output pins, and writes
 `build/render_full_system/out.wav` from that I2S receiver. The current full-system
 wrapper uses a `100 MHz` system clock and fractional 48 kHz audio timing.
+
+`make render-board-loader` verifies the board asset-load path before rendering. It
+constructs a raw SD image from the selected SF2, drives the native-SD command/data
+loader RTL into a DDR byte model, checks that the loaded DDR bytes exactly match
+the SF2 image, then renders through `wavetable_core_memory` and compares every RTL
+sample against the C++ fixed-point reference. The output WAV is
+`build/render_board_loader/out.wav`, and the summary JSON is
+`build/render_board_loader/board_loader_render_config.json`.
 
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.
@@ -206,9 +216,11 @@ See [the register map](docs/register_map.md) for addresses and validation rules.
 ## Roadmap
 
 1. Broaden multi-voice backpressure and memory-latency verification.
-2. Replace the C++ storage model with concrete board-memory controller models.
-3. Add parallel NOR Flash and board-level SPI timing integration.
-4. Introduce board-specific clocks, constraints, and synthesis projects.
+2. Replace the C++ DDR/SD storage models with concrete board-memory controller
+   and pin-level long-run checks.
+3. Add board-level timing constraints for native SD, SPI control, I2S, and DDR3.
+4. Move host/MCU voice allocation and preset selection from simulation policy into
+   board-control firmware or software.
 
 Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing
 RTL interfaces or numeric behavior.

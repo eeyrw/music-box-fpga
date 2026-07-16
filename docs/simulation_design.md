@@ -5,20 +5,23 @@ multi-voice wavetable core.
 
 For stable fixed-point arithmetic rules, see `docs/fixed_point.md`.
 
-There are five simulation intents:
+There are six simulation intents:
 
 - A self-checking regression using tiny synthetic sample data.
 - A fast C++ reference-vs-RTL SoundFont/MIDI comparison path.
 - A C++ SoundFont/MIDI memory-profile render harness that produces a playable WAV
   file.
 - A pin-level full-system render harness whose WAV output is decoded from I2S.
+- A board-loader render harness that first copies a raw SD SoundFont image into a
+  DDR byte model through the Smart Artix native-SD loader RTL, then renders from
+  the loaded DDR contents with exact RTL/reference comparison.
 - Focused peripheral tests such as SPI register transport, wave-memory subsystem,
   and I2S serialization.
 
 All RTL paths use Verilator and the same synthesizable RTL sources.
 
-The C++ render harnesses (`render-quick`, `render-memory`, and
-`render-full-system`) build their Verilated fast paths with project-level
+The C++ render harnesses (`render-quick`, `render-memory`, `render-full-system`,
+and `render-board-loader`) build their Verilated fast paths with project-level
 `RENDER_OPT_FAST=-O3` and `RENDER_OPT_GLOBAL=-O3` by default. These variables are
 Makefile overrides, not global Verilator configuration; use `make render-quick
 RENDER_OPT_FAST=-Os` to compare against Verilator's size-optimized default.
@@ -334,6 +337,49 @@ Current full-system limitations are intentional:
 - Full-system runs are smoke/integration tests today. Longer high-polyphony
   stress tests and exact I2S-decoded PCM comparisons against `render-quick` are
   tracked in `docs/system_design.md`.
+
+## C++ Board-Loader Render Flow
+
+`make render-board-loader` verifies the Smart Artix asset-loading path and the
+wavetable render path in one run. The harness builds a raw SD image at runtime:
+sector 0 contains the `WTSF` header from `docs/asset_loading.md`, and the selected
+SF2 byte image starts at the configured LBA. It then drives a Verilated wrapper
+containing:
+
+- `smart_artix_sd_native_asset_loader`, including the native SD command-level
+  block reader and DDR3 asset writer.
+- `wavetable_core_memory`, including the line-cache memory subsystem.
+
+The C++ side models the SD card at the command/data boundary, not at `CMD` and
+`DAT[3:0]` pins. This keeps full-SF2 regressions fast enough to run regularly
+while the focused SystemVerilog pin-level tests cover command framing, 4-bit data
+capture, and CRC behavior. After the loader asserts `asset_loaded`, the harness
+checks every loaded DDR byte against the source SF2 file before rendering.
+
+Run a short board-loader smoke render:
+
+```bash
+make render-board-loader SECONDS=0.1
+```
+
+Useful overrides match the other render harnesses:
+
+```bash
+make render-board-loader SF2=/path/to/file.sf2 MIDI=song.mid SECONDS=10
+make render-board-loader MEMORY_PROFILE=ddr RENDER_BOARD_LOADER_OUT_DIR=build/render_board_loader_case
+```
+
+The run writes:
+
+```text
+build/render_board_loader/out.wav
+build/render_board_loader/board_loader_render_config.json
+```
+
+The JSON summary records the loaded SF2 byte count, raw SD image size, loader
+cycle count, register-write count, memory hit/miss counters, and render workload
+summary. The render samples are compared exactly against `ReferenceSynth`; any
+mismatch fails the run.
 
 ## C++ Memory-Profile Render Flow
 

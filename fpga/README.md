@@ -5,10 +5,10 @@ under `rtl/` is the generic synthesizable wavetable core; files here should bind
 that core to a real board, a real clock tree, real pins, and real memory/audio
 devices.
 
-The current concrete target is `smart_artix/`, a Smart Artix XC7A50T skeleton
-for SPI control, DDR3-backed wavetable memory, and simple I2S audio. Use
-`board_template/` as the starting point for future board directories, for
-example:
+The current concrete target is `smart_artix/`, a Smart Artix XC7A50T board path
+for SPI control, native-SD asset loading into DDR3, DDR3-backed wavetable memory,
+and simple I2S audio. Use `board_template/` as the starting point for future board
+directories, for example:
 
 ```text
 fpga/<board-name>/
@@ -71,10 +71,11 @@ fpga/<board-name>/
    chip-select timing, and read turnaround behavior. Add synchronizers or CDC
    logic in the board wrapper when the SPI pins are not synchronous to `clk`.
 
-8. Define the asset image.
-   Runtime SF2/MIDI parsing is simulation-only. A board flow needs a preprocessed
-   wave-memory image and metadata tables that the host, MCU, or soft core can use
-   to program voice registers.
+8. Define and load the asset image.
+   Runtime SF2/MIDI parsing is simulation-only. The Smart Artix path currently
+   expects a raw SD image with a `WTSF` header and copies the SF2 byte image into
+   DDR before playback. A board flow still needs metadata tables that the host,
+   MCU, or soft core can use to program voice registers.
 
 9. Provide control firmware or host software.
    The RTL does not allocate voices or parse MIDI. A control-side implementation

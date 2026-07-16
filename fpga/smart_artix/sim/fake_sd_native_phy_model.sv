@@ -66,10 +66,37 @@ module fake_sd_native_phy_model #(
   assign unused_cmd_inputs = (^cmd_resp_type) ^ (^cmd_block_count);
 
   function automatic logic [7:0] sector_byte(input logic [31:0] lba,
-                                             input logic [15:0] byte_index);
+                                              input logic [15:0] byte_index);
+    logic [63:0] sf2_lba;
+    logic [63:0] sf2_size;
+    logic [63:0] ddr_base;
     begin
-      sector_byte = lba[7:0] ^ lba[15:8] ^ lba[23:16] ^ lba[31:24]
-          ^ byte_index[7:0] ^ byte_index[15:8];
+      sf2_lba = 64'd7;
+      sf2_size = 64'd20;
+      ddr_base = 64'd0;
+      sector_byte = 8'd0;
+      if (lba == 32'd0) begin
+        unique case (byte_index)
+          16'h0000: sector_byte = "W";
+          16'h0001: sector_byte = "T";
+          16'h0002: sector_byte = "S";
+          16'h0003: sector_byte = "F";
+          16'h0004: sector_byte = 8'd1;
+          16'h0010, 16'h0011, 16'h0012, 16'h0013,
+          16'h0014, 16'h0015, 16'h0016, 16'h0017:
+            sector_byte = sf2_lba[(byte_index - 16'h0010) * 8 +: 8];
+          16'h0018, 16'h0019, 16'h001a, 16'h001b,
+          16'h001c, 16'h001d, 16'h001e, 16'h001f:
+            sector_byte = sf2_size[(byte_index - 16'h0018) * 8 +: 8];
+          16'h0020, 16'h0021, 16'h0022, 16'h0023,
+          16'h0024, 16'h0025, 16'h0026, 16'h0027:
+            sector_byte = ddr_base[(byte_index - 16'h0020) * 8 +: 8];
+          default: sector_byte = 8'd0;
+        endcase
+      end else begin
+        sector_byte = lba[7:0] ^ lba[15:8] ^ lba[23:16] ^ lba[31:24]
+            ^ byte_index[7:0] ^ byte_index[15:8];
+      end
     end
   endfunction
 

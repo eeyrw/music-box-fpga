@@ -46,17 +46,27 @@ module smart_artix_sd_spi_asset_loader #(
   logic loader_busy;
   logic sd_start_pulse;
   logic loader_start_pulse;
+  logic load_pending;
   logic start_d;
+  logic start_pulse;
 
-  assign busy = sd_busy || loader_busy || (start && !asset_loaded);
-  assign sd_start_pulse = start && !start_d && !sd_initialized;
-  assign loader_start_pulse = start && !start_d;
+  assign start_pulse = start && !start_d;
+  assign busy = sd_busy || loader_busy || load_pending || (start && !asset_loaded);
+  assign sd_start_pulse = start_pulse && !sd_initialized;
+  assign loader_start_pulse = (start_pulse && sd_initialized)
+      || (load_pending && sd_initialized && !loader_busy && !asset_loaded);
 
   always_ff @(posedge clk) begin
-    if (rst)
+    if (rst) begin
       start_d <= 1'b0;
-    else
+      load_pending <= 1'b0;
+    end else begin
       start_d <= start;
+      if (start_pulse)
+        load_pending <= 1'b1;
+      if (loader_start_pulse)
+        load_pending <= 1'b0;
+    end
   end
 
   smart_artix_sd_spi_block_reader #(
@@ -90,7 +100,7 @@ module smart_artix_sd_spi_asset_loader #(
   ) loader (
     .clk,
     .rst,
-    .start(loader_start_pulse && (sd_initialized || sd_start_pulse)),
+    .start(loader_start_pulse),
     .ddr_init_calib_complete(ddr_init_calib_complete && sd_initialized),
     .busy(loader_busy),
     .asset_loaded,

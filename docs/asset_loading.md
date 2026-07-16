@@ -199,9 +199,37 @@ In this document, "native SD" or "4-bit SD" means the SD memory-card protocol ov
 `CMD` and `DAT[3:0]`. It does not mean the separate SDIO I/O-card function
 protocol with `CMD5`/function registers.
 
-The read/write arbiter is available as board RTL, but the current
-`smart_artix_top` remains read-path focused until real SD pins and the generated
-MIG instance are connected.
+`smart_artix_top` uses the native 4-bit SD pin loader as the board asset source,
+starts loading automatically after DDR3 calibration, arbitrates loader writes and
+wavetable line reads onto the MIG application port, and keeps the playback core
+in reset until `asset_loaded` is set.
+
+## Verification Coverage
+
+The board-level regression target runs all focused Smart Artix simulations:
+
+```bash
+make smart-artix-test
+```
+
+This covers the raw-image header parser, DDR3 asset writer masks and byte order,
+DDR3 read/write arbitration, SD SPI reader/master, native SD command reader,
+native fake-card initialization and reads, native pin PHY command/data/CRC
+behavior, and the command-level native SD asset-loader path.
+
+The full SF2 load-and-render check is:
+
+```bash
+make render-board-loader SECONDS=0.1
+```
+
+That C++ harness constructs a raw SD image from the selected SF2, drives the
+native-SD command/data loader RTL into a DDR byte model, verifies that the loaded
+DDR bytes exactly match the source SF2 file, then renders from the loaded DDR
+contents through `wavetable_core_memory` and compares every output sample against
+the C++ fixed-point reference. It intentionally uses a command-level SD model for
+large SF2 images; pin-level SD behavior is kept in focused small tests because a
+full multi-megabyte pin-level SD load would be much slower.
 
 ## SD Mode Choice
 

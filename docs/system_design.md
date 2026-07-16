@@ -257,11 +257,14 @@ the generic RTL to one vendor flow.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-9. Implement the SD-to-DDR3 asset-loading path.
-   `docs/asset_loading.md` defines the first board contract: an SD raw image with
-   a small header, FPGA-side sector reads and DDR3 write DMA, and host/MCU-owned
-   SF2 metadata and voice policy. Runtime `.sf2` parsing remains outside the
-   generic wavetable core.
+9. Harden the SD-to-DDR3 asset-loading path on hardware.
+   The Smart Artix RTL now connects native 4-bit SD loading to the DDR3 write
+   side before playback starts, and `make render-board-loader` verifies raw SD
+   image loading into a DDR byte model followed by exact RTL/reference rendering.
+   Remaining board work is schematic-verified pins, SD clock constraints,
+   generated MIG integration on real hardware, load-time/error status exposure,
+   and host/MCU-owned SF2 metadata and voice policy. Runtime `.sf2` parsing remains
+   outside the generic wavetable core.
 
 10. Strengthen full-system pass/fail checks.
    Compare I2S-decoded PCM against the `render-quick` reference on short exact

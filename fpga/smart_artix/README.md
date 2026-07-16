@@ -1,9 +1,10 @@
 # Smart Artix XC7A50T Target
 
-This directory is the first board-specific integration workspace for the Smart
-Artix minimum system board. It is intentionally a synthesis/bring-up skeleton:
-pin locations, exact clocking, and DDR3 MIG files must be filled in from the
-board schematic and Vivado-generated IP before implementation.
+This directory is the board-specific integration workspace for the Smart Artix
+minimum system board. The RTL connects SPI control, native-SD asset loading,
+DDR3-backed wavetable reads, and I2S output. Pin locations, exact clocking, and
+DDR3 MIG files must still be verified against the board schematic and
+Vivado-generated IP before hardware implementation.
 
 ## Known Board Facts
 
@@ -32,24 +33,38 @@ Still required from the board documentation:
 
 ## Current Top
 
-`rtl/smart_artix_top.sv` instantiates `wavetable_core_system` with the current
-SPI-control, line-memory, output FIFO, and I2S path. It also instantiates
-`smart_artix_ddr3_line_reader` and a small `smart_artix_mig_stub` so the read
-path can lint and simulate before Vivado MIG is generated.
+`rtl/smart_artix_top.sv` instantiates `wavetable_core_system` with SPI control,
+line-memory caching, output FIFO, and I2S output. It also connects native 4-bit SD
+asset loading to the DDR3 write side. After MIG calibration completes, the top
+starts the SD loader, copies the raw SF2 byte image into DDR3, and holds the audio
+core in reset until `asset_loaded` is asserted.
 
 The intended memory replacement is:
 
 ```text
+SD native pins: CLK, CMD, DAT[3:0]
+  -> smart_artix_sd_native_pin_asset_loader
+  -> smart_artix_sd_native_pin_phy
+  -> smart_artix_sd_native_block_reader
+  -> smart_artix_sd_ddr3_asset_loader
+  -> smart_artix_ddr3_rw_arbiter
+  -> Xilinx MIG app write interface
+  -> MT41K256M16TW
+
 wavetable_core_system external line-read pins
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
-  -> Xilinx MIG app interface
+  -> Xilinx MIG app read interface
   -> MT41K256M16TW
 ```
 
-The SD raw-image loading path is implemented as reusable board RTL but is not yet
-connected to `smart_artix_top` because the SD bit-level SPI master, real MIG
-instance, and read/write arbitration policy still need board-specific decisions:
+The raw-image asset format is documented in `docs/asset_loading.md`. Sector 0
+contains the `WTSF` header; the SF2 byte image is copied into DDR3 without byte
+repacking so software can keep using absolute SF2 `smpl` offsets when programming
+voice registers.
+
+The SD SPI path remains available as reusable board RTL for bring-up/debug, but
+the board top selects native 4-bit SD as the product load path:
 
 ```text
 SD SPI pins: CLK, CMD/MOSI, DAT0/MISO, DAT3/CS
@@ -60,12 +75,12 @@ SD SPI pins: CLK, CMD/MOSI, DAT0/MISO, DAT3/CS
 ```
 
 The SD SPI path intentionally implements only the raw-sector subset needed for
-asset loading. It borrows LiteSDCard's command/data separation but omits filesystem
-logic, write commands, DMA frontends, and native 4-bit timing. The SPI electrical
-connection is direct FPGA I/O; `PHY` here means the small RTL layer that shifts and
-samples the pins, not an external chip.
+asset loading. It borrows LiteSDCard's command/data separation but omits write
+commands and DMA frontends. The SPI electrical connection is direct FPGA I/O;
+`PHY` here means the small RTL layer that shifts and samples the pins, not an
+external chip.
 
-A matching native 4-bit command-level reader is also present:
+The native 4-bit path is the one connected to `smart_artix_top`:
 
 ```text
 native SD pins: CLK, CMD, DAT[3:0]
@@ -290,8 +305,9 @@ Board-level optimization should now focus on these items, in order:
 7. Add a tiny BRAM-backed line-memory test source for one known waveform.
 8. Re-run Vivado synthesis and implementation with real MIG and real pin
    constraints; record resource and timing changes here.
-9. Add the SD raw-image loader path: SD sector stream, asset header parser, and
-   DDR3 write DMA.
+9. Verify the SD raw-image loader path on hardware: native SD pins, asset header
+   parser, DDR3 write DMA, loader status, and loaded-byte readback or audio smoke
+   output.
 
 ## Vivado Batch Flow
 
@@ -351,128 +367,30 @@ temporary pins are replaced with schematic-verified Smart Artix pins.
 
 ## Local Checks
 
-Run the board top lint from this directory:
+Run the Smart Artix board-level regression from the repository root:
 
 ```bash
-verilator --lint-only --Wall -Wno-fatal --top-module smart_artix_top -f filelist.f
+make smart-artix-test
 ```
 
-This pure Verilator lint is only valid for the older stubbed board top. The
-current `smart_artix_top` instantiates Vivado IP directly, so use the Vivado
-batch synthesis command above for board-top checking and keep the unit tests
-below for non-vendor board RTL.
+This builds and runs the current focused Smart Artix SystemVerilog tests for the
+raw-image asset loader, DDR3 asset writer, DDR3 line reader, DDR3 read/write
+arbiter, MIG stub, FAT file reader, SD SPI reader/master, native SD command
+reader, native fake-card model, native pin PHY, and native asset-loader path.
 
-Run the DDR3 line-reader unit test from this directory:
+Run the board-loader render harness from the repository root:
 
 ```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/line_reader_obj_dir \
-  --top-module tb_smart_artix_ddr3_line_reader \
-  rtl/smart_artix_ddr3_line_reader.sv sim/tb_smart_artix_ddr3_line_reader.sv
-build/line_reader_obj_dir/Vtb_smart_artix_ddr3_line_reader
+make render-board-loader SECONDS=0.1
 ```
 
-Run the temporary MIG stub unit test from this directory:
+This C++ harness constructs a raw SD image from the selected SF2, drives the
+native-SD command/data loader RTL into a DDR byte model, checks the loaded DDR
+bytes against the source SF2, then renders through `wavetable_core_memory` and
+compares every output sample against the C++ fixed-point reference. It uses a
+command-level SD model for speed; pin-level SD behavior is covered by the focused
+native pin PHY tests inside `make smart-artix-test`.
 
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/mig_stub_obj_dir \
-  --top-module tb_smart_artix_mig_stub \
-  rtl/smart_artix_mig_stub.sv sim/tb_smart_artix_mig_stub.sv
-build/mig_stub_obj_dir/Vtb_smart_artix_mig_stub
-```
-
-Run the DDR3 asset-writer unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/asset_writer_obj_dir \
-  --top-module tb_smart_artix_ddr3_asset_writer \
-  rtl/smart_artix_ddr3_asset_writer.sv sim/tb_smart_artix_ddr3_asset_writer.sv
-build/asset_writer_obj_dir/Vtb_smart_artix_ddr3_asset_writer
-```
-
-Run the DDR3 read/write arbiter unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/ddr3_rw_arbiter_obj_dir \
-  --top-module tb_smart_artix_ddr3_rw_arbiter \
-  rtl/smart_artix_ddr3_rw_arbiter.sv sim/tb_smart_artix_ddr3_rw_arbiter.sv
-build/ddr3_rw_arbiter_obj_dir/Vtb_smart_artix_ddr3_rw_arbiter
-```
-
-Run the raw-image asset-loader unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/asset_loader_obj_dir \
-  --top-module tb_smart_artix_asset_loader \
-  rtl/smart_artix_asset_loader.sv sim/tb_smart_artix_asset_loader.sv
-build/asset_loader_obj_dir/Vtb_smart_artix_asset_loader
-```
-
-Run the SD SPI block-reader protocol unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/sd_spi_reader_obj_dir \
-  --top-module tb_smart_artix_sd_spi_block_reader \
-  rtl/smart_artix_sd_spi_block_reader.sv sim/tb_smart_artix_sd_spi_block_reader.sv
-build/sd_spi_reader_obj_dir/Vtb_smart_artix_sd_spi_block_reader
-```
-
-Run the FAT file-reader unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/fat_file_reader_obj_dir \
-  --top-module tb_smart_artix_fat_file_reader \
-  rtl/smart_artix_fat_file_reader.sv sim/tb_smart_artix_fat_file_reader.sv
-build/fat_file_reader_obj_dir/Vtb_smart_artix_fat_file_reader
-```
-
-Run the native SD command-level reader unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/sd_native_reader_obj_dir \
-  --top-module tb_smart_artix_sd_native_block_reader \
-  rtl/smart_artix_sd_native_block_reader.sv sim/tb_smart_artix_sd_native_block_reader.sv
-build/sd_native_reader_obj_dir/Vtb_smart_artix_sd_native_block_reader
-```
-
-Run the native SD reader against the fake-card command/data model from this
-directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/sd_native_fake_obj_dir \
-  --top-module tb_smart_artix_sd_native_block_reader_fake \
-  rtl/smart_artix_sd_native_block_reader.sv \
-  sim/fake_sd_native_phy_model.sv \
-  sim/tb_smart_artix_sd_native_block_reader_fake.sv
-build/sd_native_fake_obj_dir/Vtb_smart_artix_sd_native_block_reader_fake
-```
-
-Run the native SD pin-level PHY unit test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/sd_native_pin_phy_obj_dir \
-  --top-module tb_smart_artix_sd_native_pin_phy \
-  rtl/smart_artix_sd_native_pin_phy.sv sim/tb_smart_artix_sd_native_pin_phy.sv
-build/sd_native_pin_phy_obj_dir/Vtb_smart_artix_sd_native_pin_phy
-```
-
-Run the native SD pin-level fake-card transport test from this directory:
-
-```bash
-verilator --binary --timing --Wall -Wno-fatal \
-  --Mdir build/sd_native_pin_fake_obj_dir \
-  --top-module tb_smart_artix_sd_native_pin_phy_fake \
-  rtl/smart_artix_sd_native_pin_phy.sv \
-  sim/fake_sd_native_pin_model.sv \
-  sim/tb_smart_artix_sd_native_pin_phy_fake.sv
-build/sd_native_pin_fake_obj_dir/Vtb_smart_artix_sd_native_pin_phy_fake
-```
+For board-top checking, `smart_artix_top` instantiates Vivado-generated clock and
+MIG IP directly. Use the Vivado batch synthesis command above for that path; pure
+Verilator lint needs temporary stubs for those vendor modules.

@@ -19,6 +19,7 @@ MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
 RENDER_QUICK_OUT_DIR ?= $(BUILD_DIR)/render_quick
 RENDER_FULL_SYSTEM_OUT_DIR ?= $(BUILD_DIR)/render_full_system
+RENDER_BOARD_LOADER_OUT_DIR ?= $(BUILD_DIR)/render_board_loader
 RENDER_OPT_FAST ?= -O3
 RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
@@ -57,7 +58,43 @@ MEMORY_SIM_SOURCES := \
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
-.PHONY: all lint test host-ch347 list-instruments render-instrument render-quick render-memory render-full-system clean
+SMART_ARTIX_RTL_SOURCES := \
+	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_ddr3_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_native_block_reader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_native_pin_phy.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_native_pin_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_spi_byte_master.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_spi_block_reader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_spi_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_spi_pin_asset_loader.sv \
+	fpga/smart_artix/rtl/smart_artix_fat_file_reader.sv \
+	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv
+
+SMART_ARTIX_SIM_MODELS := \
+	fpga/smart_artix/sim/fake_sd_native_phy_model.sv \
+	fpga/smart_artix/sim/fake_sd_native_pin_model.sv
+
+SMART_ARTIX_TESTBENCHES := \
+	tb_smart_artix_asset_loader \
+	tb_smart_artix_ddr3_asset_writer \
+	tb_smart_artix_ddr3_line_reader \
+	tb_smart_artix_ddr3_rw_arbiter \
+	tb_smart_artix_fat_file_reader \
+	tb_smart_artix_mig_stub \
+	tb_smart_artix_sd_native_asset_loader \
+	tb_smart_artix_sd_native_block_reader \
+	tb_smart_artix_sd_native_block_reader_fake \
+	tb_smart_artix_sd_native_pin_phy \
+	tb_smart_artix_sd_native_pin_phy_fake \
+	tb_smart_artix_sd_spi_block_reader \
+	tb_smart_artix_sd_spi_byte_master
+
+.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments render-instrument render-quick render-memory render-full-system render-board-loader clean
 
 all: test
 
@@ -106,6 +143,16 @@ test:
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
+
+smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
+
+$(SMART_ARTIX_TESTBENCHES):
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary -j 1 --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/$@_obj_dir --top-module $@ \
+		$(SMART_ARTIX_RTL_SOURCES) $(SMART_ARTIX_SIM_MODELS) \
+		fpga/smart_artix/sim/$@.sv
+	$(BUILD_DIR)/$@_obj_dir/V$@
 
 host-ch347:
 	mkdir -p $(BUILD_DIR)
@@ -199,6 +246,29 @@ render-full-system:
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--out-dir $(RENDER_FULL_SYSTEM_OUT_DIR)
+
+render-board-loader:
+	# Build and run SD-native-loader-to-DDR plus RTL/reference wavetable render.
+	mkdir -p $(RENDER_BOARD_LOADER_OUT_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_board_loader_cpp_obj_dir \
+		--top-module board_loader_render_tops \
+		$(RTL_SOURCES) $(SMART_ARTIX_RTL_SOURCES) sim/tb/board_loader_render_tops.sv --exe \
+		$(abspath sim/harness/board_loader_render_main.cpp) \
+		$(abspath sim/harness/render_support.cpp) \
+		$(abspath sim/harness/register_control.cpp) \
+		$(abspath sim/harness/midi_parser.cpp) \
+		$(abspath sim/harness/sf2_loader.cpp) \
+		$(abspath sim/harness/reference_synth.cpp) \
+		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_board_loader_cpp_obj_dir -f Vboard_loader_render_tops.mk \
+		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
+	$(BUILD_DIR)/render_board_loader_cpp_obj_dir/Vboard_loader_render_tops --sf2 "$(SF2)" \
+		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
+		$(if $(MIDI),--midi "$(MIDI)",) \
+		--memory-profile "$(MEMORY_PROFILE)" \
+		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 clean:
 	rm -rf $(BUILD_DIR)
