@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cctype>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -18,6 +19,10 @@ namespace {
 struct RegisterWrite {
   uint16_t address = 0;
   uint32_t data = 0;
+};
+
+struct RegisterRead {
+  uint16_t address = 0;
 };
 
 struct SetEnvelope {
@@ -39,12 +44,14 @@ struct CommitVoice {
 struct Action {
   enum Type {
     WriteRegisterAction,
+    ReadRegisterAction,
     SetEnvelopeAction,
     ReleaseAction,
     CommitAction,
   } type = WriteRegisterAction;
 
   RegisterWrite write;
+  RegisterRead read;
   SetEnvelope envelope;
   ReleaseVoice release;
   CommitVoice commit;
@@ -65,6 +72,16 @@ class DryRunTransport : public render::RegisterWriteSink {
     uint8_t frame[7] = {0x80, uint8_t(address >> 8), uint8_t(address),
                         uint8_t(data >> 24), uint8_t(data >> 16),
                         uint8_t(data >> 8), uint8_t(data)};
+    for (uint8_t byte : frame) {
+      std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+    }
+    std::cout << std::dec << std::setfill(' ') << "\n";
+  }
+
+  void read_register(uint16_t address) {
+    std::cout << "read addr=0x" << std::hex << std::setw(4) << std::setfill('0') << address
+              << std::dec << std::setfill(' ') << " frame=";
+    uint8_t frame[7] = {0x00, uint8_t(address >> 8), uint8_t(address), 0x00, 0x00, 0x00, 0x00};
     for (uint8_t byte : frame) {
       std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << int(byte);
     }
@@ -93,6 +110,19 @@ uint16_t parse_u16(const std::string& text, const char* name) {
   return uint16_t(value);
 }
 
+uint8_t parse_u8(const std::string& text, const char* name) {
+  uint32_t value = parse_u32(text, name);
+  if (value > 0xffu) throw std::runtime_error(std::string(name) + " out of range: " + text);
+  return uint8_t(value);
+}
+
+std::string parse_device_path(const std::string& text) {
+  bool decimal_index = !text.empty();
+  for (char c : text) decimal_index = decimal_index && std::isdigit(static_cast<unsigned char>(c));
+  if (decimal_index) return "/dev/ch34x_pis" + text;
+  return text;
+}
+
 std::string need_arg(int argc, char** argv, int& index, const char* name) {
   if (index + 1 >= argc) throw std::runtime_error(std::string("missing value for ") + name);
   return argv[++index];
@@ -102,11 +132,12 @@ void print_usage(const char* argv0) {
   std::cout
       << "Usage:\n"
       << "  " << argv0 << " [transport options] --write ADDR DATA [--write ADDR DATA ...]\n"
+      << "  " << argv0 << " [transport options] --read ADDR [--read ADDR ...]\n"
       << "  " << argv0 << " [transport options] --set-envelope VOICE LEVEL\n"
       << "  " << argv0 << " [transport options] --commit-voice VOICE [voice options]\n"
       << "\nTransport options:\n"
-      << "  --lib PATH              CH347 shared library path, default libch347.so\n"
-      << "  --device N              CH347 device index, default 0\n"
+      << "  --lib PATH              CH347 shared library path, default third_party/ch347_linux/lib/x64/libch347.so\n"
+      << "  --device PATH|N         CH347 device path, default /dev/ch34x_pis0; N maps to /dev/ch34x_pisN\n"
       << "  --clock-hz HZ           SPI clock request, default 1000000\n"
       << "  --mode N                SPI mode 0..3, default 0\n"
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
@@ -163,13 +194,13 @@ Args parse_args(int argc, char** argv) {
     } else if (a == "--lib") {
       args.ch347.library_path = need_arg(argc, argv, i, "--lib");
     } else if (a == "--device") {
-      args.ch347.device_index = parse_u32(need_arg(argc, argv, i, "--device"), "device");
+      args.ch347.device_path = parse_device_path(need_arg(argc, argv, i, "--device"));
     } else if (a == "--clock-hz") {
       args.ch347.clock_hz = parse_int(need_arg(argc, argv, i, "--clock-hz"), "clock-hz");
     } else if (a == "--mode") {
       args.ch347.spi_mode = parse_int(need_arg(argc, argv, i, "--mode"), "mode");
     } else if (a == "--cs-mask") {
-      args.ch347.chip_select_mask = parse_u32(need_arg(argc, argv, i, "--cs-mask"), "cs-mask");
+      args.ch347.chip_select_mask = parse_u8(need_arg(argc, argv, i, "--cs-mask"), "cs-mask");
     } else if (a == "--dry-run") {
       args.dry_run = true;
     } else if (a == "--write") {
@@ -180,6 +211,14 @@ Args parse_args(int argc, char** argv) {
       Action action;
       action.type = Action::WriteRegisterAction;
       action.write = write;
+      args.actions.push_back(action);
+    } else if (a == "--read") {
+      flush_commit();
+      RegisterRead read;
+      read.address = parse_u16(need_arg(argc, argv, i, "--read address"), "address");
+      Action action;
+      action.type = Action::ReadRegisterAction;
+      action.read = read;
       args.actions.push_back(action);
     } else if (a == "--set-envelope") {
       flush_commit();
@@ -267,19 +306,29 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    std::unique_ptr<render::RegisterWriteSink> transport;
+    std::unique_ptr<host::Ch347RegisterTransport> transport;
     DryRunTransport dry_run;
     if (args.dry_run) {
       transport.reset();
     } else {
       transport.reset(new host::Ch347RegisterTransport(args.ch347));
     }
-    render::RegisterWriteSink& sink = args.dry_run ? static_cast<render::RegisterWriteSink&>(dry_run) : *transport;
+    render::RegisterWriteSink& sink = args.dry_run ? static_cast<render::RegisterWriteSink&>(dry_run)
+                                                   : static_cast<render::RegisterWriteSink&>(*transport);
     render::RegisterVoiceControl voice_control(sink);
 
     for (const Action& action : args.actions) {
       if (action.type == Action::WriteRegisterAction) {
         sink.write_register(action.write.address, action.write.data);
+      } else if (action.type == Action::ReadRegisterAction) {
+        if (args.dry_run) {
+          dry_run.read_register(action.read.address);
+        } else {
+          uint32_t data = transport->read_register(action.read.address);
+          std::cout << "read addr=0x" << std::hex << std::setw(4) << std::setfill('0')
+                    << action.read.address << " data=0x" << std::setw(8) << data
+                    << std::dec << std::setfill(' ') << "\n";
+        }
       } else if (action.type == Action::SetEnvelopeAction) {
         validate_voice(action.envelope.voice);
         voice_control.set_envelope(action.envelope.voice, action.envelope.level);

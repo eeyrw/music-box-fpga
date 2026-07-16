@@ -30,6 +30,16 @@ db/
 output_files/
 fpga/smart_artix/music-box-fpga.srcs/
 
+# Out-of-tree Linux kernel module builds
+third_party/ch347_linux/driver/.*.cmd
+third_party/ch347_linux/driver/.tmp_versions/
+third_party/ch347_linux/driver/*.ko
+third_party/ch347_linux/driver/*.mod
+third_party/ch347_linux/driver/*.mod.c
+third_party/ch347_linux/driver/*.o
+third_party/ch347_linux/driver/Module.symvers
+third_party/ch347_linux/driver/modules.order
+
 # Python tooling
 __pycache__/
 *.py[cod]

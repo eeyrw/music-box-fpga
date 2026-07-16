@@ -186,20 +186,23 @@ First test without hardware access:
 
 ```bash
 build/ch347_control --dry-run --write 0x3000 0
+build/ch347_control --dry-run --read 0x3000
 ```
 
 Then use the selected CH347 library and conservative SPI speed. Start around
 `1 MHz` until the board-level SPI timing contract is measured:
 
 ```bash
-build/ch347_control --lib /usr/local/lib/libch347.so --device 0 \
+build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --write 0x3000 0
+  --read 0x3000
 ```
 
-The current command-line tool is write-oriented. For bring-up, add or use a read
-command path that emits the documented SPI read frame and returns the 32-bit
-response. The useful first reads are:
+The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
+maps `--device 0` to that path for convenience. The copied x64 vendor library is
+used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
+
+The useful first reads are:
 
 | Address | Register | Expected use |
 | --- | --- | --- |

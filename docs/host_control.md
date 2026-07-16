@@ -40,21 +40,34 @@ and a command-line tool in `host/ch347_control_main.cpp`. Build it with:
 make host-ch347
 ```
 
-The binary is written to `build/ch347_control`. It loads the WCH CH347 shared
-library at runtime, so it can compile on a machine that does not currently have
-the device library installed. Use `--lib` if the library is not in the dynamic
-loader search path.
+The binary is written to `build/ch347_control`. It loads the copied WCH CH347
+shared library from `third_party/ch347_linux/lib/x64/libch347.so` by default, so
+it can compile without linking against the vendor library. Use `--lib` to point
+at a different architecture or system-installed library. The matching WCH
+`ch34x_pis` kernel driver source is copied under `third_party/ch347_linux/driver`;
+see `third_party/ch347_linux/README.md` for manual build and load commands.
 
 Examples:
 
 ```bash
-# Print the SPI frame without opening hardware.
+# Print SPI frames without opening hardware.
 build/ch347_control --dry-run --write 0x3000 0
+build/ch347_control --dry-run --read 0x3000
+
+# Read VERSION through CH347 device 0.
+build/ch347_control --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --read 0x3000
+
+# The Linux SDK also accepts explicit device paths.
+build/ch347_control --device /dev/ch34x_pis0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --read 0x3000
 
 # Write one register through CH347 device 0.
-build/ch347_control --lib /usr/local/lib/libch347.so --device 0 \
+build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --write 0x3000 0
+  --write 0x3014 0x3f
 
 # Program and commit voice 0 from command-line region parameters.
 build/ch347_control --dry-run \
@@ -69,14 +82,28 @@ right sample. If the right sample header has different bounds, also pass
 `--length-r`, `--loop-start-r`, and `--loop-end-r`; otherwise the tool mirrors the
 left-channel values.
 
-`Ch347RegisterTransport::write_register` emits the SPI frame documented in
-`docs/register_map.md`:
+`Ch347RegisterTransport` emits the SPI frames documented in
+`docs/register_map.md`. Writes use:
 
 ```text
 command byte: 0x80 for write
 address:      16-bit byte address, most-significant byte first
 data:         32-bit data, most-significant byte first
 ```
+
+Reads use the Linux SDK signature
+`CH347SPI_WriteRead(fd, false, chip_select, length, buffer)` so the
+command/address phase and 32 returned data bits remain in one CS assertion:
+
+```text
+command byte: 0x00 for read
+address:      16-bit byte address, most-significant byte first
+data clocks:  32-bit readback, most-significant bit first on MISO
+```
+
+Most per-voice configuration registers are write-dominant and read back as zero
+through their normal addresses. Use `READBACK_ADDR` and `READBACK_DATA` from
+`docs/register_map.md` when inspecting per-voice shadow or runtime state.
 
 The current RTL transport is intentionally simple and simulation-friendly. Before
 using CH347 against hardware, the board-level SPI contract still needs to define:
@@ -91,7 +118,7 @@ using CH347 against hardware, the board-level SPI contract still needs to define
 
 Keep hardware and policy code separate:
 
-- `host/ch347_transport.*`: CH347 open/configure/close and SPI frame writes.
+- `host/ch347_transport.*`: CH347 open/configure/close and SPI register frames.
 - `host/ch347_control_main.cpp`: low-level register, envelope, release, and voice
   commit commands for board bring-up.
 - Future `host/wave_image.*`: generated wave-memory image loading or Flash
