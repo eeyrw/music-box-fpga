@@ -2,9 +2,11 @@
 
 This note records the throughput-pipeline architecture direction and the current
 implementation status. The RTL now has a fixed-latency DSP throughput pipe,
-single-frame issue/retire overlap, and sequential active-slot scanning. The
-memory endpoint fetch path is still single-request and remains the main limiter
-before the renderer becomes a fuller throughput engine.
+single-frame issue/retire overlap, sequential active-slot scanning, an internal
+word-request FIFO, in-order endpoint response assembly, and a DSP context queue.
+The memory endpoint path is still untagged and ordered, so endpoint bandwidth and
+response latency remain the main limits before the renderer becomes a fuller
+throughput engine.
 
 ## Current Baseline
 
@@ -86,19 +88,20 @@ cycle N+3:   V0 S3 + V1 S2 + V2 S1 + V3 S0
 cycle N+4:   V0 S4 + V1 S3 + V2 S2 + V3 S1 + V4 S0
 ```
 
-The whole renderer does not currently sustain that pattern because endpoint
-assembly normally takes multiple cycles per voice:
+The whole renderer does not always sustain that pattern because endpoint assembly
+normally takes multiple cycles per voice:
 
 ```text
-front end:  L0 rsp + L1 req  L1 rsp  issue V0/start prefetched V1  fetch V1 ...
-prefetch:   scan/read V1 while V0 endpoints are being fetched
-DSP pipe:                       V0 S0  V0 S1  V0 S2  V0 S3  V0 S4
-retire:                                                       V0 result
+front end:  enqueue V0 L0/L1[/R0/R1]  start prefetched V1  enqueue V1 ...
+memory:     accepted requests -> ordered responses -> fetch slot completes V0
+DSP pipe:                                            V0 S0  V0 S1  V0 S2  V0 S3  V0 S4
+retire:                                                                                  V0 result
 ```
 
-The intended next architectural step is to make more of the front end look like a
-pipeline by adding explicit fetch/context queues, not by changing the DSP math
-again first.
+The intended next architectural step is no longer basic endpoint queuing; that is
+implemented. The next gains should come from memory-side work such as deeper or
+tagged outstanding reads, wider endpoint returns, or cache changes that can feed
+complete interpolation contexts faster.
 
 ## Target Shape
 
@@ -137,16 +140,15 @@ block is now a fixed-latency valid-shift pipeline, so it can accept a new comple
 voice context every cycle if the front end can provide one.
 
 `multi_voice_pipeline` also now separates issue from retire for one output frame:
-after a complete endpoint set is issued into `voice_dsp_pipeline`, the scheduler
-continues scanning and fetching later voices while earlier DSP results retire into
-the accumulator and filter-state arrays. The scheduler also overlaps the next
-valid voice's register read with the current voice's endpoint fetch, and it can
-launch the next endpoint request in the same cycle that it consumes the prior
-endpoint response. This overlaps DSP latency, register-read latency, and part of
-the request/response state overhead, but it is still bounded by the single
-outstanding memory request interface. The next larger gain still requires Option B
-style endpoint assembly/queueing or a memory path that can return interpolation
-endpoints faster.
+after endpoint requests for one voice are enqueued, the scheduler can continue
+scanning and fetching later voices while earlier endpoint responses fill fetch
+slots and earlier DSP results retire into the accumulator and filter-state arrays.
+The scheduler also overlaps the next valid voice's register read with the current
+voice's endpoint request/response activity. This overlaps DSP latency,
+register-read latency, and request/response overhead, but it is still bounded by
+the ordered untagged memory response contract and by endpoint bandwidth. The next
+larger gain requires a memory path that can return interpolation endpoints faster
+or identify responses out of order.
 
 The scheduler uses `config_valid` as an active-slot mask while it walks voice
 slots in index order. Empty voice slots cost one scan cycle but do not pay the
@@ -160,15 +162,17 @@ committed voice configuration.
 The current DSP throughput pipeline can accept and retire one voice contribution
 per cycle after fill, but frame latency only improves when the front end supplies
 complete voice endpoints fast enough to keep useful contexts in the pipe. The
-memory front end is still one request at a time, so endpoint assembly remains the
-dominant limit for dense mono/stereo workloads.
+memory front end is still ordered and untagged, so endpoint assembly remains the
+dominant limit for dense mono/stereo workloads when memory cannot keep the context
+queue nonempty.
 
 The likely bottlenecks, in order, are:
 
 1. Wave endpoint fetches.
    Mono voices need two sample reads and stereo voices need four sample reads.
-   With a one-request-at-a-time memory interface, the DSP pipe can still see
-   bubbles whenever memory latency exceeds the endpoint assembly rate.
+   With the current ordered untagged memory interface, the DSP pipe can still see
+   bubbles whenever memory latency or endpoint bandwidth cannot keep the context
+   queue nonempty.
 
 2. Register-bank render reads.
    The active configuration and runtime fields are RAM-backed synchronous reads.
@@ -193,16 +197,21 @@ by the third.
 
 ### Option A: DSP-Only Throughput Pipe
 
-Keep the current one-request-at-a-time memory front end and current frame scanner,
-but replace the compute states with a fixed-latency DSP pipe that can accept one
-complete voice context per cycle. The scanner may still feed the pipe sparsely
-because it waits for endpoint fetches.
+Status: implemented.
+
+Keep the current memory front end and frame scanner, but replace the compute
+states with a fixed-latency DSP pipe that can accept one complete voice context
+per cycle. The scanner may still feed the pipe sparsely because it waits for
+endpoint fetches.
 
 This option is the lowest-risk refactor. It proves context propagation,
 filter-state writeback, and in-order retirement without changing the memory
 contract. It may not greatly reduce full-frame latency if memory dominates.
 
 ### Option B: In-Order Endpoint Queue
+
+Status: implemented in the current RTL with `word_req_queue`, `rsp_meta_queue`,
+RAM-backed fetch slots, and `fetch_queue`.
 
 Add a fetch/context queue in front of the DSP pipe. The scheduler walks voices,
 reads register-bank context, issues endpoint requests, and pushes a complete
@@ -220,27 +229,25 @@ requests to be outstanding. The scheduler can then issue requests for several
 voices while earlier requests are still waiting.
 
 This option is the most scalable, but it changes shared interfaces and requires
-new arbitration, response reorder, and cache behavior. It should follow Option B,
-not precede it.
+new arbitration, response reorder, and cache behavior.
 
-Recommended path: implement Option A as a mechanical extraction, then Option B as
-the first useful throughput design. Reserve Option C for after memory profiling
-shows endpoint fetches are the dominant frame-latency limit.
+Recommended path: Option A and Option B are now the baseline. Reserve Option C for
+after memory profiling shows endpoint fetches are still the dominant
+frame-latency limit under realistic DDR/cache timing.
 
-## Required Design Changes
+## Implemented Design Split
 
 ### Per-Stage Context
 
-Every pipeline stage must carry the voice context it needs. The current RTL has
-many single global registers such as `voice_index`, `current_gain_l/r`,
-`current_filter_*`, `interp_stage_l/r`, and `filter_next_*`. In a throughput
-pipeline, those values must become fields in per-stage registers:
+Every pipeline stage must carry the voice context it needs. The current RTL now
+uses packed context/result records for the DSP path and queue records for endpoint
+assembly. The front end still has `current_*` registers for the selected voice,
+but once a fetch slot is allocated the fields needed by later work are copied into
+slot context, `voice_dsp_context_t`, and the DSP stage structs.
 
 ```text
 stage.valid
-stage.frame_id
 stage.voice_index
-stage.last_issued_voice
 stage.stereo
 stage.gain_l/r
 stage.envelope_level
@@ -248,20 +255,17 @@ stage.filter_enable
 stage.filter_coefficients
 stage.filter_state_snapshot
 stage.sample_l/r
-stage.phase or frame/fraction snapshot
+stage.frame/fraction snapshot
 ```
 
 Without this context, voice N's filter, gain, or writeback data can be overwritten
 by voice N+1 before voice N retires.
 
-A concrete packed context can start with these fields:
+The current `voice_dsp_context_t` carries these fields into DSP:
 
 ```text
-voice_ctx_t
+voice_dsp_context_t
   voice_index
-  frame_id
-  last_voice
-  stereo
   filter_enable
   gain_l, gain_r
   envelope_level
@@ -274,15 +278,12 @@ voice_ctx_t
 The raw endpoints can be dropped after interpolation. The filter coefficients can
 be dropped after the feedback multiply stage. Filter state snapshots can be
 dropped after next-state saturation has been computed. Keeping separate smaller
-stage structs is more work than one large context struct, but it prevents needless
-FF growth once the architecture is stable.
+stage structs prevents needless FF growth across the full DSP pipe.
 
 ### Scheduler and DSP Separation
 
-The current module combines voice scanning, register-bank reads, memory fetch,
-interpolation, filter math, gain/envelope scaling, accumulation, phase update,
-and filter-state writeback. A throughput implementation should separate these
-responsibilities:
+The current implementation separates these responsibilities inside
+`multi_voice_pipeline` plus `voice_dsp_pipeline`:
 
 ```text
 voice issue scheduler
@@ -302,7 +303,7 @@ The scheduler should own:
 - disabled/done voice skipping,
 - phase advance,
 - endpoint request sequencing,
-- `last_voice` marking for the final issued contribution.
+- next-valid prefetch setup.
 
 The DSP pipeline should own only pure per-voice sample math:
 
@@ -320,22 +321,38 @@ The retire stage should own side effects:
 
 ### Memory Request Context
 
-The current memory interface is one request at a time and has no response tag.
-That limits throughput because endpoint fetches cannot be freely overlapped with
-DSP execution. A practical throughput renderer needs at least an internal context
-FIFO for in-order memory responses:
+The current memory interface has no response tag. The RTL therefore uses internal
+in-order metadata for accepted requests:
 
 ```text
 voice_index
-frame_id
 channel
 endpoint_index
 frame_0/frame_1/fraction
 captured runtime/config fields
 ```
 
-If the memory subsystem later supports multiple outstanding reads, the external
-memory response should also carry a tag:
+The implemented MVP uses a small endpoint assembly record rather than changing the
+external memory interface:
+
+```text
+fetch slot
+  voice context without samples
+  pending endpoint count
+  raw_l0, raw_l1, raw_r0, raw_r1
+
+word_req_queue entry
+  address
+  fetch-slot index
+  endpoint kind
+
+rsp_meta_queue entry
+  fetch-slot index
+  endpoint kind
+```
+
+If the memory subsystem later supports out-of-order or tagged outstanding reads,
+the external memory response should also carry a tag:
 
 ```text
 mem_req_tag
@@ -345,21 +362,10 @@ mem_rsp_tag
 Adding tags affects `wave_memory_subsystem`, simulation models, testbenches, and
 the memory-format documentation.
 
-For the in-order MVP, use a small endpoint assembly record rather than changing
-the external memory interface:
-
-```text
-fetch_ctx_t
-  valid
-  voice_ctx_without_samples
-  next_request_kind  // L0, L1, R0, R1
-  raw_l0, raw_l1, raw_r0, raw_r1
-```
-
-The fetch unit requests endpoint samples in the same order as today. When the last
-required endpoint returns, it pushes a complete `voice_ctx_t` into the DSP issue
-queue. Mono voices skip right-channel requests and duplicate left endpoints in the
-context before issue.
+The fetch unit requests endpoint samples in `L0`, `L1`, `R0`, `R1` order. When the
+last required endpoint returns, it pushes a complete `voice_dsp_context_t` into
+the DSP issue queue. Mono voices skip right-channel requests and duplicate left
+endpoints in the context before issue.
 
 If a later tagged interface is added, each request should carry enough metadata
 to place its response into the correct endpoint slot:
@@ -376,25 +382,28 @@ context table or FIFO entry to keep the memory bus narrow.
 
 ### Accumulator Retirement
 
-The final mix should still saturate only once, after all voice contributions for
-the frame have been added. A throughput retire stage can keep the existing signed
-32-bit stereo accumulator if contributions retire in issue order. Each retired
-result should carry `frame_id` and a `last_voice` or `last_issued_voice` marker:
+The final mix still saturates only once, after all voice contributions for the
+frame have been added. The current retire stage keeps the existing signed 32-bit
+stereo accumulator and relies on one output frame in flight plus `DRAIN`, not on a
+`last_voice` marker carried by each DSP result:
 
 ```text
 if result.valid:
   accum_l += result.sample_l
   accum_r += result.sample_r
-  if result.last_voice:
-    sample_l/r <= saturate_pcm(accum_l/r)
-    sample_valid <= 1
+
+if queues_empty && outstanding_count == 0:
+  sample_l/r <= saturate_pcm(accum_l/r)
+  sample_valid <= 1
 ```
 
 If future work overlaps multiple output frames, accumulators must be banked by
-`frame_id` or protected by a frame scoreboard.
+`frame_id` or protected by a frame scoreboard. At that point each context or
+retired result will need a frame marker or equivalent reorder policy.
 
-The first throughput version should require in-order retirement. That lets the
-retire stage remain simple and deterministic:
+The current throughput version requires in-order retirement. That keeps the retire
+stage simple and deterministic; a future multi-frame or out-of-order design would
+need equivalent checks such as:
 
 ```text
 assert(result.frame_id == active_frame_id)
@@ -441,11 +450,12 @@ issue of that voice until its previous retire completes.
 
 ### Register-Bank Port Pressure
 
-Issuing one voice per cycle requires the register bank to provide one render
-context per cycle. The current render read path can do that only if it has a
-stable synchronous read schedule and if writeback/readback activity does not
-steal the same port. Runtime state that is both software-readable and renderer-
-readable may require one of these approaches:
+Issuing one voice per cycle would require the register bank to provide one render
+context per cycle. The current render read path is synchronous and uses a stable
+`voice_read_index` through `READ_VOICE` and `WAIT_VOICE`; next-valid prefetch can
+hide that latency for adjacent valid voices when endpoint activity gives it time.
+Runtime state that is both software-readable and renderer-readable may still
+require one of these approaches if the front end is tightened further:
 
 - independent render/readback ports,
 - replicated narrow state RAMs,
@@ -453,7 +463,7 @@ readable may require one of these approaches:
 - or moving more live state into the throughput pipeline context at issue time.
 
 The current register bank already exposes one render-indexed config/runtime read
-path. An issue scheduler can use that path like this:
+path. The scheduler uses that path like this:
 
 ```text
 cycle N:   present voice_read_index = v
@@ -461,15 +471,13 @@ cycle N+1: wait for synchronous RAM outputs
 cycle N+2: capture context for v, present voice_read_index = v+1
 ```
 
-This gives roughly one captured context every two cycles unless the register bank
-adds an output-valid pipeline or the scheduler overlaps address presentation with
-context qualification. The exact issue cadence should be measured before adding
-more ports. A one-context-per-two-cycle front end may still be an improvement if
-DSP latency is currently much larger than two cycles per active voice.
+The exact issue cadence should be measured before adding more ports. The current
+prefetch path is cheaper than another wide render-read port and avoids restoring a
+large next-active priority mux.
 
 ### Fixed-Latency DSP Unit
 
-The DSP portion should become a module with explicit valid propagation:
+The DSP portion is now a module with explicit valid propagation:
 
 ```systemverilog
 voice_dsp_pipeline dsp (

@@ -78,10 +78,11 @@ register accesses return a bus error rather than holding the SPI transaction ope
 `multi_voice_pipeline` is a one-frame-at-a-time throughput renderer. On each
 accepted `sample_tick`, the renderer scans voice slots in index order, reads
 configuration/runtime snapshots through the register bank's synchronous read
-path, fetches interpolation endpoints, issues complete voice contexts into a
-fixed-latency DSP pipeline, and retires DSP results into a signed 32-bit stereo
-mixer. The scan is intentionally sequential: invalid voice slots cost a clock,
-but the renderer avoids a wide per-frame priority encoder and next-voice mux.
+path, enqueues interpolation endpoint requests, assembles ordered endpoint
+responses into complete voice contexts, issues those contexts into a fixed-latency
+DSP pipeline, and retires DSP results into a signed 32-bit stereo mixer. The scan
+is intentionally sequential: invalid voice slots cost a clock, but the renderer
+avoids a wide per-frame priority encoder and next-voice mux.
 
 The core state sequence is:
 
@@ -92,15 +93,22 @@ READ_VOICE
 WAIT_VOICE
 START_VOICE
 PROCESS_VOICE
-REQ_L0  -> WAIT_L0
-REQ_L1  -> WAIT_L1
-REQ_R0  -> WAIT_R0   stereo only
-REQ_R1  -> WAIT_R1   stereo only
-DSP_START
+REQ_L0  enqueue left/mono endpoint 0
+REQ_L1  enqueue left/mono endpoint 1
+REQ_R0  enqueue right endpoint 0, stereo only
+REQ_R1  enqueue right endpoint 1, stereo only
+DSP_START  advance scheduler while queued request/response/DSP work drains
 DRAIN
 FINISH
 IDLE
 ```
+
+Endpoint responses are not consumed by `WAIT_L*` states in the current RTL.
+Accepted requests push compact response metadata, ordered `mem_rsp_valid` pulses
+fill RAM-backed fetch slots, and a complete `voice_dsp_context_t` is pushed into a
+small DSP context queue when the last required endpoint arrives. `DRAIN` waits for
+the request queue, response metadata queue, fetch slots, DSP context queue, and
+issued DSP contexts to empty before `FINISH` emits the mixed sample.
 
 The generated sample uses these integer operations:
 
