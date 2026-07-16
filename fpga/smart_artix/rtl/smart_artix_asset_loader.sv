@@ -10,8 +10,8 @@ module smart_artix_asset_loader #(
   output logic                asset_loaded,
   output logic [3:0]          status_state,
   output logic [7:0]          error_code,
-  output logic [63:0]         bytes_loaded,
-  output logic [63:0]         sf2_size_bytes,
+  output logic [31:0]         bytes_loaded,
+  output logic [31:0]         sf2_size_bytes,
   output logic [LBA_WIDTH-1:0] current_lba,
 
   output logic                sd_req_valid,
@@ -24,7 +24,7 @@ module smart_artix_asset_loader #(
 
   output logic                writer_start,
   output logic [63:0]         writer_base_byte_addr,
-  output logic [63:0]         writer_total_bytes,
+  output logic [31:0]         writer_total_bytes,
   output logic                writer_byte_valid,
   input  logic                writer_byte_ready,
   output logic [7:0]          writer_byte_data,
@@ -49,6 +49,7 @@ module smart_artix_asset_loader #(
   localparam logic [7:0] ERROR_EMPTY_IMAGE = 8'd3;
   localparam logic [7:0] ERROR_WRITER = 8'd4;
   localparam logic [7:0] ERROR_LBA_RANGE = 8'd5;
+  localparam logic [7:0] ERROR_SIZE_RANGE = 8'd6;
 
   typedef enum logic [3:0] {
     STATE_IDLE,
@@ -68,22 +69,23 @@ module smart_artix_asset_loader #(
   logic [31:0] header_magic;
   logic [31:0] header_version;
   logic [63:0] header_sf2_start_lba;
-  logic [63:0] header_sf2_size_bytes;
+  logic [31:0] header_sf2_size_bytes;
+  logic [31:0] header_sf2_size_reserved;
   logic [63:0] header_ddr_base_byte_addr;
-  logic [63:0] data_bytes_remaining;
+  logic [31:0] data_bytes_remaining;
   logic writer_byte_accepted;
 
   assign busy = (state != STATE_IDLE) && (state != STATE_DONE) && (state != STATE_ERROR);
   assign sd_req_valid = (state == STATE_REQ_HEADER) || (state == STATE_REQ_DATA);
   assign sd_req_lba = (state == STATE_REQ_HEADER) ? LBA_WIDTH'(0) : current_lba;
   assign sd_byte_ready = (state == STATE_READ_HEADER) ? 1'b1
-      : (state == STATE_STREAM_DATA) ? ((data_bytes_remaining == 64'd0) ? 1'b1 : writer_byte_ready)
+      : (state == STATE_STREAM_DATA) ? ((data_bytes_remaining == 32'd0) ? 1'b1 : writer_byte_ready)
       : 1'b0;
   assign writer_start = state == STATE_START_WRITER;
   assign writer_base_byte_addr = header_ddr_base_byte_addr;
   assign writer_total_bytes = header_sf2_size_bytes;
   assign writer_byte_valid = (state == STATE_STREAM_DATA) && sd_byte_valid
-      && (data_bytes_remaining != 64'd0);
+      && (data_bytes_remaining != 32'd0);
   assign writer_byte_data = sd_byte_data;
   assign writer_byte_accepted = writer_byte_valid && writer_byte_ready;
 
@@ -115,6 +117,7 @@ module smart_artix_asset_loader #(
       header_version <= '0;
       header_sf2_start_lba <= '0;
       header_sf2_size_bytes <= '0;
+      header_sf2_size_reserved <= '0;
       header_ddr_base_byte_addr <= '0;
       data_bytes_remaining <= '0;
     end else begin
@@ -136,6 +139,7 @@ module smart_artix_asset_loader #(
               header_version <= '0;
               header_sf2_start_lba <= '0;
               header_sf2_size_bytes <= '0;
+              header_sf2_size_reserved <= '0;
               header_ddr_base_byte_addr <= '0;
               data_bytes_remaining <= '0;
               state <= ddr_init_calib_complete ? STATE_REQ_HEADER : STATE_WAIT_DDR;
@@ -177,10 +181,10 @@ module smart_artix_asset_loader #(
                 9'h019: header_sf2_size_bytes[15:8] <= sd_byte_data;
                 9'h01a: header_sf2_size_bytes[23:16] <= sd_byte_data;
                 9'h01b: header_sf2_size_bytes[31:24] <= sd_byte_data;
-                9'h01c: header_sf2_size_bytes[39:32] <= sd_byte_data;
-                9'h01d: header_sf2_size_bytes[47:40] <= sd_byte_data;
-                9'h01e: header_sf2_size_bytes[55:48] <= sd_byte_data;
-                9'h01f: header_sf2_size_bytes[63:56] <= sd_byte_data;
+                9'h01c: header_sf2_size_reserved[7:0] <= sd_byte_data;
+                9'h01d: header_sf2_size_reserved[15:8] <= sd_byte_data;
+                9'h01e: header_sf2_size_reserved[23:16] <= sd_byte_data;
+                9'h01f: header_sf2_size_reserved[31:24] <= sd_byte_data;
                 9'h020: header_ddr_base_byte_addr[7:0] <= sd_byte_data;
                 9'h021: header_ddr_base_byte_addr[15:8] <= sd_byte_data;
                 9'h022: header_ddr_base_byte_addr[23:16] <= sd_byte_data;
@@ -200,8 +204,11 @@ module smart_artix_asset_loader #(
                 end else if (header_version != IMAGE_VERSION) begin
                   error_code <= ERROR_BAD_VERSION;
                   state <= STATE_ERROR;
-                end else if (header_sf2_size_bytes == 64'd0) begin
+                end else if (header_sf2_size_bytes == 32'd0) begin
                   error_code <= ERROR_EMPTY_IMAGE;
+                  state <= STATE_ERROR;
+                end else if (header_sf2_size_reserved != 32'd0) begin
+                  error_code <= ERROR_SIZE_RANGE;
                   state <= STATE_ERROR;
                 end else if (header_sf2_start_lba[63:LBA_WIDTH] != '0) begin
                   error_code <= ERROR_LBA_RANGE;
@@ -231,12 +238,12 @@ module smart_artix_asset_loader #(
             if (sd_byte_valid && sd_byte_ready) begin
               sector_byte_index <= sector_byte_index + 9'd1;
               if (writer_byte_accepted) begin
-                data_bytes_remaining <= data_bytes_remaining - 64'd1;
-                bytes_loaded <= bytes_loaded + 64'd1;
+                data_bytes_remaining <= data_bytes_remaining - 32'd1;
+                bytes_loaded <= bytes_loaded + 32'd1;
               end
 
               if (sd_byte_last) begin
-                if (data_bytes_remaining == (writer_byte_accepted ? 64'd1 : 64'd0))
+                if (data_bytes_remaining == (writer_byte_accepted ? 32'd1 : 32'd0))
                   state <= STATE_WAIT_WRITER;
                 else begin
                   current_lba <= current_lba + LBA_WIDTH'(1);

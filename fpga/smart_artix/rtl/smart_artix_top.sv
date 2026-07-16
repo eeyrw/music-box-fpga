@@ -128,8 +128,8 @@ module smart_artix_top (
   logic [3:0]               loader_status_state;
   logic [7:0]               sd_error_code;
   logic [7:0]               loader_error_code;
-  logic [63:0]              bytes_loaded;
-  logic [63:0]              sf2_size_bytes;
+  logic [31:0]              bytes_loaded;
+  logic [31:0]              sf2_size_bytes;
   logic [31:0]              current_lba;
   logic                     ddr_debug_start;
   logic                     ddr_debug_write;

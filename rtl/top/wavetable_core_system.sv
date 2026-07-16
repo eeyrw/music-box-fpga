@@ -42,8 +42,8 @@ module wavetable_core_system #(
   input  logic [3:0]               platform_asset_loader_state,
   input  logic [7:0]               platform_sd_error_code,
   input  logic [7:0]               platform_loader_error_code,
-  input  logic [63:0]              platform_bytes_loaded,
-  input  logic [63:0]              platform_sf2_size_bytes,
+  input  logic [31:0]              platform_bytes_loaded,
+  input  logic [31:0]              platform_sf2_size_bytes,
   input  logic [31:0]              platform_current_lba,
   output logic                     platform_ddr_debug_start,
   output logic                     platform_ddr_debug_write,
@@ -102,10 +102,8 @@ module wavetable_core_system #(
   localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = 16'h3038;
   localparam logic [15:0] ADDR_PLATFORM_STATUS = 16'h3040;
   localparam logic [15:0] ADDR_PLATFORM_ERRORS = 16'h3044;
-  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED_LO = 16'h3048;
-  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED_HI = 16'h304c;
-  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE_LO = 16'h3050;
-  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE_HI = 16'h3054;
+  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED = 16'h3048;
+  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE = 16'h3050;
   localparam logic [15:0] ADDR_PLATFORM_CURRENT_LBA = 16'h3058;
   localparam logic [15:0] ADDR_PLATFORM_DDR_STATUS = 16'h305c;
   localparam logic [15:0] ADDR_DDR_DEBUG_CONTROL = 16'h3060;
@@ -137,9 +135,8 @@ module wavetable_core_system #(
       ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
       ADDR_MEM_HIT_COUNT, ADDR_MEM_MISS_COUNT, ADDR_MEM_RESPONSE_COUNT,
-      ADDR_PLATFORM_STATUS, ADDR_PLATFORM_ERRORS, ADDR_PLATFORM_BYTES_LOADED_LO,
-      ADDR_PLATFORM_BYTES_LOADED_HI, ADDR_PLATFORM_SF2_SIZE_LO,
-      ADDR_PLATFORM_SF2_SIZE_HI, ADDR_PLATFORM_CURRENT_LBA,
+      ADDR_PLATFORM_STATUS, ADDR_PLATFORM_ERRORS, ADDR_PLATFORM_BYTES_LOADED,
+      ADDR_PLATFORM_SF2_SIZE, ADDR_PLATFORM_CURRENT_LBA,
       ADDR_PLATFORM_DDR_STATUS, ADDR_DDR_DEBUG_CONTROL,
       ADDR_DDR_DEBUG_STATUS, ADDR_DDR_DEBUG_ADDR,
       ADDR_DDR_DEBUG_BYTE_ENABLE, ADDR_DDR_DEBUG_DATA0,
@@ -238,10 +235,8 @@ module wavetable_core_system #(
         system_debug_rdata = {12'd0, platform_asset_loader_state,
                               platform_loader_error_code, platform_sd_error_code};
       end
-      ADDR_PLATFORM_BYTES_LOADED_LO: system_debug_rdata = platform_bytes_loaded[31:0];
-      ADDR_PLATFORM_BYTES_LOADED_HI: system_debug_rdata = platform_bytes_loaded[63:32];
-      ADDR_PLATFORM_SF2_SIZE_LO: system_debug_rdata = platform_sf2_size_bytes[31:0];
-      ADDR_PLATFORM_SF2_SIZE_HI: system_debug_rdata = platform_sf2_size_bytes[63:32];
+      ADDR_PLATFORM_BYTES_LOADED: system_debug_rdata = platform_bytes_loaded;
+      ADDR_PLATFORM_SF2_SIZE: system_debug_rdata = platform_sf2_size_bytes;
       ADDR_PLATFORM_CURRENT_LBA: system_debug_rdata = platform_current_lba;
       ADDR_PLATFORM_DDR_STATUS: begin
         system_debug_rdata[0] = platform_ddr_init_calib_complete;

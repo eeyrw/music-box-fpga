@@ -12,8 +12,8 @@ module smart_artix_sd_ddr3_asset_loader #(
   output logic                      asset_loaded,
   output logic [3:0]                status_state,
   output logic [7:0]                error_code,
-  output logic [63:0]               bytes_loaded,
-  output logic [63:0]               sf2_size_bytes,
+  output logic [31:0]               bytes_loaded,
+  output logic [31:0]               sf2_size_bytes,
   output logic [LBA_WIDTH-1:0]      current_lba,
 
   output logic                      sd_req_valid,
@@ -36,7 +36,7 @@ module smart_artix_sd_ddr3_asset_loader #(
 );
   logic writer_start;
   logic [63:0] writer_base_byte_addr;
-  logic [63:0] writer_total_bytes;
+  logic [31:0] writer_total_bytes;
   logic writer_byte_valid;
   logic writer_byte_ready;
   logic [7:0] writer_byte_data;

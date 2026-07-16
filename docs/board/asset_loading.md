@@ -43,7 +43,8 @@ offset  size  field
 0x08    4     header_size_bytes
 0x0c    4     flags
 0x10    8     sf2_start_lba
-0x18    8     sf2_size_bytes
+0x18    4     sf2_size_bytes
+0x1c    4     reserved, must be zero
 0x20    8     ddr_base_byte_addr
 0x28    8     metadata_start_lba
 0x30    8     metadata_size_bytes

@@ -213,10 +213,8 @@ The useful first reads are:
 | `0x3020` | `MEMORY_STATUS` | Shows cache/memory request status and response latency. |
 | `0x3040` | `PLATFORM_STATUS` | Main DDR/SD/asset-loader status word. |
 | `0x3044` | `PLATFORM_ERRORS` | SD error, loader error, and loader state. |
-| `0x3048` | `PLATFORM_BYTES_LOADED_LO` | Low word of loaded byte count. |
-| `0x304c` | `PLATFORM_BYTES_LOADED_HI` | High word of loaded byte count. |
-| `0x3050` | `PLATFORM_SF2_SIZE_LO` | Low word of SF2 byte count from the raw header. |
-| `0x3054` | `PLATFORM_SF2_SIZE_HI` | High word of SF2 byte count from the raw header. |
+| `0x3048` | `PLATFORM_BYTES_LOADED` | Loaded byte count. |
+| `0x3050` | `PLATFORM_SF2_SIZE` | SF2 byte count from the raw header. |
 | `0x3058` | `PLATFORM_CURRENT_LBA` | Current sector being loaded. |
 | `0x305c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
 | `0x3060`..`0x307c` | `DDR_DEBUG_*` | Single-beat DDR read/write debug window. |

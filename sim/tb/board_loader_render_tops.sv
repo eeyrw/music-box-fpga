@@ -15,8 +15,8 @@ module board_loader_render_tops #(
   output logic [3:0]                loader_status_state,
   output logic [7:0]                loader_sd_error_code,
   output logic [7:0]                loader_error_code,
-  output logic [63:0]               loader_bytes_loaded,
-  output logic [63:0]               loader_sf2_size_bytes,
+  output logic [31:0]               loader_bytes_loaded,
+  output logic [31:0]               loader_sf2_size_bytes,
   output logic [LBA_WIDTH-1:0]      loader_current_lba,
 
   output logic                      sd_cmd_valid,

@@ -9,6 +9,7 @@ import zlib
 
 SECTOR_BYTES = 512
 HEADER_BYTES = 0x40
+MAX_U32 = 0xffffffff
 MAGIC = b"WTSF"
 VERSION = 1
 FLAG_SF2_CRC32 = 1 << 0
@@ -59,7 +60,8 @@ def build_header(sf2, sf2_start_lba, ddr_base_byte_addr, metadata_start_lba,
     put_u32le(header, 0x08, HEADER_BYTES)
     put_u32le(header, 0x0c, flags)
     put_u64le(header, 0x10, sf2_start_lba)
-    put_u64le(header, 0x18, len(sf2))
+    put_u32le(header, 0x18, len(sf2))
+    put_u32le(header, 0x1c, 0)
     put_u64le(header, 0x20, ddr_base_byte_addr)
     put_u64le(header, 0x28, metadata_start_lba)
     put_u64le(header, 0x30, metadata_size_bytes)
@@ -78,6 +80,8 @@ def write_image(args):
         raise ValueError("DDR base byte address must be non-negative")
     if args.metadata_start_lba < 0 or args.metadata_size_bytes < 0:
         raise ValueError("metadata fields must be non-negative")
+    if len(sf2) > MAX_U32:
+        raise ValueError("SF2 file is larger than the 32-bit WTSF size field")
 
     sf2_offset = args.sf2_start_lba * SECTOR_BYTES
     total_size = align_up(sf2_offset + len(sf2), SECTOR_BYTES)
@@ -112,7 +116,8 @@ def verify_image(args):
         raise ValueError("bad WTSF magic")
     version, header_size, flags = struct.unpack_from("<III", image, 0x04)
     sf2_start_lba = struct.unpack_from("<Q", image, 0x10)[0]
-    sf2_size = struct.unpack_from("<Q", image, 0x18)[0]
+    sf2_size = struct.unpack_from("<I", image, 0x18)[0]
+    sf2_size_reserved = struct.unpack_from("<I", image, 0x1c)[0]
     ddr_base = struct.unpack_from("<Q", image, 0x20)[0]
     metadata_start_lba = struct.unpack_from("<Q", image, 0x28)[0]
     metadata_size = struct.unpack_from("<Q", image, 0x30)[0]
@@ -123,6 +128,8 @@ def verify_image(args):
         raise ValueError(f"unsupported WTSF version {version}")
     if header_size < HEADER_BYTES or header_size > SECTOR_BYTES:
         raise ValueError(f"invalid header size {header_size}")
+    if sf2_size_reserved != 0:
+        raise ValueError("reserved high SF2 size field must be zero")
     sf2_offset = sf2_start_lba * SECTOR_BYTES
     if sf2_start_lba < 1 or sf2_offset + sf2_size > len(image):
         raise ValueError("SF2 payload range is outside the image")

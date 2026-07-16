@@ -15,8 +15,8 @@ module smart_artix_sd_spi_pin_asset_loader #(
   output logic [3:0]                status_state,
   output logic [7:0]                sd_error_code,
   output logic [7:0]                loader_error_code,
-  output logic [63:0]               bytes_loaded,
-  output logic [63:0]               sf2_size_bytes,
+  output logic [31:0]               bytes_loaded,
+  output logic [31:0]               sf2_size_bytes,
   output logic [LBA_WIDTH-1:0]      current_lba,
 
   output logic                      sd_clk,

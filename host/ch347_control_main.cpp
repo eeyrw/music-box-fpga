@@ -62,6 +62,7 @@ struct Action {
     CommitAction,
     DdrDebugWriteAction,
     DdrDebugReadAction,
+    ReadLoadProgressAction,
   } type = WriteRegisterAction;
 
   RegisterWrite write;
@@ -86,6 +87,7 @@ constexpr uint16_t kDdrDebugStatus = 0x3064;
 constexpr uint16_t kDdrDebugAddr = 0x3068;
 constexpr uint16_t kDdrDebugByteEnable = 0x306c;
 constexpr uint16_t kDdrDebugData0 = 0x3070;
+constexpr uint16_t kPlatformBytesLoaded = 0x3048;
 constexpr uint32_t kDdrDebugControlStart = 1u << 0;
 constexpr uint32_t kDdrDebugControlWrite = 1u << 1;
 constexpr uint32_t kDdrDebugControlClear = 1u << 2;
@@ -163,6 +165,7 @@ void print_usage(const char* argv0) {
       << "Usage:\n"
       << "  " << argv0 << " [transport options] --write ADDR DATA [--write ADDR DATA ...]\n"
       << "  " << argv0 << " [transport options] --read ADDR [--read ADDR ...]\n"
+      << "  " << argv0 << " [transport options] --read-load-progress\n"
       << "  " << argv0 << " [transport options] --set-envelope VOICE LEVEL\n"
       << "  " << argv0 << " [transport options] --commit-voice VOICE [voice options]\n"
       << "\nTransport options:\n"
@@ -191,6 +194,7 @@ void print_usage(const char* argv0) {
       << "  --gain-r Q1_15          Default 0x4000\n"
       << "\nOther operations:\n"
       << "  --release VOICE         Set RELEASE_CONTROL.released\n"
+      << "  --read-load-progress  Read SD asset bytes-loaded progress\n"
       << "  --ddr-write ADDR D0 D1 D2 D3\n"
       << "                          Write one 16-byte DDR beat through the debug window\n"
       << "  --ddr-read ADDR         Read one 16-byte DDR beat through the debug window\n";
@@ -258,6 +262,11 @@ Args parse_args(int argc, char** argv) {
       Action action;
       action.type = Action::ReadRegisterAction;
       action.read = read;
+      args.actions.push_back(action);
+    } else if (a == "--read-load-progress") {
+      flush_commit();
+      Action action;
+      action.type = Action::ReadLoadProgressAction;
       args.actions.push_back(action);
     } else if (a == "--ddr-write") {
       flush_commit();
@@ -402,6 +411,22 @@ void emit_dry_run_ddr_read(DryRunTransport& dry_run, const DdrDebugRead& read) {
   }
 }
 
+void emit_dry_run_load_progress(DryRunTransport& dry_run) {
+  dry_run.read_register(kPlatformBytesLoaded);
+}
+
+void execute_load_progress(host::Ch347RegisterTransport* transport, DryRunTransport& dry_run,
+                           bool dry_run_mode) {
+  if (dry_run_mode) {
+    emit_dry_run_load_progress(dry_run);
+    return;
+  }
+  uint32_t bytes_loaded = transport->read_register(kPlatformBytesLoaded);
+  std::cout << "load-progress bytes-loaded=" << bytes_loaded << " (0x" << std::hex
+            << std::setw(8) << std::setfill('0') << bytes_loaded << std::dec
+            << std::setfill(' ') << ")\n";
+}
+
 void execute_ddr_write(render::RegisterWriteSink& sink, host::Ch347RegisterTransport* transport,
                        DryRunTransport& dry_run, bool dry_run_mode, const DdrDebugWrite& write) {
   validate_ddr_addr(write.byte_addr);
@@ -500,6 +525,8 @@ int main(int argc, char** argv) {
         execute_ddr_write(sink, transport.get(), dry_run, args.dry_run, action.ddr_write);
       } else if (action.type == Action::DdrDebugReadAction) {
         execute_ddr_read(sink, transport.get(), dry_run, args.dry_run, action.ddr_read);
+      } else if (action.type == Action::ReadLoadProgressAction) {
+        execute_load_progress(transport.get(), dry_run, args.dry_run);
       }
     }
   } catch (const std::exception& e) {

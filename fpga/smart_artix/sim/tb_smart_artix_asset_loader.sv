@@ -9,8 +9,8 @@ module tb_smart_artix_asset_loader;
   logic asset_loaded;
   logic [3:0] status_state;
   logic [7:0] error_code;
-  logic [63:0] bytes_loaded;
-  logic [63:0] sf2_size_bytes;
+  logic [31:0] bytes_loaded;
+  logic [31:0] sf2_size_bytes;
   logic [LBA_WIDTH-1:0] current_lba;
   logic sd_req_valid;
   logic sd_req_ready;
@@ -21,7 +21,7 @@ module tb_smart_artix_asset_loader;
   logic sd_byte_last;
   logic writer_start;
   logic [63:0] writer_base_byte_addr;
-  logic [63:0] writer_total_bytes;
+  logic [31:0] writer_total_bytes;
   logic writer_byte_valid;
   logic writer_byte_ready;
   logic [7:0] writer_byte_data;
@@ -76,11 +76,11 @@ module tb_smart_artix_asset_loader;
 
   function automatic logic [7:0] header_byte(input int index);
     logic [63:0] sf2_lba;
-    logic [63:0] sf2_size;
+    logic [31:0] sf2_size;
     logic [63:0] ddr_base;
     begin
       sf2_lba = 64'd7;
-      sf2_size = 64'd20;
+      sf2_size = 32'd20;
       ddr_base = 64'h40;
       header_byte = 8'd0;
       unique case (index)
@@ -90,7 +90,7 @@ module tb_smart_artix_asset_loader;
         3: header_byte = "F";
         4: header_byte = 8'd1;
         16,17,18,19,20,21,22,23: header_byte = sf2_lba[(index - 16) * 8 +: 8];
-        24,25,26,27,28,29,30,31: header_byte = sf2_size[(index - 24) * 8 +: 8];
+        24,25,26,27: header_byte = sf2_size[(index - 24) * 8 +: 8];
         32,33,34,35,36,37,38,39: header_byte = ddr_base[(index - 32) * 8 +: 8];
         default: header_byte = 8'd0;
       endcase
@@ -150,7 +150,7 @@ module tb_smart_artix_asset_loader;
       if (writer_start) begin
         writer_busy <= 1'b1;
         check(writer_base_byte_addr == 64'h40, "writer base byte address mismatch");
-        check(writer_total_bytes == 64'd20, "writer total byte count mismatch");
+        check(writer_total_bytes == 32'd20, "writer total byte count mismatch");
       end
       if (writer_byte_valid && writer_byte_ready) begin
         check(writer_byte_data == 8'(writer_bytes_seen), "writer byte data mismatch");
@@ -193,8 +193,8 @@ module tb_smart_artix_asset_loader;
     @(posedge clk);
     check(!busy, "loader stayed busy after asset_loaded");
     check(error_code == 8'd0, "loader reported unexpected error");
-    check(bytes_loaded == 64'd20, "loader bytes_loaded mismatch");
-    check(sf2_size_bytes == 64'd20, "loader sf2_size_bytes mismatch");
+    check(bytes_loaded == 32'd20, "loader bytes_loaded mismatch");
+    check(sf2_size_bytes == 32'd20, "loader sf2_size_bytes mismatch");
     check(current_lba == 32'd7, "loader current_lba mismatch");
     check(writer_bytes_seen == 20, "loader did not stream expected writer bytes");
 

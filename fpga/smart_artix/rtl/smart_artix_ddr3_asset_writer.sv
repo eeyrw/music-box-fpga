@@ -7,7 +7,7 @@ module smart_artix_ddr3_asset_writer #(
 
   input  logic                      start,
   input  logic [63:0]               base_byte_addr,
-  input  logic [63:0]               total_bytes,
+  input  logic [31:0]               total_bytes,
   output logic                      busy,
   output logic                      done_pulse,
   output logic                      error_pulse,
@@ -39,7 +39,7 @@ module smart_artix_ddr3_asset_writer #(
   state_t state;
   logic [MIG_DATA_WIDTH-1:0] data_buffer;
   logic [COUNT_WIDTH-1:0] beat_byte_count;
-  logic [63:0] remaining_bytes;
+  logic [31:0] remaining_bytes;
   logic [63:0] current_addr;
   logic cmd_sent;
   logic wdf_sent;
@@ -48,7 +48,7 @@ module smart_artix_ddr3_asset_writer #(
   logic base_aligned;
 
   assign busy = state != STATE_IDLE;
-  assign byte_ready = (state == STATE_FILL) && (remaining_bytes != 64'd0)
+  assign byte_ready = (state == STATE_FILL) && (remaining_bytes != 32'd0)
       && (beat_byte_count != COUNT_WIDTH'(BEAT_BYTES));
   assign accepted_byte = byte_valid && byte_ready;
   assign send_accepted = (cmd_sent || (mig_app_en && mig_app_rdy))
@@ -90,7 +90,7 @@ module smart_artix_ddr3_asset_writer #(
           if (start) begin
             if (!base_aligned) begin
               error_pulse <= 1'b1;
-            end else if (total_bytes == 64'd0) begin
+            end else if (total_bytes == 32'd0) begin
               done_pulse <= 1'b1;
             end else begin
               data_buffer <= '0;
@@ -108,9 +108,9 @@ module smart_artix_ddr3_asset_writer #(
           if (accepted_byte) begin
             data_buffer[beat_byte_count * 8 +: 8] <= byte_data;
             beat_byte_count <= beat_byte_count + COUNT_WIDTH'(1);
-            remaining_bytes <= remaining_bytes - 64'd1;
+            remaining_bytes <= remaining_bytes - 32'd1;
 
-            if ((beat_byte_count == COUNT_WIDTH'(BEAT_BYTES - 1)) || (remaining_bytes == 64'd1))
+            if ((beat_byte_count == COUNT_WIDTH'(BEAT_BYTES - 1)) || (remaining_bytes == 32'd1))
               begin
                 cmd_sent <= 1'b0;
                 wdf_sent <= 1'b0;
@@ -126,7 +126,7 @@ module smart_artix_ddr3_asset_writer #(
             wdf_sent <= 1'b1;
 
           if (send_accepted) begin
-            if (remaining_bytes == 64'd0) begin
+            if (remaining_bytes == 32'd0) begin
               done_pulse <= 1'b1;
               state <= STATE_IDLE;
             end else begin

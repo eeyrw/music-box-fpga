@@ -70,10 +70,8 @@ register_addr    = voice_base(slot) + offset
 | `0x3038` | MEM_RESPONSE_COUNT | saturating external memory response counter |
 | `0x3040` | PLATFORM_STATUS | Smart Artix SD/DDR/asset-loader status bits |
 | `0x3044` | PLATFORM_ERRORS | SD error, loader error, and loader state |
-| `0x3048` | PLATFORM_BYTES_LOADED_LO | low 32 bits of SD asset bytes loaded |
-| `0x304c` | PLATFORM_BYTES_LOADED_HI | high 32 bits of SD asset bytes loaded |
-| `0x3050` | PLATFORM_SF2_SIZE_LO | low 32 bits of SF2 byte size from the SD image header |
-| `0x3054` | PLATFORM_SF2_SIZE_HI | high 32 bits of SF2 byte size from the SD image header |
+| `0x3048` | PLATFORM_BYTES_LOADED | SD asset bytes loaded |
+| `0x3050` | PLATFORM_SF2_SIZE | SF2 byte size from the SD image header |
 | `0x3058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
 | `0x305c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
 | `0x3060` | DDR_DEBUG_CONTROL | single-beat DDR debug command control |
@@ -238,11 +236,11 @@ system simulations without platform inputs, most bits read zero.
 | `19:16` | `asset_loader_state` | Same loader state code as `PLATFORM_STATUS[14:11]`. |
 | `31:20` | reserved | Reads zero. |
 
-`PLATFORM_BYTES_LOADED_LO` (`0x3048`) and `PLATFORM_BYTES_LOADED_HI` (`0x304c`)
-form the 64-bit count of SF2 asset bytes written to DDR3. `PLATFORM_SF2_SIZE_LO`
-(`0x3050`) and `PLATFORM_SF2_SIZE_HI` (`0x3054`) form the 64-bit SF2 byte size
-read from the raw SD image header. A successful load should end with
-`bytes_loaded == sf2_size_bytes` and `PLATFORM_STATUS[5] = 1`.
+`PLATFORM_BYTES_LOADED` (`0x3048`) reports the 32-bit count of SF2 asset bytes
+written to DDR3. `PLATFORM_SF2_SIZE` (`0x3050`) reports the 32-bit SF2 byte size
+read from the raw SD image header. For the current board-loading flow, assets are
+expected to fit below 4 GiB. A successful load should end with
+`PLATFORM_BYTES_LOADED == PLATFORM_SF2_SIZE` and `PLATFORM_STATUS[5] = 1`.
 
 `PLATFORM_CURRENT_LBA` (`0x3058`) reports the current SD logical block address the
 loader is reading or most recently requested. During bring-up it helps distinguish

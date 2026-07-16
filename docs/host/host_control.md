@@ -69,6 +69,11 @@ build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
   --write 0x3014 0x3f
 
+# Read the SD asset-load byte progress from the platform SPI registers.
+build/ch347_control --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --read-load-progress
+
 # Print the SPI register sequence for one 16-byte DDR debug write.
 build/ch347_control --dry-run \
   --ddr-byte-enable 0xffff \
