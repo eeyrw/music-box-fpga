@@ -69,10 +69,10 @@ module voice_dsp_pipeline (
     dsp_base_context_t base;
     pcm_t selected_l;
     pcm_t selected_r;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_r;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
+    logic signed [95:0] next_z1_raw_l;
+    logic signed [95:0] next_z2_raw_l;
+    logic signed [95:0] next_z1_raw_r;
+    logic signed [95:0] next_z2_raw_r;
   } filter_state_stage_t;
 
   typedef struct packed {
@@ -266,20 +266,20 @@ module voice_dsp_pipeline (
         s3_filter_state.base <= s2_filter_y.base;
         s3_filter_state.selected_l <= s2_filter_y.base.filter_enable ? s2_filter_y.y_l : s2_filter_y.x_l;
         s3_filter_state.selected_r <= s2_filter_y.base.filter_enable ? s2_filter_y.y_r : s2_filter_y.x_r;
-        s3_filter_state.next_z1_l <= saturate_filter_state(next_z1_raw_l);
-        s3_filter_state.next_z2_l <= saturate_filter_state(next_z2_raw_l);
-        s3_filter_state.next_z1_r <= saturate_filter_state(next_z1_raw_r);
-        s3_filter_state.next_z2_r <= saturate_filter_state(next_z2_raw_r);
+        s3_filter_state.next_z1_raw_l <= next_z1_raw_l;
+        s3_filter_state.next_z2_raw_l <= next_z2_raw_l;
+        s3_filter_state.next_z1_raw_r <= next_z1_raw_r;
+        s3_filter_state.next_z2_raw_r <= next_z2_raw_r;
       end
 
       if (valid_pipe[4]) begin
         s4_gain.base <= s3_filter_state.base;
         s4_gain.gained_l <= gained_l_out;
         s4_gain.gained_r <= gained_r_out;
-        s4_gain.next_z1_l <= s3_filter_state.next_z1_l;
-        s4_gain.next_z2_l <= s3_filter_state.next_z2_l;
-        s4_gain.next_z1_r <= s3_filter_state.next_z1_r;
-        s4_gain.next_z2_r <= s3_filter_state.next_z2_r;
+        s4_gain.next_z1_l <= saturate_filter_state(s3_filter_state.next_z1_raw_l);
+        s4_gain.next_z2_l <= saturate_filter_state(s3_filter_state.next_z2_raw_l);
+        s4_gain.next_z1_r <= saturate_filter_state(s3_filter_state.next_z1_raw_r);
+        s4_gain.next_z2_r <= saturate_filter_state(s3_filter_state.next_z2_raw_r);
       end
     end
   end

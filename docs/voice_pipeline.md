@@ -149,8 +149,8 @@ fixed-latency 6-stage DSP pipe
   interpolate
   filter products
   filter output
-  filter state
-  gain/envelope
+  raw filter state and gain
+  filter-state saturation and envelope
   |
   v
 retire/drain
@@ -169,6 +169,14 @@ through the existing ordered one-word memory interface. The front end can overla
 later voice register prefetch, endpoint request enqueueing, memory response waits,
 and earlier DSP work, but bubbles are expected when memory cannot return complete
 contexts fast enough.
+
+The biquad state update is split across the last two DSP stages for timing. Stage
+3 registers the raw 96-bit `z1` and `z2` expressions after the coefficient
+multiply/add chain. Stage 4 saturates those raw values back to the signed 48-bit
+per-voice filter-state format while the already-registered gain result advances to
+the envelope step. This preserves the external `valid_i` to `valid_o` latency and
+sample results while avoiding a single-cycle path from DSP48 cascade outputs
+through the wide saturation compare/carry chain into the filter-state registers.
 
 The current control flow for one output frame is:
 

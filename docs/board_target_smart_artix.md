@@ -153,7 +153,7 @@ Block RAM tiles: 9 / 75, 12.00%
 Setup WNS: +0.678 ns, WHS: -1.345 ns
 ```
 
-Current post-synthesis result after overlapping word endpoint assembly, adding a
+Post-synthesis result after overlapping word endpoint assembly, adding a
 registered DSP input stage, and mapping the internal fetch/context queues to
 distributed RAM:
 
@@ -168,7 +168,7 @@ Hold WHS: -1.345 ns, THS: -23.952 ns, failing endpoints: 55
 Core clk_pll_i group: setup slack -0.371 ns, hold slack +0.029 ns
 ```
 
-Timing constraint triage for this result:
+Timing constraint triage for this older result:
 
 - The `clk_pll_i` setup failure is a real 100 MHz core datapath, not a missing
   board constraint. The worst path starts in
@@ -196,7 +196,7 @@ Timing constraint triage for this result:
   contracts, such as input/output delays or a documented asynchronous sampling
   speed limit.
 
-Current post-route result with the same inputs:
+Post-route result after the voice snapshot and area-oriented passes:
 
 ```text
 Vivado result: route_design completed successfully
@@ -240,6 +240,30 @@ failure while implementation continues to close the generated MIG/clocking hold
 paths. Remaining board-level timing gaps are the unconstrained external SPI, I2S,
 and debug I/O delays, which need real external timing contracts before hardware
 signoff.
+
+Current post-route result after integrating the complete Smart Artix board top,
+including native SD loading, DDR asset writes, debug status readback, and the
+latest DSP filter-state timing fix:
+
+```text
+Vivado result: route_design completed successfully
+Slice LUTs: 11160 / 32600, 34.23%
+Slice registers: 12636 / 65200, 19.38%
+DSP48E1: 26 / 120, 21.67%
+Block RAM tiles: 10 / 75, 13.33%
+Setup WNS: +0.066 ns, TNS: 0.000 ns, failing endpoints: 0
+Hold WHS: +0.036 ns, THS: 0.000 ns, failing endpoints: 0
+```
+
+The full board top initially routed but failed setup at `100 MHz` with
+`WNS=-0.453 ns` and `TNS=-47.096 ns`. The worst path was no longer a board or MIG
+constraint issue; it was inside `voice_dsp_pipeline`, from a DSP48 cascade output
+through the wide filter-state saturation compare/carry chain into the next filter
+history register. The fix keeps the public DSP pipeline latency unchanged: stage 3
+now registers the raw 96-bit `z1`/`z2` state expressions, and stage 4 performs the
+48-bit saturation while the gain path is already registered. `make render-quick`
+matched the C++ reference after this retiming, confirming that only the internal
+timing boundary changed.
 
 ## Vivado Project Reuse
 
