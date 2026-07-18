@@ -36,7 +36,7 @@ Still required from the board documentation:
 
 ## Current Top
 
-`rtl/smart_artix_top.sv` instantiates `wavetable_spi_audio_system` with SPI control,
+`rtl/smart_artix_top.sv` instantiates `wavetable_demo_system` with SPI control,
 line-memory caching, output FIFO, and I2S output. Board-specific SD loading, DDR3
 read/write arbitration, line reads, and DDR debug traffic are grouped behind
 `smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
@@ -58,7 +58,7 @@ SD native pins: CLK, CMD, DAT[3:0]
   -> Xilinx MIG app write interface
   -> MT41K256M16TW
 
-wavetable_spi_audio_system external line-read pins
+wavetable_demo_system external line-read pins
   -> smart_artix_ddr3_subsystem
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter

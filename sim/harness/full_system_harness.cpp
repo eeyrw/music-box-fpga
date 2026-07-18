@@ -1,6 +1,6 @@
 #include "full_system_harness.h"
 
-#include "Vwavetable_spi_audio_system.h"
+#include "Vwavetable_demo_system.h"
 
 #include <stdexcept>
 
@@ -22,7 +22,7 @@ void put_u32le(std::ofstream& f, uint32_t value) {
 
 FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
                                       const std::string& wav_path, int sample_rate)
-    : top_(new Vwavetable_spi_audio_system), voice_control_(*this), memory_(memory),
+    : top_(new Vwavetable_demo_system), voice_control_(*this), memory_(memory),
       wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
   write_wav_header(0);

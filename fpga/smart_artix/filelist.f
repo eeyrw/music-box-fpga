@@ -24,7 +24,9 @@
 ../common/rtl/spi_register_bridge.sv
 ../common/rtl/wavetable_system_debug_regs.sv
 ../common/rtl/i2s_tx.sv
-../common/rtl/wavetable_spi_audio_system.sv
+../common/rtl/wavetable_system_core.sv
+../common/rtl/wavetable_i2s_output.sv
+../common/rtl/wavetable_demo_system.sv
 
 # Board-specific RTL.
 rtl/smart_artix_pkg.sv

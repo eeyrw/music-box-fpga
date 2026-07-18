@@ -27,9 +27,9 @@ class RegisterWriteSink {
 ```
 
 `RegisterVoiceControl` implements the documented voice register sequence on top
-of that interface. The Verilator bus harness, full-system SPI harness, and future
-CH347 host tool should all share this class so that note setup, envelope updates,
-release handling, and commit ordering stay identical.
+of that interface. The Verilator bus harness, demo full-system harness, and
+future CH347 host tool should all share this class so that note setup, envelope
+updates, release handling, and commit ordering stay identical.
 
 ## CH347 Transport Shape
 

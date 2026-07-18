@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-class Vwavetable_spi_audio_system;
+class Vwavetable_demo_system;
 
 namespace render {
 
@@ -60,7 +60,7 @@ class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
   void write_wav_header(uint32_t data_bytes);
   void write_pcm16(int16_t sample);
 
-  Vwavetable_spi_audio_system* top_ = nullptr;
+  Vwavetable_demo_system* top_ = nullptr;
   RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
   std::ofstream wav_;

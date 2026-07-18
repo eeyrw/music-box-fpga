@@ -17,7 +17,9 @@ generic core you want to include:
 | --- | --- | --- |
 | `wavetable_render_core` | `rtl/top/wavetable_render_core.sv` | You want the smallest generic audio render core. It exposes the register bus, `sample_tick`, mixed PCM output, and a one-word wave-memory read interface. |
 | `wavetable_line_memory_core` | `rtl/top/wavetable_line_memory_core.sv` | You want the generic render core plus the current one-line wave-memory cache. It exposes the register bus, `sample_tick`, mixed PCM output, and an external line-read interface. |
-| `wavetable_spi_audio_system` | `fpga/common/rtl/wavetable_spi_audio_system.sv` | You want the current board/common SPI, generic debug, output FIFO, and I2S wrapper around `wavetable_line_memory_core`. This is outside `rtl/` because it is a board-facing composition layer. |
+| `wavetable_system_core` | `fpga/common/rtl/wavetable_system_core.sv` | You want the line-memory render core as a reusable system block with an abstract register bus and PCM frame output, but without SPI or I2S. |
+| `wavetable_i2s_output` | `fpga/common/rtl/wavetable_i2s_output.sv` | You want to adapt a PCM frame stream to the current FIFO-backed I2S transmitter. |
+| `wavetable_demo_system` | `fpga/common/rtl/wavetable_demo_system.sv` | You want the current pin-level demo composition that wires SPI control, debug registers, the reusable system core, and I2S output together. |
 
 For most generic RTL work, start at `wavetable_render_core`. For memory-adapter
 work, start at `wavetable_line_memory_core` or `wave_memory_subsystem`. For
@@ -28,12 +30,12 @@ pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 | Directory | Directory top | Contents | Instantiated by |
 | --- | --- | --- | --- |
 | `rtl/pkg` | none | Shared packages, constants, packed structs, and generated register constants. Packages are imported, not instantiated. | Imported throughout `rtl/`, `fpga/common/rtl`, and simulation code. |
-| `rtl/top` | `wavetable_render_core`, `wavetable_line_memory_core` | Generic core composition modules. | Testbenches, C++ Verilator harnesses, and `fpga/common/rtl/wavetable_spi_audio_system.sv`. |
+| `rtl/top` | `wavetable_render_core`, `wavetable_line_memory_core` | Generic core composition modules. | Testbenches, C++ Verilator harnesses, and `fpga/common/rtl/wavetable_system_core.sv`. |
 | `rtl/control` | `voice_register_bank` | Register decode, shadow descriptor storage, commit sequencing, active renderer snapshots, and runtime control storage. | `wavetable_render_core`. |
 | `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
 | `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
 | `rtl/memory` | `wave_memory_subsystem` | Adapter from the core's one-word PCM read interface to an external line-read interface with a one-line cache. | `wavetable_line_memory_core`, focused memory tests, and some render testbenches. |
-| `rtl/audio` | `output_sample_fifo` | Generic synchronous PCM frame FIFO for wrappers that decouple render output from audio serialization. | `fpga/common/rtl/wavetable_spi_audio_system.sv`; not used by the bare `rtl/top` cores. |
+| `rtl/audio` | `output_sample_fifo` | Generic synchronous PCM frame FIFO for wrappers that decouple render output from audio serialization. | `fpga/common/rtl/wavetable_i2s_output.sv`; not used by the bare `rtl/top` cores. |
 
 There is currently no `rtl/bus` source file. The generic register and memory
 ports are explicit ready/valid signals on module interfaces rather than a shared
@@ -76,24 +78,39 @@ wavetable_line_memory_core
 +- wave_memory_subsystem
 ```
 
-The current board/common wrapper adds transport, debug, buffering, and I2S around
-the generic line-memory core. It also exposes a debug-register extension hook
-that board wrappers can use for platform-specific status windows:
+The reusable system core keeps SPI and I2S out of the synthesis engine boundary:
 
 ```text
-wavetable_spi_audio_system
-+- wavetable_system_debug_regs
-+- spi_register_bridge
+wavetable_system_core
 +- wavetable_line_memory_core
-|  +- wavetable_render_core
-|  +- wave_memory_subsystem
+   +- wavetable_render_core
+   +- wave_memory_subsystem
+```
+
+The I2S adapter is a separate audio-output consumer:
+
+```text
+wavetable_i2s_output
 +- output_sample_fifo
 +- i2s_tx
 ```
 
+The demo board/common wrapper adds transport, debug, tick generation, and I2S
+around those reusable blocks. It also exposes a debug-register extension hook
+that board wrappers can use for platform-specific status windows:
+
+```text
+wavetable_demo_system
++- wavetable_system_debug_regs
++- spi_register_bridge
++- fractional_tick_gen
++- wavetable_system_core
++- wavetable_i2s_output
+```
+
 `spi_register_bridge`, `wavetable_system_debug_regs`, `fractional_tick_gen`,
-`i2s_tx`, and `wavetable_spi_audio_system` live under `fpga/common/rtl/`, not
-under generic `rtl/`.
+`i2s_tx`, `wavetable_system_core`, `wavetable_i2s_output`, and
+`wavetable_demo_system` live under `fpga/common/rtl/`, not under generic `rtl/`.
 
 The current Smart Artix board top keeps SD loading, DDR3 arbitration, line reads,
 and DDR debug traffic behind a board-specific subsystem:
@@ -106,7 +123,7 @@ smart_artix_top
 |  +- smart_artix_ddr3_debug_master
 |  +- smart_artix_ddr3_line_reader
 +- smart_artix_platform_debug_regs
-+- wavetable_spi_audio_system
++- wavetable_demo_system
 ```
 
 ## Package Layer

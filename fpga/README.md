@@ -121,10 +121,14 @@ fpga/common/rtl/fractional_tick_gen.sv
 fpga/common/rtl/spi_register_bridge.sv
 fpga/common/rtl/wavetable_system_debug_regs.sv
 fpga/common/rtl/i2s_tx.sv
-fpga/common/rtl/wavetable_spi_audio_system.sv
+fpga/common/rtl/wavetable_system_core.sv
+fpga/common/rtl/wavetable_i2s_output.sv
+fpga/common/rtl/wavetable_demo_system.sv
 ```
 
 Use `wavetable_render_core` for the smallest datapath integration,
-`wavetable_line_memory_core` when attaching a line-memory controller, or
-`wavetable_spi_audio_system` when keeping the current SPI plus I2S integration
-shape.
+`wavetable_line_memory_core` when attaching a line-memory controller,
+`wavetable_system_core` when you want the line-memory core behind a system reset
+and abstract register bus, `wavetable_i2s_output` when adapting PCM frames to
+I2S, or `wavetable_demo_system` when keeping the current SPI plus I2S board
+demo shape.

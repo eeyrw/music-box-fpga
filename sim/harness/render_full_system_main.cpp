@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
     if (args.sample_rate != 48000) {
-      throw std::runtime_error("render-full-system currently requires --sample-rate 48000 because wavetable_spi_audio_system uses a fixed 49.152 MHz / 48 kHz audio clock");
+      throw std::runtime_error("render-full-system currently requires --sample-rate 48000 because wavetable_demo_system uses a fixed 49.152 MHz / 48 kHz audio clock");
     }
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
     int adsr_tick_samples = std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));

@@ -40,9 +40,13 @@ simulation and board-facing transport shape:
 - `i2s_tx` serializes stereo PCM to I2S pins.
 - `wavetable_system_debug_regs` exposes system, audio, memory, and render-latency
   observability registers.
-- `wavetable_spi_audio_system` composes those adapters around the generic
-  register-bus and line-memory core, with an external debug-register extension
-  hook for board-specific status windows.
+- `wavetable_system_core` exposes the line-memory render core behind an abstract
+  register bus and PCM frame output, without SPI or I2S transport.
+- `wavetable_i2s_output` adapts PCM frames through the output FIFO and I2S
+  serializer.
+- `wavetable_demo_system` composes SPI control, debug registers, sample-clock
+  generation, the reusable system core, and the I2S output adapter for the
+  current pin-level demo path.
 
 ## Top-Level Variants
 
@@ -63,15 +67,27 @@ register bus -> voice_register_bank -> multi_voice_pipeline
 wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 ```
 
-`fpga/common/rtl/wavetable_spi_audio_system.sv` is the current pin-level wrapper:
+`fpga/common/rtl/wavetable_system_core.sv` is the reusable system core:
+
+```text
+register bus -> wavetable_line_memory_core -> PCM frames
+                                      |
+                                      v
+                             external line-memory pins
+```
+
+`fpga/common/rtl/wavetable_i2s_output.sv` is the reusable audio-output adapter:
+
+```text
+PCM frames -> output_sample_fifo -> i2s_tx -> I2S pins
+```
+
+`fpga/common/rtl/wavetable_demo_system.sv` is the current pin-level demo wrapper:
 
 ```text
 SPI pins -> spi_register_bridge -> system debug registers
                               \-> external board debug registers
-                              \-> wavetable_line_memory_core -> i2s_tx -> I2S pins
-                                                    |
-                                                    v
-                                           external line-memory pins
+                              \-> wavetable_system_core -> wavetable_i2s_output
 ```
 
 It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing

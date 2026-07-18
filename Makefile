@@ -53,7 +53,9 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/spi_register_bridge.sv \
 	fpga/common/rtl/wavetable_system_debug_regs.sv \
 	fpga/common/rtl/i2s_tx.sv \
-	fpga/common/rtl/wavetable_spi_audio_system.sv
+	fpga/common/rtl/wavetable_system_core.sv \
+	fpga/common/rtl/wavetable_i2s_output.sv \
+	fpga/common/rtl/wavetable_demo_system.sv
 
 SIM_SOURCES := \
 	sim/models/line_memory_model.sv \
@@ -70,7 +72,7 @@ I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
 SYSTEM_DEBUG_SIM_SOURCES := \
-	sim/tb/tb_wavetable_spi_audio_system_debug.sv
+	sim/tb/tb_wavetable_demo_system_debug.sv
 
 VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
@@ -134,7 +136,9 @@ lint:
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_line_memory_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_spi_audio_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_system_core $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 
 test:
@@ -178,9 +182,9 @@ test:
 		rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/system_debug_obj_dir --top-module tb_wavetable_spi_audio_system_debug \
+		--Mdir $(BUILD_DIR)/system_debug_obj_dir --top-module tb_wavetable_demo_system_debug \
 		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SYSTEM_DEBUG_SIM_SOURCES)
-	$(BUILD_DIR)/system_debug_obj_dir/Vtb_wavetable_spi_audio_system_debug
+	$(BUILD_DIR)/system_debug_obj_dir/Vtb_wavetable_demo_system_debug
 
 smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
 
@@ -289,7 +293,7 @@ render-full-system:
 	# Build and run the pin-level full-system harness. WAV output is captured from I2S RX.
 	mkdir -p $(RENDER_FULL_SYSTEM_OUT_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_spi_audio_system \
+		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_demo_system \
 		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_full_system_main.cpp) \
 		$(abspath sim/harness/render_support.cpp) \
@@ -298,9 +302,9 @@ render-full-system:
 		$(abspath sim/harness/sf2_loader.cpp) \
 		$(abspath sim/harness/full_system_harness.cpp) \
 		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_spi_audio_system.mk \
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_demo_system.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_spi_audio_system --sf2 "$(SF2)" \
+	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_demo_system --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \

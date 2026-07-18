@@ -182,7 +182,7 @@ module smart_artix_top (
     .ddr_debug_status
   );
 
-  wavetable_spi_audio_system #(
+  wavetable_demo_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
     .SYS_CLK_HZ(SYS_CLK_HZ),

@@ -292,15 +292,15 @@ precision for those regions.
 
 ## C++ Full-System I2S Render Flow
 
-`make render-full-system` renders through `wavetable_spi_audio_system`, a pin-level RTL
+`make render-full-system` renders through `wavetable_demo_system`, a pin-level RTL
 wrapper that combines:
 
 - `spi_register_bridge` for control writes.
-- `wavetable_line_memory_core` and `wave_memory_subsystem` for the audio core and line
-  memory interface.
+- `wavetable_system_core`, wrapping `wavetable_line_memory_core`, for the audio
+  core and line-memory interface.
+- `wavetable_i2s_output` for the output FIFO and I2S adapter.
 - A `100 MHz` system clock with `fractional_tick_gen` instances for sample ticks
   and I2S BCLK edges.
-- `i2s_tx` for serial audio output.
 
 The C++ harness does not read internal PCM signals. It interacts only with the
 top-level pins:
