@@ -165,3 +165,50 @@ Keep hardware and policy code separate:
 The current command-line tool is intentionally low-level. A later real-time host
 app can reuse `McuModel`, `RegisterVoiceControl`, and `Ch347RegisterTransport`
 once it has a scheduler and a board asset-loading flow.
+
+## Smart Artix Bring-Up Runner
+
+`host/smart_artix_bringup_main.cpp` wraps the practical Smart Artix checklist
+from `../board/smart_artix_bringup.md` into a staged CH347 program. Build it with:
+
+```bash
+make host-smart-artix-bringup
+```
+
+The default run reads and decodes the system and platform debug windows:
+
+```bash
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80
+```
+
+If the CH347 adapter is present but the FPGA SPI target is not connected or not
+driving MISO, reads commonly return `0xffff_ffff`. The runner treats an all-ones
+snapshot as a hard failure and exits with status `2`, which distinguishes a
+working USB adapter from a missing FPGA response.
+
+Useful staged hardware checks:
+
+```bash
+# Poll until MIG calibration and the DDR debug window are ready.
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --wait-ddr
+
+# Wait for SD raw-image load, then prove a single 128-bit DDR debug beat.
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --wait-ddr --wait-asset --ddr-smoke --ddr-addr 0x100
+
+# After choosing valid sample metadata from the loaded SF2, program voice 0.
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --wait-asset --voice-smoke --voice 0 \
+  --base 0 --length 1024 --phase-inc 0x00010000 \
+  --gain-l 0x2000 --gain-r 0x2000
+```
+
+`--ddr-smoke` writes the selected 16-byte-aligned DDR address before reading it
+back, so use an address that is safe to overwrite for the current lab setup.
+`--voice-smoke` intentionally requires explicit sample bounds because the FPGA
+does not parse SF2 metadata.

@@ -176,10 +176,11 @@ snapshots.
 
 ## SPI Debug Smoke Test
 
-Build the CH347 host tool:
+Build the CH347 host tools:
 
 ```bash
 make host-ch347
+make host-smart-artix-bringup
 ```
 
 First test without hardware access:
@@ -187,12 +188,16 @@ First test without hardware access:
 ```bash
 build/ch347_control --dry-run --write 0x3000 0
 build/ch347_control --dry-run --read 0x3000
+build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
 ```
 
 Then use the selected CH347 library and conservative SPI speed. Start around
 `1 MHz` until the board-level SPI timing contract is measured:
 
 ```bash
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80
+
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
   --read 0x3000
@@ -201,6 +206,12 @@ build/ch347_control --device 0 \
 The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
 maps `--device 0` to that path for convenience. The copied x64 vendor library is
 used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
+
+`build/smart_artix_bringup` reads the same debug registers as a staged checklist,
+decodes the status bits, and exits nonzero when a required stage fails. If CH347
+is connected to the host but not to a valid FPGA SPI target, MISO may read back
+as all ones. The runner detects the common `0xffff_ffff` snapshot and reports
+that CH347 is present but no FPGA SPI target responded.
 
 The useful first reads are:
 
@@ -255,6 +266,11 @@ After `PLATFORM_DDR_STATUS[0]` reports calibration complete and
 prove direct DDR access before depending on SD-loaded data:
 
 ```bash
+# Staged runner form. This writes one 16-byte DDR beat at the selected address.
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --wait-ddr --ddr-smoke --ddr-addr 0x00000100
+
 # Write 16 bytes at DDR byte address 0x100.
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \

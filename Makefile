@@ -106,7 +106,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_sd_spi_block_reader \
 	tb_smart_artix_sd_spi_byte_master
 
-.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
+.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 
 all: test
 
@@ -179,6 +179,13 @@ host-ch347:
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
 		sim/harness/register_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
+
+host-smart-artix-bringup:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) -I. \
+		host/smart_artix_bringup_main.cpp host/ch347_transport.cpp \
+		sim/harness/register_control.cpp \
+		-o $(BUILD_DIR)/smart_artix_bringup -ldl
 
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.
