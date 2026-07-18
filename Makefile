@@ -82,11 +82,9 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_pkg.sv \
 	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_ddr3_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_block_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_pin_phy.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_native_pin_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \

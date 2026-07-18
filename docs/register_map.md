@@ -258,6 +258,9 @@ block reader:
 | `7` | `ERROR_ACMD6` | 4-bit bus-width selection failed. |
 | `8` | `ERROR_CMD17` | Single-block read command failed. |
 | `9` | `ERROR_DATA` | Read data stream ended with a nonzero PHY data status. |
+| `10` | `ERROR_CMD6` | High-speed switch command or its 64-byte status data block failed. |
+| `11` | `ERROR_CMD23` | Predeclared multi-block count command failed. |
+| `12` | `ERROR_CMD18` | Multi-block read command failed. |
 
 `loader_error_code` is produced by the raw SD-to-DDR asset loader:
 

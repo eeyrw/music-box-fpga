@@ -15,6 +15,7 @@ module tb_smart_artix_asset_loader;
   logic sd_req_valid;
   logic sd_req_ready;
   logic [LBA_WIDTH-1:0] sd_req_lba;
+  logic [15:0] sd_req_block_count;
   logic sd_byte_valid;
   logic sd_byte_ready;
   logic [7:0] sd_byte_data;
@@ -30,6 +31,7 @@ module tb_smart_artix_asset_loader;
   logic writer_error_pulse;
   int errors;
   int writer_bytes_seen;
+  int expected_total_bytes;
 
   smart_artix_asset_loader #(.LBA_WIDTH(LBA_WIDTH)) dut (
     .clk,
@@ -46,6 +48,7 @@ module tb_smart_artix_asset_loader;
     .sd_req_valid,
     .sd_req_ready,
     .sd_req_lba,
+    .sd_req_block_count,
     .sd_byte_valid,
     .sd_byte_ready,
     .sd_byte_data,
@@ -80,7 +83,7 @@ module tb_smart_artix_asset_loader;
     logic [63:0] ddr_base;
     begin
       sf2_lba = 64'd7;
-      sf2_size = 32'd20;
+      sf2_size = 32'd1040;
       ddr_base = 64'h40;
       header_byte = 8'd0;
       unique case (index)
@@ -97,11 +100,13 @@ module tb_smart_artix_asset_loader;
     end
   endfunction
 
-  task automatic accept_request(input logic [LBA_WIDTH-1:0] expected_lba);
+  task automatic accept_request(input logic [LBA_WIDTH-1:0] expected_lba,
+                                input logic [15:0] expected_block_count);
     begin
       wait (sd_req_valid);
       @(negedge clk);
       check(sd_req_lba == expected_lba, "SD request LBA mismatch");
+      check(sd_req_block_count == expected_block_count, "SD request block count mismatch");
       sd_req_ready = 1'b1;
       @(negedge clk);
       sd_req_ready = 1'b0;
@@ -110,7 +115,7 @@ module tb_smart_artix_asset_loader;
 
   task automatic send_header_sector;
     begin
-      accept_request(32'd0);
+      accept_request(32'd0, 16'd1);
       for (int i = 0; i < 512; i++) begin
         @(negedge clk);
         sd_byte_data = header_byte(i);
@@ -126,7 +131,7 @@ module tb_smart_artix_asset_loader;
 
   task automatic send_data_sector(input logic [LBA_WIDTH-1:0] expected_lba);
     begin
-      accept_request(expected_lba);
+      accept_request(expected_lba, 16'd1);
       for (int i = 0; i < 512; i++) begin
         @(negedge clk);
         sd_byte_data = 8'(i);
@@ -150,12 +155,12 @@ module tb_smart_artix_asset_loader;
       if (writer_start) begin
         writer_busy <= 1'b1;
         check(writer_base_byte_addr == 64'h40, "writer base byte address mismatch");
-        check(writer_total_bytes == 32'd20, "writer total byte count mismatch");
+      check(writer_total_bytes == 32'd1040, "writer total byte count mismatch");
       end
       if (writer_byte_valid && writer_byte_ready) begin
         check(writer_byte_data == 8'(writer_bytes_seen), "writer byte data mismatch");
         writer_bytes_seen <= writer_bytes_seen + 1;
-        if (writer_bytes_seen == 19) begin
+        if (writer_bytes_seen == expected_total_bytes - 1) begin
           writer_done_pulse <= 1'b1;
           writer_busy <= 1'b0;
         end
@@ -175,6 +180,7 @@ module tb_smart_artix_asset_loader;
     writer_byte_ready = 1'b1;
     writer_error_pulse = 1'b0;
     errors = 0;
+    expected_total_bytes = 1040;
 
     repeat (3) @(posedge clk);
     rst = 1'b0;
@@ -187,16 +193,28 @@ module tb_smart_artix_asset_loader;
 
     ddr_init_calib_complete = 1'b1;
     send_header_sector();
-    send_data_sector(32'd7);
+    accept_request(32'd7, 16'd3);
+    for (int sector = 0; sector < 3; sector++) begin
+      for (int i = 0; i < 512; i++) begin
+        @(negedge clk);
+        sd_byte_data = 8'(i);
+        sd_byte_last = (sector == 2) && (i == 511);
+        sd_byte_valid = 1'b1;
+        wait (sd_byte_ready);
+      end
+    end
+    @(negedge clk);
+    sd_byte_valid = 1'b0;
+    sd_byte_last = 1'b0;
 
     wait (asset_loaded);
     @(posedge clk);
     check(!busy, "loader stayed busy after asset_loaded");
     check(error_code == 8'd0, "loader reported unexpected error");
-    check(bytes_loaded == 32'd20, "loader bytes_loaded mismatch");
-    check(sf2_size_bytes == 32'd20, "loader sf2_size_bytes mismatch");
-    check(current_lba == 32'd7, "loader current_lba mismatch");
-    check(writer_bytes_seen == 20, "loader did not stream expected writer bytes");
+    check(bytes_loaded == 32'd1040, "loader bytes_loaded mismatch");
+    check(sf2_size_bytes == 32'd1040, "loader sf2_size_bytes mismatch");
+    check(current_lba == 32'd9, "loader current_lba mismatch");
+    check(writer_bytes_seen == 1040, "loader did not stream expected writer bytes");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_asset_loader errors=%0d", errors);

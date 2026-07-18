@@ -118,7 +118,11 @@ and DDR debug traffic behind a board-specific subsystem:
 ```text
 smart_artix_top
 +- smart_artix_ddr3_subsystem
-|  +- smart_artix_sd_native_pin_asset_loader
+|  +- smart_artix_sd_native_pin_phy
+|  +- smart_artix_sd_native_asset_loader
+|  |  +- smart_artix_sd_native_block_reader
+|  |  +- smart_artix_asset_loader
+|  |  +- smart_artix_ddr3_asset_writer
 |  +- smart_artix_ddr3_rw_arbiter
 |  +- smart_artix_ddr3_debug_master
 |  +- smart_artix_ddr3_line_reader

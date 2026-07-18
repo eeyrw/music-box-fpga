@@ -302,7 +302,8 @@ The loader currently targets SDHC and SDXC cards:
 - native-mode card identification and selection through `CMD2`, `CMD3`, and
   `CMD7`.
 - 4-bit data mode through `CMD55/ACMD6`.
-- single-block reads through `CMD17`.
+- high-speed timing through `CMD6`, then reads through `CMD17` or
+  predeclared `CMD23/CMD18` bursts.
 
 Do not use SDSC cards for the first bring-up path. The RTL intentionally does not
 implement the byte-addressed SDSC fallback.

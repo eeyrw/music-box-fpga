@@ -57,6 +57,9 @@ module fake_sd_native_phy_model #(
   logic [15:0] data_delay_count;
   logic [15:0] data_byte_index;
   logic [15:0] active_block_len;
+  logic [15:0] active_block_index;
+  logic [15:0] active_block_count;
+  logic [15:0] predeclared_block_count;
   logic [7:0] acmd41_count;
   logic cmd_accept;
   logic unused_cmd_inputs;
@@ -119,6 +122,20 @@ module fake_sd_native_phy_model #(
   task automatic start_data(input logic [15:0] block_len);
     begin
       active_block_len <= block_len;
+      active_block_index <= '0;
+      active_block_count <= 16'd1;
+      data_byte_index <= '0;
+      data_delay_count <= '0;
+      data_state <= DATA_WAIT;
+    end
+  endtask
+
+  task automatic start_multi_data(input logic [15:0] block_len,
+                                  input logic [15:0] block_count);
+    begin
+      active_block_len <= block_len;
+      active_block_index <= '0;
+      active_block_count <= (block_count == 16'd0) ? 16'd1 : block_count;
       data_byte_index <= '0;
       data_delay_count <= '0;
       data_state <= DATA_WAIT;
@@ -136,6 +153,9 @@ module fake_sd_native_phy_model #(
       illegal_command_count <= '0;
       last_read_lba <= '0;
       active_block_len <= 16'd512;
+      active_block_index <= '0;
+      active_block_count <= 16'd1;
+      predeclared_block_count <= 16'd0;
       data_delay_count <= '0;
       data_byte_index <= '0;
       rsp_valid <= 1'b0;
@@ -151,9 +171,6 @@ module fake_sd_native_phy_model #(
       if (data_valid && data_ready) begin
         data_valid <= 1'b0;
         data_last <= 1'b0;
-        if (data_byte_index == active_block_len) begin
-          data_state <= DATA_IDLE;
-        end
       end
 
       unique case (data_state)
@@ -169,13 +186,24 @@ module fake_sd_native_phy_model #(
 
         DATA_SEND: begin
           if (!data_valid || data_ready) begin
-            data <= sector_byte(last_read_lba, data_byte_index);
+            data <= (active_block_len == 16'd64) ? 8'h5a
+                : sector_byte(last_read_lba + 32'(active_block_index), data_byte_index);
             data_status <= STATUS_OK;
-            data_last <= data_byte_index == active_block_len - 16'd1;
+            data_last <= (data_byte_index == active_block_len - 16'd1)
+                && (active_block_index == active_block_count - 16'd1);
             data_valid <= 1'b1;
-            data_byte_index <= data_byte_index + 16'd1;
-            if (data_byte_index == active_block_len - 16'd1)
-              data_state <= DATA_IDLE;
+            if (data_byte_index == active_block_len - 16'd1) begin
+              data_byte_index <= '0;
+              if (active_block_index == active_block_count - 16'd1) begin
+                data_state <= DATA_IDLE;
+              end else begin
+                active_block_index <= active_block_index + 16'd1;
+                data_delay_count <= '0;
+                data_state <= DATA_WAIT;
+              end
+            end else begin
+              data_byte_index <= data_byte_index + 16'd1;
+            end
           end
         end
 
@@ -263,6 +291,11 @@ module fake_sd_native_phy_model #(
               app_cmd <= 1'b0;
               wide_bus <= 1'b1;
               respond_ok('0);
+            end else if (!app_cmd && selected && card_state == CARD_TRANSFER
+                         && cmd_arg == 32'h80ff_fff1 && cmd_data_read
+                         && cmd_block_len == 16'd64) begin
+              respond_ok('0);
+              start_data(16'd64);
             end else begin
               app_cmd <= 1'b0;
               respond_illegal();
@@ -275,6 +308,31 @@ module fake_sd_native_phy_model #(
               last_read_lba <= cmd_arg;
               respond_ok('0);
               start_data(cmd_block_len);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd23: begin
+            app_cmd <= 1'b0;
+            if (selected && card_state == CARD_TRANSFER && cmd_arg[31:16] == 16'd0
+                && cmd_arg[15:0] != 16'd0) begin
+              predeclared_block_count <= cmd_arg[15:0];
+              respond_ok('0);
+            end else begin
+              respond_illegal();
+            end
+          end
+
+          6'd18: begin
+            app_cmd <= 1'b0;
+            if (selected && card_state == CARD_TRANSFER && cmd_data_read && cmd_block_len == 16'd512
+                && predeclared_block_count != 16'd0
+                && cmd_block_count == predeclared_block_count) begin
+              last_read_lba <= cmd_arg;
+              respond_ok('0);
+              start_multi_data(cmd_block_len, predeclared_block_count);
+              predeclared_block_count <= 16'd0;
             end else begin
               respond_illegal();
             end

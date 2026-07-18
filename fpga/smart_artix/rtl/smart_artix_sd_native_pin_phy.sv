@@ -73,6 +73,8 @@ module smart_artix_sd_native_pin_phy #(
   logic [7:0] rsp_bit_count;
   logic [135:0] rsp_shift;
   logic [15:0] data_byte_count;
+  logic [15:0] active_block_len;
+  logic [15:0] active_block_count;
   logic data_half;
   logic [3:0] data_high_nibble;
   logic [15:0] timeout_count;
@@ -157,6 +159,8 @@ module smart_artix_sd_native_pin_phy #(
       rsp_status <= STATUS_OK;
       rsp_data <= '0;
       data_byte_count <= '0;
+      active_block_len <= '0;
+      active_block_count <= '0;
       data_half <= 1'b0;
       data_high_nibble <= '0;
       data_valid <= 1'b0;
@@ -197,6 +201,8 @@ module smart_artix_sd_native_pin_phy #(
           if (cmd_valid) begin
             cmd_frame <= {2'b01, cmd_index, cmd_arg, crc7_command(cmd_index, cmd_arg), 1'b1};
             cmd_bit_index <= 6'd47;
+            active_block_len <= cmd_block_len;
+            active_block_count <= (cmd_block_count == 16'd0) ? 16'd1 : cmd_block_count;
             sd_cmd_o <= 1'b0;
             sd_cmd_oe <= 1'b1;
             state <= STATE_CMD_LOW;
@@ -255,7 +261,12 @@ module smart_artix_sd_native_pin_phy #(
                 rsp_status <= STATUS_OK;
                 rsp_data <= '0;
                 rsp_valid <= 1'b1;
-                state <= cmd_data_read ? STATE_DATA_WAIT : STATE_POST_LOW;
+                if (cmd_data_read) begin
+                  timeout_count <= '0;
+                  state <= STATE_DATA_WAIT;
+                end else begin
+                  state <= STATE_POST_LOW;
+                end
               end else begin
                 state <= STATE_RESP_WAIT;
               end
@@ -311,7 +322,12 @@ module smart_artix_sd_native_pin_phy #(
                   ? STATUS_OK : STATUS_CRC_ERROR;
               rsp_data <= (cmd_resp_type == RESP_LONG) ? rsp_shift[120:1] : {88'd0, rsp_shift[39:8]};
               rsp_valid <= 1'b1;
-              state <= cmd_data_read ? STATE_DATA_WAIT : STATE_POST_LOW;
+              if (cmd_data_read) begin
+                timeout_count <= '0;
+                state <= STATE_DATA_WAIT;
+              end else begin
+                state <= STATE_POST_LOW;
+              end
             end else begin
               state <= STATE_RESP_LOW;
             end
@@ -369,7 +385,7 @@ module smart_artix_sd_native_pin_phy #(
               crc_dat1 <= crc16_next(crc_dat1, sd_dat_i[1]);
               crc_dat2 <= crc16_next(crc_dat2, sd_dat_i[2]);
               crc_dat3 <= crc16_next(crc_dat3, sd_dat_i[3]);
-              if (data_byte_count == (cmd_block_len - 16'd1)) begin
+              if (data_byte_count == (active_block_len - 16'd1)) begin
                 pending_final_data <= {data_high_nibble, sd_dat_i};
               end else begin
                 data <= {data_high_nibble, sd_dat_i};
@@ -392,7 +408,7 @@ module smart_artix_sd_native_pin_phy #(
             sd_clk <= 1'b0;
             if (data_valid && !data_ready) begin
               state <= STATE_DATA_HOLD;
-            end else if (data_byte_count == cmd_block_len && !data_valid) begin
+            end else if (data_byte_count == active_block_len && !data_valid) begin
               crc_skip_count <= '0;
               crc_bit_count <= '0;
               state <= STATE_DATA_CRC_LOW;
@@ -406,7 +422,7 @@ module smart_artix_sd_native_pin_phy #(
 
         STATE_DATA_HOLD: begin
           if (!data_valid)
-            state <= data_byte_count == cmd_block_len ? STATE_DATA_CRC_LOW : STATE_DATA_LOW;
+            state <= data_byte_count == active_block_len ? STATE_DATA_CRC_LOW : STATE_DATA_LOW;
         end
 
         STATE_DATA_CRC_LOW: begin
@@ -460,15 +476,22 @@ module smart_artix_sd_native_pin_phy #(
           if (!data_valid) begin
             data <= pending_final_data;
             data_status <= (crc_match && (data_status == STATUS_OK)) ? STATUS_OK : STATUS_CRC_ERROR;
-            data_last <= 1'b1;
+            data_last <= active_block_count <= 16'd1;
             data_valid <= 1'b1;
             state <= STATE_DATA_FINAL_HOLD;
           end
         end
 
         STATE_DATA_FINAL_HOLD: begin
-          if (data_valid && data_ready)
-            state <= STATE_POST_LOW;
+          if (data_valid && data_ready) begin
+            if (active_block_count > 16'd1) begin
+              active_block_count <= active_block_count - 16'd1;
+              timeout_count <= '0;
+              state <= STATE_DATA_WAIT;
+            end else begin
+              state <= STATE_POST_LOW;
+            end
+          end
         end
 
         STATE_POST_LOW: begin
@@ -513,7 +536,7 @@ module smart_artix_sd_native_pin_phy #(
 /* verilator lint_off UNUSEDSIGNAL */
   logic unused_inputs;
 /* verilator lint_on UNUSEDSIGNAL */
-  assign unused_inputs = (^cmd_block_count) ^ command_done ^ response_done ^ data_done
+  assign unused_inputs = command_done ^ response_done ^ data_done
       ^ (^crc_skip_count) ^ unused_rsp_shift_msb;
   assign command_done = 1'b0;
   assign response_done = 1'b0;

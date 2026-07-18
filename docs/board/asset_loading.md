@@ -98,18 +98,18 @@ The first Smart Artix implementation provides the board-side middle of this path
 - `smart_artix_ddr3_asset_writer` packs the byte stream into MIG write-data beats,
   emits write masks for a partial final beat, and tracks the independent MIG
   command and write-data ready handshakes.
-- `smart_artix_ddr3_rw_arbiter` multiplexes wavetable read commands and loader
-  write commands onto one MIG application command port. Read commands have
-  priority; the write-data channel is passed through independently to match the
-  7-series MIG app interface.
-- `smart_artix_sd_ddr3_asset_loader` wires those two blocks together behind a
-  sector-stream SD reader interface and a MIG write interface.
+- `smart_artix_ddr3_rw_arbiter` multiplexes wavetable reads, loader writes, and
+  debug reads/writes onto one MIG application port. Read commands have priority
+  when no read response is outstanding; each write command and write-data beat is
+  locked to the same owner until both sides of the 7-series MIG app interface
+  accept the write.
 - `smart_artix_sd_native_block_reader` implements the matching command-level
   native SD path above the pin PHY: `CMD0`, `CMD8`,
   `CMD55`/`ACMD41`, `CMD2`, `CMD3`, `CMD7`, `CMD55`/`ACMD6` to enter 4-bit bus
-  mode, then `CMD17` single-block reads.
-- `smart_artix_sd_native_asset_loader` connects the native reader to the same raw
-  image loader and DDR3 writer.
+  mode, `CMD6` to switch high-speed timing, then `CMD17` single-block reads and
+  `CMD23`/`CMD18` predeclared multi-block reads.
+- `smart_artix_sd_native_asset_loader` connects the native reader to the raw
+  image loader and DDR3 writer at the command/data interface.
 - `smart_artix_sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
   `SD_CLK`, bidirectional `CMD` through `cmd_o/cmd_oe/cmd_i`, and `DAT[3:0]` read
   sampling. It generates command CRC7, captures short/long responses, and converts
@@ -118,8 +118,9 @@ The first Smart Artix implementation provides the board-side middle of this path
   emits the SD-required idle clocks before accepting commands, checks the data-block
   end bit on all four DAT lines, and emits idle clocks after each transaction so
   the card has bus-turnaround clocks before the next command.
-- `smart_artix_sd_native_pin_asset_loader` wires the native pin layer through the
-  native block reader into the raw image loader and DDR3 writer.
+- `smart_artix_ddr3_subsystem` wires the native pin layer through the native
+  command/data asset loader and arbitrates the resulting DDR3 writes with runtime
+  wavetable reads.
 
 Native 4-bit SD keeps command/control sequencing separate from the byte data
 stream. The current native pin layer generates command CRC7, receives data bytes,
@@ -131,7 +132,8 @@ product path uses the raw `WTSF` SD image.
 Board simulation also includes `fake_sd_native_phy_model`, a card-side behavioral
 model following the fake-card testing style used by standalone SD-reader projects.
 It maintains initialization state, app-command state, RCA selection, 4-bit bus
-mode, OCR/CID-style responses, and delayed `CMD17` block data. This gives the
+mode, high-speed switch status data, OCR/CID-style responses, and delayed
+single-block or multi-block read data. This gives the
 native command reader a more realistic regression than a scripted response list,
 while still stopping at the command/data interface rather than modeling pin-level
 `CMD`/`DAT` electrical timing.
@@ -160,7 +162,9 @@ Native mode:
   CMD3            -> capture RCA
   CMD7            -> select card
   CMD55/ACMD6     -> switch DAT bus to 4-bit mode
+  CMD6            -> switch high-speed timing while still using the init clock
   CMD17           -> single-block reads by LBA
+  CMD23/CMD18     -> predeclared multi-block reads by LBA
 ```
 
 The fake-card regression exercises the native-mode retry path by returning busy
@@ -175,9 +179,10 @@ adopted yet:
 - `CMD16` block-length setup is not used because SDHC/SDXC cards have fixed
   512-byte block addressing for this path.
 - The reader does not switch from a slow initialization clock to a faster transfer
-  clock internally; `smart_artix_sd_native_pin_asset_loader` selects between
+  clock internally; `smart_artix_ddr3_subsystem` selects between
   `sd_init_clk_div` and `sd_transfer_clk_div` at the pin PHY based on the reader's
-  `sd_initialized` state.
+  `sd_transfer_clock_ready` state. This keeps the `CMD6` high-speed switch and
+  its 64-byte status block on the initialization clock.
 - Pin-level pull-up behavior on `CMD` and `DAT[3:0]` is handled in the Smart Artix
   XDC skeleton with conditional `PULLUP` constraints that become active when the
   board top exposes native SD ports.

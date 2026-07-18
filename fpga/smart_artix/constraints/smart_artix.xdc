@@ -30,8 +30,9 @@ set_property IOSTANDARD LVCMOS33 [get_ports {i2s_bclk i2s_lrclk i2s_sdata}]
 # Native SD card pins. Some boards label these nets by their SPI-mode role:
 # SCK -> SD_CLK, MOSI -> SD_CMD, MISO -> SD_D0, and CS -> SD_D3. Native 4-bit
 # mode also uses SD_D1 and SD_D2. The current board top is a read-only SD host:
-# the SD card drives DAT[3:0] during CMD17 data blocks, and the FPGA samples
-# those pins as inputs. The FPGA must not actively drive DAT[3:0] in this path.
+# the SD card drives DAT[3:0] during CMD6 status and read data blocks, and the
+# FPGA samples those pins as inputs. The FPGA must not actively drive DAT[3:0]
+# in this path.
 # Keep pull-ups enabled on CMD and DAT[3:0]. DAT1-DAT3 must not float during
 # power-up; otherwise a card can enter the wrong mode or fail native-SD bring-up.
 set_property PACKAGE_PIN V20 [get_ports sd_clk]

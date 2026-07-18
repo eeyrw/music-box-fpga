@@ -1,18 +1,21 @@
 module smart_artix_sd_native_block_reader #(
   parameter int LBA_WIDTH = 32,
-  parameter int INIT_RETRY_LIMIT = 1024
+  parameter int INIT_RETRY_LIMIT = 1024,
+  parameter bit ENABLE_HIGH_SPEED = 1'b1
 ) (
   input  logic                clk,
   input  logic                rst,
 
   input  logic                init_start,
   output logic                initialized,
+  output logic                transfer_clock_ready,
   output logic                busy,
   output logic [7:0]          error_code,
 
   input  logic                block_req_valid,
   output logic                block_req_ready,
   input  logic [LBA_WIDTH-1:0] block_req_lba,
+  input  logic [15:0]         block_req_block_count,
 
   output logic                block_byte_valid,
   input  logic                block_byte_ready,
@@ -53,16 +56,23 @@ module smart_artix_sd_native_block_reader #(
   localparam logic [7:0] ERROR_ACMD6 = 8'd7;
   localparam logic [7:0] ERROR_CMD17 = 8'd8;
   localparam logic [7:0] ERROR_DATA = 8'd9;
+  localparam logic [7:0] ERROR_CMD6 = 8'd10;
+  localparam logic [7:0] ERROR_CMD23 = 8'd11;
+  localparam logic [7:0] ERROR_CMD18 = 8'd12;
 
   localparam logic [5:0] CMD0 = 6'd0;
   localparam logic [5:0] CMD2 = 6'd2;
   localparam logic [5:0] CMD3 = 6'd3;
+  localparam logic [5:0] CMD6 = 6'd6;
   localparam logic [5:0] CMD7 = 6'd7;
   localparam logic [5:0] CMD8 = 6'd8;
   localparam logic [5:0] CMD17 = 6'd17;
+  localparam logic [5:0] CMD18 = 6'd18;
+  localparam logic [5:0] CMD23 = 6'd23;
   localparam logic [5:0] CMD55 = 6'd55;
   localparam logic [5:0] ACMD6 = 6'd6;
   localparam logic [5:0] ACMD41 = 6'd41;
+  localparam logic [31:0] CMD6_SWITCH_HIGH_SPEED_ARG = 32'h80ff_fff1;
 
   typedef enum logic [4:0] {
     STATE_IDLE,
@@ -83,7 +93,10 @@ module smart_artix_sd_native_block_reader #(
     OP_CMD7,
     OP_CMD55_4BIT,
     OP_ACMD6,
-    OP_CMD17
+    OP_CMD6_HS,
+    OP_CMD17,
+    OP_CMD23,
+    OP_CMD18
   } op_t;
 
   state_t state;
@@ -95,6 +108,11 @@ module smart_artix_sd_native_block_reader #(
   logic [15:0] init_retry_count;
   logic [15:0] rca;
   logic [8:0] data_count;
+  logic [15:0] active_block_count;
+  logic [15:0] pending_block_count;
+  logic [15:0] pending_block_len;
+  logic [15:0] request_block_count;
+  logic [LBA_WIDTH-1:0] active_lba;
   logic cmd_accept;
   logic data_accept;
   logic unused_rsp_bits;
@@ -110,20 +128,25 @@ module smart_artix_sd_native_block_reader #(
   assign phy_cmd_arg = pending_cmd_arg;
   assign phy_cmd_resp_type = pending_resp_type;
   assign phy_cmd_data_read = pending_data_read;
-  assign phy_cmd_block_len = 16'd512;
-  assign phy_cmd_block_count = pending_data_read ? 16'd1 : 16'd0;
+  assign phy_cmd_block_len = pending_block_len;
+  assign phy_cmd_block_count = pending_data_read ? pending_block_count : 16'd0;
   assign phy_data_ready = (state == STATE_READ_DATA) && (!block_byte_valid || block_byte_ready);
+  assign request_block_count = (block_req_block_count == 16'd0) ? 16'd1 : block_req_block_count;
 
   task automatic start_command(input logic [5:0] cmd_index,
                                input logic [31:0] cmd_arg,
                                input logic [1:0] resp_type,
                                input logic data_read,
+                               input logic [15:0] block_len,
+                               input logic [15:0] block_count,
                                input op_t next_op);
     begin
       pending_cmd_index <= cmd_index;
       pending_cmd_arg <= cmd_arg;
       pending_resp_type <= resp_type;
       pending_data_read <= data_read;
+      pending_block_len <= block_len;
+      pending_block_count <= block_count;
       op <= next_op;
       state <= STATE_SEND;
     end
@@ -133,6 +156,7 @@ module smart_artix_sd_native_block_reader #(
     begin
       error_code <= code;
       initialized <= 1'b0;
+      transfer_clock_ready <= 1'b0;
       state <= STATE_ERROR;
     end
   endtask
@@ -142,14 +166,19 @@ module smart_artix_sd_native_block_reader #(
       state <= STATE_IDLE;
       op <= OP_NONE;
       initialized <= 1'b0;
+      transfer_clock_ready <= 1'b0;
       error_code <= ERROR_NONE;
       pending_cmd_index <= '0;
       pending_cmd_arg <= '0;
       pending_resp_type <= RESP_NONE;
       pending_data_read <= 1'b0;
+      pending_block_len <= 16'd0;
+      pending_block_count <= 16'd0;
       init_retry_count <= '0;
       rca <= '0;
       data_count <= '0;
+      active_block_count <= '0;
+      active_lba <= '0;
       block_byte_valid <= 1'b0;
       block_byte_data <= '0;
       block_byte_last <= 1'b0;
@@ -164,9 +193,15 @@ module smart_artix_sd_native_block_reader #(
           if (init_start && !initialized) begin
             error_code <= ERROR_NONE;
             init_retry_count <= '0;
-            start_command(CMD0, 32'h0000_0000, RESP_NONE, 1'b0, OP_CMD0);
+            start_command(CMD0, 32'h0000_0000, RESP_NONE, 1'b0, 16'd0, 16'd0, OP_CMD0);
           end else if (block_req_valid && block_req_ready) begin
-            start_command(CMD17, 32'(block_req_lba), RESP_SHORT, 1'b1, OP_CMD17);
+            active_lba <= block_req_lba;
+            if (request_block_count == 16'd1) begin
+              start_command(CMD17, 32'(block_req_lba), RESP_SHORT, 1'b1, 16'd512, 16'd1, OP_CMD17);
+            end else begin
+              active_block_count <= request_block_count;
+              start_command(CMD23, {16'd0, request_block_count}, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD23);
+            end
           end
         end
 
@@ -174,7 +209,7 @@ module smart_artix_sd_native_block_reader #(
           if (cmd_accept) begin
             if (pending_resp_type == RESP_NONE) begin
               if (op == OP_CMD0)
-                start_command(CMD8, 32'h0000_01aa, RESP_SHORT, 1'b0, OP_CMD8);
+                start_command(CMD8, 32'h0000_01aa, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD8);
               else
                 state <= STATE_IDLE;
             end else begin
@@ -188,14 +223,14 @@ module smart_artix_sd_native_block_reader #(
             unique case (op)
               OP_CMD8: begin
                 if (phy_rsp_status == STATUS_OK && phy_rsp_data[11:0] == 12'h1aa)
-                  start_command(CMD55, 32'h0000_0000, RESP_SHORT, 1'b0, OP_CMD55_IDLE);
+                  start_command(CMD55, 32'h0000_0000, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD55_IDLE);
                 else
                   fail(ERROR_CMD8);
               end
 
               OP_CMD55_IDLE: begin
                 if (phy_rsp_status == STATUS_OK)
-                  start_command(ACMD41, 32'h4030_0000, RESP_SHORT, 1'b0, OP_ACMD41);
+                  start_command(ACMD41, 32'h4030_0000, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_ACMD41);
                 else
                   fail(ERROR_ACMD41);
               end
@@ -205,12 +240,12 @@ module smart_artix_sd_native_block_reader #(
                   fail(ERROR_ACMD41);
                 end else if (phy_rsp_data[31]) begin
                   if (phy_rsp_data[30])
-                    start_command(CMD2, 32'h0000_0000, RESP_LONG, 1'b0, OP_CMD2);
+                    start_command(CMD2, 32'h0000_0000, RESP_LONG, 1'b0, 16'd0, 16'd0, OP_CMD2);
                   else
                     fail(ERROR_NOT_SDHC);
                 end else if (init_retry_count != 16'(INIT_RETRY_LIMIT - 1)) begin
                   init_retry_count <= init_retry_count + 16'd1;
-                  start_command(CMD55, 32'h0000_0000, RESP_SHORT, 1'b0, OP_CMD55_IDLE);
+                  start_command(CMD55, 32'h0000_0000, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD55_IDLE);
                 end else begin
                   fail(ERROR_ACMD41);
                 end
@@ -218,7 +253,7 @@ module smart_artix_sd_native_block_reader #(
 
               OP_CMD2: begin
                 if (phy_rsp_status == STATUS_OK)
-                  start_command(CMD3, 32'h0000_0000, RESP_SHORT, 1'b0, OP_CMD3);
+                  start_command(CMD3, 32'h0000_0000, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD3);
                 else
                   fail(ERROR_CMD2);
               end
@@ -226,7 +261,7 @@ module smart_artix_sd_native_block_reader #(
               OP_CMD3: begin
                 if (phy_rsp_status == STATUS_OK) begin
                   rca <= phy_rsp_data[31:16];
-                  start_command(CMD7, {phy_rsp_data[31:16], 16'h0000}, RESP_SHORT, 1'b0, OP_CMD7);
+                  start_command(CMD7, {phy_rsp_data[31:16], 16'h0000}, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD7);
                 end else begin
                   fail(ERROR_CMD3);
                 end
@@ -234,38 +269,69 @@ module smart_artix_sd_native_block_reader #(
 
               OP_CMD7: begin
                 if (phy_rsp_status == STATUS_OK)
-                  start_command(CMD55, {rca, 16'h0000}, RESP_SHORT, 1'b0, OP_CMD55_4BIT);
+                  start_command(CMD55, {rca, 16'h0000}, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_CMD55_4BIT);
                 else
                   fail(ERROR_CMD7);
               end
 
               OP_CMD55_4BIT: begin
                 if (phy_rsp_status == STATUS_OK)
-                  start_command(ACMD6, 32'h0000_0002, RESP_SHORT, 1'b0, OP_ACMD6);
+                  start_command(ACMD6, 32'h0000_0002, RESP_SHORT, 1'b0, 16'd0, 16'd0, OP_ACMD6);
                 else
                   fail(ERROR_ACMD6);
               end
 
               OP_ACMD6: begin
                 if (phy_rsp_status == STATUS_OK) begin
-                  initialized <= 1'b1;
-                  error_code <= ERROR_NONE;
-                  state <= STATE_IDLE;
+                  if (ENABLE_HIGH_SPEED) begin
+                    start_command(CMD6, CMD6_SWITCH_HIGH_SPEED_ARG, RESP_SHORT, 1'b1, 16'd64, 16'd1, OP_CMD6_HS);
+                  end else begin
+                    initialized <= 1'b1;
+                    transfer_clock_ready <= 1'b1;
+                    error_code <= ERROR_NONE;
+                    state <= STATE_IDLE;
+                  end
                 end else begin
                   fail(ERROR_ACMD6);
+                end
+              end
+
+              OP_CMD6_HS: begin
+                if (phy_rsp_status == STATUS_OK) begin
+                  data_count <= '0;
+                  state <= STATE_READ_DATA;
+                end else begin
+                  fail(ERROR_CMD6);
                 end
               end
 
               OP_CMD17: begin
                 if (phy_rsp_status == STATUS_OK) begin
                   data_count <= '0;
+                  active_block_count <= 16'd1;
                   state <= STATE_READ_DATA;
                 end else begin
                   fail(ERROR_CMD17);
                 end
               end
 
-              default: fail(ERROR_CMD17);
+              OP_CMD23: begin
+                if (phy_rsp_status == STATUS_OK)
+                  start_command(CMD18, 32'(active_lba), RESP_SHORT, 1'b1, 16'd512, active_block_count, OP_CMD18);
+                else
+                  fail(ERROR_CMD23);
+              end
+
+              OP_CMD18: begin
+                if (phy_rsp_status == STATUS_OK) begin
+                  data_count <= '0;
+                  state <= STATE_READ_DATA;
+                end else begin
+                  fail(ERROR_CMD18);
+                end
+              end
+
+              default: fail(ERROR_CMD18);
             endcase
           end
         end
@@ -274,14 +340,28 @@ module smart_artix_sd_native_block_reader #(
           if (data_accept) begin
             if (phy_data_status != STATUS_OK) begin
               fail(ERROR_DATA);
+            end else if (op == OP_CMD6_HS) begin
+              if (phy_data_last || data_count == 9'(pending_block_len - 16'd1)) begin
+                initialized <= 1'b1;
+                transfer_clock_ready <= 1'b1;
+                error_code <= ERROR_NONE;
+                state <= STATE_IDLE;
+              end else begin
+                data_count <= data_count + 9'd1;
+              end
             end else begin
               block_byte_data <= phy_data;
               block_byte_valid <= 1'b1;
-              block_byte_last <= phy_data_last || data_count == 9'd511;
-              if (phy_data_last || data_count == 9'd511)
-                state <= STATE_IDLE;
-              else
+              block_byte_last <= phy_data_last || ((data_count == 9'd511) && (active_block_count <= 16'd1));
+              if (data_count == 9'd511) begin
+                data_count <= '0;
+                if (active_block_count > 16'd1)
+                  active_block_count <= active_block_count - 16'd1;
+                else
+                  state <= STATE_IDLE;
+              end else begin
                 data_count <= data_count + 9'd1;
+              end
             end
           end
         end
@@ -290,7 +370,7 @@ module smart_artix_sd_native_block_reader #(
           if (init_start) begin
             error_code <= ERROR_NONE;
             init_retry_count <= '0;
-            start_command(CMD0, 32'h0000_0000, RESP_NONE, 1'b0, OP_CMD0);
+            start_command(CMD0, 32'h0000_0000, RESP_NONE, 1'b0, 16'd0, 16'd0, OP_CMD0);
           end
         end
 

@@ -43,7 +43,7 @@ module smart_artix_top (
   localparam int SYS_CLK_HZ = 100_000_000;
   localparam int SAMPLE_RATE_HZ = 48_000;
   localparam logic [SD_DIV_WIDTH-1:0] SD_INIT_CLK_DIV = SD_DIV_WIDTH'(124);
-  localparam logic [SD_DIV_WIDTH-1:0] SD_TRANSFER_CLK_DIV = SD_DIV_WIDTH'(1);
+  localparam logic [SD_DIV_WIDTH-1:0] SD_TRANSFER_CLK_DIV = SD_DIV_WIDTH'(0);
 
   logic clk_sys;
   logic rst_sys;

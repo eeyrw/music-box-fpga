@@ -5,11 +5,13 @@ module tb_smart_artix_sd_native_block_reader;
   logic rst;
   logic init_start;
   logic initialized;
+  logic transfer_clock_ready;
   logic busy;
   logic [7:0] error_code;
   logic block_req_valid;
   logic block_req_ready;
   logic [LBA_WIDTH-1:0] block_req_lba;
+  logic [15:0] block_req_block_count;
   logic block_byte_valid;
   logic block_byte_ready;
   logic [7:0] block_byte_data;
@@ -41,11 +43,13 @@ module tb_smart_artix_sd_native_block_reader;
     .rst,
     .init_start,
     .initialized,
+    .transfer_clock_ready,
     .busy,
     .error_code,
     .block_req_valid,
     .block_req_ready,
     .block_req_lba,
+    .block_req_block_count,
     .block_byte_valid,
     .block_byte_ready,
     .block_byte_data,
@@ -93,8 +97,7 @@ module tb_smart_artix_sd_native_block_reader;
       check(phy_cmd_resp_type == expected_resp, "native SD response type mismatch");
       check(phy_cmd_data_read == expected_data_read, "native SD data_read mismatch");
       if (expected_data_read) begin
-        check(phy_cmd_block_len == 16'd512, "native SD block length mismatch");
-        check(phy_cmd_block_count == 16'd1, "native SD block count mismatch");
+        check(phy_cmd_block_count != 16'd0, "native SD block count missing");
       end
       phy_cmd_ready = 1'b1;
       @(posedge clk);
@@ -146,6 +149,7 @@ module tb_smart_artix_sd_native_block_reader;
     init_start = 1'b0;
     block_req_valid = 1'b0;
     block_req_lba = 32'd0;
+    block_req_block_count = 16'd1;
     block_byte_ready = 1'b1;
     phy_cmd_ready = 1'b0;
     phy_rsp_valid = 1'b0;
@@ -175,10 +179,25 @@ module tb_smart_artix_sd_native_block_reader;
     accept_cmd_rsp(6'd7, 32'h1234_0000, 2'd1, 1'b0, 120'h0);
     accept_cmd_rsp(6'd55, 32'h1234_0000, 2'd1, 1'b0, 120'h0);
     accept_cmd_rsp(6'd6, 32'h0000_0002, 2'd1, 1'b0, 120'h0);
+    accept_cmd_rsp(6'd6, 32'h80ff_fff1, 2'd1, 1'b1, 120'h0);
+    check(phy_cmd_block_len == 16'd64, "native SD CMD6 status block length mismatch");
+    check(phy_cmd_block_count == 16'd1, "native SD CMD6 status block count mismatch");
+    for (int i = 0; i < 64; i++) begin
+      @(negedge clk);
+      phy_data = 8'h5a;
+      phy_data_last = i == 63;
+      phy_data_valid = 1'b1;
+      wait (phy_data_ready);
+      @(posedge clk);
+      @(negedge clk);
+      phy_data_valid = 1'b0;
+      phy_data_last = 1'b0;
+    end
 
     wait (initialized);
     @(posedge clk);
     check(error_code == 8'd0, "native SD init error");
+    check(transfer_clock_ready, "native SD transfer clock not ready after high-speed switch");
     check(!busy, "native SD reader stayed busy after init");
     check(block_req_ready, "native SD reader not ready after init");
 
@@ -190,6 +209,8 @@ module tb_smart_artix_sd_native_block_reader;
     block_req_valid = 1'b0;
 
     accept_cmd_rsp(6'd17, 32'h0000_4567, 2'd1, 1'b1, 120'h0);
+    check(phy_cmd_block_len == 16'd512, "native SD CMD17 block length mismatch");
+    check(phy_cmd_block_count == 16'd1, "native SD CMD17 block count mismatch");
     for (int i = 0; i < 512; i++) begin
       @(negedge clk);
       phy_data = 8'(i);

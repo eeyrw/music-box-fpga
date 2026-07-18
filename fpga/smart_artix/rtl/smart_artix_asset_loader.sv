@@ -17,6 +17,7 @@ module smart_artix_asset_loader #(
   output logic                sd_req_valid,
   input  logic                sd_req_ready,
   output logic [LBA_WIDTH-1:0] sd_req_lba,
+  output logic [15:0]         sd_req_block_count,
   input  logic                sd_byte_valid,
   output logic                sd_byte_ready,
   input  logic [7:0]          sd_byte_data,
@@ -50,6 +51,7 @@ module smart_artix_asset_loader #(
   localparam logic [7:0] ERROR_WRITER = 8'd4;
   localparam logic [7:0] ERROR_LBA_RANGE = 8'd5;
   localparam logic [7:0] ERROR_SIZE_RANGE = 8'd6;
+  localparam int MAX_SD_BURST_BLOCKS = 16;
 
   typedef enum logic [3:0] {
     STATE_IDLE,
@@ -73,11 +75,13 @@ module smart_artix_asset_loader #(
   logic [31:0] header_sf2_size_reserved;
   logic [63:0] header_ddr_base_byte_addr;
   logic [31:0] data_bytes_remaining;
+  logic [15:0] burst_block_count;
   logic writer_byte_accepted;
 
   assign busy = (state != STATE_IDLE) && (state != STATE_DONE) && (state != STATE_ERROR);
   assign sd_req_valid = (state == STATE_REQ_HEADER) || (state == STATE_REQ_DATA);
   assign sd_req_lba = (state == STATE_REQ_HEADER) ? LBA_WIDTH'(0) : current_lba;
+  assign sd_req_block_count = (state == STATE_REQ_HEADER) ? 16'd1 : burst_block_count;
   assign sd_byte_ready = (state == STATE_READ_HEADER) ? 1'b1
       : (state == STATE_STREAM_DATA) ? ((data_bytes_remaining == 32'd0) ? 1'b1 : writer_byte_ready)
       : 1'b0;
@@ -88,6 +92,15 @@ module smart_artix_asset_loader #(
       && (data_bytes_remaining != 32'd0);
   assign writer_byte_data = sd_byte_data;
   assign writer_byte_accepted = writer_byte_valid && writer_byte_ready;
+
+  always_comb begin
+    if (data_bytes_remaining > 32'(MAX_SD_BURST_BLOCKS * 512))
+      burst_block_count = 16'(MAX_SD_BURST_BLOCKS);
+    else
+      burst_block_count = 16'((data_bytes_remaining + 32'd511) >> 9);
+    if (burst_block_count == 16'd0)
+      burst_block_count = 16'd1;
+  end
 
   always_comb begin
     unique case (state)
@@ -242,11 +255,16 @@ module smart_artix_asset_loader #(
                 bytes_loaded <= bytes_loaded + 32'd1;
               end
 
+              if (sector_byte_index == 9'd511) begin
+                sector_byte_index <= '0;
+                if (!(sd_byte_last && (data_bytes_remaining == (writer_byte_accepted ? 32'd1 : 32'd0))))
+                  current_lba <= current_lba + LBA_WIDTH'(1);
+              end
+
               if (sd_byte_last) begin
                 if (data_bytes_remaining == (writer_byte_accepted ? 32'd1 : 32'd0))
                   state <= STATE_WAIT_WRITER;
                 else begin
-                  current_lba <= current_lba + LBA_WIDTH'(1);
                   state <= STATE_REQ_DATA;
                 end
               end

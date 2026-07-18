@@ -9,6 +9,7 @@ module tb_smart_artix_sd_native_asset_loader;
   logic busy;
   logic asset_loaded;
   logic sd_initialized;
+  logic sd_transfer_clock_ready;
   logic [3:0] status_state;
   logic [7:0] sd_error_code;
   logic [7:0] loader_error_code;
@@ -51,6 +52,7 @@ module tb_smart_artix_sd_native_asset_loader;
     .busy,
     .asset_loaded,
     .sd_initialized,
+    .sd_transfer_clock_ready,
     .status_state,
     .sd_error_code,
     .loader_error_code,
@@ -175,6 +177,7 @@ module tb_smart_artix_sd_native_asset_loader;
 
     check(asset_loaded, "native asset loader did not complete from one start pulse");
     check(sd_initialized, "native asset loader did not initialize SD card");
+    check(sd_transfer_clock_ready, "native asset loader transfer clock was not marked ready");
     check(wide_bus, "native asset loader did not switch SD card to 4-bit mode");
     check(illegal_command_count == 8'd0, "native asset loader sent illegal SD command");
     check(sd_error_code == 8'd0, "native asset loader reported SD error");

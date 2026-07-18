@@ -50,10 +50,11 @@ The intended memory replacement is:
 ```text
 SD native pins: CLK, CMD, DAT[3:0]
   -> smart_artix_ddr3_subsystem
-  -> smart_artix_sd_native_pin_asset_loader
   -> smart_artix_sd_native_pin_phy
+  -> smart_artix_sd_native_asset_loader
   -> smart_artix_sd_native_block_reader
-  -> smart_artix_sd_ddr3_asset_loader
+  -> smart_artix_asset_loader
+  -> smart_artix_ddr3_asset_writer
   -> smart_artix_ddr3_rw_arbiter
   -> Xilinx MIG app write interface
   -> MT41K256M16TW
@@ -76,25 +77,32 @@ The native 4-bit path is connected to `smart_artix_top`:
 ```text
 native SD pins: CLK, CMD, DAT[3:0]
   -> smart_artix_sd_native_pin_phy
+  -> smart_artix_sd_native_asset_loader
   -> smart_artix_sd_native_block_reader
-  -> smart_artix_sd_ddr3_asset_loader
+  -> smart_artix_asset_loader
+  -> smart_artix_ddr3_asset_writer
   -> smart_artix_ddr3_rw_arbiter
   -> MIG app write interface
 ```
 
 The native reader initializes SDHC/SDXC cards, selects the assigned RCA, switches
-to 4-bit bus mode with `ACMD6`, and issues single-block `CMD17` reads. The native
+to 4-bit bus mode with `ACMD6`, switches to high-speed timing with `CMD6`, and
+issues `CMD17` single-block reads or `CMD23`/`CMD18` predeclared multi-block
+reads. The native
 pin PHY drives `SD_CLK`, transmits commands with CRC7, releases/captures the `CMD`
 line for responses, receives `DAT[3:0]` as a byte stream, and checks each data
 line's CRC16 before releasing the final byte of a block.
 
 The initialization policy follows the same practical sequence used by small FPGA
 SD readers, but narrowed to SDHC/SDXC: `CMD0`, `CMD8`, retrying `CMD55/ACMD41`
-with HCS, then `CMD2/CMD3/CMD7` plus `CMD55/ACMD6` for native 4-bit mode.
+with HCS, then `CMD2/CMD3/CMD7` plus `CMD55/ACMD6` for native 4-bit mode and
+`CMD6` for high-speed timing.
 SDv1/SDSC, SPI-mode SD, FAT filesystems, and `CMD16` fallback remain out of
-scope for this loader path. The native pin asset-loader wrapper has separate
-`sd_init_clk_div` and `sd_transfer_clk_div` inputs and switches to the transfer
-divider after the SD reader reports initialization complete.
+scope for this loader path. The DDR3 subsystem has separate `sd_init_clk_div` and
+`sd_transfer_clk_div` inputs and switches the native pin PHY to the transfer
+divider after the SD reader reports `sd_transfer_clock_ready`. With the current
+100 MHz MIG UI clock, the divider formula is `sd_clk = clk / (2 * (clk_div + 1))`:
+`SD_INIT_CLK_DIV = 124` gives 400 kHz and `SD_TRANSFER_CLK_DIV = 0` gives 50 MHz.
 
 Ethernet is not part of the initial real-time audio path. If the board's
 RTL8211E interface is used later, it should first serve board control and asset

@@ -74,6 +74,7 @@ module board_loader_render_tops #(
   smart_artix_pkg::mig_app_command_t loader_mig_command;
   smart_artix_pkg::mig_app_write_data_t loader_mig_write_data;
   smart_artix_pkg::mig_app_response_t loader_mig_response;
+  logic loader_sd_transfer_clock_ready;
 
   assign mig_app_addr = MIG_ADDR_WIDTH'(loader_mig_command.addr);
   assign mig_app_cmd = loader_mig_command.cmd;
@@ -98,6 +99,7 @@ module board_loader_render_tops #(
     .busy(loader_busy),
     .asset_loaded(loader_asset_loaded),
     .sd_initialized(loader_sd_initialized),
+    .sd_transfer_clock_ready(loader_sd_transfer_clock_ready),
     .status_state(loader_status_state),
     .sd_error_code(loader_sd_error_code),
     .loader_error_code(loader_error_code),
@@ -152,4 +154,9 @@ module board_loader_render_tops #(
     .mem_debug_response_pulse(core_mem_debug_response_pulse),
     .mem_debug_response_latency(core_mem_debug_response_latency)
   );
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_loader_status;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_loader_status = loader_sd_transfer_clock_ready;
 endmodule

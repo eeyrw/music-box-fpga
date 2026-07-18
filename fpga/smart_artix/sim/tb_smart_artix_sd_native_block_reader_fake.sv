@@ -5,11 +5,13 @@ module tb_smart_artix_sd_native_block_reader_fake;
   logic rst;
   logic init_start;
   logic initialized;
+  logic transfer_clock_ready;
   logic busy;
   logic [7:0] error_code;
   logic block_req_valid;
   logic block_req_ready;
   logic [LBA_WIDTH-1:0] block_req_lba;
+  logic [15:0] block_req_block_count;
   logic block_byte_valid;
   logic block_byte_ready;
   logic [7:0] block_byte_data;
@@ -45,11 +47,13 @@ module tb_smart_artix_sd_native_block_reader_fake;
     .rst,
     .init_start,
     .initialized,
+    .transfer_clock_ready,
     .busy,
     .error_code,
     .block_req_valid,
     .block_req_ready,
     .block_req_lba,
+    .block_req_block_count,
     .block_byte_valid,
     .block_byte_ready,
     .block_byte_data,
@@ -133,6 +137,7 @@ module tb_smart_artix_sd_native_block_reader_fake;
     init_start = 1'b0;
     block_req_valid = 1'b0;
     block_req_lba = 32'd0;
+    block_req_block_count = 16'd1;
     block_byte_ready = 1'b1;
     errors = 0;
 
@@ -146,6 +151,7 @@ module tb_smart_artix_sd_native_block_reader_fake;
     wait (initialized);
     @(posedge clk);
     check(error_code == 8'd0, "fake SD native init error");
+    check(transfer_clock_ready, "fake SD native transfer clock not ready after init");
     check(!busy, "fake SD native reader stayed busy after init");
     check(block_req_ready, "fake SD native reader not ready after init");
     check(selected, "fake SD native card was not selected");

@@ -48,6 +48,24 @@ module smart_artix_ddr3_subsystem #(
   logic [31:0]               bytes_loaded;
   logic [31:0]               sf2_size_bytes;
   logic [LBA_WIDTH-1:0]      current_lba;
+  logic                      sd_transfer_clock_ready;
+  logic                      sd_cmd_valid;
+  logic                      sd_cmd_ready;
+  logic [5:0]                sd_cmd_index;
+  logic [31:0]               sd_cmd_arg;
+  logic [1:0]                sd_cmd_resp_type;
+  logic                      sd_cmd_data_read;
+  logic [15:0]               sd_cmd_block_len;
+  logic [15:0]               sd_cmd_block_count;
+  logic                      sd_rsp_valid;
+  logic [2:0]                sd_rsp_status;
+  logic [119:0]              sd_rsp_data;
+  logic                      sd_data_valid;
+  logic                      sd_data_ready;
+  logic [7:0]                sd_data;
+  logic                      sd_data_last;
+  logic [2:0]                sd_data_status;
+  logic [SD_DIV_WIDTH-1:0]   selected_sd_clk_div;
   logic                      debug_ready;
   logic                      debug_busy;
   logic                      debug_done;
@@ -76,34 +94,73 @@ module smart_artix_ddr3_subsystem #(
   assign platform_status.bytes_loaded = bytes_loaded;
   assign platform_status.sf2_size_bytes = sf2_size_bytes;
   assign platform_status.current_lba = current_lba[31:0];
+  assign selected_sd_clk_div = sd_transfer_clock_ready ? sd_transfer_clk_div : sd_init_clk_div;
 
-  smart_artix_sd_native_pin_asset_loader #(
-    .LBA_WIDTH(LBA_WIDTH),
-    .SD_DIV_WIDTH(SD_DIV_WIDTH)
+  smart_artix_sd_native_asset_loader #(
+    .LBA_WIDTH(LBA_WIDTH)
   ) asset_loader (
     .clk,
     .rst(loader_rst),
     .start,
-    .sd_init_clk_div,
-    .sd_transfer_clk_div,
     .ddr_init_calib_complete,
     .busy(loader_busy),
     .asset_loaded,
     .sd_initialized,
+    .sd_transfer_clock_ready,
     .status_state(loader_status_state),
     .sd_error_code,
     .loader_error_code,
     .bytes_loaded,
     .sf2_size_bytes,
     .current_lba,
+    .sd_cmd_valid,
+    .sd_cmd_ready,
+    .sd_cmd_index,
+    .sd_cmd_arg,
+    .sd_cmd_resp_type,
+    .sd_cmd_data_read,
+    .sd_cmd_block_len,
+    .sd_cmd_block_count,
+    .sd_rsp_valid,
+    .sd_rsp_status,
+    .sd_rsp_data,
+    .sd_data_valid,
+    .sd_data_ready,
+    .sd_data,
+    .sd_data_last,
+    .sd_data_status,
+    .mig_app_command(write_command),
+    .mig_app_write_data(write_data),
+    .mig_app_response(write_response)
+  );
+
+  smart_artix_sd_native_pin_phy #(
+    .DIV_WIDTH(SD_DIV_WIDTH)
+  ) sd_phy (
+    .clk,
+    .rst(loader_rst),
+    .clk_div(selected_sd_clk_div),
+    .cmd_valid(sd_cmd_valid),
+    .cmd_ready(sd_cmd_ready),
+    .cmd_index(sd_cmd_index),
+    .cmd_arg(sd_cmd_arg),
+    .cmd_resp_type(sd_cmd_resp_type),
+    .cmd_data_read(sd_cmd_data_read),
+    .cmd_block_len(sd_cmd_block_len),
+    .cmd_block_count(sd_cmd_block_count),
+    .rsp_valid(sd_rsp_valid),
+    .rsp_status(sd_rsp_status),
+    .rsp_data(sd_rsp_data),
+    .data_valid(sd_data_valid),
+    .data_ready(sd_data_ready),
+    .data(sd_data),
+    .data_last(sd_data_last),
+    .data_status(sd_data_status),
     .sd_clk,
     .sd_cmd_o,
     .sd_cmd_oe,
     .sd_cmd_i,
-    .sd_dat_i,
-    .mig_app_command(write_command),
-    .mig_app_write_data(write_data),
-    .mig_app_response(write_response)
+    .sd_dat_i
   );
 
   smart_artix_ddr3_rw_arbiter arbiter (

@@ -9,6 +9,7 @@ module smart_artix_sd_native_asset_loader #(
   output logic                      busy,
   output logic                      asset_loaded,
   output logic                      sd_initialized,
+  output logic                      sd_transfer_clock_ready,
   output logic [3:0]                status_state,
   output logic [7:0]                sd_error_code,
   output logic [7:0]                loader_error_code,
@@ -42,10 +43,20 @@ module smart_artix_sd_native_asset_loader #(
   logic sd_req_valid;
   logic sd_req_ready;
   logic [LBA_WIDTH-1:0] sd_req_lba;
+  logic [15:0] sd_req_block_count;
   logic sd_byte_valid;
   logic sd_byte_ready;
   logic [7:0] sd_byte_data;
   logic sd_byte_last;
+  logic writer_start;
+  logic [63:0] writer_base_byte_addr;
+  logic [31:0] writer_total_bytes;
+  logic writer_byte_valid;
+  logic writer_byte_ready;
+  logic [7:0] writer_byte_data;
+  logic writer_busy;
+  logic writer_done_pulse;
+  logic writer_error_pulse;
   logic loader_busy;
   logic sd_start_pulse;
   logic loader_start_pulse;
@@ -79,11 +90,13 @@ module smart_artix_sd_native_asset_loader #(
     .rst,
     .init_start(sd_start_pulse),
     .initialized(sd_initialized),
+    .transfer_clock_ready(sd_transfer_clock_ready),
     .busy(sd_busy),
     .error_code(sd_error_code),
     .block_req_valid(sd_req_valid),
     .block_req_ready(sd_req_ready),
     .block_req_lba(sd_req_lba),
+    .block_req_block_count(sd_req_block_count),
     .block_byte_valid(sd_byte_valid),
     .block_byte_ready(sd_byte_ready),
     .block_byte_data(sd_byte_data),
@@ -106,7 +119,7 @@ module smart_artix_sd_native_asset_loader #(
     .phy_data_status(sd_data_status)
   );
 
-  smart_artix_sd_ddr3_asset_loader #(
+  smart_artix_asset_loader #(
     .LBA_WIDTH(LBA_WIDTH)
   ) loader (
     .clk,
@@ -123,10 +136,34 @@ module smart_artix_sd_native_asset_loader #(
     .sd_req_valid,
     .sd_req_ready,
     .sd_req_lba,
+    .sd_req_block_count,
     .sd_byte_valid,
     .sd_byte_ready,
     .sd_byte_data,
     .sd_byte_last,
+    .writer_start,
+    .writer_base_byte_addr,
+    .writer_total_bytes,
+    .writer_byte_valid,
+    .writer_byte_ready,
+    .writer_byte_data,
+    .writer_busy,
+    .writer_done_pulse,
+    .writer_error_pulse
+  );
+
+  smart_artix_ddr3_asset_writer writer (
+    .clk,
+    .rst,
+    .start(writer_start),
+    .base_byte_addr(writer_base_byte_addr),
+    .total_bytes(writer_total_bytes),
+    .busy(writer_busy),
+    .done_pulse(writer_done_pulse),
+    .error_pulse(writer_error_pulse),
+    .byte_valid(writer_byte_valid),
+    .byte_ready(writer_byte_ready),
+    .byte_data(writer_byte_data),
     .mig_app_command,
     .mig_app_write_data,
     .mig_app_response

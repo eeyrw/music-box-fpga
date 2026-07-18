@@ -205,7 +205,11 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
     while (!top_->loader_asset_loaded && timeout < timeout_limit) {
       if (top_->loader_sd_error_code != 0 || top_->loader_error_code != 0) {
         throw std::runtime_error("loader error sd=" + std::to_string(int(top_->loader_sd_error_code)) +
-                                 " loader=" + std::to_string(int(top_->loader_error_code)));
+                                 " loader=" + std::to_string(int(top_->loader_error_code)) +
+                                 " current_lba=" + std::to_string(top_->loader_current_lba) +
+                                 " bytes_loaded=" + std::to_string(top_->loader_bytes_loaded) +
+                                 " sd_commands=" + std::to_string(sd_commands_) +
+                                 " last_cmd=" + std::to_string(last_cmd_));
       }
       tick();
       ++timeout;
@@ -348,9 +352,12 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
     top_->sd_rsp_data[2] = 0;
     top_->sd_rsp_data[3] = 0;
     top_->sd_data_valid = data_active_ ? 1 : 0;
-    top_->sd_data = data_active_ ? sector_byte(active_lba_, data_index_) : 0;
-    top_->sd_data_last = data_active_ && data_index_ == 511;
+    top_->sd_data = data_active_ ? current_sd_data_ : 0;
+    top_->sd_data_last = data_active_ && data_index_ == active_block_len_ - 1 &&
+                         active_block_index_ == active_block_count_ - 1;
     top_->sd_data_status = 0;
+    driven_sd_data_valid_ = top_->sd_data_valid != 0;
+    driven_sd_data_ = top_->sd_data;
 
     top_->core_ext_req_ready = (!line_pending_ && ready_gap_countdown_ == 0) ? 1 : 0;
     top_->core_ext_rsp_valid = 0;
@@ -379,6 +386,7 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   }
 
   void observe_sequential_outputs() {
+    bool data_was_active = data_active_;
     if (pending_rsp_cycles_ > 0) {
       --pending_rsp_cycles_;
       if (pending_rsp_cycles_ == 0 && data_start_pending_) {
@@ -390,16 +398,25 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
       if (data_start_delay_ == 0) {
         data_active_ = true;
         data_index_ = 0;
+        active_block_index_ = 0;
+        current_sd_data_ = active_data_byte();
+      }
+    }
+    if (data_was_active && driven_sd_data_valid_ && top_->sd_data_ready) {
+      if (data_index_ == active_block_len_ - 1) {
+        data_index_ = 0;
+        if (active_block_index_ == active_block_count_ - 1) {
+          data_active_ = false;
+        } else {
+          ++active_block_index_;
+          current_sd_data_ = active_data_byte();
+        }
+      } else {
+        ++data_index_;
+        current_sd_data_ = active_data_byte();
       }
     }
     if (top_->sd_cmd_valid && top_->sd_cmd_ready) handle_sd_command();
-    if (data_active_ && top_->sd_data_valid && top_->sd_data_ready) {
-      if (data_index_ == 511) {
-        data_active_ = false;
-      } else {
-        ++data_index_;
-      }
-    }
     if (top_->mig_app_en && top_->mig_app_rdy) pending_mig_addr_ = top_->mig_app_addr;
     if (top_->mig_app_wdf_wren && top_->mig_app_wdf_rdy) write_mig_beat(pending_mig_addr_);
 
@@ -419,6 +436,7 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   void handle_sd_command() {
     uint8_t cmd = top_->sd_cmd_index;
     uint32_t arg = top_->sd_cmd_arg;
+    data_active_ = false;
     ++sd_commands_;
     last_cmd_ = cmd;
     if (cmd == 0) {
@@ -447,8 +465,29 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
       wide_bus_ = true;
       return respond(0, 0);
     }
+    if (cmd == 6 && !app_cmd_ && card_selected_ && arg == 0x80ff'fff1U) {
+      active_block_len_ = 64;
+      active_block_count_ = 1;
+      data_start_pending_ = true;
+      return respond(0, 0);
+    }
     if (cmd == 17 && card_selected_ && wide_bus_) {
       active_lba_ = arg;
+      active_block_len_ = top_->sd_cmd_block_len;
+      active_block_count_ = 1;
+      data_start_pending_ = true;
+      return respond(0, 0);
+    }
+    if (cmd == 23 && card_selected_ && wide_bus_ && (arg >> 16) == 0 && (arg & 0xffffU) != 0) {
+      predeclared_block_count_ = arg & 0xffffU;
+      return respond(0, 0);
+    }
+    if (cmd == 18 && card_selected_ && wide_bus_ && predeclared_block_count_ != 0 &&
+        top_->sd_cmd_block_count == predeclared_block_count_) {
+      active_lba_ = arg;
+      active_block_len_ = top_->sd_cmd_block_len;
+      active_block_count_ = predeclared_block_count_;
+      predeclared_block_count_ = 0;
       data_start_pending_ = true;
       return respond(0, 0);
     }
@@ -464,6 +503,19 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   uint8_t sector_byte(uint32_t lba, int index) const {
     size_t offset = size_t(lba) * 512u + size_t(index);
     return offset < sd_image_.size() ? sd_image_[offset] : 0;
+  }
+
+  uint8_t active_data_byte() const {
+    if (active_block_len_ == 64) return 0x5a;
+    return sector_byte(active_lba_ + uint32_t(active_block_index_), data_index_);
+  }
+
+  static std::string hex_byte(uint8_t value) {
+    const char* digits = "0123456789abcdef";
+    std::string out = "00";
+    out[0] = digits[(value >> 4) & 0xf];
+    out[1] = digits[value & 0xf];
+    return out;
   }
 
   void write_mig_beat(uint32_t addr) {
@@ -502,6 +554,13 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   int data_start_delay_ = 0;
   uint32_t active_lba_ = 0;
   int data_index_ = 0;
+  int active_block_len_ = 512;
+  int active_block_index_ = 0;
+  int active_block_count_ = 1;
+  int predeclared_block_count_ = 0;
+  uint8_t current_sd_data_ = 0;
+  bool driven_sd_data_valid_ = false;
+  uint8_t driven_sd_data_ = 0;
   uint32_t pending_mig_addr_ = 0;
   bool line_pending_ = false;
   uint32_t line_pending_addr_ = 0;

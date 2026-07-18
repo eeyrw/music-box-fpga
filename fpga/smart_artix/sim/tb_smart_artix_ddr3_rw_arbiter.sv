@@ -95,15 +95,66 @@ module tb_smart_artix_ddr3_rw_arbiter;
     check(mig_app_command.cmd == 3'b001, "arbiter read command mismatch");
     check(read_response.rdy, "arbiter did not return read ready");
     check(!write_response.rdy, "arbiter returned write ready while read had priority");
-    check(mig_app_write_data.wren, "arbiter should still forward independent write-data channel");
+    check(!mig_app_write_data.wren, "arbiter forwarded write data without the matching write command grant");
+    check(!write_response.wdf_rdy,
+          "arbiter returned write-data ready while read command had priority");
 
+    @(posedge clk);
     @(negedge clk);
     read_command.en = 1'b0;
+    mig_app_response.rdy = 1'b0;
+    mig_app_response.wdf_rdy = 1'b1;
+    #1;
+    check(mig_app_command.en, "arbiter did not keep pending write command after read grant");
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_00c0),
+          "arbiter pending write address mismatch");
+    check(mig_app_write_data.wren, "arbiter did not pair write data with pending write command");
+    check(write_response.wdf_rdy, "arbiter did not return paired write-data ready");
+
+    @(posedge clk);
+    @(negedge clk);
+    mig_app_response.rdy = 1'b1;
+    mig_app_response.wdf_rdy = 1'b0;
+    #1;
+    check(mig_app_command.en, "arbiter did not keep write command until accepted");
+    check(write_response.rdy, "arbiter did not return pending write command ready");
+    check(!mig_app_write_data.wren, "arbiter resent already accepted write data");
+
+    @(posedge clk);
+    @(negedge clk);
+    write_command.en = 1'b0;
+    write_data.wren = 1'b0;
+    mig_app_response.wdf_rdy = 1'b1;
+
+    write_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0280);
+    write_command.en = 1'b1;
+    write_data.wren = 1'b1;
+    #1;
+    check(write_response.rdy, "arbiter blocked write command while read response was pending");
+    check(write_response.wdf_rdy, "arbiter blocked write data while read response was pending");
+
+    @(posedge clk);
+    @(negedge clk);
+    write_command.en = 1'b0;
+    write_data.wren = 1'b0;
+    mig_app_response.rd_data_valid = 1'b1;
+    mig_app_response.rd_data_end = 1'b1;
+    #1;
+    check(read_response.rd_data_valid, "arbiter did not route read data valid");
+    check(read_response.rd_data_end, "arbiter did not route read data end");
+    check(read_response.rd_data == mig_app_response.rd_data, "arbiter read data mismatch");
+    check(!debug_response.rd_data_valid, "arbiter broadcast read data to debug client");
+
+    @(posedge clk);
+    @(negedge clk);
+    mig_app_response.rd_data_valid = 1'b0;
+    mig_app_response.rd_data_end = 1'b0;
     debug_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0180);
     debug_command.cmd = 3'b001;
     debug_command.en = 1'b1;
     write_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0200);
     write_command.en = 1'b1;
+    write_data.wren = 1'b1;
     #1;
     check(mig_app_command.en, "arbiter did not forward debug command");
     check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0180),
@@ -111,35 +162,49 @@ module tb_smart_artix_ddr3_rw_arbiter;
     check(mig_app_command.cmd == 3'b001, "arbiter debug command mismatch");
     check(debug_response.rdy, "arbiter did not return debug ready");
     check(!write_response.rdy, "arbiter returned write ready while debug had priority");
+    check(!mig_app_write_data.wren, "arbiter forwarded loader write data during debug read");
 
+    @(posedge clk);
     @(negedge clk);
     debug_command.en = 1'b0;
+    write_command.en = 1'b0;
+    write_data.wren = 1'b0;
+    mig_app_response.rd_data = 128'h1234_5678_9abc_def0_1111_2222_3333_4444;
+    mig_app_response.rd_data_valid = 1'b1;
+    mig_app_response.rd_data_end = 1'b1;
+    #1;
+    check(debug_response.rd_data_valid, "arbiter did not route debug read data valid");
+    check(debug_response.rd_data_end, "arbiter did not route debug read data end");
+    check(debug_response.rd_data == mig_app_response.rd_data, "arbiter debug read data mismatch");
+    check(!read_response.rd_data_valid, "arbiter broadcast debug read data to read client");
+
+    @(posedge clk);
+    @(negedge clk);
+    mig_app_response.rd_data_valid = 1'b0;
+    mig_app_response.rd_data_end = 1'b0;
+    debug_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0300);
+    debug_command.cmd = 3'b000;
+    debug_command.en = 1'b1;
     debug_write_data.data = 128'h1111_2222_3333_4444_5555_6666_7777_8888;
     debug_write_data.mask = 16'h0f0f;
     debug_write_data.wren = 1'b1;
     debug_write_data.end_ = 1'b1;
+    write_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0340);
+    write_command.en = 1'b1;
     write_data.data = 128'haaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111;
     write_data.mask = 16'hf0f0;
     write_data.wren = 1'b1;
     write_data.end_ = 1'b1;
     #1;
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0300),
+          "arbiter debug write command address mismatch");
+    check(debug_response.rdy, "arbiter did not return debug write command ready");
+    check(!write_response.rdy, "arbiter returned loader ready while debug write had priority");
     check(mig_app_write_data.data == debug_write_data.data, "arbiter debug write data mismatch");
     check(mig_app_write_data.mask == debug_write_data.mask, "arbiter debug write mask mismatch");
     check(debug_response.wdf_rdy, "arbiter did not return debug write-data ready");
     check(!write_response.wdf_rdy,
           "arbiter returned loader write-data ready while debug write data active");
-
-    @(negedge clk);
-    debug_write_data.wren = 1'b0;
-    mig_app_response.rd_data_valid = 1'b1;
-    mig_app_response.rd_data_end = 1'b1;
-    #1;
-    check(read_response.rd_data_valid, "arbiter did not route read data valid");
-    check(read_response.rd_data_end, "arbiter did not route read data end");
-    check(read_response.rd_data == mig_app_response.rd_data, "arbiter read data mismatch");
-    check(debug_response.rd_data_valid, "arbiter did not route debug read data valid");
-    check(debug_response.rd_data_end, "arbiter did not route debug read data end");
-    check(debug_response.rd_data == mig_app_response.rd_data, "arbiter debug read data mismatch");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_rw_arbiter errors=%0d", errors);
