@@ -1,8 +1,12 @@
 # Generic synthesizable RTL. Keep this list aligned with RTL_SOURCES in ../../Makefile.
 ../../rtl/pkg/synth_pkg.sv
 ../../rtl/bus/spi_register_bridge.sv
+../../rtl/control/voice_active_store.sv
 ../../rtl/control/voice_bram_1r1w.sv
 ../../rtl/control/voice_bram_1w2r.sv
+../../rtl/control/voice_commit_engine.sv
+../../rtl/control/voice_descriptor_store.sv
+../../rtl/control/voice_runtime_store.sv
 ../../rtl/control/voice_register_bank.sv
 ../../rtl/control/wavetable_system_debug_regs.sv
 ../../rtl/memory/wave_memory_subsystem.sv

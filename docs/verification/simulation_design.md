@@ -485,7 +485,6 @@ The normal Note On register sequence is:
 
 ```text
 ENVELOPE_LEVEL = 0
-CONTROL        = enable + mono/stereo
 BASE_ADDR      = selected left/mono memory word address
 BASE_ADDR_R    = selected right memory word address for stereo
 LENGTH         = left/mono sample frames
@@ -494,10 +493,11 @@ LOOP_START     = left/mono first loop frame
 LOOP_START_R   = right first loop frame for stereo
 LOOP_END       = left/mono exclusive loop end
 LOOP_END_R     = right exclusive loop end for stereo
+REGION_MODE    = mono/stereo + no loop / continuous / loop-until-release
 PHASE_INIT     = 0
 PHASE_INC      = generated Q24.8 increment
 GAIN_L/R       = selected Q1.15 channel gains
-LOOP_MODE      = no loop / continuous / loop-until-release
+CONTROL        = enable
 COMMIT         = 1
 ```
 

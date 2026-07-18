@@ -123,9 +123,13 @@ module tb_spi_register_bridge;
     end
   endtask
 
-  task automatic expect_readback(input logic [15:0] address, input logic [31:0] expected);
-    spi_write_word(16'h3004, {16'd0, address});
-    expect_read(16'h3008, expected);
+  task automatic expect_read_error(input logic [15:0] address);
+    logic [31:0] actual;
+    spi_read_word(address, actual);
+    if (!spi_error) begin
+      $error("SPI read 0x%04x got 0x%08x but did not report expected error", address, actual);
+      errors++;
+    end
   endtask
 
   task automatic publish_frame_boundary;
@@ -133,6 +137,17 @@ module tb_spi_register_bridge;
     frame_boundary = 1'b1;
     @(negedge clk);
     frame_boundary = 1'b0;
+  endtask
+
+  task automatic write_expect(input logic [15:0] address,
+                              input logic [31:0] write_data,
+                              input logic [31:0] expected_read);
+    spi_write_word(address, write_data);
+    if (spi_error) begin
+      $error("SPI write 0x%04x unexpectedly reported error", address);
+      errors++;
+    end
+    expect_read(address, expected_read);
   endtask
 
   initial begin
@@ -147,32 +162,62 @@ module tb_spi_register_bridge;
     rst = 1'b0;
     repeat (5) @(negedge clk);
 
-    spi_write_word(16'h0104, 32'h1234_5678);
+    spi_write_word(16'h0100, 32'h1234_5678);
     if (spi_error) begin
       $error("SPI write unexpectedly reported error");
       errors++;
     end
     expect_read(16'h3000, 32'h0005_0000);
-    expect_read(16'h0104, 32'h0000_0000);
-    expect_readback(16'h0104, 32'h1234_5678);
+    expect_read(16'h0100, 32'h1234_5678);
+    expect_read_error(16'h3004);
+    expect_read_error(16'h3008);
+
+    expect_read(16'h027c, 32'h0000_0000);
+    expect_read(16'h0274, 32'h0000_0000);
+    expect_read(16'h0268, 32'h0000_0000);
+    write_expect(16'h0270, 32'hffff_ffff, 32'h0000_0001);
+    write_expect(16'h0200, 32'h89ab_cdef, 32'h89ab_cdef);
+    write_expect(16'h0208, 32'hff12_3456, 32'h0012_3456);
+    write_expect(16'h0210, 32'hff00_0011, 32'h0000_0011);
+    write_expect(16'h0218, 32'hff00_0044, 32'h0000_0044);
+    write_expect(16'h0230, 32'h7654_3210, 32'h7654_3210);
+    write_expect(16'h0234, 32'h0102_0304, 32'h0102_0304);
+    write_expect(16'h0240, 32'h0000_8001, 32'hffff_8001);
+    write_expect(16'h0244, 32'h0000_7ffe, 32'h0000_7ffe);
+    write_expect(16'h024c, 32'h0000_8000, 32'hffff_8000);
+    write_expect(16'h0238, 32'h0100_0200, 32'h0100_0200);
+    write_expect(16'h0220, 32'hffff_ffff, 32'h0000_0007);
+    write_expect(16'h0250, 32'hffff_ffff, 32'h0000_0001);
+    write_expect(16'h0254, 32'h1111_2222, 32'h1111_2222);
+    write_expect(16'h0258, 32'h3333_4444, 32'h3333_4444);
+    write_expect(16'h025c, 32'h5555_6666, 32'h5555_6666);
+    write_expect(16'h0260, 32'h7777_8888, 32'h7777_8888);
+    write_expect(16'h0264, 32'h9999_aaaa, 32'h9999_aaaa);
+    write_expect(16'h0248, 32'h8001_7ffe, 32'h8001_7ffe);
+    write_expect(16'h0278, 32'h0000_0001, 32'h0000_0001);
+    write_expect(16'h0204, 32'h0123_4567, 32'h0123_4567);
+    write_expect(16'h020c, 32'hffab_cdef, 32'h00ab_cdef);
+    write_expect(16'h0214, 32'hff00_0022, 32'h0000_0022);
+    write_expect(16'h021c, 32'hff00_0055, 32'h0000_0055);
 
     spi_write_word(16'h0108, 32'h0000_0004);
-    spi_write_word(16'h012c, 32'h0000_4000);
-    spi_write_word(16'h0138, 32'h0000_0001);
-    spi_write_word(16'h013c, 32'h0800_0000);
-    spi_write_word(16'h0134, 32'h0000_0000);
-    spi_write_word(16'h0124, 32'h0000_0001);
-    expect_readback(16'h0108, 32'h0000_0004);
-    expect_readback(16'h012c, 32'h0000_4000);
-    expect_readback(16'h0138, 32'h0000_0001);
-    expect_readback(16'h013c, 32'h0800_0000);
+    spi_write_word(16'h014c, 32'h0000_4000);
+    spi_write_word(16'h0150, 32'h0000_0001);
+    spi_write_word(16'h0154, 32'h0800_0000);
+    spi_write_word(16'h0120, 32'h0000_0000);
+    expect_read(16'h0108, 32'h0000_0004);
+    expect_read(16'h014c, 32'h0000_4000);
+    expect_read(16'h0150, 32'h0000_0001);
+    expect_read(16'h0154, 32'h0800_0000);
+    spi_write_word(16'h0174, 32'h0000_0001);
+    repeat (80) @(negedge clk);
     publish_frame_boundary();
     @(negedge clk);
     if (!config_valid[0] || (render_config.length !== 24'd4)) begin
       $error("SPI commit did not update active voice configuration");
       errors++;
     end
-    expect_readback(16'h0128, 32'h0000_0001);
+    expect_read(16'h017c, 32'h0000_0001);
     if (^commit_pulse === 1'bx) begin
       $error("commit_pulse contains unknown bits");
       errors++;

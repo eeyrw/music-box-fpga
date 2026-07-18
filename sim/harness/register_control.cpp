@@ -30,7 +30,6 @@ void RegisterVoiceControl::set_filter(int voice, const FilterConfig& filter) {
 }
 
 void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  registers_.write_register(voice_addr(voice, kRegControl), uint32_t((r.stereo ? 2 : 0) | (enable ? 1 : 0)));
   registers_.write_register(voice_addr(voice, kRegBaseAddr), r.base_addr);
   registers_.write_register(voice_addr(voice, kRegBaseAddrR), r.base_addr_r);
   registers_.write_register(voice_addr(voice, kRegLength), r.length);
@@ -43,13 +42,15 @@ void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_in
   registers_.write_register(voice_addr(voice, kRegPhaseInc), phase_inc);
   registers_.write_register(voice_addr(voice, kRegGainL), uint32_t(uint16_t(r.gain_l)));
   registers_.write_register(voice_addr(voice, kRegGainR), uint32_t(uint16_t(r.gain_r)));
-  registers_.write_register(voice_addr(voice, kRegLoopMode), uint32_t(r.loop_mode & 0x3));
+  registers_.write_register(voice_addr(voice, kRegRegionMode),
+                            uint32_t((r.stereo ? 1 : 0) | ((r.loop_mode & 0x3) << 1)));
   registers_.write_register(voice_addr(voice, kRegFilterControl), uint32_t(r.filter_enable ? 1 : 0));
   registers_.write_register(voice_addr(voice, kRegFilterB0), uint32_t(r.filter_b0));
   registers_.write_register(voice_addr(voice, kRegFilterB1), uint32_t(r.filter_b1));
   registers_.write_register(voice_addr(voice, kRegFilterB2), uint32_t(r.filter_b2));
   registers_.write_register(voice_addr(voice, kRegFilterA1), uint32_t(r.filter_a1));
   registers_.write_register(voice_addr(voice, kRegFilterA2), uint32_t(r.filter_a2));
+  registers_.write_register(voice_addr(voice, kRegControl), uint32_t(enable ? 1 : 0));
   registers_.write_register(voice_addr(voice, kRegCommit), 1);
 }
 

@@ -216,14 +216,15 @@ registers; the next cycle performs phase advance, loop wrap, frame selection, an
 phase writeback from those registers. This costs one clock per visited voice and
 keeps the external core and memory interfaces unchanged.
 
-The latest pass confirms that the largest voice-register-bank muxes have been
-removed: active configuration is stored as a `32 x 172` BRAM-backed word and
-runtime filter coefficients as a `32 x 160` BRAM-backed word. Runtime phase
-increment, gain, and envelope state are stored in narrow true-dual-port RAM banks
-so readback does not steal the renderer read port. Direct per-voice
-configuration/runtime readback was intentionally removed from the main register
-path; low-rate inspection now uses the staged readback window, and software
-should still mirror write state on the host side for normal operation.
+The latest RTL pass removes the largest voice-register-bank muxes: host-visible
+descriptors live in a `32 voices x 32 words x 32-bit` RAM, active configuration
+is stored as a `32 x 244` renderer-facing word, and runtime filter coefficients
+are stored as a `32 x 160` word. Runtime phase increment, gain, and envelope
+state are stored in narrow true-dual-port RAM banks so bus inspection does not
+steal the renderer read port. Direct per-voice configuration/runtime readback
+uses multi-cycle synchronous RAM reads through the normal register addresses, so
+software can verify hardware state without a separate debug indirection. This
+pass needs a fresh Smart Artix synthesis measurement.
 
 The area-oriented pass also removes the renderer's combinational next-valid-voice
 search. Invalid voice slots are scanned sequentially, trading frame-render cycles

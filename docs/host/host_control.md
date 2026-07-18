@@ -116,9 +116,10 @@ address:      16-bit byte address, most-significant byte first
 data clocks:  32-bit readback, most-significant bit first on MISO
 ```
 
-Most per-voice configuration registers are write-dominant and read back as zero
-through their normal addresses. Use `READBACK_ADDR` and `READBACK_DATA` from
-`../register_map.md` when inspecting per-voice shadow or runtime state.
+Per-voice configuration and runtime registers read back through their normal
+addresses. Some reads take multiple system-clock cycles because the register bank
+uses synchronous RAM internally; the SPI bridge waits for the internal
+`bus_ready` response before shifting out the 32-bit read data.
 
 The command-line tool also wraps the Smart Artix DDR debug register window:
 

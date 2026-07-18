@@ -787,17 +787,19 @@ LUTs, `39017 / 65200` slice registers, `565` LUTs as memory, and `26 / 120` DSPs
 The final distributed-RAM mapping report only identified the output FIFO RAMs,
 not the wide `voice_register_bank` fields.
 
-The next passes introduced a reusable `voice_bram_1r1w` synchronous RAM template
-and moved the two widest renderer-facing voice-bank groups into inferred Block
-RAM:
+The next passes introduced reusable synchronous RAM templates and moved the
+host-visible and renderer-facing voice-bank groups behind explicit store
+modules:
 
-- `active_config_ram`: `32 x 172` committed active voice configuration.
+- `descriptor_ram`: `32 voices x 32 words x 32-bit` host-visible descriptor
+  mirror.
+- `active_config_ram`: `32 x 244` committed active voice configuration.
 - `runtime_phase_ram`: `32 x 32` runtime phase increments with independent
-  renderer and readback read ports.
+  renderer and bus-inspection read ports.
 - `runtime_gain_ram`: `32 x 32` packed runtime left/right gains with independent
-  renderer and readback read ports.
+  renderer and bus-inspection read ports.
 - `runtime_envelope_ram`: `32 x 16` runtime envelope levels with independent
-  renderer and readback read ports.
+  renderer and bus-inspection read ports.
 - `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
 
 `COMMIT` now writes the selected active-config BRAM entry directly and also copies
@@ -807,18 +809,19 @@ to runtime filter BRAM as one packed `160` bit word, avoiding mixed old/new IIR
 coefficients. The frame-boundary pulse is still used by the renderer to reload
 phase and clear filter history on voice commit, but the active config storage
 itself no longer needs a multi-voice frame-boundary copy. Per-voice
-configuration/runtime readback data was also removed from the direct per-voice
-register bus path; only `STATUS` and `VERSION` remain meaningful direct read
-paths. Software inspection uses the staged `READBACK_ADDR`/`READBACK_DATA` window
-instead of direct per-field reads, avoiding the large combinational readback mux
-on the main register path.
+configuration and runtime scalar state now reads back through the normal
+per-voice register addresses. These reads use the synchronous RAM read paths and
+therefore complete as multi-cycle bus transactions, avoiding a large
+combinational per-field readback mux on the main register path.
 
 Vivado 2018.3 recognizes the active, shadow, runtime filter, and runtime scalar
-storage as RAM templates. The latest Smart Artix synthesis run reports
+storage as RAM templates. The latest recorded Smart Artix synthesis run before
+the grouped-descriptor split reports
 `9891 / 32600` slice LUTs, `13373 / 65200` slice registers, `565` LUTs as
 memory, `9 / 75` Block RAM tiles, and `26 / 120` DSPs. Post-synthesis timing is still not closed with WNS
 `-10.650 ns`, so this storage change fixes the major voice-bank resource pressure
-but not the remaining DSP/timing architecture.
+but not the remaining DSP/timing architecture. The grouped descriptor and active
+runtime store split should be re-measured in the next Smart Artix synthesis pass.
 
 The area-oriented renderer pass replaces the combinational next-valid-voice
 search with sequential slot scanning, moves per-voice phase into a `32 x 32`

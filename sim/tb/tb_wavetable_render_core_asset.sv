@@ -8,6 +8,15 @@ module tb_wavetable_render_core_asset;
 `ifndef RENDER_BASE_ADDR_R
 `define RENDER_BASE_ADDR_R RENDER_BASE_ADDR
 `endif
+`ifndef RENDER_LENGTH_R
+`define RENDER_LENGTH_R RENDER_LENGTH
+`endif
+`ifndef RENDER_LOOP_START_R
+`define RENDER_LOOP_START_R RENDER_LOOP_START
+`endif
+`ifndef RENDER_LOOP_END_R
+`define RENDER_LOOP_END_R RENDER_LOOP_END
+`endif
 
   // Unlike tb_wavetable_render_core, this testbench is not a strict unit test. It is a
   // render harness: drive the RTL for N samples and dump its exact PCM output.
@@ -155,17 +164,21 @@ module tb_wavetable_render_core_asset;
 
     // Configure the core exactly as software would: write all shadow registers,
     // then commit atomically with ADDR_COMMIT.
-    bus_write_word(16'h0100, (RENDER_STEREO != 0) ? 32'h0000_0003 : 32'h0000_0001);
-    bus_write_word(16'h0104, RENDER_BASE_ADDR);
-    bus_write_word(16'h0158, `RENDER_BASE_ADDR_R);
+    bus_write_word(16'h0170, 32'h0000_0001);
+    bus_write_word(16'h0120, (RENDER_STEREO != 0) ? 32'h0000_0001 : 32'h0000_0000);
+    bus_write_word(16'h0100, RENDER_BASE_ADDR);
+    bus_write_word(16'h0104, `RENDER_BASE_ADDR_R);
     bus_write_word(16'h0108, RENDER_LENGTH);
-    bus_write_word(16'h010c, RENDER_LOOP_START);
-    bus_write_word(16'h0110, RENDER_LOOP_END);
-    bus_write_word(16'h0114, 32'h0000_0000);
-    bus_write_word(16'h0118, RENDER_PHASE_INC);
-    bus_write_word(16'h011c, RENDER_GAIN_L);
-    bus_write_word(16'h0120, RENDER_GAIN_R);
-    bus_write_word(16'h0124, 32'd1);
+    bus_write_word(16'h010c, `RENDER_LENGTH_R);
+    bus_write_word(16'h0110, RENDER_LOOP_START);
+    bus_write_word(16'h0114, `RENDER_LOOP_START_R);
+    bus_write_word(16'h0118, RENDER_LOOP_END);
+    bus_write_word(16'h011c, `RENDER_LOOP_END_R);
+    bus_write_word(16'h0130, 32'h0000_0000);
+    bus_write_word(16'h0134, RENDER_PHASE_INC);
+    bus_write_word(16'h0140, RENDER_GAIN_L);
+    bus_write_word(16'h0144, RENDER_GAIN_R);
+    bus_write_word(16'h0174, 32'd1);
     repeat (2) @(negedge clk);
 
     // The output file is always stereo: mono instruments have already been

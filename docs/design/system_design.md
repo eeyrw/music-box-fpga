@@ -53,7 +53,7 @@ wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 `rtl/top/wavetable_spi_audio_system.sv` is the current pin-level simulation wrapper:
 
 ```text
-SPI pins -> spi_register_bridge -> debug/readback window
+SPI pins -> spi_register_bridge -> system debug registers
                               \-> wavetable_line_memory_core -> i2s_tx -> I2S pins
                                                     |
                                                     v
@@ -63,7 +63,7 @@ SPI pins -> spi_register_bridge -> debug/readback window
 It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
 from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
-The debug/readback window is implemented by
+The system debug register window is implemented by
 `rtl/control/wavetable_system_debug_regs.sv`, which keeps status counters,
 render-latency accounting, and DDR debug-control registers out of the pin-level
 wrapper.
@@ -163,8 +163,8 @@ items.
 The hardware contract is register-level:
 
 - Note On writes wave address or linked-stereo addresses, per-channel length and
-  loop range, phase increment, gains,
-  runtime envelope, `LOOP_MODE`, then commits the slot.
+  loop range, `REGION_MODE`, phase increment, gains, runtime envelope, then
+  enables and commits the slot.
 - Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
 - Runtime gain, pitch, release, and committed filter updates do not reload phase
   and update the runtime state sampled by the renderer when it accepts each voice
@@ -229,11 +229,11 @@ the generic RTL to one vendor flow.
 2. Continue voice-control storage reduction where it is worth the protocol cost.
    The latest register-bank passes moved active configuration, shadow register
    state, runtime filter coefficients, and runtime phase/gain/envelope state into
-   inferred RAM and removed large direct per-voice readback muxes from the main
-   bus path. The staged readback window preserves low-rate inspection without
-   restoring the old direct mux. Further savings for one-bit runtime release and
-   filter-enable state should be handled only if post-implementation resource or
-   timing data justifies the added control complexity.
+   inferred RAM. Per-voice configuration and runtime registers are directly
+   readable through multi-cycle synchronous bus reads instead of through a
+   separate debug indirection. Further savings for one-bit runtime release
+   and filter-enable state should be handled only if post-implementation resource
+   or timing data justifies the added control complexity.
 
 3. Design a wavetable-optimized memory subsystem.
    The current `wave_memory_subsystem` is a minimal single-line cache. A later

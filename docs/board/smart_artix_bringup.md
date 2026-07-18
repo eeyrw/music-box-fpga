@@ -372,9 +372,8 @@ Start with:
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
 The minimal write order is documented in `../register_map.md` under `Note On`.
-For board debug, keep a host-side mirror of the written state because the main
-per-voice register map is write-dominant; use the `READBACK_ADDR` and
-`READBACK_DATA` window only for low-rate inspection.
+For board debug, read the normal per-voice register addresses to verify shadow
+configuration and live runtime scalar state.
 
 If audio is silent after the voice commit:
 

@@ -344,22 +344,35 @@ def linked_pair(samples, selected):
 def region_addresses(samples, selected, smpl_word_offset):
     left, right = linked_pair(samples, selected)
     stereo = right is not None and sanitize_sample_type(right.sample_type) in (SAMPLE_LEFT, SAMPLE_RIGHT)
+
+    def channel_region(sample):
+        frame_count = min(sample.end - sample.start, 65535)
+        if frame_count <= 0:
+            raise ValueError(f"sample {sample.name!r} has no PCM frames")
+        loop_start = max(0, min(sample.start_loop - sample.start, frame_count - 1))
+        loop_end = max(loop_start + 1, min(sample.end_loop - sample.start, frame_count))
+        if loop_start >= loop_end or loop_end > frame_count:
+            return frame_count, 0, frame_count
+        return frame_count, loop_start, loop_end
+
+    length, loop_start, loop_end = channel_region(left)
     if stereo:
-        frame_count = min(left.end - left.start, right.end - right.start, 65535)
-        loop_start = max(0, min(left.start_loop - left.start, right.start_loop - right.start, frame_count - 1))
-        loop_end = max(loop_start + 1, min(left.end_loop - left.start, right.end_loop - right.start, frame_count))
+        length_r, loop_start_r, loop_end_r = channel_region(right)
         base_addr_r = smpl_word_offset + right.start
     else:
-        frame_count = min(left.end - left.start, 65535)
-        loop_start = max(0, min(left.start_loop - left.start, frame_count - 1))
-        loop_end = max(loop_start + 1, min(left.end_loop - left.start, frame_count))
+        length_r, loop_start_r, loop_end_r = length, loop_start, loop_end
         base_addr_r = smpl_word_offset + left.start
-    if loop_start >= loop_end or loop_end > frame_count:
+
+    if loop_start >= loop_end or loop_end > length:
         # Some soundfonts use degenerate or missing loop points. Use the whole
         # sample as a legal fallback so the RTL configuration remains valid.
         loop_start = 0
-        loop_end = frame_count
-    return left, right, stereo, smpl_word_offset + left.start, base_addr_r, frame_count, loop_start, loop_end
+        loop_end = length
+    if loop_start_r >= loop_end_r or loop_end_r > length_r:
+        loop_start_r = 0
+        loop_end_r = length_r
+    return (left, right, stereo, smpl_word_offset + left.start, base_addr_r,
+            length, length_r, loop_start, loop_start_r, loop_end, loop_end_r)
 
 
 def file_words(data):
@@ -426,7 +439,8 @@ def main():
     if smpl_payload & 1:
         raise ValueError("smpl payload is not word aligned")
     smpl_word_offset = smpl_payload // 2
-    left, right, stereo, base_addr, base_addr_r, length, loop_start, loop_end = region_addresses(
+    (left, right, stereo, base_addr, base_addr_r, length, length_r, loop_start,
+     loop_start_r, loop_end, loop_end_r) = region_addresses(
         samples, sample, smpl_word_offset)
 
     # Convert SF2 pitch metadata to the RTL's Q16.16 phase increment. A value of
@@ -454,8 +468,11 @@ def main():
         "RENDER_BASE_ADDR": base_addr,
         "RENDER_BASE_ADDR_R": base_addr_r,
         "RENDER_LENGTH": length,
+        "RENDER_LENGTH_R": length_r,
         "RENDER_LOOP_START": loop_start,
+        "RENDER_LOOP_START_R": loop_start_r,
         "RENDER_LOOP_END": loop_end,
+        "RENDER_LOOP_END_R": loop_end_r,
         "RENDER_PHASE_INC": phase_inc,
         "RENDER_GAIN_L": 0x7fff,
         "RENDER_GAIN_R": 0x7fff,
