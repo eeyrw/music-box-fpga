@@ -75,7 +75,7 @@ package code. A DSP primitive must not depend on a voice controller.
 - Move the real MIDI/SF2 render harness from generated SystemVerilog includes to
   a C++ Verilator executable. The C++ harness should parse SF2 and MIDI at
   runtime, model MCU-side preset selection, voice allocation, envelopes,
-  controller policy, wave memory, and WAV output, then drive `wavetable_core`
+  controller policy, wave memory, and WAV output, then drive `wavetable_render_core`
   through its register and memory ports. Keep the existing SystemVerilog
   self-checking tests for small exact RTL regressions.
 

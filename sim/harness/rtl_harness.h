@@ -7,8 +7,7 @@
 #include <string>
 #include <vector>
 
-class Vwavetable_core;
-class Vwavetable_core_memory;
+class Vwavetable_line_memory_core;
 
 namespace render {
 
@@ -37,9 +36,10 @@ struct MemoryProfile {
 
 MemoryProfile parse_memory_profile(const std::string& name);
 
-// Thin Verilator-side driver for wavetable_core. It owns the top module, models
-// the external wave-memory slave, writes the generated stereo PCM stream as a
-// WAV file, and exposes firmware-like helpers for voice register writes.
+// Thin Verilator-side driver for wavetable_line_memory_core. It owns the top
+// module, models the external line-memory slave, writes the generated stereo PCM
+// stream as a WAV file, and exposes firmware-like helpers for voice register
+// writes.
 class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
@@ -68,7 +68,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void write_wav_header(uint32_t data_bytes);
   void write_pcm16(int16_t sample);
 
-  Vwavetable_core_memory* top_ = nullptr;
+  Vwavetable_line_memory_core* top_ = nullptr;
   RegisterVoiceControl voice_control_;
   // Shared wave-memory image. For SF2-backed renders this is the complete file
   // image, with regions pointing at absolute sample words inside smpl.

@@ -27,7 +27,7 @@ SD raw image
 MCU / host control
   -> SF2 or preprocessed metadata
   -> voice register writes over SPI/control bus
-  -> wavetable_core reads PCM from DDR3
+  -> wavetable_render_core reads PCM from DDR3
 ```
 
 ## Raw SD Image Format
@@ -88,7 +88,7 @@ ddr3_arbiter
 ```
 
 These blocks belong under a concrete board directory such as `fpga/smart_artix/`.
-The generic `wavetable_core`, `wave_memory_subsystem`, and register map should not
+The generic `wavetable_render_core`, `wave_memory_subsystem`, and register map should not
 depend on SD, MIG, or board clocking signals.
 
 The first Smart Artix implementation provides the board-side middle of this path:
@@ -231,7 +231,7 @@ make render-board-loader SECONDS=0.1
 That C++ harness constructs a raw SD image from the selected SF2, drives the
 native-SD command/data loader RTL into a DDR byte model, verifies that the loaded
 DDR bytes exactly match the source SF2 file, then renders from the loaded DDR
-contents through `wavetable_core_memory` and compares every output sample against
+contents through `wavetable_line_memory_core` and compares every output sample against
 the C++ fixed-point reference. It intentionally uses a command-level SD model for
 large SF2 images; pin-level SD behavior is kept in focused small tests because a
 full multi-megabyte pin-level SD load would be much slower.

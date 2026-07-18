@@ -36,7 +36,7 @@ Still required from the board documentation:
 
 ## Current Top
 
-`rtl/smart_artix_top.sv` instantiates `wavetable_core_system` with SPI control,
+`rtl/smart_artix_top.sv` instantiates `wavetable_spi_audio_system` with SPI control,
 line-memory caching, output FIFO, and I2S output. It also connects native 4-bit SD
 asset loading to the DDR3 write side. After MIG calibration completes, the top
 starts the SD loader, copies the raw SF2 byte image into DDR3, and holds the audio
@@ -54,7 +54,7 @@ SD native pins: CLK, CMD, DAT[3:0]
   -> Xilinx MIG app write interface
   -> MT41K256M16TW
 
-wavetable_core_system external line-read pins
+wavetable_spi_audio_system external line-read pins
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
   -> Xilinx MIG app read interface
@@ -389,7 +389,7 @@ make render-board-loader SECONDS=0.1
 
 This C++ harness constructs a raw SD image from the selected SF2, drives the
 native-SD command/data loader RTL into a DDR byte model, checks the loaded DDR
-bytes against the source SF2, then renders through `wavetable_core_memory` and
+bytes against the source SF2, then renders through `wavetable_line_memory_core` and
 compares every output sample against the C++ fixed-point reference. It uses a
 command-level SD model for speed; pin-level SD behavior is covered by the focused
 native pin PHY tests inside `make smart-artix-test`.

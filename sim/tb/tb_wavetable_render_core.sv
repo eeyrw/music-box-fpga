@@ -1,4 +1,4 @@
-module tb_wavetable_core;
+module tb_wavetable_render_core;
   import synth_pkg::*;
 
   // Self-checking unit test for the wavetable datapath. It uses tiny synthetic
@@ -39,7 +39,7 @@ module tb_wavetable_core;
   // clock and synchronous reset.
   always #5 clk = ~clk;
 
-  wavetable_core dut (.*);
+  wavetable_render_core dut (.*);
 
   assign unused_mem_debug = mem_debug_hit_pulse | mem_debug_miss_pulse |
                             mem_debug_response_pulse | (|mem_debug_response_latency);

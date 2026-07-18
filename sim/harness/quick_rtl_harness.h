@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-class Vwavetable_core;
+class Vwavetable_render_core;
 
 namespace render {
 
@@ -56,7 +56,7 @@ class QuickRtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint32_t count_filtered_voices() const;
   uint32_t count_stereo_voices() const;
 
-  Vwavetable_core* top_ = nullptr;
+  Vwavetable_render_core* top_ = nullptr;
   RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
   std::array<VoiceMirror, kNumVoices> voices_{};

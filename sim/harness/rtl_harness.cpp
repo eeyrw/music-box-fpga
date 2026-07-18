@@ -1,6 +1,6 @@
 #include "rtl_harness.h"
 
-#include "Vwavetable_core_memory.h"
+#include "Vwavetable_line_memory_core.h"
 
 #include <cstdio>
 #include <iostream>
@@ -49,7 +49,7 @@ MemoryProfile parse_memory_profile(const std::string& name) {
 
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                        int sample_rate, const MemoryProfile& memory_profile)
-    : top_(new Vwavetable_core_memory), voice_control_(*this), memory_(memory),
+    : top_(new Vwavetable_line_memory_core), voice_control_(*this), memory_(memory),
       memory_profile_(memory_profile), wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
   if (!wav_) throw std::runtime_error("failed to open " + wav_path);
   // Write a placeholder WAV header now. The final data length is not known until

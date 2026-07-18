@@ -58,7 +58,7 @@ fpga/<board-name>/
    timing for SPI, I2S, and memory interfaces.
 
 5. Replace abstract memory with a physical memory controller.
-   `wavetable_core_memory` exposes a line-read interface, not real DDR3 pins or
+   `wavetable_line_memory_core` exposes a line-read interface, not real DDR3 pins or
    a MIG app interface. The Smart Artix path should translate line requests into
    reads from a MIG controller configured for the Micron `MT41K256M16TW`.
 
@@ -94,20 +94,25 @@ root `Makefile`:
 
 ```text
 rtl/pkg/synth_pkg.sv
-rtl/bus/register_bus_if.sv
 rtl/bus/spi_register_bridge.sv
+rtl/control/voice_bram_1r1w.sv
+rtl/control/voice_bram_1w2r.sv
 rtl/control/voice_register_bank.sv
+rtl/control/wavetable_system_debug_regs.sv
 rtl/memory/wave_memory_subsystem.sv
 rtl/dsp/linear_interpolator.sv
 rtl/dsp/gain_saturate.sv
+rtl/dsp/voice_dsp_pipeline.sv
+rtl/audio/fractional_tick_gen.sv
+rtl/audio/output_sample_fifo.sv
 rtl/audio/i2s_tx.sv
+rtl/voice/voice_phase_frame.sv
 rtl/voice/multi_voice_pipeline.sv
-rtl/top/wavetable_core.sv
-rtl/top/wavetable_core_memory.sv
-rtl/top/wavetable_core_spi.sv
-rtl/top/wavetable_core_system.sv
+rtl/top/wavetable_render_core.sv
+rtl/top/wavetable_line_memory_core.sv
+rtl/top/wavetable_spi_audio_system.sv
 ```
 
-Use `wavetable_core` for the smallest datapath integration, `wavetable_core_memory`
-when attaching a line-memory controller, or `wavetable_core_system` when keeping
+Use `wavetable_render_core` for the smallest datapath integration, `wavetable_line_memory_core`
+when attaching a line-memory controller, or `wavetable_spi_audio_system` when keeping
 the current SPI plus I2S integration shape.

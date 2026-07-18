@@ -42,14 +42,14 @@ lint target.
 `make test` builds the synthetic-data regression testbench:
 
 ```text
-sim/tb/tb_wavetable_core.sv
+sim/tb/tb_wavetable_render_core.sv
 ```
 
 `make render-instrument` builds the legacy single-instrument SoundFont render
 testbench:
 
 ```text
-sim/tb/tb_render_wavetable_core.sv
+sim/tb/tb_wavetable_render_core_asset.sv
 ```
 
 ## Behavioral Memory Model
@@ -79,7 +79,7 @@ and keeps simulation from failing before the testbench can report context.
 
 ## Self-Checking Regression
 
-The regression testbench is `sim/tb/tb_wavetable_core.sv`.
+The regression testbench is `sim/tb/tb_wavetable_render_core.sv`.
 
 It manually fills the memory model with small values:
 
@@ -181,8 +181,8 @@ SystemVerilog render testbench. `render_config.json` is for human inspection.
 Step 2: Render through RTL.
 
 ```bash
-verilator --binary ... tb_render_wavetable_core
-build/render_obj_dir/Vtb_render_wavetable_core
+verilator --binary ... tb_wavetable_render_core_asset
+build/render_obj_dir/Vtb_wavetable_render_core_asset
 ```
 
 The render testbench programs the core registers from generated localparams,
@@ -215,7 +215,7 @@ model, and drives two backends from the same control writes:
 
 - `ReferenceSynth`: a C++ fixed-point model of the current wavetable playback,
   interpolation, Q1.15 gain/envelope, loop, and saturation rules.
-- `QuickRtlHarness`: a Verilated `wavetable_core` instance with a direct one-word
+- `QuickRtlHarness`: a Verilated `wavetable_render_core` instance with a direct one-word
   memory response model.
 
 This path intentionally skips SPI, I2S, `wave_memory_subsystem`, and external
@@ -280,11 +280,11 @@ precision for those regions.
 
 ## C++ Full-System I2S Render Flow
 
-`make render-full-system` renders through `wavetable_core_system`, a pin-level RTL
+`make render-full-system` renders through `wavetable_spi_audio_system`, a pin-level RTL
 wrapper that combines:
 
 - `spi_register_bridge` for control writes.
-- `wavetable_core_memory` and `wave_memory_subsystem` for the audio core and line
+- `wavetable_line_memory_core` and `wave_memory_subsystem` for the audio core and line
   memory interface.
 - A `100 MHz` system clock with `fractional_tick_gen` instances for sample ticks
   and I2S BCLK edges.
@@ -348,7 +348,7 @@ containing:
 
 - `smart_artix_sd_native_asset_loader`, including the native SD command-level
   block reader and DDR3 asset writer.
-- `wavetable_core_memory`, including the line-cache memory subsystem.
+- `wavetable_line_memory_core`, including the line-cache memory subsystem.
 
 The C++ side models the SD card at the command/data boundary, not at `CMD` and
 `DAT[3:0]` pins. This keeps full-SF2 regressions fast enough to run regularly
@@ -383,7 +383,7 @@ mismatch fails the run.
 
 ## C++ Memory-Profile Render Flow
 
-`make render-memory` renders a short score through `wavetable_core_memory`, which
+`make render-memory` renders a short score through `wavetable_line_memory_core`, which
 wraps the core with `wave_memory_subsystem`. The C++ harness parses SF2 and MIDI
 at runtime, models the MCU-side policy, drives the register bus, serves the
 external line-read memory interface, and writes the WAV file directly. The FPGA
@@ -413,7 +413,7 @@ The C++ harness performs only simulation-side work:
   tuning, and output sample rate.
 - Convert SF2 volume and modulation envelope attack, decay, sustain, release,
   and sampleModes into per-region control values used by the C++ MCU model.
-- Drive `wavetable_core_memory` through its public Verilated ports, including the
+- Drive `wavetable_line_memory_core` through its public Verilated ports, including the
   external line-memory request/response interface.
 
 Each `make render-memory` run writes memory subsystem counters to:
@@ -757,7 +757,7 @@ assets/soundfonts/MT6276.sf2
 
 For `make test`, start with the first `$error` line. It usually reports the
 actual and expected sample value. Then inspect the programmed phase, gain, loop,
-and memory values in `tb_wavetable_core.sv`.
+and memory values in `tb_wavetable_render_core.sv`.
 
 For `make render-instrument`, inspect `build/render/render_config.json` first. It
 shows which instrument, sample, loop points, sample rate, and phase increment the

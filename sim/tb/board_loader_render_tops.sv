@@ -114,7 +114,7 @@ module board_loader_render_tops #(
     .mig_app_wdf_rdy
   );
 
-  wavetable_core_memory #(
+  wavetable_line_memory_core #(
     .LINE_WORDS(LINE_WORDS)
   ) core (
     .clk,

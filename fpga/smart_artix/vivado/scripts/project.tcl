@@ -97,6 +97,16 @@ foreach src [split $filelist_text "\n"] {
   lappend expected_sources [file normalize [file join $board_dir $src]]
 }
 
+set generic_rtl_root [file normalize [file join $repo_root rtl]]
+foreach existing [get_files -quiet -of_objects [get_filesets sources_1]] {
+  set existing_path [file normalize $existing]
+  set is_generic_rtl [string match ${generic_rtl_root}/* $existing_path]
+  set is_expected [expr {[lsearch -exact $expected_sources $existing_path] >= 0}]
+  if {$is_generic_rtl && !$is_expected} {
+    remove_files -quiet $existing_path
+  }
+}
+
 foreach src $expected_sources {
   if {[llength [get_files -quiet $src]] == 0} {
     add_files $src

@@ -21,8 +21,8 @@ the selected board details.
 ## Integration Decisions
 
 - Top-level module name:
-- Core wrapper used: `wavetable_core`, `wavetable_core_memory`, or
-  `wavetable_core_system`
+- Core wrapper used: `wavetable_render_core`, `wavetable_line_memory_core`, or
+  `wavetable_spi_audio_system`
 - Clock generation method:
 - Reset sequencing method:
 - SPI mode and maximum SCLK:

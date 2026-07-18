@@ -1,4 +1,4 @@
-module tb_wavetable_core_system_debug;
+module tb_wavetable_spi_audio_system_debug;
   logic clk = 1'b0;
   logic rst;
   logic core_rst;
@@ -54,7 +54,7 @@ module tb_wavetable_core_system_debug;
 
   always #5 clk = ~clk;
 
-  wavetable_core_system #(
+  wavetable_spi_audio_system #(
     .LINE_WORDS(8),
     .OUTPUT_FIFO_DEPTH(8),
     .SYS_CLK_HZ(1_000_000),
@@ -281,9 +281,9 @@ module tb_wavetable_core_system_debug;
     expect_read(16'h3014, 32'h0000_0000);
 
     if (errors != 0)
-      $fatal(1, "FAIL: wavetable_core_system_debug errors=%0d", errors);
+      $fatal(1, "FAIL: wavetable_spi_audio_system_debug errors=%0d", errors);
 
-    $display("PASS: wavetable_core_system_debug");
+    $display("PASS: wavetable_spi_audio_system_debug");
     $finish;
   end
 

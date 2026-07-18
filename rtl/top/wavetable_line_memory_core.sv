@@ -1,4 +1,4 @@
-module wavetable_core_memory #(
+module wavetable_line_memory_core #(
   parameter int LINE_WORDS = 8
 ) (
   input  logic                     clk,
@@ -31,7 +31,7 @@ module wavetable_core_memory #(
   logic mem_rsp_valid;
   synth_pkg::pcm_t mem_rsp_data;
 
-  wavetable_core core (
+  wavetable_render_core core (
     .clk,
     .rst,
     .bus_valid,

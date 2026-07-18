@@ -125,7 +125,7 @@ registers, the sampled value is the shadow state. For `ENVELOPE_LEVEL`,
 the live runtime scalar state. `STATUS` and `VERSION` can be read either directly
 or through the readback window. Unsupported readback addresses return zero.
 
-The system debug registers are implemented by `wavetable_core_system`, so they
+The system debug registers are implemented by `wavetable_spi_audio_system`, so they
 are visible through SPI in system-level and Smart Artix builds. In non-board
 system simulations, the platform fields read zero unless the testbench drives the
 platform status inputs. The debug window remains available while the playback
@@ -139,7 +139,7 @@ status bits below are live snapshots unless explicitly marked sticky or counted.
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `core_busy` | `wavetable_core_memory` is currently rendering or servicing work. |
+| `0` | `core_busy` | `wavetable_line_memory_core` is currently rendering or servicing work. |
 | `1` | `render_pending` | A sample tick has been accepted and the wrapper is waiting for `core_sample_valid`. |
 | `2` | `core_sample_valid` | The core produced a stereo sample in the current cycle. |
 | `3` | `fifo_sample_valid` | The output FIFO contains at least one sample for I2S. |
@@ -213,7 +213,7 @@ system simulations without platform inputs, most bits read zero.
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `platform_debug_present` | Always `1` in `wavetable_core_system`, so software can detect this debug window. |
+| `0` | `platform_debug_present` | Always `1` in `wavetable_spi_audio_system`, so software can detect this debug window. |
 | `1` | `platform_error_present` | `sd_error_code != 0` or `loader_error_code != 0`. |
 | `2` | `ddr_init_calib_complete` | MIG DDR3 calibration complete. This must be `1` before normal DDR-backed playback. |
 | `3` | `ddr_ui_rst` | MIG UI-clock reset is asserted. This should be `0` for normal operation. |

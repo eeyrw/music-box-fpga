@@ -1,6 +1,6 @@
 #include "quick_rtl_harness.h"
 
-#include "Vwavetable_core.h"
+#include "Vwavetable_render_core.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -19,7 +19,7 @@ std::string hex16(uint16_t v) {
 }  // namespace
 
 QuickRtlHarness::QuickRtlHarness(const std::vector<int16_t>& memory)
-    : top_(new Vwavetable_core), voice_control_(*this), memory_(memory) {
+    : top_(new Vwavetable_render_core), voice_control_(*this), memory_(memory) {
   top_->clk = 0;
   top_->rst = 1;
   top_->bus_valid = 0;

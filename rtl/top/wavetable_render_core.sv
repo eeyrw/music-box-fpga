@@ -1,4 +1,4 @@
-module wavetable_core (
+module wavetable_render_core (
   input  logic                     clk,
   input  logic                     rst,
   input  logic                     bus_valid,

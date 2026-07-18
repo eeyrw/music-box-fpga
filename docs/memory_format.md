@@ -80,9 +80,9 @@ unit test and the normal synthesis render path:
 
 - `tb_wave_memory_subsystem` checks one line miss, one same-line hit, and one
   second-line miss with `LINE_WORDS = 8` and `line_memory_model LATENCY = 4`.
-- `tb_wavetable_core` routes the full multi-voice self-checking datapath through
-  `wavetable_core -> wave_memory_subsystem -> line_memory_model`.
-- `tb_render_wavetable_core` uses the same memory path for SF2-derived render
+- `tb_wavetable_render_core` routes the full multi-voice self-checking datapath through
+  `wavetable_render_core -> wave_memory_subsystem -> line_memory_model`.
+- `tb_wavetable_render_core_asset` uses the same memory path for SF2-derived render
   runs.
 
 Observed focused-test behavior:

@@ -200,14 +200,14 @@ loads the CH347 vendor library at runtime. See
 [`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
 
 With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
-render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_core`
+render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_render_core`
 with a direct word-memory model and compares every RTL output sample against a C++
 fixed-point reference implementation. It also writes `build/render_quick/out.wav`
 for quick listening after the exact comparison passes.
 
 `make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
 runtime, models MCU-side note allocation and Q1.15 ADSR envelope writes, and
-drives `wavetable_core_memory` through the register interface. Wave reads pass
+drives `wavetable_line_memory_core` through the register interface. Wave reads pass
 through the line-cache memory subsystem before the C++ external line-memory model
 responds. The output WAV is `build/render_memory/out.wav`, and memory
 hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
@@ -223,7 +223,7 @@ wrapper uses a `100 MHz` system clock and fractional 48 kHz audio timing.
 `make render-board-loader` verifies the board asset-load path before rendering. It
 constructs a raw SD image from the selected SF2, drives the native-SD command/data
 loader RTL into a DDR byte model, checks that the loaded DDR bytes exactly match
-the SF2 image, then renders through `wavetable_core_memory` and compares every RTL
+the SF2 image, then renders through `wavetable_line_memory_core` and compares every RTL
 sample against the C++ fixed-point reference. The output WAV is
 `build/render_board_loader/out.wav`, and the summary JSON is
 `build/render_board_loader/board_loader_render_config.json`.

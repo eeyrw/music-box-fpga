@@ -36,7 +36,7 @@ Implemented RTL pieces:
 
 ## Top-Level Variants
 
-`rtl/top/wavetable_core.sv` is the core datapath wrapper:
+`rtl/top/wavetable_render_core.sv` is the core datapath wrapper:
 
 ```text
 register bus -> voice_register_bank -> multi_voice_pipeline
@@ -44,20 +44,17 @@ register bus -> voice_register_bank -> multi_voice_pipeline
                                       -> sample_valid + sample_l/sample_r
 ```
 
-`rtl/top/wavetable_core_memory.sv` adds the line-memory subsystem:
+`rtl/top/wavetable_line_memory_core.sv` adds the line-memory subsystem:
 
 ```text
-wavetable_core -> wave_memory_subsystem -> external line-read interface
+wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 ```
 
-`rtl/top/wavetable_core_spi.sv` exposes the register bus through SPI pins while
-leaving the core memory and sample interfaces abstract.
-
-`rtl/top/wavetable_core_system.sv` is the current pin-level simulation wrapper:
+`rtl/top/wavetable_spi_audio_system.sv` is the current pin-level simulation wrapper:
 
 ```text
 SPI pins -> spi_register_bridge -> debug/readback window
-                              \-> wavetable_core_memory -> i2s_tx -> I2S pins
+                              \-> wavetable_line_memory_core -> i2s_tx -> I2S pins
                                                     |
                                                     v
                                            external line-memory pins
@@ -66,6 +63,10 @@ SPI pins -> spi_register_bridge -> debug/readback window
 It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
 from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
+The debug/readback window is implemented by
+`rtl/control/wavetable_system_debug_regs.sv`, which keeps status counters,
+render-latency accounting, and DDR debug-control registers out of the pin-level
+wrapper.
 
 The wrapper has two reset levels. `rst` resets the SPI bridge and system debug
 registers. `core_rst` resets only playback-facing blocks: sample tick generation,
@@ -78,10 +79,11 @@ register accesses return a bus error rather than holding the SPI transaction ope
 `multi_voice_pipeline` is a one-frame-at-a-time throughput renderer. On each
 accepted `sample_tick`, the renderer scans voice slots in index order, reads
 configuration/runtime snapshots through the register bank's synchronous read
-path, enqueues interpolation endpoint requests, assembles ordered endpoint
-responses into complete voice contexts, issues those contexts into a fixed-latency
-DSP pipeline, and retires DSP results into a signed 32-bit stereo mixer. The scan
-is intentionally sequential: invalid voice slots cost a clock, but the renderer
+path, asks `voice_phase_frame` for the current interpolation frames, next phase,
+loop wrap, and done decisions, issues endpoint fetch contexts through
+`voice_endpoint_fetch`, issues completed contexts into a fixed-latency DSP
+pipeline, and retires DSP results into a signed 32-bit stereo mixer. The scan is
+intentionally sequential: invalid voice slots cost a clock, but the renderer
 avoids a wide per-frame priority encoder and next-voice mux.
 
 The core state sequence is:
@@ -93,22 +95,18 @@ READ_VOICE
 WAIT_VOICE
 START_VOICE
 PROCESS_VOICE
-REQ_L0  enqueue left/mono endpoint 0
-REQ_L1  enqueue left/mono endpoint 1
-REQ_R0  enqueue right endpoint 0, stereo only
-REQ_R1  enqueue right endpoint 1, stereo only
-DSP_START  advance scheduler while queued request/response/DSP work drains
+DSP_START  advance scheduler while endpoint fetch and DSP work drains
 DRAIN
 FINISH
 IDLE
 ```
 
-Endpoint responses are not consumed by `WAIT_L*` states in the current RTL.
+`voice_endpoint_fetch` serializes L0/L1/R0/R1 endpoint requests internally.
 Accepted requests push compact response metadata, ordered `mem_rsp_valid` pulses
 fill RAM-backed fetch slots, and a complete `voice_dsp_context_t` is pushed into a
 small DSP context queue when the last required endpoint arrives. `DRAIN` waits for
-the request queue, response metadata queue, fetch slots, DSP context queue, and
-issued DSP contexts to empty before `FINISH` emits the mixed sample.
+the fetch engine and issued DSP contexts to empty before `FINISH` emits the mixed
+sample.
 
 The generated sample uses these integer operations:
 
@@ -190,10 +188,11 @@ the requested audio clocks. This keeps the long-term sample rate aligned to
 `SAMPLE_RATE_HZ` in the single `100 MHz` domain, at the cost of one-system-clock
 edge placement jitter.
 
-The optional biquad filter datapath is isolated in `biquad_filter_datapath`. The
-voice scheduler still owns the multi-cycle sequencing, per-voice filter state
-arrays, and state writeback; the filter module owns the coefficient multiplies,
-PCM saturation, and next-state arithmetic.
+The optional biquad filter arithmetic is implemented inside
+`voice_dsp_pipeline`, which is the single RTL owner for interpolation, filter
+coefficient multiplies, PCM saturation, gain, envelope scaling, and next filter
+state calculation. The voice scheduler still owns per-voice filter state arrays
+and state writeback.
 
 The practical board question is whether all active voices can render before the
 I2S transmitter needs the next frame. If not, the next architecture work is an
@@ -241,11 +240,11 @@ the generic RTL to one vendor flow.
    revision should exploit the predictable per-voice Q24.8 phase stride with
    per-voice small line caches, demand-priority fills, and low-priority prefetch
    for the next interpolated frame or loop-wrapped frame. This likely requires
-   adding a voice identifier to the core memory-request interface, or otherwise
-   moving the cache closer to `multi_voice_pipeline` so the memory subsystem can
-   preserve locality across interleaved voices. Use `render-memory` hit/miss,
-   response-latency, render-latency, and deadline-miss counters to compare this
-   against the current one-line baseline.
+   adding a voice identifier to the core memory-request interface, or extending
+   `voice_endpoint_fetch` with locality policy while keeping phase and DSP
+   algorithms out of the memory adapter. Use `render-memory` hit/miss,
+   response-latency, render-latency, and deadline-miss counters to compare any
+   new policy against the current one-line baseline.
 
 4. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a

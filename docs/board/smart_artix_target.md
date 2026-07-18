@@ -36,13 +36,13 @@ The FPGA synth path is:
 ```text
 external MCU or PC USB-to-SPI
   -> spi_register_bridge
-  -> wavetable_core
+  -> wavetable_render_core
   -> wave_memory_subsystem
   -> DDR3 line-read adapter
   -> Xilinx MIG DDR3 controller
   -> MT41K256M16TW
 
-wavetable_core
+wavetable_render_core
   -> output FIFO
   -> i2s_tx
   -> simple I2S codec
@@ -59,7 +59,7 @@ The DDR3 controller must stay behind a board-level adapter. The generic core
 must not depend on MIG signals or DDR timing. The intended layering is:
 
 ```text
-wavetable_core word reads
+wavetable_render_core word reads
   -> wave_memory_subsystem line reads
   -> board DDR3 line-reader adapter
   -> MIG application interface
@@ -270,14 +270,14 @@ XDC until the Smart Artix configuration bank voltage is verified from the board
 schematic or vendor documentation.
 
 The Smart Artix reset tree keeps the SPI debug window alive once the MIG UI clock
-is calibrated. Asset-loading state no longer holds `wavetable_core_system` in full
+is calibrated. Asset-loading state no longer holds `wavetable_spi_audio_system` in full
 reset; instead, `core_rst` gates only playback, line reads, FIFO, and I2S until
 the SD-to-DDR loader reports `asset_loaded`. This lets firmware inspect loader
 state, byte counters, SD errors, and DDR status over SPI while the sample asset is
 still loading or has failed to load.
 
 This is not yet an always-on debug island. The board top still clocks
-`wavetable_core_system` and its SPI bridge from the MIG `ui_clk`, so the SPI debug
+`wavetable_spi_audio_system` and its SPI bridge from the MIG `ui_clk`, so the SPI debug
 window is unavailable before the MIG UI clock is present and the system reset is
 released. Full power-on debug will require a separate always-on clock domain for a
 minimal SPI/debug block, plus CDC snapshots from the MIG, SD loader, and audio

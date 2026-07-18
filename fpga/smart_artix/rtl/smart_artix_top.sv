@@ -327,7 +327,7 @@ module smart_artix_top (
     .mig_app_rd_data_end(read_app_rd_data_end)
   );
 
-  wavetable_core_system #(
+  wavetable_spi_audio_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
     .SYS_CLK_HZ(SYS_CLK_HZ),

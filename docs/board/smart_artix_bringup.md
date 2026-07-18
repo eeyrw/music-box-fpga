@@ -27,7 +27,7 @@ host, MCU, or later soft-processor responsibilities.
 - `clk_in` from the board `50 MHz` oscillator.
 - `smart_artix_clk_50m_to_200m`, feeding MIG `sys_clk_i`.
 - `smart_artix_ddr3_mig`, exposing a `100 MHz` MIG `ui_clk`.
-- `wavetable_core_system`, clocked by MIG `ui_clk`.
+- `wavetable_spi_audio_system`, clocked by MIG `ui_clk`.
 - native 4-bit SD asset loading into DDR3.
 - DDR3 read/write arbitration between asset-loader writes and wavetable reads.
 - SPI register control and system debug registers.
