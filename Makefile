@@ -76,6 +76,8 @@ VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
 
 SMART_ARTIX_RTL_SOURCES := \
+	rtl/pkg/synth_register_pkg.sv \
+	fpga/smart_artix/rtl/smart_artix_pkg.sv \
 	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_ddr3_asset_loader.sv \
@@ -91,7 +93,9 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
-	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv
+	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_subsystem.sv \
+	fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv
 
 SMART_ARTIX_SIM_MODELS := \
 	fpga/smart_artix/sim/fake_sd_native_phy_model.sv \
@@ -105,6 +109,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_ddr3_rw_arbiter \
 	tb_smart_artix_fat_file_reader \
 	tb_smart_artix_mig_stub \
+	tb_smart_artix_platform_debug_regs \
 	tb_smart_artix_sd_native_asset_loader \
 	tb_smart_artix_sd_native_block_reader \
 	tb_smart_artix_sd_native_block_reader_fake \

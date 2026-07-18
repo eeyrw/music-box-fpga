@@ -130,11 +130,13 @@ addresses report a bus error.
 The system debug registers are implemented by
 `fpga/common/rtl/wavetable_system_debug_regs.sv` and are composed into the
 current SPI/I2S system wrapper. They are visible through whichever board-level
-register transport is connected to that wrapper. In non-board system
-simulations, the platform fields read zero unless the testbench drives the
-platform status inputs. The debug window remains available while the playback
-core/audio path is held in `core_rst`; non-debug core register accesses during
-that reset return a bus error instead of stalling the transport bridge.
+register transport is connected to that wrapper. The platform and DDR debug
+registers are implemented by board-specific debug extensions such as
+`fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv`; wrappers without that
+extension may report those addresses as normal unsupported register accesses.
+The debug window remains available while the playback core/audio path is held in
+`core_rst`; non-debug core register accesses during that reset return a bus
+error instead of stalling the transport bridge.
 
 All unspecified or reserved bits in the system debug registers read as zero. The
 status bits below are live snapshots unless explicitly marked sticky or counted.
@@ -212,12 +214,13 @@ The event counters are direct 32-bit saturating reads:
 | `0x3034` | `MEM_MISS_COUNT` | Wave-memory line-cache miss pulses. |
 | `0x3038` | `MEM_RESPONSE_COUNT` | External memory-line response pulses. |
 
-`PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. In generic
-system simulations without platform inputs, most bits read zero.
+`PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. Generic
+wrappers may leave this address unimplemented unless they attach a board-specific
+debug-register extension.
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `platform_debug_present` | Always `1` in `wavetable_spi_audio_system`, so software can detect this debug window. |
+| `0` | `platform_debug_present` | `1` when the board wrapper implements this platform debug window. |
 | `1` | `platform_error_present` | `sd_error_code != 0` or `loader_error_code != 0`. |
 | `2` | `ddr_init_calib_complete` | MIG DDR3 calibration complete. This must be `1` before normal DDR-backed playback. |
 | `3` | `ddr_ui_rst` | MIG UI-clock reset is asserted. This should be `0` for normal operation. |

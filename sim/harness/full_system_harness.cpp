@@ -36,22 +36,8 @@ FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
   top_->ext_req_ready = 1;
   top_->ext_rsp_valid = 0;
   for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
-  top_->platform_ddr_init_calib_complete = 0;
-  top_->platform_ddr_ui_rst = 0;
-  top_->platform_ddr_device_temp = 0;
-  top_->platform_mig_app_rdy = 0;
-  top_->platform_mig_app_wdf_rdy = 0;
-  top_->platform_mig_app_rd_data_valid = 0;
-  top_->platform_mig_app_rd_data_end = 0;
-  top_->platform_sd_initialized = 0;
-  top_->platform_asset_loaded = 0;
-  top_->platform_asset_loader_busy = 0;
-  top_->platform_asset_loader_state = 0;
-  top_->platform_sd_error_code = 0;
-  top_->platform_loader_error_code = 0;
-  top_->platform_bytes_loaded = 0;
-  top_->platform_sf2_size_bytes = 0;
-  top_->platform_current_lba = 0;
+  top_->debug_ext_access = 0;
+  top_->debug_ext_rdata = 0;
 }
 
 FullSystemHarness::~FullSystemHarness() {

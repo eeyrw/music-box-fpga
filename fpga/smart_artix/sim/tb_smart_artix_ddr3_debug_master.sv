@@ -1,38 +1,22 @@
 module tb_smart_artix_ddr3_debug_master;
-  localparam int MIG_ADDR_WIDTH = 28;
-  localparam int MIG_DATA_WIDTH = 128;
-  localparam int MASK_WIDTH = MIG_DATA_WIDTH / 8;
-
   logic clk;
   logic rst;
   logic start;
   logic write;
   logic [31:0] byte_addr;
-  logic [MIG_DATA_WIDTH-1:0] wdata;
-  logic [MASK_WIDTH-1:0] byte_enable;
+  logic [smart_artix_pkg::MIG_DATA_WIDTH-1:0] wdata;
+  logic [smart_artix_pkg::MIG_MASK_WIDTH-1:0] byte_enable;
   logic ready;
   logic busy;
   logic done_pulse;
   logic error_pulse;
-  logic [MIG_DATA_WIDTH-1:0] rdata;
-  logic [MIG_ADDR_WIDTH-1:0] mig_app_addr;
-  logic [2:0] mig_app_cmd;
-  logic mig_app_en;
-  logic mig_app_rdy;
-  logic [MIG_DATA_WIDTH-1:0] mig_app_rd_data;
-  logic mig_app_rd_data_valid;
-  logic mig_app_rd_data_end;
-  logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data;
-  logic [MASK_WIDTH-1:0] mig_app_wdf_mask;
-  logic mig_app_wdf_wren;
-  logic mig_app_wdf_end;
-  logic mig_app_wdf_rdy;
+  logic [smart_artix_pkg::MIG_DATA_WIDTH-1:0] rdata;
+  smart_artix_pkg::mig_app_command_t mig_app_command;
+  smart_artix_pkg::mig_app_write_data_t mig_app_write_data;
+  smart_artix_pkg::mig_app_response_t mig_app_response;
   int errors;
 
-  smart_artix_ddr3_debug_master #(
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
-  ) dut (
+  smart_artix_ddr3_debug_master dut (
     .clk,
     .rst,
     .start,
@@ -45,18 +29,9 @@ module tb_smart_artix_ddr3_debug_master;
     .done_pulse,
     .error_pulse,
     .rdata,
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_rd_data,
-    .mig_app_rd_data_valid,
-    .mig_app_rd_data_end,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command,
+    .mig_app_write_data,
+    .mig_app_response
   );
 
 /* verilator lint_off BLKSEQ */
@@ -80,11 +55,10 @@ module tb_smart_artix_ddr3_debug_master;
     byte_addr = '0;
     wdata = 128'h0123_4567_89ab_cdef_fedc_ba98_7654_3210;
     byte_enable = 16'h00ff;
-    mig_app_rdy = 1'b1;
-    mig_app_rd_data = 128'haaaa_bbbb_cccc_dddd_eeee_ffff_1111_2222;
-    mig_app_rd_data_valid = 1'b0;
-    mig_app_rd_data_end = 1'b0;
-    mig_app_wdf_rdy = 1'b1;
+    mig_app_response = '0;
+    mig_app_response.rdy = 1'b1;
+    mig_app_response.rd_data = 128'haaaa_bbbb_cccc_dddd_eeee_ffff_1111_2222;
+    mig_app_response.wdf_rdy = 1'b1;
     errors = 0;
 
     repeat (2) @(posedge clk);
@@ -118,11 +92,14 @@ module tb_smart_artix_ddr3_debug_master;
     start = 1'b0;
     #1;
     check(busy && !ready, "debug write did not enter busy state");
-    check(mig_app_en && mig_app_cmd == 3'b000, "debug write command not driven");
-    check(mig_app_addr == 28'h000_0100, "debug write address mismatch");
-    check(mig_app_wdf_wren && mig_app_wdf_end, "debug write data strobe not driven");
-    check(mig_app_wdf_data == wdata, "debug write data mismatch");
-    check(mig_app_wdf_mask == 16'hff00, "debug write mask mismatch");
+    check(mig_app_command.en && mig_app_command.cmd == 3'b000,
+          "debug write command not driven");
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0100),
+          "debug write address mismatch");
+    check(mig_app_write_data.wren && mig_app_write_data.end_,
+          "debug write data strobe not driven");
+    check(mig_app_write_data.data == wdata, "debug write data mismatch");
+    check(mig_app_write_data.mask == 16'hff00, "debug write mask mismatch");
     @(negedge clk);
     #1;
     check(done_pulse, "debug write did not complete after command/data ready");
@@ -135,14 +112,16 @@ module tb_smart_artix_ddr3_debug_master;
     @(negedge clk);
     start = 1'b0;
     #1;
-    check(mig_app_en && mig_app_cmd == 3'b001, "debug read command not driven");
-    check(mig_app_addr == 28'h000_0200, "debug read address mismatch");
+    check(mig_app_command.en && mig_app_command.cmd == 3'b001,
+          "debug read command not driven");
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0200),
+          "debug read address mismatch");
     @(negedge clk);
-    mig_app_rd_data_valid = 1'b1;
-    mig_app_rd_data_end = 1'b1;
+    mig_app_response.rd_data_valid = 1'b1;
+    mig_app_response.rd_data_end = 1'b1;
     @(negedge clk);
-    mig_app_rd_data_valid = 1'b0;
-    mig_app_rd_data_end = 1'b0;
+    mig_app_response.rd_data_valid = 1'b0;
+    mig_app_response.rd_data_end = 1'b0;
     #1;
     check(done_pulse, "debug read did not complete on read data end");
     check(rdata == 128'haaaa_bbbb_cccc_dddd_eeee_ffff_1111_2222, "debug read data mismatch");

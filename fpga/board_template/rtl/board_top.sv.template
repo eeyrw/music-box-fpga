@@ -46,6 +46,7 @@ module board_top (
   ) core_system (
     .clk(clk_sys),
     .rst(rst_sys),
+    .core_rst(1'b0),
     .spi_sclk(spi_sclk),
     .spi_cs_n(spi_cs_n),
     .spi_mosi(spi_mosi),
@@ -67,7 +68,13 @@ module board_top (
     .mem_debug_response_latency(),
     .output_fifo_level(output_fifo_level),
     .render_deadline_miss_pulse(render_deadline_miss_pulse),
-    .render_latency_cycles(render_latency_cycles)
+    .render_latency_cycles(render_latency_cycles),
+    .debug_bus_valid(),
+    .debug_bus_write(),
+    .debug_bus_address(),
+    .debug_bus_wdata(),
+    .debug_ext_access(1'b0),
+    .debug_ext_rdata(32'd0)
   );
 
   // Keep ext_req_addr referenced until the memory controller is implemented.

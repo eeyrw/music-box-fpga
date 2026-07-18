@@ -1,8 +1,6 @@
 module tb_smart_artix_sd_native_asset_loader;
   localparam int LBA_WIDTH = 32;
-  localparam int MIG_ADDR_WIDTH = 28;
-  localparam int MIG_DATA_WIDTH = 128;
-  localparam int BEAT_BYTES = MIG_DATA_WIDTH / 8;
+  localparam int BEAT_BYTES = smart_artix_pkg::MIG_MASK_WIDTH;
 
   logic clk;
   logic rst;
@@ -33,15 +31,9 @@ module tb_smart_artix_sd_native_asset_loader;
   logic [7:0] sd_data;
   logic sd_data_last;
   logic [2:0] sd_data_status;
-  logic [MIG_ADDR_WIDTH-1:0] mig_app_addr;
-  logic [2:0] mig_app_cmd;
-  logic mig_app_en;
-  logic mig_app_rdy;
-  logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data;
-  logic [MIG_DATA_WIDTH/8-1:0] mig_app_wdf_mask;
-  logic mig_app_wdf_wren;
-  logic mig_app_wdf_end;
-  logic mig_app_wdf_rdy;
+  smart_artix_pkg::mig_app_command_t mig_app_command;
+  smart_artix_pkg::mig_app_write_data_t mig_app_write_data;
+  smart_artix_pkg::mig_app_response_t mig_app_response;
   logic [7:0] illegal_command_count;
   logic [31:0] last_read_lba;
   logic selected;
@@ -50,9 +42,7 @@ module tb_smart_artix_sd_native_asset_loader;
   int byte_index;
 
   smart_artix_sd_native_asset_loader #(
-    .LBA_WIDTH(LBA_WIDTH),
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
+    .LBA_WIDTH(LBA_WIDTH)
   ) dut (
     .clk,
     .rst,
@@ -83,15 +73,9 @@ module tb_smart_artix_sd_native_asset_loader;
     .sd_data,
     .sd_data_last,
     .sd_data_status,
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command,
+    .mig_app_write_data,
+    .mig_app_response
   );
 
   fake_sd_native_phy_model #(
@@ -149,17 +133,19 @@ module tb_smart_artix_sd_native_asset_loader;
   always_ff @(posedge clk) begin
     if (rst) begin
       byte_index <= 0;
-    end else if (mig_app_en && mig_app_rdy) begin
-      check(mig_app_cmd == 3'b000, "native asset loader emitted non-write MIG command");
-      check(mig_app_addr == MIG_ADDR_WIDTH'(byte_index), "native asset loader MIG address mismatch");
-      check(mig_app_wdf_wren && mig_app_wdf_end, "native asset loader missing write-data beat");
+    end else if (mig_app_command.en && mig_app_response.rdy) begin
+      check(mig_app_command.cmd == 3'b000, "native asset loader emitted non-write MIG command");
+      check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(byte_index),
+            "native asset loader MIG address mismatch");
+      check(mig_app_write_data.wren && mig_app_write_data.end_,
+            "native asset loader missing write-data beat");
       for (int i = 0; i < BEAT_BYTES; i++) begin
         if (byte_index + i < 20) begin
-          check(!mig_app_wdf_mask[i], "native asset loader masked valid byte");
-          check(mig_app_wdf_data[i * 8 +: 8] == expected_byte(16'(byte_index + i)),
+          check(!mig_app_write_data.mask[i], "native asset loader masked valid byte");
+          check(mig_app_write_data.data[i * 8 +: 8] == expected_byte(16'(byte_index + i)),
                 "native asset loader write data mismatch");
         end else begin
-          check(mig_app_wdf_mask[i], "native asset loader did not mask padding byte");
+          check(mig_app_write_data.mask[i], "native asset loader did not mask padding byte");
         end
       end
       byte_index <= byte_index + BEAT_BYTES;
@@ -171,8 +157,9 @@ module tb_smart_artix_sd_native_asset_loader;
     rst = 1'b1;
     start = 1'b0;
     ddr_init_calib_complete = 1'b0;
-    mig_app_rdy = 1'b1;
-    mig_app_wdf_rdy = 1'b1;
+    mig_app_response = '0;
+    mig_app_response.rdy = 1'b1;
+    mig_app_response.wdf_rdy = 1'b1;
     errors = 0;
 
     repeat (3) @(posedge clk);

@@ -26,32 +26,10 @@ module tb_wavetable_spi_audio_system_debug;
   logic [3:0] output_fifo_level;
   logic render_deadline_miss_pulse;
   logic [15:0] render_latency_cycles;
-  logic platform_ddr_init_calib_complete;
-  logic platform_ddr_ui_rst;
-  logic [11:0] platform_ddr_device_temp;
-  logic platform_mig_app_rdy;
-  logic platform_mig_app_wdf_rdy;
-  logic platform_mig_app_rd_data_valid;
-  logic platform_mig_app_rd_data_end;
-  logic platform_sd_initialized;
-  logic platform_asset_loaded;
-  logic platform_asset_loader_busy;
-  logic [3:0] platform_asset_loader_state;
-  logic [7:0] platform_sd_error_code;
-  logic [7:0] platform_loader_error_code;
-  logic [31:0] platform_bytes_loaded;
-  logic [31:0] platform_sf2_size_bytes;
-  logic [31:0] platform_current_lba;
-  logic platform_ddr_debug_start;
-  logic platform_ddr_debug_write;
-  logic [31:0] platform_ddr_debug_addr;
-  logic [127:0] platform_ddr_debug_wdata;
-  logic [15:0] platform_ddr_debug_byte_enable;
-  logic platform_ddr_debug_ready;
-  logic platform_ddr_debug_busy;
-  logic platform_ddr_debug_done;
-  logic platform_ddr_debug_error;
-  logic [127:0] platform_ddr_debug_rdata;
+  logic debug_bus_valid;
+  logic debug_bus_write;
+  logic [15:0] debug_bus_address;
+  logic [31:0] debug_bus_wdata;
   int errors = 0;
 
   always #5 clk = ~clk;
@@ -87,32 +65,12 @@ module tb_wavetable_spi_audio_system_debug;
     .output_fifo_level,
     .render_deadline_miss_pulse,
     .render_latency_cycles,
-    .platform_ddr_init_calib_complete,
-    .platform_ddr_ui_rst,
-    .platform_ddr_device_temp,
-    .platform_mig_app_rdy,
-    .platform_mig_app_wdf_rdy,
-    .platform_mig_app_rd_data_valid,
-    .platform_mig_app_rd_data_end,
-    .platform_sd_initialized,
-    .platform_asset_loaded,
-    .platform_asset_loader_busy,
-    .platform_asset_loader_state,
-    .platform_sd_error_code,
-    .platform_loader_error_code,
-    .platform_bytes_loaded,
-    .platform_sf2_size_bytes,
-    .platform_current_lba,
-    .platform_ddr_debug_start,
-    .platform_ddr_debug_write,
-    .platform_ddr_debug_addr,
-    .platform_ddr_debug_wdata,
-    .platform_ddr_debug_byte_enable,
-    .platform_ddr_debug_ready,
-    .platform_ddr_debug_busy,
-    .platform_ddr_debug_done,
-    .platform_ddr_debug_error,
-    .platform_ddr_debug_rdata
+    .debug_bus_valid,
+    .debug_bus_write,
+    .debug_bus_address,
+    .debug_bus_wdata,
+    .debug_ext_access(1'b0),
+    .debug_ext_rdata(32'd0)
   );
 
   task automatic spi_clock_bit(input logic bit_value);
@@ -186,27 +144,6 @@ module tb_wavetable_spi_audio_system_debug;
     ext_req_ready = 1'b1;
     ext_rsp_valid = 1'b0;
     ext_rsp_data = '0;
-    platform_ddr_init_calib_complete = 1'b1;
-    platform_ddr_ui_rst = 1'b0;
-    platform_ddr_device_temp = 12'h2a5;
-    platform_mig_app_rdy = 1'b1;
-    platform_mig_app_wdf_rdy = 1'b0;
-    platform_mig_app_rd_data_valid = 1'b1;
-    platform_mig_app_rd_data_end = 1'b0;
-    platform_sd_initialized = 1'b1;
-    platform_asset_loaded = 1'b1;
-    platform_asset_loader_busy = 1'b0;
-    platform_asset_loader_state = 4'ha;
-    platform_sd_error_code = 8'h12;
-    platform_loader_error_code = 8'h34;
-    platform_bytes_loaded = 32'h5566_7788;
-    platform_sf2_size_bytes = 32'hddee_ff00;
-    platform_current_lba = 32'h1234_5678;
-    platform_ddr_debug_ready = 1'b1;
-    platform_ddr_debug_busy = 1'b0;
-    platform_ddr_debug_done = 1'b0;
-    platform_ddr_debug_error = 1'b0;
-    platform_ddr_debug_rdata = 128'hfedc_ba98_7654_3210_89ab_cdef_0123_4567;
     core_rst = 1'b0;
 
     repeat (5) @(negedge clk);
@@ -214,12 +151,6 @@ module tb_wavetable_spi_audio_system_debug;
     repeat (5) @(negedge clk);
 
     core_rst = 1'b1;
-    platform_asset_loaded = 1'b0;
-    platform_asset_loader_busy = 1'b1;
-    platform_asset_loader_state = 4'h5;
-    platform_bytes_loaded = 32'h0000_1000;
-    expect_read(REG_PLATFORM_STATUS, 32'h0000_2ad7);
-    expect_read(REG_PLATFORM_BYTES_LOADED, 32'h0000_1000);
     spi_write_word(16'h0000, 32'h0000_0001);
     if (!spi_error) begin
       $error("core register write during core reset did not report error");
@@ -227,10 +158,6 @@ module tb_wavetable_spi_audio_system_debug;
     end
 
     core_rst = 1'b0;
-    platform_asset_loaded = 1'b1;
-    platform_asset_loader_busy = 1'b0;
-    platform_asset_loader_state = 4'ha;
-    platform_bytes_loaded = 32'h5566_7788;
     repeat (2) @(negedge clk);
 
     expect_read(REG_VERSION, REG_VERSION_VALUE);
@@ -238,44 +165,6 @@ module tb_wavetable_spi_audio_system_debug;
     expect_read(REG_DEBUG_EVENT_FLAGS, 32'h0000_0000);
     expect_read(REG_AUDIO_STATUS, 32'h0000_0000);
     expect_read(REG_UNDERRUN_COUNT, 32'h0000_0000);
-    expect_read(REG_PLATFORM_STATUS, 32'h0000_52b7);
-    expect_read(REG_PLATFORM_ERRORS, 32'h000a_3412);
-    expect_read(REG_PLATFORM_BYTES_LOADED, 32'h5566_7788);
-    expect_read(REG_PLATFORM_SF2_SIZE, 32'hddee_ff00);
-    expect_read(REG_PLATFORM_CURRENT_LBA, 32'h1234_5678);
-    expect_read(REG_PLATFORM_DDR_STATUS, 32'h02a5_0015);
-    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0003);
-    spi_write_word(REG_DDR_DEBUG_ADDR, 32'h0000_0100);
-    spi_write_word(REG_DDR_DEBUG_BYTE_ENABLE, 32'h0000_00ff);
-    spi_write_word(REG_DDR_DEBUG_DATA0, 32'h0123_4567);
-    spi_write_word(REG_DDR_DEBUG_DATA1, 32'h89ab_cdef);
-    spi_write_word(REG_DDR_DEBUG_DATA2, 32'h7654_3210);
-    spi_write_word(REG_DDR_DEBUG_DATA3, 32'hfedc_ba98);
-    spi_write_word(REG_DDR_DEBUG_CONTROL,
-                   REG_DDR_DEBUG_CONTROL_START_MASK | REG_DDR_DEBUG_CONTROL_WRITE_MASK);
-    if (!platform_ddr_debug_write || platform_ddr_debug_addr != 32'h0000_0100 ||
-        platform_ddr_debug_byte_enable != 16'h00ff ||
-        platform_ddr_debug_wdata != 128'hfedc_ba98_7654_3210_89ab_cdef_0123_4567) begin
-      $error("DDR debug register write state mismatch write=%0b addr=0x%08x be=0x%04x wdata=0x%032x",
-             platform_ddr_debug_write, platform_ddr_debug_addr,
-             platform_ddr_debug_byte_enable, platform_ddr_debug_wdata);
-      errors++;
-    end
-    platform_ddr_debug_ready = 1'b0;
-    platform_ddr_debug_busy = 1'b1;
-    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0025);
-    platform_ddr_debug_ready = 1'b1;
-    platform_ddr_debug_busy = 1'b0;
-    platform_ddr_debug_done = 1'b1;
-    @(negedge clk);
-    platform_ddr_debug_done = 1'b0;
-    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_002b);
-    expect_read(REG_DDR_DEBUG_DATA0, 32'h0123_4567);
-    expect_read(REG_DDR_DEBUG_DATA1, 32'h89ab_cdef);
-    expect_read(REG_DDR_DEBUG_DATA2, 32'h7654_3210);
-    expect_read(REG_DDR_DEBUG_DATA3, 32'hfedc_ba98);
-    spi_write_word(REG_DDR_DEBUG_CONTROL, REG_DDR_DEBUG_CONTROL_CLEAR_MASK);
-    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0023);
     spi_write_word(REG_DEBUG_EVENT_FLAGS,
                    REG_DEBUG_EVENT_FLAGS_UNDERRUN_MASK |
                    REG_DEBUG_EVENT_FLAGS_SAMPLE_DROP_MASK |
@@ -302,5 +191,6 @@ module tb_wavetable_spi_audio_system_debug;
   assign unused_outputs = ext_req_valid | (|ext_req_addr) | i2s_bclk | i2s_lrclk | i2s_sdata |
       underrun_pulse | sample_drop_pulse | mem_debug_hit_pulse | mem_debug_miss_pulse |
       mem_debug_response_pulse | (|mem_debug_response_latency) | (|output_fifo_level) |
-      render_deadline_miss_pulse | (|render_latency_cycles) | platform_ddr_debug_start;
+      render_deadline_miss_pulse | (|render_latency_cycles) | debug_bus_valid |
+      debug_bus_write | (|debug_bus_address) | (|debug_bus_wdata);
 endmodule

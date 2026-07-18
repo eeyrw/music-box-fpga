@@ -29,32 +29,12 @@ module wavetable_spi_audio_system #(
   output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles,
-  input  logic                     platform_ddr_init_calib_complete,
-  input  logic                     platform_ddr_ui_rst,
-  input  logic [11:0]              platform_ddr_device_temp,
-  input  logic                     platform_mig_app_rdy,
-  input  logic                     platform_mig_app_wdf_rdy,
-  input  logic                     platform_mig_app_rd_data_valid,
-  input  logic                     platform_mig_app_rd_data_end,
-  input  logic                     platform_sd_initialized,
-  input  logic                     platform_asset_loaded,
-  input  logic                     platform_asset_loader_busy,
-  input  logic [3:0]               platform_asset_loader_state,
-  input  logic [7:0]               platform_sd_error_code,
-  input  logic [7:0]               platform_loader_error_code,
-  input  logic [31:0]              platform_bytes_loaded,
-  input  logic [31:0]              platform_sf2_size_bytes,
-  input  logic [31:0]              platform_current_lba,
-  output logic                     platform_ddr_debug_start,
-  output logic                     platform_ddr_debug_write,
-  output logic [31:0]              platform_ddr_debug_addr,
-  output logic [LINE_WORDS*16-1:0] platform_ddr_debug_wdata,
-  output logic [LINE_WORDS*2-1:0]  platform_ddr_debug_byte_enable,
-  input  logic                     platform_ddr_debug_ready,
-  input  logic                     platform_ddr_debug_busy,
-  input  logic                     platform_ddr_debug_done,
-  input  logic                     platform_ddr_debug_error,
-  input  logic [LINE_WORDS*16-1:0] platform_ddr_debug_rdata
+  output logic                     debug_bus_valid,
+  output logic                     debug_bus_write,
+  output logic [15:0]              debug_bus_address,
+  output logic [31:0]              debug_bus_wdata,
+  input  logic                     debug_ext_access,
+  input  logic [31:0]              debug_ext_rdata
 );
   logic sample_tick;
   logic spi_bus_valid;
@@ -90,13 +70,21 @@ module wavetable_spi_audio_system #(
   logic [31:0] system_debug_rdata;
 
   assign core_reset = rst || core_rst;
-  assign core_bus_valid = spi_bus_valid && !system_debug_access && !core_reset;
+  assign debug_bus_valid = spi_bus_valid;
+  assign debug_bus_write = spi_bus_write;
+  assign debug_bus_address = spi_bus_address;
+  assign debug_bus_wdata = spi_bus_wdata;
+  assign core_bus_valid = spi_bus_valid && !system_debug_access && !debug_ext_access && !core_reset;
   assign core_bus_write = spi_bus_write;
   assign core_bus_address = spi_bus_address;
   assign core_bus_wdata = spi_bus_wdata;
-  assign spi_bus_ready = system_debug_access ? 1'b1 : (core_reset ? spi_bus_valid : core_bus_ready);
-  assign spi_bus_error = system_debug_access ? 1'b0 : (core_reset ? 1'b1 : core_bus_error);
-  assign spi_bus_rdata = system_debug_access ? system_debug_rdata : (core_reset ? 32'd0 : core_bus_rdata);
+  assign spi_bus_ready = (system_debug_access || debug_ext_access) ? 1'b1 :
+                         (core_reset ? spi_bus_valid : core_bus_ready);
+  assign spi_bus_error = (system_debug_access || debug_ext_access) ? 1'b0 :
+                         (core_reset ? 1'b1 : core_bus_error);
+  assign spi_bus_rdata = system_debug_access ? system_debug_rdata :
+                         (debug_ext_access ? debug_ext_rdata :
+                         (core_reset ? 32'd0 : core_bus_rdata));
 
   fractional_tick_gen #(
     .SYS_CLK_HZ(SYS_CLK_HZ),
@@ -108,7 +96,6 @@ module wavetable_spi_audio_system #(
   );
 
   wavetable_system_debug_regs #(
-    .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH)
   ) debug_regs (
     .clk,
@@ -136,33 +123,7 @@ module wavetable_spi_audio_system #(
     .mem_debug_response_latency,
     .output_fifo_level,
     .render_deadline_miss_pulse,
-    .render_latency_cycles,
-    .platform_ddr_init_calib_complete,
-    .platform_ddr_ui_rst,
-    .platform_ddr_device_temp,
-    .platform_mig_app_rdy,
-    .platform_mig_app_wdf_rdy,
-    .platform_mig_app_rd_data_valid,
-    .platform_mig_app_rd_data_end,
-    .platform_sd_initialized,
-    .platform_asset_loaded,
-    .platform_asset_loader_busy,
-    .platform_asset_loader_state,
-    .platform_sd_error_code,
-    .platform_loader_error_code,
-    .platform_bytes_loaded,
-    .platform_sf2_size_bytes,
-    .platform_current_lba,
-    .platform_ddr_debug_start,
-    .platform_ddr_debug_write,
-    .platform_ddr_debug_addr,
-    .platform_ddr_debug_wdata,
-    .platform_ddr_debug_byte_enable,
-    .platform_ddr_debug_ready,
-    .platform_ddr_debug_busy,
-    .platform_ddr_debug_done,
-    .platform_ddr_debug_error,
-    .platform_ddr_debug_rdata
+    .render_latency_cycles
   );
 
   spi_register_bridge spi_bridge (

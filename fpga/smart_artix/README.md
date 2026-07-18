@@ -37,15 +37,19 @@ Still required from the board documentation:
 ## Current Top
 
 `rtl/smart_artix_top.sv` instantiates `wavetable_spi_audio_system` with SPI control,
-line-memory caching, output FIFO, and I2S output. It also connects native 4-bit SD
-asset loading to the DDR3 write side. After MIG calibration completes, the top
-starts the SD loader, copies the raw SF2 byte image into DDR3, and holds the audio
-core in reset until `asset_loaded` is asserted.
+line-memory caching, output FIFO, and I2S output. Board-specific SD loading, DDR3
+read/write arbitration, line reads, and DDR debug traffic are grouped behind
+`smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
+`smart_artix_platform_debug_regs` through the common wrapper's debug extension
+bus. After MIG calibration completes, the top starts the SD loader, copies the
+raw SF2 byte image into DDR3, and holds the audio core in reset until
+`asset_loaded` is asserted.
 
 The intended memory replacement is:
 
 ```text
 SD native pins: CLK, CMD, DAT[3:0]
+  -> smart_artix_ddr3_subsystem
   -> smart_artix_sd_native_pin_asset_loader
   -> smart_artix_sd_native_pin_phy
   -> smart_artix_sd_native_block_reader
@@ -55,6 +59,7 @@ SD native pins: CLK, CMD, DAT[3:0]
   -> MT41K256M16TW
 
 wavetable_spi_audio_system external line-read pins
+  -> smart_artix_ddr3_subsystem
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
   -> Xilinx MIG app read interface
@@ -135,6 +140,12 @@ application read interface:
 If the generated MIG uses a different app data width, address unit, burst mode,
 or clocking scheme, update the adapter before connecting hardware. The current
 adapter assumes one MIG read response contains the whole line.
+
+Smart Artix RTL uses `smart_artix_pkg.sv` as the local board-facing contract for
+MIG app command, write-data, response, line-read, platform-status, and DDR debug
+structs. Generated MIG IP ports remain explicit at `smart_artix_top`; the struct
+types are used on the board-owned side of that boundary and in the DDR3
+subsystem internals.
 
 `smart_artix_mig_stub` is not a DDR3 timing model. It only provides a calibration
 delay, accepts one read command at a time, and returns a deterministic 128-bit

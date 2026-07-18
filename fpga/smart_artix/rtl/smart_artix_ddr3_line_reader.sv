@@ -1,28 +1,17 @@
 module smart_artix_ddr3_line_reader #(
-  parameter int LINE_WORDS = 8,
-  parameter int MIG_ADDR_WIDTH = 28,
-  parameter int MIG_DATA_WIDTH = LINE_WORDS * 16,
   parameter int WORD_ADDR_SHIFT = 1
 ) (
   input  logic                     clk,
   input  logic                     rst,
 
-  input  logic                     line_req_valid,
+  input  smart_artix_pkg::line_read_request_t line_req,
   output logic                     line_req_ready,
-  input  logic [31:0]              line_req_addr,
-  output logic                     line_rsp_valid,
-  output logic [LINE_WORDS*16-1:0] line_rsp_data,
+  output smart_artix_pkg::line_read_response_t line_rsp,
 
   input  logic                     mig_init_calib_complete,
-  output logic [MIG_ADDR_WIDTH-1:0] mig_app_addr,
-  output logic [2:0]               mig_app_cmd,
-  output logic                     mig_app_en,
-  input  logic                     mig_app_rdy,
-  input  logic [MIG_DATA_WIDTH-1:0] mig_app_rd_data,
-  input  logic                     mig_app_rd_data_valid,
-  input  logic                     mig_app_rd_data_end
+  output smart_artix_pkg::mig_app_command_t  mig_app_command,
+  input  smart_artix_pkg::mig_app_response_t mig_app_response
 );
-  localparam int LINE_BITS = LINE_WORDS * 16;
   localparam logic [2:0] MIG_CMD_READ = 3'b001;
 
   typedef enum logic [1:0] {
@@ -35,37 +24,38 @@ module smart_artix_ddr3_line_reader #(
   logic [31:0] pending_line_addr;
 
   assign line_req_ready = mig_init_calib_complete && (state == STATE_IDLE);
-  assign mig_app_cmd = MIG_CMD_READ;
-  assign mig_app_en = state == STATE_SEND_READ;
-  assign mig_app_addr = MIG_ADDR_WIDTH'({pending_line_addr, {WORD_ADDR_SHIFT{1'b0}}});
+  assign mig_app_command.cmd = MIG_CMD_READ;
+  assign mig_app_command.en = state == STATE_SEND_READ;
+  assign mig_app_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(
+      {pending_line_addr, {WORD_ADDR_SHIFT{1'b0}}});
 
   always_ff @(posedge clk) begin
     if (rst) begin
       state <= STATE_IDLE;
       pending_line_addr <= '0;
-      line_rsp_valid <= 1'b0;
-      line_rsp_data <= '0;
+      line_rsp.valid <= 1'b0;
+      line_rsp.data <= '0;
     end else begin
-      line_rsp_valid <= 1'b0;
+      line_rsp.valid <= 1'b0;
 
       unique case (state)
         STATE_IDLE: begin
-          if (line_req_valid && line_req_ready) begin
-            pending_line_addr <= line_req_addr;
+          if (line_req.valid && line_req_ready) begin
+            pending_line_addr <= line_req.addr;
             state <= STATE_SEND_READ;
           end
         end
 
         STATE_SEND_READ: begin
-          if (mig_app_rdy)
+          if (mig_app_response.rdy)
             state <= STATE_WAIT_DATA;
         end
 
         STATE_WAIT_DATA: begin
-          if (mig_app_rd_data_valid) begin
-            line_rsp_data <= mig_app_rd_data[LINE_BITS-1:0];
-            line_rsp_valid <= mig_app_rd_data_end;
-            if (mig_app_rd_data_end)
+          if (mig_app_response.rd_data_valid) begin
+            line_rsp.data <= mig_app_response.rd_data[smart_artix_pkg::LINE_BITS-1:0];
+            line_rsp.valid <= mig_app_response.rd_data_end;
+            if (mig_app_response.rd_data_end)
               state <= STATE_IDLE;
           end
         end
@@ -74,4 +64,9 @@ module smart_artix_ddr3_line_reader #(
       endcase
     end
   end
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_mig_write_ready;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_mig_write_ready = mig_app_response.wdf_rdy;
 endmodule

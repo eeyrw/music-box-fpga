@@ -1,7 +1,5 @@
 module smart_artix_sd_native_pin_asset_loader #(
   parameter int LBA_WIDTH = 32,
-  parameter int MIG_ADDR_WIDTH = 28,
-  parameter int MIG_DATA_WIDTH = 128,
   parameter int SD_DIV_WIDTH = 16
 ) (
   input  logic                      clk,
@@ -27,15 +25,9 @@ module smart_artix_sd_native_pin_asset_loader #(
   input  logic                      sd_cmd_i,
   input  logic [3:0]                sd_dat_i,
 
-  output logic [MIG_ADDR_WIDTH-1:0] mig_app_addr,
-  output logic [2:0]                mig_app_cmd,
-  output logic                      mig_app_en,
-  input  logic                      mig_app_rdy,
-  output logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data,
-  output logic [MIG_DATA_WIDTH/8-1:0] mig_app_wdf_mask,
-  output logic                      mig_app_wdf_wren,
-  output logic                      mig_app_wdf_end,
-  input  logic                      mig_app_wdf_rdy
+  output smart_artix_pkg::mig_app_command_t    mig_app_command,
+  output smart_artix_pkg::mig_app_write_data_t mig_app_write_data,
+  input  smart_artix_pkg::mig_app_response_t   mig_app_response
 );
   logic sd_cmd_valid;
   logic sd_cmd_ready;
@@ -58,9 +50,7 @@ module smart_artix_sd_native_pin_asset_loader #(
   assign selected_sd_clk_div = sd_initialized ? sd_transfer_clk_div : sd_init_clk_div;
 
   smart_artix_sd_native_asset_loader #(
-    .LBA_WIDTH(LBA_WIDTH),
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
+    .LBA_WIDTH(LBA_WIDTH)
   ) loader (
     .clk,
     .rst,
@@ -91,15 +81,9 @@ module smart_artix_sd_native_pin_asset_loader #(
     .sd_data,
     .sd_data_last,
     .sd_data_status,
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command,
+    .mig_app_write_data,
+    .mig_app_response
   );
 
   smart_artix_sd_native_pin_phy #(

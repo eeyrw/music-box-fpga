@@ -17,7 +17,7 @@ generic core you want to include:
 | --- | --- | --- |
 | `wavetable_render_core` | `rtl/top/wavetable_render_core.sv` | You want the smallest generic audio render core. It exposes the register bus, `sample_tick`, mixed PCM output, and a one-word wave-memory read interface. |
 | `wavetable_line_memory_core` | `rtl/top/wavetable_line_memory_core.sv` | You want the generic render core plus the current one-line wave-memory cache. It exposes the register bus, `sample_tick`, mixed PCM output, and an external line-read interface. |
-| `wavetable_spi_audio_system` | `fpga/common/rtl/wavetable_spi_audio_system.sv` | You want the current board/common SPI, debug, output FIFO, and I2S wrapper around `wavetable_line_memory_core`. This is outside `rtl/` because it is a board-facing composition layer. |
+| `wavetable_spi_audio_system` | `fpga/common/rtl/wavetable_spi_audio_system.sv` | You want the current board/common SPI, generic debug, output FIFO, and I2S wrapper around `wavetable_line_memory_core`. This is outside `rtl/` because it is a board-facing composition layer. |
 
 For most generic RTL work, start at `wavetable_render_core`. For memory-adapter
 work, start at `wavetable_line_memory_core` or `wave_memory_subsystem`. For
@@ -77,7 +77,8 @@ wavetable_line_memory_core
 ```
 
 The current board/common wrapper adds transport, debug, buffering, and I2S around
-the generic line-memory core:
+the generic line-memory core. It also exposes a debug-register extension hook
+that board wrappers can use for platform-specific status windows:
 
 ```text
 wavetable_spi_audio_system
@@ -93,6 +94,20 @@ wavetable_spi_audio_system
 `spi_register_bridge`, `wavetable_system_debug_regs`, `fractional_tick_gen`,
 `i2s_tx`, and `wavetable_spi_audio_system` live under `fpga/common/rtl/`, not
 under generic `rtl/`.
+
+The current Smart Artix board top keeps SD loading, DDR3 arbitration, line reads,
+and DDR debug traffic behind a board-specific subsystem:
+
+```text
+smart_artix_top
++- smart_artix_ddr3_subsystem
+|  +- smart_artix_sd_native_pin_asset_loader
+|  +- smart_artix_ddr3_rw_arbiter
+|  +- smart_artix_ddr3_debug_master
+|  +- smart_artix_ddr3_line_reader
++- smart_artix_platform_debug_regs
++- wavetable_spi_audio_system
+```
 
 ## Package Layer
 
@@ -110,6 +125,12 @@ under generic `rtl/`.
 owns the register address constants, bit masks, default software constants, and
 `reg_voice_addr()`. Do not edit it by hand; run `make generate-register-map`
 after changing the JSON spec.
+
+Board-facing packages stay with their board integration code instead of the
+generic package layer. For example, `fpga/smart_artix/rtl/smart_artix_pkg.sv`
+owns the Smart Artix DDR3 app-channel structs, line-read request/response
+structs, platform status, and DDR debug request/status structs used between
+`smart_artix_top`, `smart_artix_ddr3_subsystem`, and the board debug adapter.
 
 ## Control Layer
 

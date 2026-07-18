@@ -1,7 +1,5 @@
 module smart_artix_sd_ddr3_asset_loader #(
-  parameter int LBA_WIDTH = 32,
-  parameter int MIG_ADDR_WIDTH = 28,
-  parameter int MIG_DATA_WIDTH = 128
+  parameter int LBA_WIDTH = 32
 ) (
   input  logic                      clk,
   input  logic                      rst,
@@ -24,15 +22,9 @@ module smart_artix_sd_ddr3_asset_loader #(
   input  logic [7:0]                sd_byte_data,
   input  logic                      sd_byte_last,
 
-  output logic [MIG_ADDR_WIDTH-1:0] mig_app_addr,
-  output logic [2:0]                mig_app_cmd,
-  output logic                      mig_app_en,
-  input  logic                      mig_app_rdy,
-  output logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data,
-  output logic [MIG_DATA_WIDTH/8-1:0] mig_app_wdf_mask,
-  output logic                      mig_app_wdf_wren,
-  output logic                      mig_app_wdf_end,
-  input  logic                      mig_app_wdf_rdy
+  output smart_artix_pkg::mig_app_command_t    mig_app_command,
+  output smart_artix_pkg::mig_app_write_data_t mig_app_write_data,
+  input  smart_artix_pkg::mig_app_response_t   mig_app_response
 );
   logic writer_start;
   logic [63:0] writer_base_byte_addr;
@@ -76,10 +68,7 @@ module smart_artix_sd_ddr3_asset_loader #(
     .writer_error_pulse
   );
 
-  smart_artix_ddr3_asset_writer #(
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
-  ) writer (
+  smart_artix_ddr3_asset_writer writer (
     .clk,
     .rst,
     .start(writer_start),
@@ -91,14 +80,8 @@ module smart_artix_sd_ddr3_asset_loader #(
     .byte_valid(writer_byte_valid),
     .byte_ready(writer_byte_ready),
     .byte_data(writer_byte_data),
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command,
+    .mig_app_write_data,
+    .mig_app_response
   );
 endmodule

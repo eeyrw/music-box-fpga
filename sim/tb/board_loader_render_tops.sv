@@ -1,7 +1,7 @@
 module board_loader_render_tops #(
   parameter int LBA_WIDTH = 32,
-  parameter int MIG_ADDR_WIDTH = 28,
-  parameter int MIG_DATA_WIDTH = 128,
+  parameter int MIG_ADDR_WIDTH = smart_artix_pkg::MIG_ADDR_WIDTH,
+  parameter int MIG_DATA_WIDTH = smart_artix_pkg::MIG_DATA_WIDTH,
   parameter int LINE_WORDS = 8
 ) (
   input  logic                      clk,
@@ -69,10 +69,27 @@ module board_loader_render_tops #(
   output logic                      core_mem_debug_response_pulse,
   output logic [15:0]               core_mem_debug_response_latency
 );
+  localparam int MIG_MASK_WIDTH = MIG_DATA_WIDTH / 8;
+
+  smart_artix_pkg::mig_app_command_t loader_mig_command;
+  smart_artix_pkg::mig_app_write_data_t loader_mig_write_data;
+  smart_artix_pkg::mig_app_response_t loader_mig_response;
+
+  assign mig_app_addr = MIG_ADDR_WIDTH'(loader_mig_command.addr);
+  assign mig_app_cmd = loader_mig_command.cmd;
+  assign mig_app_en = loader_mig_command.en;
+  assign mig_app_wdf_data = MIG_DATA_WIDTH'(loader_mig_write_data.data);
+  assign mig_app_wdf_mask = MIG_MASK_WIDTH'(loader_mig_write_data.mask);
+  assign mig_app_wdf_wren = loader_mig_write_data.wren;
+  assign mig_app_wdf_end = loader_mig_write_data.end_;
+  assign loader_mig_response.rdy = mig_app_rdy;
+  assign loader_mig_response.wdf_rdy = mig_app_wdf_rdy;
+  assign loader_mig_response.rd_data = '0;
+  assign loader_mig_response.rd_data_valid = 1'b0;
+  assign loader_mig_response.rd_data_end = 1'b0;
+
   smart_artix_sd_native_asset_loader #(
-    .LBA_WIDTH(LBA_WIDTH),
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
+    .LBA_WIDTH(LBA_WIDTH)
   ) loader (
     .clk,
     .rst,
@@ -103,15 +120,9 @@ module board_loader_render_tops #(
     .sd_data,
     .sd_data_last,
     .sd_data_status,
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command(loader_mig_command),
+    .mig_app_write_data(loader_mig_write_data),
+    .mig_app_response(loader_mig_response)
   );
 
   wavetable_line_memory_core #(

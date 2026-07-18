@@ -1,5 +1,4 @@
 module wavetable_system_debug_regs #(
-  parameter int LINE_WORDS = 8,
   parameter int OUTPUT_FIFO_DEPTH = 8
 ) (
   input  logic                     clk,
@@ -27,33 +26,7 @@ module wavetable_system_debug_regs #(
   input  logic [15:0]              mem_debug_response_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
   output logic                     render_deadline_miss_pulse,
-  output logic [15:0]              render_latency_cycles,
-  input  logic                     platform_ddr_init_calib_complete,
-  input  logic                     platform_ddr_ui_rst,
-  input  logic [11:0]              platform_ddr_device_temp,
-  input  logic                     platform_mig_app_rdy,
-  input  logic                     platform_mig_app_wdf_rdy,
-  input  logic                     platform_mig_app_rd_data_valid,
-  input  logic                     platform_mig_app_rd_data_end,
-  input  logic                     platform_sd_initialized,
-  input  logic                     platform_asset_loaded,
-  input  logic                     platform_asset_loader_busy,
-  input  logic [3:0]               platform_asset_loader_state,
-  input  logic [7:0]               platform_sd_error_code,
-  input  logic [7:0]               platform_loader_error_code,
-  input  logic [31:0]              platform_bytes_loaded,
-  input  logic [31:0]              platform_sf2_size_bytes,
-  input  logic [31:0]              platform_current_lba,
-  output logic                     platform_ddr_debug_start,
-  output logic                     platform_ddr_debug_write,
-  output logic [31:0]              platform_ddr_debug_addr,
-  output logic [LINE_WORDS*16-1:0] platform_ddr_debug_wdata,
-  output logic [LINE_WORDS*2-1:0]  platform_ddr_debug_byte_enable,
-  input  logic                     platform_ddr_debug_ready,
-  input  logic                     platform_ddr_debug_busy,
-  input  logic                     platform_ddr_debug_done,
-  input  logic                     platform_ddr_debug_error,
-  input  logic [LINE_WORDS*16-1:0] platform_ddr_debug_rdata
+  output logic [15:0]              render_latency_cycles
 );
   import synth_register_pkg::*;
 
@@ -68,20 +41,6 @@ module wavetable_system_debug_regs #(
   localparam logic [15:0] ADDR_MEM_HIT_COUNT = REG_MEM_HIT_COUNT;
   localparam logic [15:0] ADDR_MEM_MISS_COUNT = REG_MEM_MISS_COUNT;
   localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = REG_MEM_RESPONSE_COUNT;
-  localparam logic [15:0] ADDR_PLATFORM_STATUS = REG_PLATFORM_STATUS;
-  localparam logic [15:0] ADDR_PLATFORM_ERRORS = REG_PLATFORM_ERRORS;
-  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED = REG_PLATFORM_BYTES_LOADED;
-  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE = REG_PLATFORM_SF2_SIZE;
-  localparam logic [15:0] ADDR_PLATFORM_CURRENT_LBA = REG_PLATFORM_CURRENT_LBA;
-  localparam logic [15:0] ADDR_PLATFORM_DDR_STATUS = REG_PLATFORM_DDR_STATUS;
-  localparam logic [15:0] ADDR_DDR_DEBUG_CONTROL = REG_DDR_DEBUG_CONTROL;
-  localparam logic [15:0] ADDR_DDR_DEBUG_STATUS = REG_DDR_DEBUG_STATUS;
-  localparam logic [15:0] ADDR_DDR_DEBUG_ADDR = REG_DDR_DEBUG_ADDR;
-  localparam logic [15:0] ADDR_DDR_DEBUG_BYTE_ENABLE = REG_DDR_DEBUG_BYTE_ENABLE;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA0 = REG_DDR_DEBUG_DATA0;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA1 = REG_DDR_DEBUG_DATA1;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA2 = REG_DDR_DEBUG_DATA2;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA3 = REG_DDR_DEBUG_DATA3;
 
   logic render_pending;
   logic [15:0] render_latency_count;
@@ -93,23 +52,13 @@ module wavetable_system_debug_regs #(
   logic [31:0] mem_miss_count;
   logic [31:0] mem_response_count;
   logic [31:0] debug_event_set_mask;
-  logic ddr_debug_write_latched;
-  logic ddr_debug_done_latched;
-  logic ddr_debug_error_latched;
 
   function automatic logic is_system_debug_address(input logic [15:0] address);
     unique case (address)
       ADDR_SYSTEM_STATUS, ADDR_DEBUG_EVENT_FLAGS, ADDR_AUDIO_STATUS,
       ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
-      ADDR_MEM_HIT_COUNT, ADDR_MEM_MISS_COUNT, ADDR_MEM_RESPONSE_COUNT,
-      ADDR_PLATFORM_STATUS, ADDR_PLATFORM_ERRORS, ADDR_PLATFORM_BYTES_LOADED,
-      ADDR_PLATFORM_SF2_SIZE, ADDR_PLATFORM_CURRENT_LBA,
-      ADDR_PLATFORM_DDR_STATUS, ADDR_DDR_DEBUG_CONTROL,
-      ADDR_DDR_DEBUG_STATUS, ADDR_DDR_DEBUG_ADDR,
-      ADDR_DDR_DEBUG_BYTE_ENABLE, ADDR_DDR_DEBUG_DATA0,
-      ADDR_DDR_DEBUG_DATA1, ADDR_DDR_DEBUG_DATA2,
-      ADDR_DDR_DEBUG_DATA3: begin
+      ADDR_MEM_HIT_COUNT, ADDR_MEM_MISS_COUNT, ADDR_MEM_RESPONSE_COUNT: begin
         is_system_debug_address = 1'b1;
       end
       default: is_system_debug_address = 1'b0;
@@ -177,56 +126,6 @@ module wavetable_system_debug_regs #(
       ADDR_MEM_HIT_COUNT: debug_rdata = mem_hit_count;
       ADDR_MEM_MISS_COUNT: debug_rdata = mem_miss_count;
       ADDR_MEM_RESPONSE_COUNT: debug_rdata = mem_response_count;
-      ADDR_PLATFORM_STATUS: begin
-        debug_rdata[0] = 1'b1;
-        debug_rdata[1] = (platform_sd_error_code != 8'd0) || (platform_loader_error_code != 8'd0);
-        debug_rdata[2] = platform_ddr_init_calib_complete;
-        debug_rdata[3] = platform_ddr_ui_rst;
-        debug_rdata[4] = platform_sd_initialized;
-        debug_rdata[5] = platform_asset_loaded;
-        debug_rdata[6] = platform_asset_loader_busy;
-        debug_rdata[7] = platform_mig_app_rdy;
-        debug_rdata[8] = platform_mig_app_wdf_rdy;
-        debug_rdata[9] = platform_mig_app_rd_data_valid;
-        debug_rdata[10] = platform_mig_app_rd_data_end;
-        debug_rdata[14:11] = platform_asset_loader_state;
-      end
-      ADDR_PLATFORM_ERRORS: begin
-        debug_rdata = {12'd0, platform_asset_loader_state,
-                       platform_loader_error_code, platform_sd_error_code};
-      end
-      ADDR_PLATFORM_BYTES_LOADED: debug_rdata = platform_bytes_loaded;
-      ADDR_PLATFORM_SF2_SIZE: debug_rdata = platform_sf2_size_bytes;
-      ADDR_PLATFORM_CURRENT_LBA: debug_rdata = platform_current_lba;
-      ADDR_PLATFORM_DDR_STATUS: begin
-        debug_rdata[0] = platform_ddr_init_calib_complete;
-        debug_rdata[1] = platform_ddr_ui_rst;
-        debug_rdata[2] = platform_mig_app_rdy;
-        debug_rdata[3] = platform_mig_app_wdf_rdy;
-        debug_rdata[4] = platform_mig_app_rd_data_valid;
-        debug_rdata[5] = platform_mig_app_rd_data_end;
-        debug_rdata[27:16] = platform_ddr_device_temp;
-      end
-      ADDR_DDR_DEBUG_CONTROL: begin
-        debug_rdata[1] = ddr_debug_write_latched;
-      end
-      ADDR_DDR_DEBUG_STATUS: begin
-        debug_rdata = {
-          26'd0,
-          ddr_debug_write_latched,
-          ddr_debug_error_latched,
-          ddr_debug_done_latched,
-          platform_ddr_debug_busy,
-          platform_ddr_debug_ready,
-          1'b1
-        };
-      end
-      ADDR_DDR_DEBUG_ADDR: debug_rdata = platform_ddr_debug_addr;
-      ADDR_DDR_DEBUG_BYTE_ENABLE: debug_rdata = {16'd0, platform_ddr_debug_byte_enable};
-      ADDR_DDR_DEBUG_DATA0: debug_rdata = platform_ddr_debug_rdata[31:0];
-      ADDR_DDR_DEBUG_DATA1: debug_rdata = platform_ddr_debug_rdata[63:32];
-      ADDR_DDR_DEBUG_DATA2: debug_rdata = platform_ddr_debug_rdata[95:64];
-      ADDR_DDR_DEBUG_DATA3: debug_rdata = platform_ddr_debug_rdata[127:96];
       default: debug_rdata = 32'd0;
     endcase
   end
@@ -244,48 +143,8 @@ module wavetable_system_debug_regs #(
       mem_hit_count <= 32'd0;
       mem_miss_count <= 32'd0;
       mem_response_count <= 32'd0;
-      platform_ddr_debug_start <= 1'b0;
-      platform_ddr_debug_write <= 1'b0;
-      platform_ddr_debug_addr <= 32'd0;
-      platform_ddr_debug_wdata <= '0;
-      platform_ddr_debug_byte_enable <= '1;
-      ddr_debug_write_latched <= 1'b0;
-      ddr_debug_done_latched <= 1'b0;
-      ddr_debug_error_latched <= 1'b0;
     end else begin
       render_deadline_miss_pulse <= 1'b0;
-      platform_ddr_debug_start <= 1'b0;
-
-      if (platform_ddr_debug_done)
-        ddr_debug_done_latched <= 1'b1;
-      if (platform_ddr_debug_error)
-        ddr_debug_error_latched <= 1'b1;
-
-      if (debug_access && bus_write) begin
-        unique case (bus_address)
-          ADDR_DDR_DEBUG_CONTROL: begin
-            if (bus_wdata[0] && platform_ddr_debug_ready) begin
-              platform_ddr_debug_start <= 1'b1;
-              platform_ddr_debug_write <= bus_wdata[1];
-              ddr_debug_write_latched <= bus_wdata[1];
-              ddr_debug_done_latched <= 1'b0;
-              ddr_debug_error_latched <= 1'b0;
-            end
-            if (bus_wdata[2]) begin
-              ddr_debug_done_latched <= 1'b0;
-              ddr_debug_error_latched <= 1'b0;
-            end
-          end
-          ADDR_DDR_DEBUG_ADDR: platform_ddr_debug_addr <= bus_wdata;
-          ADDR_DDR_DEBUG_BYTE_ENABLE: platform_ddr_debug_byte_enable <= bus_wdata[LINE_WORDS*2-1:0];
-          ADDR_DDR_DEBUG_DATA0: platform_ddr_debug_wdata[31:0] <= bus_wdata;
-          ADDR_DDR_DEBUG_DATA1: platform_ddr_debug_wdata[63:32] <= bus_wdata;
-          ADDR_DDR_DEBUG_DATA2: platform_ddr_debug_wdata[95:64] <= bus_wdata;
-          ADDR_DDR_DEBUG_DATA3: platform_ddr_debug_wdata[127:96] <= bus_wdata;
-          default: begin
-          end
-        endcase
-      end
 
       if (debug_access && bus_write && (bus_address == ADDR_DEBUG_EVENT_FLAGS)) begin
         debug_event_flags <= (debug_event_flags & ~bus_wdata) | debug_event_set_mask;

@@ -1,7 +1,4 @@
-module smart_artix_ddr3_asset_writer #(
-  parameter int MIG_ADDR_WIDTH = 28,
-  parameter int MIG_DATA_WIDTH = 128
-) (
+module smart_artix_ddr3_asset_writer (
   input  logic                      clk,
   input  logic                      rst,
 
@@ -16,17 +13,11 @@ module smart_artix_ddr3_asset_writer #(
   output logic                      byte_ready,
   input  logic [7:0]                byte_data,
 
-  output logic [MIG_ADDR_WIDTH-1:0] mig_app_addr,
-  output logic [2:0]                mig_app_cmd,
-  output logic                      mig_app_en,
-  input  logic                      mig_app_rdy,
-  output logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data,
-  output logic [MIG_DATA_WIDTH/8-1:0] mig_app_wdf_mask,
-  output logic                      mig_app_wdf_wren,
-  output logic                      mig_app_wdf_end,
-  input  logic                      mig_app_wdf_rdy
+  output smart_artix_pkg::mig_app_command_t    mig_app_command,
+  output smart_artix_pkg::mig_app_write_data_t mig_app_write_data,
+  input  smart_artix_pkg::mig_app_response_t   mig_app_response
 );
-  localparam int BEAT_BYTES = MIG_DATA_WIDTH / 8;
+  localparam int BEAT_BYTES = smart_artix_pkg::MIG_MASK_WIDTH;
   localparam int COUNT_WIDTH = $clog2(BEAT_BYTES + 1);
   localparam logic [2:0] MIG_CMD_WRITE = 3'b000;
 
@@ -37,7 +28,7 @@ module smart_artix_ddr3_asset_writer #(
   } state_t;
 
   state_t state;
-  logic [MIG_DATA_WIDTH-1:0] data_buffer;
+  logic [smart_artix_pkg::MIG_DATA_WIDTH-1:0] data_buffer;
   logic [COUNT_WIDTH-1:0] beat_byte_count;
   logic [31:0] remaining_bytes;
   logic [63:0] current_addr;
@@ -51,22 +42,22 @@ module smart_artix_ddr3_asset_writer #(
   assign byte_ready = (state == STATE_FILL) && (remaining_bytes != 32'd0)
       && (beat_byte_count != COUNT_WIDTH'(BEAT_BYTES));
   assign accepted_byte = byte_valid && byte_ready;
-  assign send_accepted = (cmd_sent || (mig_app_en && mig_app_rdy))
-      && (wdf_sent || (mig_app_wdf_wren && mig_app_wdf_rdy));
+  assign send_accepted = (cmd_sent || (mig_app_command.en && mig_app_response.rdy))
+      && (wdf_sent || (mig_app_write_data.wren && mig_app_response.wdf_rdy));
   assign base_aligned = base_byte_addr[$clog2(BEAT_BYTES)-1:0] == '0;
 
-  assign mig_app_addr = MIG_ADDR_WIDTH'(current_addr);
-  assign mig_app_cmd = MIG_CMD_WRITE;
-  assign mig_app_en = (state == STATE_SEND) && !cmd_sent;
-  assign mig_app_wdf_data = data_buffer;
-  assign mig_app_wdf_wren = (state == STATE_SEND) && !wdf_sent;
-  assign mig_app_wdf_end = (state == STATE_SEND) && !wdf_sent;
+  assign mig_app_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(current_addr);
+  assign mig_app_command.cmd = MIG_CMD_WRITE;
+  assign mig_app_command.en = (state == STATE_SEND) && !cmd_sent;
+  assign mig_app_write_data.data = data_buffer;
+  assign mig_app_write_data.wren = (state == STATE_SEND) && !wdf_sent;
+  assign mig_app_write_data.end_ = (state == STATE_SEND) && !wdf_sent;
 
   always_comb begin
-    mig_app_wdf_mask = '1;
+    mig_app_write_data.mask = '1;
     for (int i = 0; i < BEAT_BYTES; i++) begin
       if (i < beat_byte_count)
-        mig_app_wdf_mask[i] = 1'b0;
+        mig_app_write_data.mask[i] = 1'b0;
     end
   end
 
@@ -120,9 +111,9 @@ module smart_artix_ddr3_asset_writer #(
         end
 
         STATE_SEND: begin
-          if (mig_app_en && mig_app_rdy)
+          if (mig_app_command.en && mig_app_response.rdy)
             cmd_sent <= 1'b1;
-          if (mig_app_wdf_wren && mig_app_wdf_rdy)
+          if (mig_app_write_data.wren && mig_app_response.wdf_rdy)
             wdf_sent <= 1'b1;
 
           if (send_accepted) begin
@@ -144,4 +135,10 @@ module smart_artix_ddr3_asset_writer #(
       endcase
     end
   end
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_mig_read_response;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_mig_read_response = (^mig_app_response.rd_data)
+      ^ mig_app_response.rd_data_valid ^ mig_app_response.rd_data_end;
 endmodule

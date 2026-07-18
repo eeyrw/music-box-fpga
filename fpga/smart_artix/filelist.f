@@ -27,10 +27,13 @@
 ../common/rtl/wavetable_spi_audio_system.sv
 
 # Board-specific RTL.
+rtl/smart_artix_pkg.sv
 rtl/smart_artix_mig_stub.sv
 rtl/smart_artix_ddr3_debug_master.sv
 rtl/smart_artix_ddr3_line_reader.sv
 rtl/smart_artix_ddr3_rw_arbiter.sv
+rtl/smart_artix_ddr3_subsystem.sv
+rtl/smart_artix_platform_debug_regs.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
 rtl/smart_artix_fat_file_reader.sv

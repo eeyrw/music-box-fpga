@@ -1,7 +1,5 @@
 module tb_smart_artix_ddr3_asset_writer;
-  localparam int MIG_ADDR_WIDTH = 28;
-  localparam int MIG_DATA_WIDTH = 128;
-  localparam int BEAT_BYTES = MIG_DATA_WIDTH / 8;
+  localparam int BEAT_BYTES = smart_artix_pkg::MIG_MASK_WIDTH;
 
   logic clk;
   logic rst;
@@ -14,23 +12,14 @@ module tb_smart_artix_ddr3_asset_writer;
   logic byte_valid;
   logic byte_ready;
   logic [7:0] byte_data;
-  logic [MIG_ADDR_WIDTH-1:0] mig_app_addr;
-  logic [2:0] mig_app_cmd;
-  logic mig_app_en;
-  logic mig_app_rdy;
-  logic [MIG_DATA_WIDTH-1:0] mig_app_wdf_data;
-  logic [BEAT_BYTES-1:0] mig_app_wdf_mask;
-  logic mig_app_wdf_wren;
-  logic mig_app_wdf_end;
-  logic mig_app_wdf_rdy;
+  smart_artix_pkg::mig_app_command_t mig_app_command;
+  smart_artix_pkg::mig_app_write_data_t mig_app_write_data;
+  smart_artix_pkg::mig_app_response_t mig_app_response;
   int errors;
   int cmd_seen;
   int wdf_seen;
 
-  smart_artix_ddr3_asset_writer #(
-    .MIG_ADDR_WIDTH(MIG_ADDR_WIDTH),
-    .MIG_DATA_WIDTH(MIG_DATA_WIDTH)
-  ) dut (
+  smart_artix_ddr3_asset_writer dut (
     .clk,
     .rst,
     .start,
@@ -42,15 +31,9 @@ module tb_smart_artix_ddr3_asset_writer;
     .byte_valid,
     .byte_ready,
     .byte_data,
-    .mig_app_addr,
-    .mig_app_cmd,
-    .mig_app_en,
-    .mig_app_rdy,
-    .mig_app_wdf_data,
-    .mig_app_wdf_mask,
-    .mig_app_wdf_wren,
-    .mig_app_wdf_end,
-    .mig_app_wdf_rdy
+    .mig_app_command,
+    .mig_app_write_data,
+    .mig_app_response
   );
 
 /* verilator lint_off BLKSEQ */
@@ -71,31 +54,35 @@ module tb_smart_artix_ddr3_asset_writer;
       cmd_seen <= 0;
       wdf_seen <= 0;
     end else begin
-      if (mig_app_en && mig_app_rdy) begin
+      if (mig_app_command.en && mig_app_response.rdy) begin
         cmd_seen <= cmd_seen + 1;
-        check(mig_app_cmd == 3'b000, "asset writer used wrong MIG write command");
+        check(mig_app_command.cmd == 3'b000, "asset writer used wrong MIG write command");
         if (cmd_seen == 0)
-          check(mig_app_addr == MIG_ADDR_WIDTH'(28'h000_0020), "first write address mismatch");
+          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0020),
+                "first write address mismatch");
         else if (cmd_seen == 1)
-          check(mig_app_addr == MIG_ADDR_WIDTH'(28'h000_0030), "second write address mismatch");
+          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0030),
+                "second write address mismatch");
         else
           check(1'b0, "asset writer emitted too many write commands");
       end
 
-      if (mig_app_wdf_wren && mig_app_wdf_rdy) begin
+      if (mig_app_write_data.wren && mig_app_response.wdf_rdy) begin
         wdf_seen <= wdf_seen + 1;
-        check(mig_app_cmd == 3'b000, "asset writer used wrong MIG write command");
-        check(mig_app_wdf_end, "asset writer did not assert wdf_end");
+        check(mig_app_command.cmd == 3'b000, "asset writer used wrong MIG write command");
+        check(mig_app_write_data.end_, "asset writer did not assert wdf_end");
 
         if (wdf_seen == 0) begin
-        check(mig_app_wdf_mask == 16'h0000, "first write mask mismatch");
-        check(mig_app_wdf_data[31:0] == 32'h0302_0100, "first write byte order mismatch");
-        check(mig_app_wdf_data[119:32] == 88'h0e0d_0c0b_0a09_0807_0605_04,
-              "first write middle bytes mismatch");
-        check(mig_app_wdf_data[127:120] == 8'h0f, "first write final byte mismatch");
+          check(mig_app_write_data.mask == 16'h0000, "first write mask mismatch");
+          check(mig_app_write_data.data[31:0] == 32'h0302_0100,
+                "first write byte order mismatch");
+          check(mig_app_write_data.data[119:32] == 88'h0e0d_0c0b_0a09_0807_0605_04,
+                "first write middle bytes mismatch");
+          check(mig_app_write_data.data[127:120] == 8'h0f, "first write final byte mismatch");
         end else if (wdf_seen == 1) begin
-        check(mig_app_wdf_mask == 16'hfff0, "second write partial mask mismatch");
-        check(mig_app_wdf_data[31:0] == 32'h1312_1110, "second write byte order mismatch");
+          check(mig_app_write_data.mask == 16'hfff0, "second write partial mask mismatch");
+          check(mig_app_write_data.data[31:0] == 32'h1312_1110,
+                "second write byte order mismatch");
         end else begin
           check(1'b0, "asset writer emitted too many write-data beats");
         end
@@ -111,8 +98,9 @@ module tb_smart_artix_ddr3_asset_writer;
     total_bytes = 32'd0;
     byte_valid = 1'b0;
     byte_data = 8'd0;
-    mig_app_rdy = 1'b1;
-    mig_app_wdf_rdy = 1'b1;
+    mig_app_response = '0;
+    mig_app_response.rdy = 1'b1;
+    mig_app_response.wdf_rdy = 1'b1;
     errors = 0;
 
     repeat (3) @(posedge clk);
@@ -155,4 +143,9 @@ module tb_smart_artix_ddr3_asset_writer;
     $display("PASS: smart_artix_ddr3_asset_writer");
     $finish;
   end
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_beat_bytes;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_beat_bytes = BEAT_BYTES == 0;
 endmodule

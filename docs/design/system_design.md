@@ -38,10 +38,11 @@ simulation and board-facing transport shape:
 - `spi_register_bridge` adapts SPI pins to the abstract register bus.
 - `fractional_tick_gen` derives sample and bit-clock ticks from a system clock.
 - `i2s_tx` serializes stereo PCM to I2S pins.
-- `wavetable_system_debug_regs` exposes system, audio, memory, and platform
+- `wavetable_system_debug_regs` exposes system, audio, memory, and render-latency
   observability registers.
 - `wavetable_spi_audio_system` composes those adapters around the generic
-  register-bus and line-memory core.
+  register-bus and line-memory core, with an external debug-register extension
+  hook for board-specific status windows.
 
 ## Top-Level Variants
 
@@ -66,6 +67,7 @@ wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 
 ```text
 SPI pins -> spi_register_bridge -> system debug registers
+                              \-> external board debug registers
                               \-> wavetable_line_memory_core -> i2s_tx -> I2S pins
                                                     |
                                                     v
@@ -77,8 +79,10 @@ from fractional phase-accumulator dividers. It is a simulation integration wrapp
 constraint or PLL specification.
 The system debug register window is implemented by
 `fpga/common/rtl/wavetable_system_debug_regs.sv`, which keeps status counters,
-render-latency accounting, and DDR debug-control registers out of the pin-level
-wrapper.
+render-latency accounting, and memory-cache counters out of the pin-level
+wrapper. Board-specific platform status and DDR debug-control registers are
+implemented outside the common wrapper; the Smart Artix board uses
+`fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv`.
 
 The wrapper has two reset levels. `rst` resets the SPI bridge and system debug
 registers. `core_rst` resets only playback-facing blocks: sample tick generation,
