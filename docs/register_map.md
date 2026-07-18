@@ -271,10 +271,6 @@ block reader:
 | `5` | `ERROR_LBA_RANGE` | Header SF2 start LBA could not fit the configured SD LBA width. |
 | `6` | `ERROR_SIZE_RANGE` | Header reserved size word was nonzero, so the SF2 size exceeded the current 32-bit loader limit. |
 
-The optional SPI-mode SD asset-loader wrapper uses the same `loader_error_code`
-values, but its `sd_error_code` values come from the SPI-mode block reader rather
-than the native-mode table above.
-
 `PLATFORM_BYTES_LOADED` (`0x3048`) reports the 32-bit count of SF2 asset bytes
 written to DDR3. `PLATFORM_SF2_SIZE` (`0x3050`) reports the 32-bit SF2 byte size
 read from the raw SD image header. For the current board-loading flow, assets are

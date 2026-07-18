@@ -38,12 +38,7 @@ rtl/smart_artix_ddr3_subsystem.sv
 rtl/smart_artix_platform_debug_regs.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
-rtl/smart_artix_fat_file_reader.sv
 rtl/smart_artix_sd_ddr3_asset_loader.sv
-rtl/smart_artix_sd_spi_block_reader.sv
-rtl/smart_artix_sd_spi_asset_loader.sv
-rtl/smart_artix_sd_spi_byte_master.sv
-rtl/smart_artix_sd_spi_pin_asset_loader.sv
 rtl/smart_artix_sd_native_block_reader.sv
 rtl/smart_artix_sd_native_asset_loader.sv
 rtl/smart_artix_sd_native_pin_phy.sv

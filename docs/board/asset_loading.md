@@ -104,13 +104,8 @@ The first Smart Artix implementation provides the board-side middle of this path
   7-series MIG app interface.
 - `smart_artix_sd_ddr3_asset_loader` wires those two blocks together behind a
   sector-stream SD reader interface and a MIG write interface.
-- `smart_artix_sd_spi_block_reader` implements the minimal SD SPI-mode protocol
-  subset needed for raw-sector reads: power-up dummy clocks, `CMD0`, `CMD8`,
-  `CMD55`/`ACMD41`, `CMD58` SDHC detection, and `CMD17` single-block reads.
-- `smart_artix_sd_spi_asset_loader` connects the SD SPI block reader to the raw
-  image loader and DDR3 writer through the same sector-stream contract.
 - `smart_artix_sd_native_block_reader` implements the matching command-level
-  native SD path above a future command/data PHY: `CMD0`, `CMD8`,
+  native SD path above the pin PHY: `CMD0`, `CMD8`,
   `CMD55`/`ACMD41`, `CMD2`, `CMD3`, `CMD7`, `CMD55`/`ACMD6` to enter 4-bit bus
   mode, then `CMD17` single-block reads.
 - `smart_artix_sd_native_asset_loader` connects the native reader to the same raw
@@ -125,21 +120,13 @@ The first Smart Artix implementation provides the board-side middle of this path
   the card has bus-turnaround clocks before the next command.
 - `smart_artix_sd_native_pin_asset_loader` wires the native pin layer through the
   native block reader into the raw image loader and DDR3 writer.
-- `smart_artix_fat_file_reader` is an optional FAT layer above the same
-  sector-stream SD reader interface. It supports 512-byte sectors, FAT16 and
-  FAT32 root-directory search, 8.3 short filenames, and cluster-chain file byte
-  streaming. It is intended for board bring-up with a normally formatted card;
-  the raw-image loader remains the simpler product path until long filenames,
-  subdirectories, and broader filesystem policy are needed.
 
-The SD SPI block reader follows the same split used by LiteSDCard: command/control
-sequencing is separate from the byte data stream. `smart_artix_sd_spi_byte_master`
-now provides the direct FPGA-pin SPI layer for `CLK`, `CMD/MOSI`, `DAT0/MISO`, and
-`DAT3/CS`; no external SD PHY chip is implied. Native 4-bit SD uses the same split
-and now has a first pin-level implementation for command and read-data timing. The
-current native pin layer generates command CRC7, receives data bytes, and checks
-DAT-line CRC16 at the end of each block. A CRC mismatch is reported through the
-data status attached to the final byte.
+Native 4-bit SD keeps command/control sequencing separate from the byte data
+stream. The current native pin layer generates command CRC7, receives data bytes,
+and checks DAT-line CRC16 at the end of each block. A CRC mismatch is reported
+through the data status attached to the final byte. SPI-mode SD and FAT
+filesystem loading are intentionally not part of the Smart Artix board RTL; the
+product path uses the raw `WTSF` SD image.
 
 Board simulation also includes `fake_sd_native_phy_model`, a card-side behavioral
 model following the fake-card testing style used by standalone SD-reader projects.
@@ -218,9 +205,9 @@ make smart-artix-test
 ```
 
 This covers the raw-image header parser, DDR3 asset writer masks and byte order,
-DDR3 read/write arbitration, SD SPI reader/master, native SD command reader,
-native fake-card initialization and reads, native pin PHY command/data/CRC
-behavior, and the command-level native SD asset-loader path.
+DDR3 read/write arbitration, native SD command reader, native fake-card
+initialization and reads, native pin PHY command/data/CRC behavior, and the
+command-level native SD asset-loader path.
 
 The full SF2 load-and-render check is:
 
@@ -357,7 +344,8 @@ The intended hardware bring-up order is:
 5. Connect the DDR line reader to `wave_memory_subsystem` and play a known sample
    from DDR3 through I2S.
 6. Increase image size and measure full-load time, CRC behavior, and error paths.
-7. Move from SD SPI mode to native 4-bit SD if load time is unacceptable.
+7. Increase native 4-bit SD clock rate once board timing constraints are
+   schematic-verified.
 
 ## Open Decisions
 

@@ -21,6 +21,84 @@ set bitstream_dir $build_dir/bitstream
 set log_dir $build_dir/logs
 set project_file [file join $build_dir ${board_name}.xpr]
 
+proc load_ddr_ucf_pin_map {ucf_path} {
+  if {![file exists $ucf_path]} {
+    error "DDR pin source file is missing: $ucf_path"
+  }
+
+  set fd [open $ucf_path r]
+  set text [read $fd]
+  close $fd
+
+  set pins [dict create]
+  foreach line [split $text "\n"] {
+    if {[regexp {NET[ \t]+"([^"]+)"[ \t]+LOC[ \t]*=[ \t]*"([^"]+)"} $line -> net loc]} {
+      if {[string match "ddr3_*" $net]} {
+        # DDRPIN.ucf has historically carried duplicated DQ entries; keep the
+        # last assignment as the effective board pin source.
+        dict set pins $net $loc
+      }
+    }
+  }
+
+  if {[dict size $pins] == 0} {
+    error "No DDR3 pin assignments were found in $ucf_path"
+  }
+  return $pins
+}
+
+proc load_mig_prj_pin_map {mig_prj_path} {
+  if {![file exists $mig_prj_path]} {
+    error "MIG project file is missing: $mig_prj_path"
+  }
+
+  set fd [open $mig_prj_path r]
+  set text [read $fd]
+  close $fd
+
+  set pins [dict create]
+  foreach line [split $text "\n"] {
+    if {[regexp {<Pin[^>]*PADName="([^"]+)"[^>]*name="([^"]+)"} $line -> pad net]} {
+      if {[string match "ddr3_*" $net]} {
+        dict set pins $net $pad
+      }
+    }
+  }
+
+  if {[dict size $pins] == 0} {
+    error "No DDR3 pin assignments were found in $mig_prj_path"
+  }
+  return $pins
+}
+
+proc verify_mig_pins_match_ucf {ucf_path mig_prj_path} {
+  set ucf_pins [load_ddr_ucf_pin_map $ucf_path]
+  set mig_pins [load_mig_prj_pin_map $mig_prj_path]
+  set errors [list]
+
+  foreach net [lsort [dict keys $ucf_pins]] {
+    if {![dict exists $mig_pins $net]} {
+      lappend errors "$net is present in DDRPIN.ucf but missing from MIG pin selection"
+      continue
+    }
+    set ucf_loc [dict get $ucf_pins $net]
+    set mig_loc [dict get $mig_pins $net]
+    if {$ucf_loc ne $mig_loc} {
+      lappend errors "$net DDRPIN.ucf=$ucf_loc MIG=$mig_loc"
+    }
+  }
+
+  foreach net [lsort [dict keys $mig_pins]] {
+    if {![dict exists $ucf_pins $net]} {
+      lappend errors "$net is present in MIG pin selection but missing from DDRPIN.ucf"
+    }
+  }
+
+  if {[llength $errors] != 0} {
+    error "MIG DDR3 pin selection does not match DDRPIN.ucf:\n[join $errors \n]"
+  }
+}
+
 set force_rebuild 0
 if {[info exists ::env(VIVADO_FORCE_REBUILD)] && $::env(VIVADO_FORCE_REBUILD) ne "0"} {
   set force_rebuild 1
@@ -35,6 +113,10 @@ file mkdir $checkpoint_dir
 file mkdir $report_dir
 file mkdir $bitstream_dir
 file mkdir $log_dir
+
+verify_mig_pins_match_ucf \
+  [file join $board_dir DDRPIN.ucf] \
+  [file join $source_ip_root smart_artix_ddr3_mig/mig_b.prj]
 
 if {$force_rebuild && [file exists $project_file]} {
   close_project -quiet

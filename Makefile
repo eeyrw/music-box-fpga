@@ -87,11 +87,6 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_pin_phy.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_pin_asset_loader.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_spi_byte_master.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_spi_block_reader.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_spi_asset_loader.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_spi_pin_asset_loader.sv \
-	fpga/smart_artix/rtl/smart_artix_fat_file_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
@@ -109,16 +104,13 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_ddr3_debug_master \
 	tb_smart_artix_ddr3_line_reader \
 	tb_smart_artix_ddr3_rw_arbiter \
-	tb_smart_artix_fat_file_reader \
 	tb_smart_artix_mig_stub \
 	tb_smart_artix_platform_debug_regs \
 	tb_smart_artix_sd_native_asset_loader \
 	tb_smart_artix_sd_native_block_reader \
 	tb_smart_artix_sd_native_block_reader_fake \
 	tb_smart_artix_sd_native_pin_phy \
-	tb_smart_artix_sd_native_pin_phy_fake \
-	tb_smart_artix_sd_spi_block_reader \
-	tb_smart_artix_sd_spi_byte_master
+	tb_smart_artix_sd_native_pin_phy_fake
 
 .PHONY: all generate-register-map check-register-map lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 

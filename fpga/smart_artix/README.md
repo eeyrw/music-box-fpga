@@ -71,24 +71,7 @@ contains the `WTSF` header; the SF2 byte image is copied into DDR3 without byte
 repacking so software can keep using absolute SF2 `smpl` offsets when programming
 voice registers.
 
-The SD SPI path remains available as reusable board RTL for bring-up/debug, but
-the board top selects native 4-bit SD as the product load path:
-
-```text
-SD SPI pins: CLK, CMD/MOSI, DAT0/MISO, DAT3/CS
-  -> smart_artix_sd_spi_byte_master
-  -> smart_artix_sd_spi_block_reader
-  -> smart_artix_sd_ddr3_asset_loader
-  -> MIG app write interface
-```
-
-The SD SPI path intentionally implements only the raw-sector subset needed for
-asset loading. It borrows LiteSDCard's command/data separation but omits write
-commands and DMA frontends. The SPI electrical connection is direct FPGA I/O;
-`PHY` here means the small RTL layer that shifts and samples the pins, not an
-external chip.
-
-The native 4-bit path is the one connected to `smart_artix_top`:
+The native 4-bit path is connected to `smart_artix_top`:
 
 ```text
 native SD pins: CLK, CMD, DAT[3:0]
@@ -107,16 +90,11 @@ line's CRC16 before releasing the final byte of a block.
 
 The initialization policy follows the same practical sequence used by small FPGA
 SD readers, but narrowed to SDHC/SDXC: `CMD0`, `CMD8`, retrying `CMD55/ACMD41`
-with HCS, then either `CMD58` for SPI mode or `CMD2/CMD3/CMD7` plus
-`CMD55/ACMD6` for native 4-bit mode. SDv1/SDSC and `CMD16` fallback remain out of
+with HCS, then `CMD2/CMD3/CMD7` plus `CMD55/ACMD6` for native 4-bit mode.
+SDv1/SDSC, SPI-mode SD, FAT filesystems, and `CMD16` fallback remain out of
 scope for this loader path. The native pin asset-loader wrapper has separate
 `sd_init_clk_div` and `sd_transfer_clk_div` inputs and switches to the transfer
 divider after the SD reader reports initialization complete.
-
-An optional `smart_artix_fat_file_reader` can sit above either SD block reader when
-bring-up needs to load an 8.3-named file from a FAT16/FAT32 root directory. It
-keeps the same sector-stream boundary as the raw-image loader and deliberately
-does not implement long filenames or subdirectories yet.
 
 Ethernet is not part of the initial real-time audio path. If the board's
 RTL8211E interface is used later, it should first serve board control and asset
@@ -181,9 +159,10 @@ not be used to connect real hardware. The temporary non-DDR I/O standard is
 `LVCMOS33`, and the primary board clock is constrained to `20.000 ns` for the
 confirmed `50 MHz` oscillator. DDR3 pins come from the generated MIG XDC.
 
-`DDRPIN.ucf` is kept as the board-provided DDR pin reference. It is not consumed
-directly by the Vivado batch flow; use it when checking or regenerating the MIG
-pin configuration, then let MIG emit the final DDR3 XDC.
+`DDRPIN.ucf` is the board-provided DDR3 pin assignment source. Keep it with the
+board target: the Vivado project script checks the MIG `mig_b.prj` pin selection
+against this file before generating or reusing the MIG IP, and the generated MIG
+XDC then carries those pins into synthesis and implementation.
 
 The current board top instantiates `smart_artix_clk_50m_to_200m` and `smart_artix_ddr3_mig` when the
 generated IP configuration is present. The source-controlled IP inputs are the
@@ -395,8 +374,8 @@ make smart-artix-test
 
 This builds and runs the current focused Smart Artix SystemVerilog tests for the
 raw-image asset loader, DDR3 asset writer, DDR3 line reader, DDR3 read/write
-arbiter, MIG stub, FAT file reader, SD SPI reader/master, native SD command
-reader, native fake-card model, native pin PHY, and native asset-loader path.
+arbiter, MIG stub, native SD command reader, native fake-card model, native pin
+PHY, and native asset-loader path.
 
 Run the board-loader render harness from the repository root:
 

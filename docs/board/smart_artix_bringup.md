@@ -116,7 +116,7 @@ Expected intent:
 - `make test` checks exact core register, memory, interpolation, loop, gain, and
   mix behavior.
 - `make smart-artix-test` checks the Smart Artix SD, DDR writer, DDR reader,
-  read/write arbiter, FAT helper, and loader blocks with focused simulations.
+  read/write arbiter, native SD path, and loader blocks with focused simulations.
 - `make render-board-loader` verifies the raw-image SD-to-DDR path at command level
   and compares rendered samples against the C++ fixed-point reference.
 
