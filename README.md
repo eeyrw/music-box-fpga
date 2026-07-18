@@ -125,8 +125,8 @@ points:
 - [`docs/register_map.md`](docs/register_map.md): software-visible register map.
 - [`docs/host/host_control.md`](docs/host/host_control.md): reusable host-side C++ control
   boundary for future PC/CH347 SPI control.
-- [`docs/board/smart_artix_target.md`](docs/board/smart_artix_target.md): current
-  XC7A50T Smart Artix board assumptions and board integration direction.
+- [`fpga/smart_artix/README.md`](fpga/smart_artix/README.md): current XC7A50T
+  Smart Artix board assumptions, Vivado status, and board integration direction.
 - [`docs/board/smart_artix_bringup.md`](docs/board/smart_artix_bringup.md): practical Smart
   Artix hardware bring-up sequence and debug checklist.
 - [`fpga/smart_artix/`](fpga/smart_artix/): Smart Artix XC7A50T synthesis and

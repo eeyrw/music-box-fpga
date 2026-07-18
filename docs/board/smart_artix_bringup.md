@@ -402,7 +402,7 @@ Use this order when a stage fails:
 
 ## Suggested Milestones
 
-Record each board result in `smart_artix_target.md` or a dated lab log.
+Record each board result in `../../fpga/smart_artix/README.md` or a dated lab log.
 Use these milestones as the first checklist:
 
 1. Bitstream generated with all top-level I/O constrained.

@@ -113,6 +113,12 @@ bring-up needs to load an 8.3-named file from a FAT16/FAT32 root directory. It
 keeps the same sector-stream boundary as the raw-image loader and deliberately
 does not implement long filenames or subdirectories yet.
 
+Ethernet is not part of the initial real-time audio path. If the board's
+RTL8211E interface is used later, it should first serve board control and asset
+upload needs such as UDP status, preset upload, wave-image transfer, or network
+MIDI. A full TCP/IP stack is better owned by an MCU or soft core than by the
+wavetable datapath RTL.
+
 ## DDR3 Line-Reader Assumptions
 
 The first `smart_artix_ddr3_line_reader` skeleton targets the 7-series MIG native
