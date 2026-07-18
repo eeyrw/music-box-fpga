@@ -11,7 +11,7 @@ namespace host {
 
 struct Ch347Options {
   std::string library_path = "third_party/ch347_linux/lib/x64/libch347.so";
-  std::string device_path = "/dev/ch34x_pis0";
+  std::string device_path = "/dev/ch34x_pis2";
   uint8_t chip_select_mask = 0x80;
   int spi_mode = 0;
   int clock_hz = 1000000;
