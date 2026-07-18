@@ -45,6 +45,9 @@ simulation and board-facing transport shape:
 
 ## Top-Level Variants
 
+For a directory-by-directory RTL reading map and full instantiation tree, see
+`rtl_module_map.md`.
+
 `rtl/top/wavetable_render_core.sv` is the core datapath wrapper:
 
 ```text

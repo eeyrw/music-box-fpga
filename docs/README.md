@@ -17,6 +17,8 @@ subdirectories.
 
 - [`design/system_design.md`](design/system_design.md): current RTL architecture,
   control split, timing budget, and board-facing backlog.
+- [`design/rtl_module_map.md`](design/rtl_module_map.md): generic RTL directory
+  tops, module roles, and instantiation tree.
 - [`design/control_memory_refactor_plan.md`](design/control_memory_refactor_plan.md):
   destructive control-plane and wave-memory cleanup plan.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): current multi-voice
