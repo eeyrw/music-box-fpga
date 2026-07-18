@@ -15,6 +15,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/${top_name}.sv
 
 set rtl_sources {
   ../../rtl/pkg/synth_pkg.sv
+  ../../rtl/pkg/synth_register_pkg.sv
   ../../rtl/control/voice_active_store.sv
   ../../rtl/control/voice_bram_1r1w.sv
   ../../rtl/control/voice_bram_1w2r.sv

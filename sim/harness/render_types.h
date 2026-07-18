@@ -1,5 +1,7 @@
 #pragma once
 
+#include "generated/register_map.h"
+
 #include <cstdint>
 #include <cmath>
 #include <string>
@@ -12,42 +14,42 @@ namespace render {
 #endif
 
 constexpr int kNumVoices = RENDER_NUM_VOICES;
-constexpr int kQ15Full = 32767;
+constexpr int kQ15Full = int(regs::kQ15Full);
 constexpr int kPhaseFrameBits = 24;
 constexpr int kPhaseFracBits = 8;
 constexpr uint32_t kPhaseFracScale = 1u << kPhaseFracBits;
 constexpr uint32_t kPhaseFracMask = kPhaseFracScale - 1u;
 constexpr uint32_t kPhaseFrameMask = (1u << kPhaseFrameBits) - 1u;
-constexpr uint16_t kVoiceBase = 0x0100;
-constexpr uint16_t kVoiceStride = 0x0100;
+constexpr uint16_t kVoiceBase = regs::kVoiceBase;
+constexpr uint16_t kVoiceStride = regs::kVoiceStride;
 
-constexpr int kRegBaseAddr = 0x00;
-constexpr int kRegBaseAddrR = 0x04;
-constexpr int kRegLength = 0x08;
-constexpr int kRegLengthR = 0x0c;
-constexpr int kRegLoopStart = 0x10;
-constexpr int kRegLoopStartR = 0x14;
-constexpr int kRegLoopEnd = 0x18;
-constexpr int kRegLoopEndR = 0x1c;
-constexpr int kRegRegionMode = 0x20;
-constexpr int kRegPhaseInit = 0x30;
-constexpr int kRegPhaseInc = 0x34;
-constexpr int kRegPhaseIncRuntime = 0x38;
-constexpr int kRegGainL = 0x40;
-constexpr int kRegGainR = 0x44;
-constexpr int kRegGainRuntime = 0x48;
-constexpr int kRegEnvelopeLevel = 0x4c;
-constexpr int kRegFilterControl = 0x50;
-constexpr int kRegFilterB0 = 0x54;
-constexpr int kRegFilterB1 = 0x58;
-constexpr int kRegFilterB2 = 0x5c;
-constexpr int kRegFilterA1 = 0x60;
-constexpr int kRegFilterA2 = 0x64;
-constexpr int kRegFilterCommit = 0x68;
-constexpr int kRegControl = 0x70;
-constexpr int kRegCommit = 0x74;
-constexpr int kRegReleaseControl = 0x78;
-constexpr int kRegStatus = 0x7c;
+constexpr int kRegBaseAddr = regs::kOffBaseAddr;
+constexpr int kRegBaseAddrR = regs::kOffBaseAddrR;
+constexpr int kRegLength = regs::kOffLength;
+constexpr int kRegLengthR = regs::kOffLengthR;
+constexpr int kRegLoopStart = regs::kOffLoopStart;
+constexpr int kRegLoopStartR = regs::kOffLoopStartR;
+constexpr int kRegLoopEnd = regs::kOffLoopEnd;
+constexpr int kRegLoopEndR = regs::kOffLoopEndR;
+constexpr int kRegRegionMode = regs::kOffRegionMode;
+constexpr int kRegPhaseInit = regs::kOffPhaseInit;
+constexpr int kRegPhaseInc = regs::kOffPhaseInc;
+constexpr int kRegPhaseIncRuntime = regs::kOffPhaseIncRuntime;
+constexpr int kRegGainL = regs::kOffGainL;
+constexpr int kRegGainR = regs::kOffGainR;
+constexpr int kRegGainRuntime = regs::kOffGainRuntime;
+constexpr int kRegEnvelopeLevel = regs::kOffEnvelopeLevel;
+constexpr int kRegFilterControl = regs::kOffFilterControl;
+constexpr int kRegFilterB0 = regs::kOffFilterB0;
+constexpr int kRegFilterB1 = regs::kOffFilterB1;
+constexpr int kRegFilterB2 = regs::kOffFilterB2;
+constexpr int kRegFilterA1 = regs::kOffFilterA1;
+constexpr int kRegFilterA2 = regs::kOffFilterA2;
+constexpr int kRegFilterCommit = regs::kOffFilterCommit;
+constexpr int kRegControl = regs::kOffControl;
+constexpr int kRegCommit = regs::kOffCommit;
+constexpr int kRegReleaseControl = regs::kOffReleaseControl;
+constexpr int kRegStatus = regs::kOffStatus;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
@@ -108,7 +110,7 @@ struct Region {
   int gain_l = 0x4000;
   int gain_r = 0x4000;
   bool filter_enable = false;
-  int filter_b0 = 0x10000000;
+  int filter_b0 = int(regs::kFilterB0UnityQ428);
   int filter_b1 = 0;
   int filter_b2 = 0;
   int filter_a1 = 0;
@@ -149,7 +151,7 @@ struct Region {
 
 struct FilterConfig {
   bool enable = false;
-  int b0 = 0x10000000;
+  int b0 = int(regs::kFilterB0UnityQ428);
   int b1 = 0;
   int b2 = 0;
   int a1 = 0;
@@ -228,7 +230,7 @@ inline int velocity_target(int velocity) {
 }
 
 inline uint16_t voice_addr(int voice, int offset) {
-  return uint16_t(kVoiceBase + voice * kVoiceStride + offset);
+  return regs::voice_addr(voice, uint16_t(offset));
 }
 
 inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {

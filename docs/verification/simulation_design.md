@@ -39,6 +39,18 @@ SIM_SOURCES = behavioral memory model + self-checking testbench
 system tasks such as `$readmemh`, `$fopen`, and `$finish` out of the synthesizable
 lint target.
 
+The software-visible register constants are generated from
+`spec/register_map.json` into both SystemVerilog and C++ headers:
+
+```text
+rtl/pkg/synth_register_pkg.sv
+sim/harness/generated/register_map.h
+```
+
+Run `make generate-register-map` after changing the JSON source. Run
+`make check-register-map` before committing to verify the checked-in generated
+files still match the JSON register contract.
+
 `make test` builds the synthetic-data regression testbench:
 
 ```text

@@ -10,7 +10,8 @@ subdirectories.
 - [`fixed_point.md`](fixed_point.md): numeric formats and arithmetic rules.
 - [`memory_format.md`](memory_format.md): wave-memory layout and memory handshake.
 - [`register_map.md`](register_map.md): software-visible register addresses and
-  commit/runtime behavior.
+  commit/runtime behavior. The register constants are generated from
+  [`../spec/register_map.json`](../spec/register_map.json).
 
 ## Design Notes
 
@@ -26,7 +27,7 @@ subdirectories.
 
 - [`verification/simulation_design.md`](verification/simulation_design.md):
   self-checking tests, SoundFont/MIDI render harnesses, memory-profile renders,
-  and board-loader simulation.
+  board-loader simulation, and generated register-map consistency checks.
 
 ## Host Control
 

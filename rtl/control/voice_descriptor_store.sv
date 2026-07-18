@@ -9,23 +9,24 @@ module voice_descriptor_store (
   output logic [31:0]                               read_data
 );
   import synth_pkg::*;
+  import synth_register_pkg::*;
 
   localparam int DESCRIPTOR_WORDS = NUM_VOICES * 32;
   localparam int DESCRIPTOR_WORD_INDEX_WIDTH = $clog2(DESCRIPTOR_WORDS);
 
-  localparam logic [15:0] OFF_LENGTH       = 16'h0008;
-  localparam logic [15:0] OFF_LENGTH_R     = 16'h000c;
-  localparam logic [15:0] OFF_LOOP_START   = 16'h0010;
-  localparam logic [15:0] OFF_LOOP_START_R = 16'h0014;
-  localparam logic [15:0] OFF_LOOP_END     = 16'h0018;
-  localparam logic [15:0] OFF_LOOP_END_R   = 16'h001c;
-  localparam logic [15:0] OFF_REGION_MODE  = 16'h0020;
-  localparam logic [15:0] OFF_GAIN_L       = 16'h0040;
-  localparam logic [15:0] OFF_GAIN_R       = 16'h0044;
-  localparam logic [15:0] OFF_GAIN_RT      = 16'h0048;
-  localparam logic [15:0] OFF_ENVELOPE     = 16'h004c;
-  localparam logic [15:0] OFF_FILTER_CTL   = 16'h0050;
-  localparam logic [15:0] OFF_CONTROL      = 16'h0070;
+  localparam logic [15:0] OFF_LENGTH       = REG_OFF_LENGTH;
+  localparam logic [15:0] OFF_LENGTH_R     = REG_OFF_LENGTH_R;
+  localparam logic [15:0] OFF_LOOP_START   = REG_OFF_LOOP_START;
+  localparam logic [15:0] OFF_LOOP_START_R = REG_OFF_LOOP_START_R;
+  localparam logic [15:0] OFF_LOOP_END     = REG_OFF_LOOP_END;
+  localparam logic [15:0] OFF_LOOP_END_R   = REG_OFF_LOOP_END_R;
+  localparam logic [15:0] OFF_REGION_MODE  = REG_OFF_REGION_MODE;
+  localparam logic [15:0] OFF_GAIN_L       = REG_OFF_GAIN_L;
+  localparam logic [15:0] OFF_GAIN_R       = REG_OFF_GAIN_R;
+  localparam logic [15:0] OFF_GAIN_RT      = REG_OFF_GAIN_RUNTIME;
+  localparam logic [15:0] OFF_ENVELOPE     = REG_OFF_ENVELOPE_LEVEL;
+  localparam logic [15:0] OFF_FILTER_CTL   = REG_OFF_FILTER_CONTROL;
+  localparam logic [15:0] OFF_CONTROL      = REG_OFF_CONTROL;
 
   logic [DESCRIPTOR_WORD_INDEX_WIDTH-1:0] write_addr;
   logic [DESCRIPTOR_WORD_INDEX_WIDTH-1:0] read_addr;

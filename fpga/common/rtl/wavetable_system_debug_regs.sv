@@ -55,31 +55,33 @@ module wavetable_system_debug_regs #(
   input  logic                     platform_ddr_debug_error,
   input  logic [LINE_WORDS*16-1:0] platform_ddr_debug_rdata
 );
-  localparam logic [15:0] ADDR_SYSTEM_STATUS = 16'h3010;
-  localparam logic [15:0] ADDR_DEBUG_EVENT_FLAGS = 16'h3014;
-  localparam logic [15:0] ADDR_AUDIO_STATUS = 16'h3018;
-  localparam logic [15:0] ADDR_RENDER_STATUS = 16'h301c;
-  localparam logic [15:0] ADDR_MEMORY_STATUS = 16'h3020;
-  localparam logic [15:0] ADDR_UNDERRUN_COUNT = 16'h3024;
-  localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = 16'h3028;
-  localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = 16'h302c;
-  localparam logic [15:0] ADDR_MEM_HIT_COUNT = 16'h3030;
-  localparam logic [15:0] ADDR_MEM_MISS_COUNT = 16'h3034;
-  localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = 16'h3038;
-  localparam logic [15:0] ADDR_PLATFORM_STATUS = 16'h3040;
-  localparam logic [15:0] ADDR_PLATFORM_ERRORS = 16'h3044;
-  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED = 16'h3048;
-  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE = 16'h3050;
-  localparam logic [15:0] ADDR_PLATFORM_CURRENT_LBA = 16'h3058;
-  localparam logic [15:0] ADDR_PLATFORM_DDR_STATUS = 16'h305c;
-  localparam logic [15:0] ADDR_DDR_DEBUG_CONTROL = 16'h3060;
-  localparam logic [15:0] ADDR_DDR_DEBUG_STATUS = 16'h3064;
-  localparam logic [15:0] ADDR_DDR_DEBUG_ADDR = 16'h3068;
-  localparam logic [15:0] ADDR_DDR_DEBUG_BYTE_ENABLE = 16'h306c;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA0 = 16'h3070;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA1 = 16'h3074;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA2 = 16'h3078;
-  localparam logic [15:0] ADDR_DDR_DEBUG_DATA3 = 16'h307c;
+  import synth_register_pkg::*;
+
+  localparam logic [15:0] ADDR_SYSTEM_STATUS = REG_SYSTEM_STATUS;
+  localparam logic [15:0] ADDR_DEBUG_EVENT_FLAGS = REG_DEBUG_EVENT_FLAGS;
+  localparam logic [15:0] ADDR_AUDIO_STATUS = REG_AUDIO_STATUS;
+  localparam logic [15:0] ADDR_RENDER_STATUS = REG_RENDER_STATUS;
+  localparam logic [15:0] ADDR_MEMORY_STATUS = REG_MEMORY_STATUS;
+  localparam logic [15:0] ADDR_UNDERRUN_COUNT = REG_UNDERRUN_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = REG_SAMPLE_DROP_COUNT;
+  localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = REG_RENDER_DEADLINE_MISS_COUNT;
+  localparam logic [15:0] ADDR_MEM_HIT_COUNT = REG_MEM_HIT_COUNT;
+  localparam logic [15:0] ADDR_MEM_MISS_COUNT = REG_MEM_MISS_COUNT;
+  localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = REG_MEM_RESPONSE_COUNT;
+  localparam logic [15:0] ADDR_PLATFORM_STATUS = REG_PLATFORM_STATUS;
+  localparam logic [15:0] ADDR_PLATFORM_ERRORS = REG_PLATFORM_ERRORS;
+  localparam logic [15:0] ADDR_PLATFORM_BYTES_LOADED = REG_PLATFORM_BYTES_LOADED;
+  localparam logic [15:0] ADDR_PLATFORM_SF2_SIZE = REG_PLATFORM_SF2_SIZE;
+  localparam logic [15:0] ADDR_PLATFORM_CURRENT_LBA = REG_PLATFORM_CURRENT_LBA;
+  localparam logic [15:0] ADDR_PLATFORM_DDR_STATUS = REG_PLATFORM_DDR_STATUS;
+  localparam logic [15:0] ADDR_DDR_DEBUG_CONTROL = REG_DDR_DEBUG_CONTROL;
+  localparam logic [15:0] ADDR_DDR_DEBUG_STATUS = REG_DDR_DEBUG_STATUS;
+  localparam logic [15:0] ADDR_DDR_DEBUG_ADDR = REG_DDR_DEBUG_ADDR;
+  localparam logic [15:0] ADDR_DDR_DEBUG_BYTE_ENABLE = REG_DDR_DEBUG_BYTE_ENABLE;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA0 = REG_DDR_DEBUG_DATA0;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA1 = REG_DDR_DEBUG_DATA1;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA2 = REG_DDR_DEBUG_DATA2;
+  localparam logic [15:0] ADDR_DDR_DEBUG_DATA3 = REG_DDR_DEBUG_DATA3;
 
   logic render_pending;
   logic [15:0] render_latency_count;

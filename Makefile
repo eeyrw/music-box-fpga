@@ -29,6 +29,7 @@ RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
+	rtl/pkg/synth_register_pkg.sv \
 	rtl/control/voice_active_store.sv \
 	rtl/control/voice_bram_1r1w.sv \
 	rtl/control/voice_bram_1w2r.sv \
@@ -112,9 +113,16 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_sd_spi_block_reader \
 	tb_smart_artix_sd_spi_byte_master
 
-.PHONY: all lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
+.PHONY: all generate-register-map check-register-map lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 
 all: test
+
+generate-register-map:
+	python3 tools/gen_register_map.py
+
+check-register-map:
+	python3 tools/gen_register_map.py
+	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.

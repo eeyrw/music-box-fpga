@@ -1,5 +1,6 @@
 # Generic synthesizable RTL. Keep this list aligned with RTL_SOURCES in ../../Makefile.
 ../../rtl/pkg/synth_pkg.sv
+../../rtl/pkg/synth_register_pkg.sv
 ../../rtl/control/voice_active_store.sv
 ../../rtl/control/voice_bram_1r1w.sv
 ../../rtl/control/voice_bram_1w2r.sv

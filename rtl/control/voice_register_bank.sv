@@ -16,41 +16,41 @@ module voice_register_bank (
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse
 );
   import synth_pkg::*;
+  import synth_register_pkg::*;
 
-  // Byte addresses for the simple 32-bit register bus. Configuration writes
-  // update shadow state first; commit strobes copy coherent groups into the
-  // renderer-facing active/runtime state.
-  localparam logic [15:0] VOICE_BASE      = 16'h0100;
-  localparam logic [15:0] VOICE_STRIDE    = 16'h0100;
+  // Byte addresses for the simple 32-bit register bus. Address values come
+  // from the generated register-map package.
+  localparam logic [15:0] VOICE_BASE      = REG_VOICE_BASE;
+  localparam logic [15:0] VOICE_STRIDE    = REG_VOICE_STRIDE;
   localparam logic [15:0] VOICE_LIMIT     = 16'(NUM_VOICES * VOICE_STRIDE);
-  localparam logic [15:0] OFF_BASE        = 16'h0000;
-  localparam logic [15:0] OFF_BASE_R      = 16'h0004;
-  localparam logic [15:0] OFF_LENGTH      = 16'h0008;
-  localparam logic [15:0] OFF_LENGTH_R    = 16'h000c;
-  localparam logic [15:0] OFF_LOOP_START  = 16'h0010;
-  localparam logic [15:0] OFF_LOOP_START_R = 16'h0014;
-  localparam logic [15:0] OFF_LOOP_END    = 16'h0018;
-  localparam logic [15:0] OFF_LOOP_END_R  = 16'h001c;
-  localparam logic [15:0] OFF_REGION_MODE = 16'h0020;
-  localparam logic [15:0] OFF_PHASE_INIT  = 16'h0030;
-  localparam logic [15:0] OFF_PHASE_INC   = 16'h0034;
-  localparam logic [15:0] OFF_PHASE_RT    = 16'h0038;
-  localparam logic [15:0] OFF_GAIN_L      = 16'h0040;
-  localparam logic [15:0] OFF_GAIN_R      = 16'h0044;
-  localparam logic [15:0] OFF_GAIN_RT     = 16'h0048;
-  localparam logic [15:0] OFF_ENVELOPE    = 16'h004c;
-  localparam logic [15:0] OFF_FILTER_CTL  = 16'h0050;
-  localparam logic [15:0] OFF_FILTER_B0   = 16'h0054;
-  localparam logic [15:0] OFF_FILTER_B1   = 16'h0058;
-  localparam logic [15:0] OFF_FILTER_B2   = 16'h005c;
-  localparam logic [15:0] OFF_FILTER_A1   = 16'h0060;
-  localparam logic [15:0] OFF_FILTER_A2   = 16'h0064;
-  localparam logic [15:0] OFF_FILTER_COMMIT = 16'h0068;
-  localparam logic [15:0] OFF_CONTROL     = 16'h0070;
-  localparam logic [15:0] OFF_COMMIT      = 16'h0074;
-  localparam logic [15:0] OFF_RELEASE     = 16'h0078;
-  localparam logic [15:0] OFF_STATUS      = 16'h007c;
-  localparam logic [15:0] ADDR_VERSION    = 16'h3000;
+  localparam logic [15:0] OFF_BASE        = REG_OFF_BASE_ADDR;
+  localparam logic [15:0] OFF_BASE_R      = REG_OFF_BASE_ADDR_R;
+  localparam logic [15:0] OFF_LENGTH      = REG_OFF_LENGTH;
+  localparam logic [15:0] OFF_LENGTH_R    = REG_OFF_LENGTH_R;
+  localparam logic [15:0] OFF_LOOP_START  = REG_OFF_LOOP_START;
+  localparam logic [15:0] OFF_LOOP_START_R = REG_OFF_LOOP_START_R;
+  localparam logic [15:0] OFF_LOOP_END    = REG_OFF_LOOP_END;
+  localparam logic [15:0] OFF_LOOP_END_R  = REG_OFF_LOOP_END_R;
+  localparam logic [15:0] OFF_REGION_MODE = REG_OFF_REGION_MODE;
+  localparam logic [15:0] OFF_PHASE_INIT  = REG_OFF_PHASE_INIT;
+  localparam logic [15:0] OFF_PHASE_INC   = REG_OFF_PHASE_INC;
+  localparam logic [15:0] OFF_PHASE_RT    = REG_OFF_PHASE_INC_RUNTIME;
+  localparam logic [15:0] OFF_GAIN_L      = REG_OFF_GAIN_L;
+  localparam logic [15:0] OFF_GAIN_R      = REG_OFF_GAIN_R;
+  localparam logic [15:0] OFF_GAIN_RT     = REG_OFF_GAIN_RUNTIME;
+  localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE_LEVEL;
+  localparam logic [15:0] OFF_FILTER_CTL  = REG_OFF_FILTER_CONTROL;
+  localparam logic [15:0] OFF_FILTER_B0   = REG_OFF_FILTER_B0;
+  localparam logic [15:0] OFF_FILTER_B1   = REG_OFF_FILTER_B1;
+  localparam logic [15:0] OFF_FILTER_B2   = REG_OFF_FILTER_B2;
+  localparam logic [15:0] OFF_FILTER_A1   = REG_OFF_FILTER_A1;
+  localparam logic [15:0] OFF_FILTER_A2   = REG_OFF_FILTER_A2;
+  localparam logic [15:0] OFF_FILTER_COMMIT = REG_OFF_FILTER_COMMIT;
+  localparam logic [15:0] OFF_CONTROL     = REG_OFF_CONTROL;
+  localparam logic [15:0] OFF_COMMIT      = REG_OFF_COMMIT;
+  localparam logic [15:0] OFF_RELEASE     = REG_OFF_RELEASE_CONTROL;
+  localparam logic [15:0] OFF_STATUS      = REG_OFF_STATUS;
+  localparam logic [15:0] ADDR_VERSION    = REG_VERSION;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
 
@@ -278,7 +278,7 @@ module voice_register_bank (
         default:      inspect_data = descriptor_read_data;
       endcase
     end else if (inspect_address == ADDR_VERSION) begin
-      inspect_data = 32'h0005_0000;
+      inspect_data = REG_VERSION_VALUE;
     end
 
     address_valid = (voice_address && known_voice_offset(selected_offset)) || global_address;
@@ -288,7 +288,7 @@ module voice_register_bank (
     end else if (voice_address && !known_voice_offset(selected_offset)) begin
       address_valid = 1'b0;
     end else if (bus_address == ADDR_VERSION) begin
-      bus_rdata = 32'h0005_0000;
+      bus_rdata = REG_VERSION_VALUE;
     end
 
     bus_ready = 1'b0;

@@ -1,5 +1,9 @@
 # Multi-Voice Register Map
 
+The address and bit-mask constants in this document are mirrored from
+`spec/register_map.json`. Run `make generate-register-map` after changing the
+JSON source so RTL and C++ users pick up the same register contract.
+
 The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
 single-beat and 32-bit aligned. The 32-bit data word is the bus container; many
 fields are narrower and explicitly define which bits are meaningful. Wave-memory

@@ -1,0 +1,123 @@
+{
+  "bus": {
+    "address_width": 16,
+    "data_width": 32
+  },
+  "version": {
+    "name": "VERSION",
+    "address": "0x3000",
+    "value": "0x00050000"
+  },
+  "voice_window": {
+    "base": "0x0100",
+    "stride": "0x0100"
+  },
+  "voice_registers": [
+    {"name": "BASE_ADDR", "offset": "0x0000"},
+    {"name": "BASE_ADDR_R", "offset": "0x0004"},
+    {"name": "LENGTH", "offset": "0x0008"},
+    {"name": "LENGTH_R", "offset": "0x000c"},
+    {"name": "LOOP_START", "offset": "0x0010"},
+    {"name": "LOOP_START_R", "offset": "0x0014"},
+    {"name": "LOOP_END", "offset": "0x0018"},
+    {"name": "LOOP_END_R", "offset": "0x001c"},
+    {"name": "REGION_MODE", "offset": "0x0020"},
+    {"name": "PHASE_INIT", "offset": "0x0030"},
+    {"name": "PHASE_INC", "offset": "0x0034"},
+    {"name": "PHASE_INC_RUNTIME", "offset": "0x0038"},
+    {"name": "GAIN_L", "offset": "0x0040"},
+    {"name": "GAIN_R", "offset": "0x0044"},
+    {"name": "GAIN_RUNTIME", "offset": "0x0048"},
+    {"name": "ENVELOPE_LEVEL", "offset": "0x004c"},
+    {"name": "FILTER_CONTROL", "offset": "0x0050"},
+    {"name": "FILTER_B0", "offset": "0x0054"},
+    {"name": "FILTER_B1", "offset": "0x0058"},
+    {"name": "FILTER_B2", "offset": "0x005c"},
+    {"name": "FILTER_A1", "offset": "0x0060"},
+    {"name": "FILTER_A2", "offset": "0x0064"},
+    {"name": "FILTER_COMMIT", "offset": "0x0068"},
+    {"name": "CONTROL", "offset": "0x0070"},
+    {"name": "COMMIT", "offset": "0x0074"},
+    {"name": "RELEASE_CONTROL", "offset": "0x0078"},
+    {"name": "STATUS", "offset": "0x007c"}
+  ],
+  "global_registers": [
+    {"name": "VERSION", "address": "0x3000"},
+    {"name": "SYSTEM_STATUS", "address": "0x3010"},
+    {"name": "DEBUG_EVENT_FLAGS", "address": "0x3014"},
+    {"name": "AUDIO_STATUS", "address": "0x3018"},
+    {"name": "RENDER_STATUS", "address": "0x301c"},
+    {"name": "MEMORY_STATUS", "address": "0x3020"},
+    {"name": "UNDERRUN_COUNT", "address": "0x3024"},
+    {"name": "SAMPLE_DROP_COUNT", "address": "0x3028"},
+    {"name": "RENDER_DEADLINE_MISS_COUNT", "address": "0x302c"},
+    {"name": "MEM_HIT_COUNT", "address": "0x3030"},
+    {"name": "MEM_MISS_COUNT", "address": "0x3034"},
+    {"name": "MEM_RESPONSE_COUNT", "address": "0x3038"},
+    {"name": "PLATFORM_STATUS", "address": "0x3040"},
+    {"name": "PLATFORM_ERRORS", "address": "0x3044"},
+    {"name": "PLATFORM_BYTES_LOADED", "address": "0x3048"},
+    {"name": "PLATFORM_SF2_SIZE", "address": "0x3050"},
+    {"name": "PLATFORM_CURRENT_LBA", "address": "0x3058"},
+    {"name": "PLATFORM_DDR_STATUS", "address": "0x305c"},
+    {"name": "DDR_DEBUG_CONTROL", "address": "0x3060"},
+    {"name": "DDR_DEBUG_STATUS", "address": "0x3064"},
+    {"name": "DDR_DEBUG_ADDR", "address": "0x3068"},
+    {"name": "DDR_DEBUG_BYTE_ENABLE", "address": "0x306c"},
+    {"name": "DDR_DEBUG_DATA0", "address": "0x3070"},
+    {"name": "DDR_DEBUG_DATA1", "address": "0x3074"},
+    {"name": "DDR_DEBUG_DATA2", "address": "0x3078"},
+    {"name": "DDR_DEBUG_DATA3", "address": "0x307c"}
+  ],
+  "fields": {
+    "REGION_MODE": {
+      "STEREO_BIT": 0,
+      "LOOP_MODE_LSB": 1,
+      "LOOP_MODE_WIDTH": 2,
+      "MASK": "0x00000007"
+    },
+    "CONTROL": {
+      "ENABLE_MASK": "0x00000001"
+    },
+    "COMMIT": {
+      "APPLY_MASK": "0x00000001"
+    },
+    "FILTER_CONTROL": {
+      "ENABLE_MASK": "0x00000001"
+    },
+    "FILTER_COMMIT": {
+      "APPLY_MASK": "0x00000001"
+    },
+    "DEBUG_EVENT_FLAGS": {
+      "UNDERRUN_MASK": "0x00000001",
+      "SAMPLE_DROP_MASK": "0x00000002",
+      "RENDER_DEADLINE_MISS_MASK": "0x00000004",
+      "MEM_HIT_MASK": "0x00000008",
+      "MEM_MISS_MASK": "0x00000010",
+      "MEM_RESPONSE_MASK": "0x00000020"
+    },
+    "PLATFORM_STATUS": {
+      "DEBUG_PRESENT_MASK": "0x00000001",
+      "ERROR_PRESENT_MASK": "0x00000002",
+      "DDR_CALIBRATED_MASK": "0x00000004",
+      "DDR_UI_RESET_MASK": "0x00000008",
+      "SD_INITIALIZED_MASK": "0x00000010",
+      "ASSET_LOADED_MASK": "0x00000020"
+    },
+    "DDR_DEBUG_CONTROL": {
+      "START_MASK": "0x00000001",
+      "WRITE_MASK": "0x00000002",
+      "CLEAR_MASK": "0x00000004"
+    },
+    "DDR_DEBUG_STATUS": {
+      "PRESENT_MASK": "0x00000001",
+      "READY_MASK": "0x00000002",
+      "DONE_MASK": "0x00000008",
+      "ERROR_MASK": "0x00000010"
+    }
+  },
+  "numeric_constants": {
+    "Q15_FULL": "0x00007fff",
+    "FILTER_B0_UNITY_Q4_28": "0x10000000"
+  }
+}

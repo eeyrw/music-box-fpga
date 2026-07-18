@@ -82,18 +82,18 @@ struct Args {
   std::vector<Action> actions;
 };
 
-constexpr uint16_t kDdrDebugControl = 0x3060;
-constexpr uint16_t kDdrDebugStatus = 0x3064;
-constexpr uint16_t kDdrDebugAddr = 0x3068;
-constexpr uint16_t kDdrDebugByteEnable = 0x306c;
-constexpr uint16_t kDdrDebugData0 = 0x3070;
-constexpr uint16_t kPlatformBytesLoaded = 0x3048;
-constexpr uint32_t kDdrDebugControlStart = 1u << 0;
-constexpr uint32_t kDdrDebugControlWrite = 1u << 1;
-constexpr uint32_t kDdrDebugControlClear = 1u << 2;
-constexpr uint32_t kDdrDebugStatusReady = 1u << 1;
-constexpr uint32_t kDdrDebugStatusDone = 1u << 3;
-constexpr uint32_t kDdrDebugStatusError = 1u << 4;
+constexpr uint16_t kDdrDebugControl = render::regs::kDdrDebugControl;
+constexpr uint16_t kDdrDebugStatus = render::regs::kDdrDebugStatus;
+constexpr uint16_t kDdrDebugAddr = render::regs::kDdrDebugAddr;
+constexpr uint16_t kDdrDebugByteEnable = render::regs::kDdrDebugByteEnable;
+constexpr uint16_t kDdrDebugData0 = render::regs::kDdrDebugData0;
+constexpr uint16_t kPlatformBytesLoaded = render::regs::kPlatformBytesLoaded;
+constexpr uint32_t kDdrDebugControlStart = render::regs::kDdrDebugControlStartMask;
+constexpr uint32_t kDdrDebugControlWrite = render::regs::kDdrDebugControlWriteMask;
+constexpr uint32_t kDdrDebugControlClear = render::regs::kDdrDebugControlClearMask;
+constexpr uint32_t kDdrDebugStatusReady = render::regs::kDdrDebugStatusReadyMask;
+constexpr uint32_t kDdrDebugStatusDone = render::regs::kDdrDebugStatusDoneMask;
+constexpr uint32_t kDdrDebugStatusError = render::regs::kDdrDebugStatusErrorMask;
 
 class DryRunTransport : public render::RegisterWriteSink {
  public:

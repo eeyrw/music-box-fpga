@@ -1,4 +1,6 @@
 module tb_wavetable_spi_audio_system_debug;
+  import synth_register_pkg::*;
+
   logic clk = 1'b0;
   logic rst;
   logic core_rst;
@@ -216,8 +218,8 @@ module tb_wavetable_spi_audio_system_debug;
     platform_asset_loader_busy = 1'b1;
     platform_asset_loader_state = 4'h5;
     platform_bytes_loaded = 32'h0000_1000;
-    expect_read(16'h3040, 32'h0000_2ad7);
-    expect_read(16'h3048, 32'h0000_1000);
+    expect_read(REG_PLATFORM_STATUS, 32'h0000_2ad7);
+    expect_read(REG_PLATFORM_BYTES_LOADED, 32'h0000_1000);
     spi_write_word(16'h0000, 32'h0000_0001);
     if (!spi_error) begin
       $error("core register write during core reset did not report error");
@@ -231,25 +233,26 @@ module tb_wavetable_spi_audio_system_debug;
     platform_bytes_loaded = 32'h5566_7788;
     repeat (2) @(negedge clk);
 
-    expect_read(16'h3000, 32'h0005_0000);
-    expect_read(16'h3010, 32'h0000_0050);
-    expect_read(16'h3014, 32'h0000_0000);
-    expect_read(16'h3018, 32'h0000_0000);
-    expect_read(16'h3024, 32'h0000_0000);
-    expect_read(16'h3040, 32'h0000_52b7);
-    expect_read(16'h3044, 32'h000a_3412);
-    expect_read(16'h3048, 32'h5566_7788);
-    expect_read(16'h3050, 32'hddee_ff00);
-    expect_read(16'h3058, 32'h1234_5678);
-    expect_read(16'h305c, 32'h02a5_0015);
-    expect_read(16'h3064, 32'h0000_0003);
-    spi_write_word(16'h3068, 32'h0000_0100);
-    spi_write_word(16'h306c, 32'h0000_00ff);
-    spi_write_word(16'h3070, 32'h0123_4567);
-    spi_write_word(16'h3074, 32'h89ab_cdef);
-    spi_write_word(16'h3078, 32'h7654_3210);
-    spi_write_word(16'h307c, 32'hfedc_ba98);
-    spi_write_word(16'h3060, 32'h0000_0003);
+    expect_read(REG_VERSION, REG_VERSION_VALUE);
+    expect_read(REG_SYSTEM_STATUS, 32'h0000_0050);
+    expect_read(REG_DEBUG_EVENT_FLAGS, 32'h0000_0000);
+    expect_read(REG_AUDIO_STATUS, 32'h0000_0000);
+    expect_read(REG_UNDERRUN_COUNT, 32'h0000_0000);
+    expect_read(REG_PLATFORM_STATUS, 32'h0000_52b7);
+    expect_read(REG_PLATFORM_ERRORS, 32'h000a_3412);
+    expect_read(REG_PLATFORM_BYTES_LOADED, 32'h5566_7788);
+    expect_read(REG_PLATFORM_SF2_SIZE, 32'hddee_ff00);
+    expect_read(REG_PLATFORM_CURRENT_LBA, 32'h1234_5678);
+    expect_read(REG_PLATFORM_DDR_STATUS, 32'h02a5_0015);
+    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0003);
+    spi_write_word(REG_DDR_DEBUG_ADDR, 32'h0000_0100);
+    spi_write_word(REG_DDR_DEBUG_BYTE_ENABLE, 32'h0000_00ff);
+    spi_write_word(REG_DDR_DEBUG_DATA0, 32'h0123_4567);
+    spi_write_word(REG_DDR_DEBUG_DATA1, 32'h89ab_cdef);
+    spi_write_word(REG_DDR_DEBUG_DATA2, 32'h7654_3210);
+    spi_write_word(REG_DDR_DEBUG_DATA3, 32'hfedc_ba98);
+    spi_write_word(REG_DDR_DEBUG_CONTROL,
+                   REG_DDR_DEBUG_CONTROL_START_MASK | REG_DDR_DEBUG_CONTROL_WRITE_MASK);
     if (!platform_ddr_debug_write || platform_ddr_debug_addr != 32'h0000_0100 ||
         platform_ddr_debug_byte_enable != 16'h00ff ||
         platform_ddr_debug_wdata != 128'hfedc_ba98_7654_3210_89ab_cdef_0123_4567) begin
@@ -260,25 +263,31 @@ module tb_wavetable_spi_audio_system_debug;
     end
     platform_ddr_debug_ready = 1'b0;
     platform_ddr_debug_busy = 1'b1;
-    expect_read(16'h3064, 32'h0000_0025);
+    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0025);
     platform_ddr_debug_ready = 1'b1;
     platform_ddr_debug_busy = 1'b0;
     platform_ddr_debug_done = 1'b1;
     @(negedge clk);
     platform_ddr_debug_done = 1'b0;
-    expect_read(16'h3064, 32'h0000_002b);
-    expect_read(16'h3070, 32'h0123_4567);
-    expect_read(16'h3074, 32'h89ab_cdef);
-    expect_read(16'h3078, 32'h7654_3210);
-    expect_read(16'h307c, 32'hfedc_ba98);
-    spi_write_word(16'h3060, 32'h0000_0004);
-    expect_read(16'h3064, 32'h0000_0023);
-    spi_write_word(16'h3014, 32'h0000_003f);
+    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_002b);
+    expect_read(REG_DDR_DEBUG_DATA0, 32'h0123_4567);
+    expect_read(REG_DDR_DEBUG_DATA1, 32'h89ab_cdef);
+    expect_read(REG_DDR_DEBUG_DATA2, 32'h7654_3210);
+    expect_read(REG_DDR_DEBUG_DATA3, 32'hfedc_ba98);
+    spi_write_word(REG_DDR_DEBUG_CONTROL, REG_DDR_DEBUG_CONTROL_CLEAR_MASK);
+    expect_read(REG_DDR_DEBUG_STATUS, 32'h0000_0023);
+    spi_write_word(REG_DEBUG_EVENT_FLAGS,
+                   REG_DEBUG_EVENT_FLAGS_UNDERRUN_MASK |
+                   REG_DEBUG_EVENT_FLAGS_SAMPLE_DROP_MASK |
+                   REG_DEBUG_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK |
+                   REG_DEBUG_EVENT_FLAGS_MEM_HIT_MASK |
+                   REG_DEBUG_EVENT_FLAGS_MEM_MISS_MASK |
+                   REG_DEBUG_EVENT_FLAGS_MEM_RESPONSE_MASK);
     if (spi_error) begin
       $error("system debug flag clear unexpectedly reported error");
       errors++;
     end
-    expect_read(16'h3014, 32'h0000_0000);
+    expect_read(REG_DEBUG_EVENT_FLAGS, 32'h0000_0000);
 
     if (errors != 0)
       $fatal(1, "FAIL: wavetable_spi_audio_system_debug errors=%0d", errors);

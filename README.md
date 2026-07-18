@@ -95,6 +95,7 @@ fpga/                   Board-specific FPGA integration workspace
     assets/             Board asset notes; generated images stay in build/
 
 docs/                   Stable contracts and design/verification notes
+spec/                   Machine-readable register map source
 assets/                 Small checked-in SF2/MIDI inputs for simulation
 host/                   PC-side CH347/SPI control utility code
 tools/                  Python utilities for SF2/WTSF/WAV/Vivado summaries
@@ -149,6 +150,12 @@ Run RTL lint:
 
 ```bash
 make lint
+```
+
+Check that generated register-map headers match `spec/register_map.json`:
+
+```bash
+make check-register-map
 ```
 
 Build and execute the self-checking simulation:
