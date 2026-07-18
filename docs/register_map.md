@@ -9,13 +9,15 @@ into renderer-facing active storage and stages a render-boundary commit pulse fo
 phase reload and filter-history clear. Writes to runtime registers do not require
 `COMMIT`, update live runtime state directly, and do not reload playback phase.
 
-`spi_register_bridge` exposes this same register bus through a simple 56-bit SPI
-frame: 8-bit command, 16-bit byte address, then 32-bit data phase. Command bit 7
-selects write when set and read when clear; command bits 6:0 are reserved. Read
-data is shifted out most-significant bit first during the data phase. The SPI
-master must leave enough system-clock cycles between the address phase and read
-data phase for the bridge to complete the internal register-bus access. This is
-a simulation-friendly transport, not a board timing contract.
+Board-level adapters expose this same register bus through the selected physical
+transport. The current `fpga/common/rtl/spi_register_bridge.sv` adapter uses a
+simple 56-bit SPI frame: 8-bit command, 16-bit byte address, then 32-bit data
+phase. Command bit 7 selects write when set and read when clear; command bits
+6:0 are reserved. Read data is shifted out most-significant bit first during the
+data phase. The SPI master must leave enough system-clock cycles between the
+address phase and read data phase for the bridge to complete the internal
+register-bus access. This is a simulation-friendly transport, not a board timing
+contract.
 
 The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
 uses `0x0100 + N * 0x100` plus the offsets below.
@@ -121,12 +123,14 @@ filter group to runtime without a phase reload. Reads from `ENVELOPE_LEVEL`,
 runtime scalar state. `COMMIT` and `FILTER_COMMIT` read as zero. Unsupported
 addresses report a bus error.
 
-The system debug registers are implemented by `wavetable_spi_audio_system`, so they
-are visible through SPI in system-level and Smart Artix builds. In non-board
-system simulations, the platform fields read zero unless the testbench drives the
+The system debug registers are implemented by
+`fpga/common/rtl/wavetable_system_debug_regs.sv` and are composed into the
+current SPI/I2S system wrapper. They are visible through whichever board-level
+register transport is connected to that wrapper. In non-board system
+simulations, the platform fields read zero unless the testbench drives the
 platform status inputs. The debug window remains available while the playback
 core/audio path is held in `core_rst`; non-debug core register accesses during
-that reset return a bus error instead of stalling the SPI bridge.
+that reset return a bus error instead of stalling the transport bridge.
 
 All unspecified or reserved bits in the system debug registers read as zero. The
 status bits below are live snapshots unless explicitly marked sticky or counted.

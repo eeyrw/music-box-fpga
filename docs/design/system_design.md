@@ -30,9 +30,18 @@ Implemented RTL pieces:
   saturated stereo mixing.
 - Abstract one-word memory request/response interface.
 - Minimal one-line cache/burst adapter through `wave_memory_subsystem`.
-- Simulation-friendly SPI register transport through `spi_register_bridge`.
-- Fixed 48 kHz stereo I2S transmit path through `i2s_tx`.
-- Output sample FIFO and render-deadline observability in the full-system wrapper.
+- Output sample FIFO for wrappers that consume rendered PCM frames.
+
+Board/common wrapper pieces under `fpga/common/rtl` provide the current
+simulation and board-facing transport shape:
+
+- `spi_register_bridge` adapts SPI pins to the abstract register bus.
+- `fractional_tick_gen` derives sample and bit-clock ticks from a system clock.
+- `i2s_tx` serializes stereo PCM to I2S pins.
+- `wavetable_system_debug_regs` exposes system, audio, memory, and platform
+  observability registers.
+- `wavetable_spi_audio_system` composes those adapters around the generic
+  register-bus and line-memory core.
 
 ## Top-Level Variants
 
@@ -50,7 +59,7 @@ register bus -> voice_register_bank -> multi_voice_pipeline
 wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 ```
 
-`rtl/top/wavetable_spi_audio_system.sv` is the current pin-level simulation wrapper:
+`fpga/common/rtl/wavetable_spi_audio_system.sv` is the current pin-level wrapper:
 
 ```text
 SPI pins -> spi_register_bridge -> system debug registers
@@ -64,7 +73,7 @@ It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
 from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
 The system debug register window is implemented by
-`rtl/control/wavetable_system_debug_regs.sv`, which keeps status counters,
+`fpga/common/rtl/wavetable_system_debug_regs.sv`, which keeps status counters,
 render-latency accounting, and DDR debug-control registers out of the pin-level
 wrapper.
 

@@ -1,8 +1,8 @@
 # Music Box FPGA
 
 An open SystemVerilog wavetable synthesizer core. The project currently targets
-self-checking simulation paths for the core datapath, memory subsystem, SPI
-register transport, and I2S output before board-specific timing and synthesis are
+self-checking simulation paths for the core datapath, memory subsystem, and
+board-facing SPI/I2S adapter layer before board-specific timing and synthesis are
 introduced.
 
 The current milestone implements 32 stereo output voice slots with configurable
@@ -25,14 +25,15 @@ filtering, and saturated mixing.
 - Shared multi-voice rendering pipeline and saturated stereo mixer
 - Ready/valid abstract memory interface
 - Minimal line-cache memory subsystem and external line-read interface
-- SPI register bridge for simulation-friendly control transport
-- I2S transmitter for fixed 48 kHz stereo output
+- Transport-independent register bus for host, MCU, soft-core, or simulation control
+- Common board/peripheral adapters for SPI register transport and I2S output
 - One-cycle behavioral wave-memory model
 - Self-checking SystemVerilog regression test
 
 The current core intentionally does not implement board-level SPI electrical
-timing, physical NOR Flash timing, complete SF2 preset/modulator/velocity
-behavior, filter coefficient calculation, or vendor-specific FPGA logic.
+timing, physical NOR Flash timing, DDR controller timing, I2S codec integration,
+complete SF2 preset/modulator/velocity behavior, filter coefficient calculation,
+or vendor-specific FPGA logic.
 See [`docs/README.md`](docs/README.md) for the current documentation map and
 [`docs/design/system_design.md`](docs/design/system_design.md) for the architecture
 and roadmap notes.
@@ -53,9 +54,11 @@ Shadow Registers -> Commit -> Active Voice Configurations
                          LPF + Gain + Envelope + Mixer
                                     |
                   sample_valid + sample_l/sample_r
-                                     |
-                                  I2S TX
 ```
+
+Board wrappers connect the register bus to a physical control transport such as
+SPI, UART, or a soft-core bus, generate `sample_tick`, attach memory controllers,
+and serialize PCM to board audio pins when needed.
 
 PCM data is signed 16-bit. Playback phase uses unsigned Q16.16 sample-frame
 units, and channel gains use signed Q1.15. Mono waves contain one word per frame;
@@ -67,13 +70,12 @@ metadata. Detailed contracts are documented in [`docs/`](docs/).
 ```text
 rtl/                    Generic synthesizable SystemVerilog core
   pkg/                  Shared types and constants
-  bus/                  Register-bus protocol declarations and SPI bridge
   control/              Shadow, active, and runtime voice register storage
   memory/               Abstract line-cache memory subsystem
   voice/                Multi-voice phase, fetch, and render sequencing
   dsp/                  Interpolation, filters, gain, envelope, and mixing
-  audio/                Output FIFO, sample timing, and I2S transmitter
-  top/                  Reusable core wrappers for simulation and integration
+  audio/                Output FIFO for rendered PCM frames
+  top/                  Register-bus and line-memory core wrappers
 
 sim/                    Simulation-only code
   models/               Behavioral models that are not synthesis sources
@@ -81,6 +83,8 @@ sim/                    Simulation-only code
   harness/              C++ SF2/MIDI/reference render and RTL harness code
 
 fpga/                   Board-specific FPGA integration workspace
+  common/               Reusable board/peripheral adapters
+    rtl/                SPI bridge, debug regs, tick gen, I2S TX, pin wrapper
   board_template/       Starting point for future board ports
   smart_artix/          XC7A50T Smart Artix board path
     rtl/                Board adapters for SD, DDR3, debug, and top level
@@ -98,11 +102,14 @@ third_party/            External vendor support files kept separate
 build/                  Generated outputs only; ignored by Git
 ```
 
-Production RTL lives under `rtl/`. Board wrappers under `fpga/` may instantiate
-vendor IP and physical interfaces, but simulation models stay under `sim/` or the
-board-specific `fpga/<board>/sim/` directory and must not be added to synthesis
-file lists. Generated Vivado projects, reports, bitstreams, render output, and SD
-images are written below `build/`.
+The synthesizer core lives under `rtl/` and exposes abstract register, memory,
+and PCM/tick interfaces. Reusable physical-interface adapters live under
+`fpga/common/rtl`, while concrete board tops live under `fpga/<board>/rtl`.
+Board wrappers under `fpga/` may instantiate vendor IP and physical interfaces,
+but simulation models stay under `sim/` or the board-specific
+`fpga/<board>/sim/` directory and must not be added to synthesis file lists.
+Generated Vivado projects, reports, bitstreams, render output, and SD images are
+written below `build/`.
 
 Useful learning documents start at [`docs/README.md`](docs/README.md). Key entry
 points:
@@ -215,10 +222,11 @@ hit/miss/latency counters are written to `build/render_memory/memory_stats.json`
 or `parallel-nor`.
 
 `make render-full-system` is the pin-level integration path. The C++ harness uses
-an SPI master model to program the top-level SPI pins, serves the external line
-memory interface as a storage model, decodes the I2S output pins, and writes
-`build/render_full_system/out.wav` from that I2S receiver. The current full-system
-wrapper uses a `100 MHz` system clock and fractional 48 kHz audio timing.
+an SPI master model to program the top-level SPI pins of the common board
+wrapper, serves the external line memory interface as a storage model, decodes
+the I2S output pins, and writes `build/render_full_system/out.wav` from that I2S
+receiver. The current full-system wrapper uses a `100 MHz` system clock and
+fractional 48 kHz audio timing.
 
 `make render-board-loader` verifies the board asset-load path before rendering. It
 constructs a raw SD image from the selected SF2, drives the native-SD command/data
@@ -250,13 +258,15 @@ Python-generated SystemVerilog MIDI render flow has been removed.
 
 ## Current Register Interface
 
-The simulation bus is a single-beat 32-bit register interface with `valid`,
-`write`, `address`, `wdata`, `rdata`, `ready`, and `error` signals. Configuration
-writes modify shadow state for one voice slot. Writing that slot's commit
-register atomically replaces the active voice configuration. Runtime writes such
-as envelope, gain, pitch, and release do not require commit and are sampled at
-output-frame render boundaries. `spi_register_bridge` provides a simple SPI
-transport for this bus using an 8-bit command, 16-bit byte address, and 32-bit
+The core bus is a single-beat 32-bit register interface with `valid`, `write`,
+`address`, `wdata`, `rdata`, `ready`, and `error` signals. Configuration writes
+modify shadow state for one voice slot. Writing that slot's commit register
+atomically replaces the active voice configuration. Runtime writes such as
+envelope, gain, pitch, and release do not require commit and are sampled at
+output-frame render boundaries. `fpga/common/rtl/spi_register_bridge.sv`
+provides one simple SPI transport for this bus using an 8-bit command, 16-bit
+byte address, and 32-bit data phase; future UART or bus adapters should target
+the same abstract register-bus contract.
 
 See [the register map](docs/register_map.md) for addresses and validation rules.
 

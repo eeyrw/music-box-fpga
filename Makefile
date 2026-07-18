@@ -29,7 +29,6 @@ RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
-	rtl/bus/spi_register_bridge.sv \
 	rtl/control/voice_active_store.sv \
 	rtl/control/voice_bram_1r1w.sv \
 	rtl/control/voice_bram_1w2r.sv \
@@ -37,20 +36,23 @@ RTL_SOURCES := \
 	rtl/control/voice_descriptor_store.sv \
 	rtl/control/voice_runtime_store.sv \
 	rtl/control/voice_register_bank.sv \
-	rtl/control/wavetable_system_debug_regs.sv \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/dsp/voice_dsp_pipeline.sv \
-	rtl/audio/fractional_tick_gen.sv \
 	rtl/audio/output_sample_fifo.sv \
-	rtl/audio/i2s_tx.sv \
 	rtl/voice/voice_phase_frame.sv \
 	rtl/voice/voice_endpoint_fetch.sv \
 	rtl/voice/multi_voice_pipeline.sv \
 	rtl/top/wavetable_render_core.sv \
-	rtl/top/wavetable_line_memory_core.sv \
-	rtl/top/wavetable_spi_audio_system.sv
+	rtl/top/wavetable_line_memory_core.sv
+
+FPGA_COMMON_RTL_SOURCES := \
+	fpga/common/rtl/fractional_tick_gen.sv \
+	fpga/common/rtl/spi_register_bridge.sv \
+	fpga/common/rtl/wavetable_system_debug_regs.sv \
+	fpga/common/rtl/i2s_tx.sv \
+	fpga/common/rtl/wavetable_spi_audio_system.sv
 
 SIM_SOURCES := \
 	sim/models/line_memory_model.sv \
@@ -118,9 +120,9 @@ lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_line_memory_core $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_spi_audio_system $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_spi_audio_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 
 test:
 	mkdir -p $(BUILD_DIR)
@@ -152,7 +154,7 @@ test:
 	$(BUILD_DIR)/obj_dir/V$(TOP)
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
-		$(RTL_SOURCES) $(SPI_SIM_SOURCES)
+		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SPI_SIM_SOURCES)
 	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
@@ -160,11 +162,11 @@ test:
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
-		$(RTL_SOURCES) $(I2S_SIM_SOURCES)
+		rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/system_debug_obj_dir --top-module tb_wavetable_spi_audio_system_debug \
-		$(RTL_SOURCES) $(SYSTEM_DEBUG_SIM_SOURCES)
+		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SYSTEM_DEBUG_SIM_SOURCES)
 	$(BUILD_DIR)/system_debug_obj_dir/Vtb_wavetable_spi_audio_system_debug
 
 smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
@@ -275,7 +277,7 @@ render-full-system:
 	mkdir -p $(RENDER_FULL_SYSTEM_OUT_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_spi_audio_system \
-		$(RTL_SOURCES) --exe \
+		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) --exe \
 		$(abspath sim/harness/render_full_system_main.cpp) \
 		$(abspath sim/harness/render_support.cpp) \
 		$(abspath sim/harness/register_control.cpp) \

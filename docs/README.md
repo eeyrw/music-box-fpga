@@ -35,6 +35,11 @@ subdirectories.
 
 ## Board Integration
 
+- [`../fpga/README.md`](../fpga/README.md): board workspace layout, generic core
+  source list, and common adapter source list.
+- [`../fpga/common/README.md`](../fpga/common/README.md): reusable board-facing
+  RTL boundary for transports, debug windows, tick generation, and audio
+  serializers.
 - [`board/smart_artix_target.md`](board/smart_artix_target.md): Smart Artix board
   assumptions, integration boundary, Vivado snapshots, and milestone state.
 - [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical
