@@ -19,7 +19,7 @@ generic core you want to include:
 | `wavetable_cached_render_core` | `rtl/top/wavetable_cached_render_core.sv` | You want the generic render core plus the current one-line wave-memory cache. It exposes the register bus, `sample_tick`, mixed PCM output, and an external line-read interface. |
 | `wavetable_system_core` | `fpga/common/rtl/wavetable_system_core.sv` | You want the render core and line-memory adapter as a reusable board-facing system block with an abstract register bus and PCM frame output, but without SPI or I2S. |
 | `wavetable_i2s_output` | `fpga/common/rtl/wavetable_i2s_output.sv` | You want to adapt a PCM frame stream to the current FIFO-backed I2S transmitter. |
-| `wavetable_demo_system` | `fpga/common/rtl/wavetable_demo_system.sv` | You want the current pin-level demo composition that wires SPI control, debug registers, the reusable system core, and I2S output together. |
+| `wavetable_demo_system` | `fpga/common/rtl/wavetable_demo_system.sv` | You want the current pin-level demo composition that wires SPI control, common status registers, the reusable system core, and I2S output together. |
 
 For most generic RTL work, start at `wavetable_render_core`. For memory-adapter
 work, start at `wavetable_cached_render_core` or `wave_memory_subsystem`. For
@@ -95,25 +95,25 @@ wavetable_i2s_output
 +- i2s_tx
 ```
 
-The demo board/common wrapper adds transport, debug, tick generation, and I2S
-around those reusable blocks. It also exposes a debug-register extension hook
+The demo board/common wrapper adds transport, status registers, tick generation, and I2S
+around those reusable blocks. It also exposes a platform-register extension hook
 that board wrappers can use for platform-specific status windows:
 
 ```text
 wavetable_demo_system
-+- wavetable_system_debug_regs
++- wavetable_common_status_regs
 +- spi_register_bridge
 +- fractional_tick_gen
 +- wavetable_system_core
 +- wavetable_i2s_output
 ```
 
-`spi_register_bridge`, `wavetable_system_debug_regs`, `fractional_tick_gen`,
+`spi_register_bridge`, `wavetable_common_status_regs`, `fractional_tick_gen`,
 `i2s_tx`, `wavetable_system_core`, `wavetable_i2s_output`, and
 `wavetable_demo_system` live under `fpga/common/rtl/`, not under generic `rtl/`.
 
 The current Smart Artix board top keeps SD loading, DDR3 arbitration, line reads,
-and DDR debug traffic behind a board-specific subsystem:
+and DDR register access traffic behind a board-specific subsystem:
 
 ```text
 smart_artix_top
@@ -124,9 +124,9 @@ smart_artix_top
 |  |  +- smart_artix_asset_loader
 |  |  +- smart_artix_ddr3_asset_writer
 |  +- smart_artix_ddr3_rw_arbiter
-|  +- smart_artix_ddr3_debug_master
+|  +- smart_artix_ddr3_reg_access_master
 |  +- smart_artix_ddr3_line_reader
-+- smart_artix_platform_debug_regs
++- smart_artix_platform_regs
 +- wavetable_demo_system
 ```
 
@@ -150,8 +150,8 @@ after changing the JSON spec.
 Board-facing packages stay with their board integration code instead of the
 generic package layer. For example, `fpga/smart_artix/rtl/smart_artix_pkg.sv`
 owns the Smart Artix DDR3 app-channel structs, line-read request/response
-structs, platform status, and DDR debug request/status structs used between
-`smart_artix_top`, `smart_artix_ddr3_subsystem`, and the board debug adapter.
+structs, platform status, and DDR register access request/status structs used between
+`smart_artix_top`, `smart_artix_ddr3_subsystem`, and the board register inspection adapter.
 
 ## Control Layer
 

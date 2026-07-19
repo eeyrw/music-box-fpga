@@ -61,7 +61,8 @@ RTL_SOURCES := \
 FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/fractional_tick_gen.sv \
 	fpga/common/rtl/spi_register_bridge.sv \
-	fpga/common/rtl/wavetable_system_debug_regs.sv \
+	fpga/common/rtl/wavetable_register_fabric.sv \
+	fpga/common/rtl/wavetable_common_status_regs.sv \
 	fpga/common/rtl/i2s_tx.sv \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
@@ -83,8 +84,8 @@ MEMORY_SIM_SOURCES := \
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
-SYSTEM_DEBUG_SIM_SOURCES := \
-	sim/tb/tb_wavetable_demo_system_debug.sv
+COMMON_STATUS_SIM_SOURCES := \
+	sim/tb/tb_wavetable_demo_common_status.sv
 
 VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
@@ -114,11 +115,11 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
-	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
+	fpga/smart_artix/rtl/smart_artix_ddr3_reg_access_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_subsystem.sv \
-	fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv
+	fpga/smart_artix/rtl/smart_artix_platform_regs.sv
 
 SMART_ARTIX_SIM_MODELS := \
 	fpga/common/sim/fake_sd_native_phy_model.sv \
@@ -130,11 +131,11 @@ SMART_ARTIX_WITH_CORE_RTL_SOURCES := \
 SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_asset_loader \
 	tb_smart_artix_ddr3_asset_writer \
-	tb_smart_artix_ddr3_debug_master \
+	tb_smart_artix_ddr3_reg_access_master \
 	tb_smart_artix_ddr3_line_reader \
 	tb_smart_artix_ddr3_rw_arbiter \
 	tb_smart_artix_mig_stub \
-	tb_smart_artix_platform_debug_regs \
+	tb_smart_artix_platform_regs \
 	tb_smart_artix_sd_native_asset_loader \
 	tb_sd_native_block_reader \
 	tb_sd_native_block_reader_fake \
@@ -211,9 +212,9 @@ test-rtl-peripheral:
 		rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/system_debug_obj_dir --top-module tb_wavetable_demo_system_debug \
-		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SYSTEM_DEBUG_SIM_SOURCES)
-	$(BUILD_DIR)/system_debug_obj_dir/Vtb_wavetable_demo_system_debug
+		--Mdir $(BUILD_DIR)/common_status_obj_dir --top-module tb_wavetable_demo_common_status \
+		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(COMMON_STATUS_SIM_SOURCES)
+	$(BUILD_DIR)/common_status_obj_dir/Vtb_wavetable_demo_common_status
 
 smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
 

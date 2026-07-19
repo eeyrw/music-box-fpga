@@ -7,7 +7,7 @@ Use this layer for adapters that bind the core's abstract contracts to physical
 or system-integration details:
 
 - register transports such as SPI, UART, or soft-core buses,
-- board/system debug register windows,
+- board/common status register windows,
 - sample or serial-clock tick generation,
 - audio serializers such as I2S,
 - reusable SD native command/pin adapters that do not depend on a board memory

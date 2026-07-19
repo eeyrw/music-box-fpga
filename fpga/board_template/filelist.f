@@ -22,7 +22,7 @@
 # Common board/peripheral RTL.
 ../common/rtl/fractional_tick_gen.sv
 ../common/rtl/spi_register_bridge.sv
-../common/rtl/wavetable_system_debug_regs.sv
+../common/rtl/wavetable_common_status_regs.sv
 ../common/rtl/i2s_tx.sv
 ../common/rtl/wavetable_system_core.sv
 ../common/rtl/wavetable_i2s_output.sv

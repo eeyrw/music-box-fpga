@@ -5,9 +5,9 @@ module smart_artix_ddr3_rw_arbiter (
   input  smart_artix_pkg::mig_app_command_t    read_command,
   output smart_artix_pkg::mig_app_response_t   read_response,
 
-  input  smart_artix_pkg::mig_app_command_t    debug_command,
-  input  smart_artix_pkg::mig_app_write_data_t debug_write_data,
-  output smart_artix_pkg::mig_app_response_t   debug_response,
+  input  smart_artix_pkg::mig_app_command_t    reg_access_command,
+  input  smart_artix_pkg::mig_app_write_data_t reg_access_write_data,
+  output smart_artix_pkg::mig_app_response_t   reg_access_response,
 
   input  smart_artix_pkg::mig_app_command_t    write_command,
   input  smart_artix_pkg::mig_app_write_data_t write_data,
@@ -23,7 +23,7 @@ module smart_artix_ddr3_rw_arbiter (
   typedef enum logic [1:0] {
     OWNER_NONE,
     OWNER_READ,
-    OWNER_DEBUG,
+    OWNER_REG_ACCESS,
     OWNER_WRITE
   } owner_t;
 
@@ -47,8 +47,8 @@ module smart_artix_ddr3_rw_arbiter (
       cmd_owner = write_owner;
     end else if (read_command.en && read_owner == OWNER_NONE) begin
       cmd_owner = OWNER_READ;
-    end else if (debug_command.en && read_owner == OWNER_NONE) begin
-      cmd_owner = OWNER_DEBUG;
+    end else if (reg_access_command.en && read_owner == OWNER_NONE) begin
+      cmd_owner = OWNER_REG_ACCESS;
     end else if (write_command.en) begin
       cmd_owner = OWNER_WRITE;
     end
@@ -57,7 +57,7 @@ module smart_artix_ddr3_rw_arbiter (
   always_comb begin
     unique case (cmd_owner)
       OWNER_READ: mig_app_command = read_command;
-      OWNER_DEBUG: mig_app_command = debug_command;
+      OWNER_REG_ACCESS: mig_app_command = reg_access_command;
       OWNER_WRITE: mig_app_command = write_command;
       default: mig_app_command = '0;
     endcase
@@ -70,8 +70,8 @@ module smart_artix_ddr3_rw_arbiter (
     wdf_owner = OWNER_NONE;
     if (write_owner != OWNER_NONE) begin
       wdf_owner = write_owner;
-    end else if (cmd_owner == OWNER_DEBUG && debug_command.cmd == MIG_CMD_WRITE && debug_write_data.wren) begin
-      wdf_owner = OWNER_DEBUG;
+    end else if (cmd_owner == OWNER_REG_ACCESS && reg_access_command.cmd == MIG_CMD_WRITE && reg_access_write_data.wren) begin
+      wdf_owner = OWNER_REG_ACCESS;
     end else if (cmd_owner == OWNER_WRITE && write_command.cmd == MIG_CMD_WRITE && write_data.wren) begin
       wdf_owner = OWNER_WRITE;
     end
@@ -79,7 +79,7 @@ module smart_artix_ddr3_rw_arbiter (
 
   always_comb begin
     unique case (wdf_owner)
-      OWNER_DEBUG: mig_app_write_data = debug_write_data;
+      OWNER_REG_ACCESS: mig_app_write_data = reg_access_write_data;
       OWNER_WRITE: mig_app_write_data = write_data;
       default: mig_app_write_data = '0;
     endcase
@@ -101,24 +101,24 @@ module smart_artix_ddr3_rw_arbiter (
 
   always_comb begin
     read_response = '0;
-    debug_response = '0;
+    reg_access_response = '0;
     write_response = '0;
 
     read_response.rdy = (cmd_owner == OWNER_READ) ? mig_app_response.rdy : 1'b0;
-    debug_response.rdy = (cmd_owner == OWNER_DEBUG) ? mig_app_response.rdy : 1'b0;
+    reg_access_response.rdy = (cmd_owner == OWNER_REG_ACCESS) ? mig_app_response.rdy : 1'b0;
     write_response.rdy = (cmd_owner == OWNER_WRITE) ? mig_app_response.rdy : 1'b0;
 
-    debug_response.wdf_rdy = (wdf_owner == OWNER_DEBUG) ? mig_app_response.wdf_rdy : 1'b0;
+    reg_access_response.wdf_rdy = (wdf_owner == OWNER_REG_ACCESS) ? mig_app_response.wdf_rdy : 1'b0;
     write_response.wdf_rdy = (wdf_owner == OWNER_WRITE) ? mig_app_response.wdf_rdy : 1'b0;
 
     read_response.rd_data = mig_app_response.rd_data;
-    debug_response.rd_data = mig_app_response.rd_data;
+    reg_access_response.rd_data = mig_app_response.rd_data;
     write_response.rd_data = mig_app_response.rd_data;
 
     read_response.rd_data_valid = (read_owner == OWNER_READ) ? mig_app_response.rd_data_valid : 1'b0;
     read_response.rd_data_end = (read_owner == OWNER_READ) ? mig_app_response.rd_data_end : 1'b0;
-    debug_response.rd_data_valid = (read_owner == OWNER_DEBUG) ? mig_app_response.rd_data_valid : 1'b0;
-    debug_response.rd_data_end = (read_owner == OWNER_DEBUG) ? mig_app_response.rd_data_end : 1'b0;
+    reg_access_response.rd_data_valid = (read_owner == OWNER_REG_ACCESS) ? mig_app_response.rd_data_valid : 1'b0;
+    reg_access_response.rd_data_end = (read_owner == OWNER_REG_ACCESS) ? mig_app_response.rd_data_end : 1'b0;
   end
 
   always_ff @(posedge clk) begin

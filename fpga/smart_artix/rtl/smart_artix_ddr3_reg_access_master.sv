@@ -1,4 +1,4 @@
-module smart_artix_ddr3_debug_master (
+module smart_artix_ddr3_reg_access_master (
   input  logic                         clk,
   input  logic                         rst,
 

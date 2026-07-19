@@ -55,12 +55,12 @@ change.
 - [`../fpga/README.md`](../fpga/README.md): board workspace layout, expected board
   directory contents, and synthesis source-list guidance.
 - [`../fpga/common/README.md`](../fpga/common/README.md): reusable board-facing RTL
-  boundary for transports, debug windows, tick generation, and audio serializers.
+  boundary for transports, platform register windows, tick generation, and audio serializers.
 - [`../fpga/smart_artix/README.md`](../fpga/smart_artix/README.md): Smart Artix
   board assumptions, current top, Vivado flow/status, resource notes, and local
   checks.
 - [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical Smart
-  Artix hardware bring-up sequence and debug checklist.
+  Artix hardware bring-up sequence and bring-up checklist.
 - [`board/asset_loading.md`](board/asset_loading.md): SD raw-image to DDR3 asset
   loading contract and Smart Artix loader blocks.
 

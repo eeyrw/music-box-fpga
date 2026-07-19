@@ -62,7 +62,7 @@ package smart_artix_pkg;
     logic [31:0]          addr;
     logic [LINE_BITS-1:0] wdata;
     logic [LINE_BYTES-1:0] byte_enable;
-  } ddr_debug_request_t;
+  } ddr_reg_access_request_t;
 
   typedef struct packed {
     logic                 ready;
@@ -70,5 +70,5 @@ package smart_artix_pkg;
     logic                 done;
     logic                 error;
     logic [LINE_BITS-1:0] rdata;
-  } ddr_debug_status_t;
+  } ddr_reg_access_status_t;
 endpackage

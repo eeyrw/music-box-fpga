@@ -3,14 +3,14 @@
 This document turns the current Smart Artix board integration state into a
 hardware bring-up procedure. It assumes the `fpga/smart_artix/` top level is the
 target image and that the first board goal is to prove the platform path before
-debugging musical behavior.
+bringing up musical behavior.
 
 The intended order is:
 
 ```text
 Vivado bitstream
   -> clock/reset and DDR3 calibration
-  -> SPI debug-window reads
+  -> SPI status-register reads
   -> SD raw-image load into DDR3
   -> one programmed voice
   -> I2S electrical/audio smoke test
@@ -30,9 +30,9 @@ host, MCU, or later soft-processor responsibilities.
 - `wavetable_demo_system`, clocked by MIG `ui_clk`.
 - native 4-bit SD asset loading into DDR3.
 - DDR3 read/write arbitration between asset-loader writes and wavetable reads.
-- SPI register control and system debug registers.
+- SPI register control and common status registers.
 - fixed-rate 48 kHz I2S transmit output.
-- debug LED outputs for SPI errors, audio underrun/drop/deadline events, asset
+- status LED outputs for SPI errors, audio underrun/drop/deadline events, asset
   load completion, and loader errors.
 
 The generic core and the MIG application interface intentionally stay in the
@@ -47,7 +47,7 @@ The first hardware image should prove these contracts:
   Wizard and MIG IP.
 - The board oscillator, reset input, and MIG DDR3 connection allow
   `init_calib_complete` to assert.
-- The SPI transport can read the system debug window after the MIG UI clock is
+- The SPI transport can read the common status window after the MIG UI clock is
   available.
 - The SD raw-image loader can initialize an SDHC or SDXC card, parse the `WTSF`
   sector-0 header, and copy the SF2 byte image into DDR3.
@@ -74,7 +74,7 @@ Required checks:
 - Confirm `clk_in` is the board `50 MHz` oscillator pin and that the Clocking
   Wizard XDC owns the primary clock constraint.
 - Confirm `rst_n` source and polarity. The board top expects active-low reset.
-- Confirm SPI, I2S, SD, and debug LED pins against the schematic and connector
+- Confirm SPI, I2S, SD, and status LED pins against the schematic and connector
   pinout.
 - Confirm I/O standards and bank voltages. The skeleton uses `LVCMOS33` for
   non-DDR I/O.
@@ -121,7 +121,7 @@ Expected intent:
   and compares rendered samples against the C++ fixed-point reference.
 
 These tests do not prove board pin timing or DDR3 electrical behavior. They are
-the regression floor before hardware debugging starts.
+the regression floor before hardware bring-up starts.
 
 ## Vivado Flow
 
@@ -168,13 +168,13 @@ Keep the first power-on observation simple:
 - Confirm DDR3 calibration eventually completes.
 - Watch `led_loader_error` and `led_asset_loaded` if those outputs are pinned.
 
-The current SPI debug window is clocked from MIG `ui_clk`. It is available only
-after the MIG UI clock exists and the system reset is released. If DDR3
-calibration never completes, expect SPI debug reads to fail or stay unavailable.
-A future always-on debug island would need a separate clock domain and CDC status
-snapshots.
+The current SPI platform register window is clocked from MIG `ui_clk`. It is
+available only after the MIG UI clock exists and the system reset is released.
+If DDR3 calibration never completes, expect SPI reg reads to fail or stay
+unavailable. A future always-on status island would need a separate clock domain
+and CDC status snapshots.
 
-## SPI Debug Smoke Test
+## SPI Status Smoke Test
 
 Build the CH347 host tools:
 
@@ -207,11 +207,11 @@ The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
 maps `--device 0` to that path for convenience. The copied x64 vendor library is
 used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
-`build/smart_artix_bringup` reads the same debug registers as a staged checklist,
-decodes the status bits, and exits nonzero when a required stage fails. If CH347
-is connected to the host but not to a valid FPGA SPI target, MISO may read back
-as all ones. The runner detects the common `0xffff_ffff` snapshot and reports
-that CH347 is present but no FPGA SPI target responded.
+`build/smart_artix_bringup` reads the same common status registers as a staged
+checklist, decodes the status bits, and exits nonzero when a required stage
+fails. If CH347 is connected to the host but not to a valid FPGA SPI target,
+MISO may read back as all ones. The runner detects the common `0xffff_ffff`
+snapshot and reports that CH347 is present but no FPGA SPI target responded.
 
 The useful first reads are:
 
@@ -219,7 +219,7 @@ The useful first reads are:
 | --- | --- | --- |
 | `0x3000` | `VERSION` | Proves SPI can reach the register map. |
 | `0x3010` | `SYSTEM_STATUS` | Shows core, FIFO, I2S, and external-memory handshake state. |
-| `0x3014` | `DEBUG_EVENT_FLAGS` | Shows sticky underrun/drop/deadline/memory events. |
+| `0x3014` | `COMMON_EVENT_FLAGS` | Shows sticky underrun/drop/deadline/memory events. |
 | `0x3018` | `AUDIO_STATUS` | Shows FIFO level and sticky audio errors. |
 | `0x3020` | `MEMORY_STATUS` | Shows cache/memory request status and response latency. |
 | `0x3040` | `PLATFORM_STATUS` | Main DDR/SD/asset-loader status word. |
@@ -228,12 +228,12 @@ The useful first reads are:
 | `0x3050` | `PLATFORM_SF2_SIZE` | SF2 byte count from the raw header. |
 | `0x3058` | `PLATFORM_CURRENT_LBA` | Current sector being loaded. |
 | `0x305c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
-| `0x3060`..`0x307c` | `DDR_DEBUG_*` | Single-beat DDR read/write debug window. |
+| `0x3060`..`0x307c` | `DDR_ACCESS_*` | Single-beat DDR read/write platform register window. |
 
 `PLATFORM_STATUS` bit meanings:
 
 ```text
-bit 0      debug window present
+bit 0      platform register window present
 bit 1      SD or loader error present
 bit 2      DDR calibration complete
 bit 3      DDR UI reset
@@ -262,8 +262,8 @@ code identifies raw `WTSF` header validation, size/range checks, or DDR writer
 failure.
 
 After `PLATFORM_DDR_STATUS[0]` reports calibration complete and
-`DDR_DEBUG_STATUS.ready` is set, use the DDR debug wrapper in the CH347 tool to
-prove direct DDR access before depending on SD-loaded data:
+`DDR_ACCESS_STATUS.ready` is set, use the DDR register-access wrapper in the
+CH347 tool to prove direct DDR access before depending on SD-loaded data:
 
 ```bash
 # Staged runner form. This writes one 16-byte DDR beat at the selected address.
@@ -283,11 +283,11 @@ build/ch347_control --device 0 \
   --ddr-read 0x00000100
 ```
 
-Each DDR debug command accesses one 128-bit MIG beat, which is 16 bytes in the
-current Smart Artix build. To inspect or patch 128 bytes, run eight commands and
-increment the address by `0x10` each time. The address must be 16-byte aligned;
-an unaligned command or a write with `--ddr-byte-enable 0` reports an error and
-does not access DDR.
+Each DDR register-access command accesses one 128-bit MIG beat, which is 16
+bytes in the current Smart Artix build. To inspect or patch 128 bytes, run eight
+commands and increment the address by `0x10` each time. The address must be
+16-byte aligned; an unaligned command or a write with `--ddr-byte-enable 0`
+reports an error and does not access DDR.
 
 ## SD Raw Image Bring-Up
 
@@ -373,14 +373,14 @@ Start with:
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
 The minimal write order is documented in `../register_map.md` under `Note On`.
-For board debug, read the normal per-voice register addresses to verify shadow
+For board register inspection, read the normal per-voice register addresses to verify shadow
 configuration and live runtime scalar state.
 
 If audio is silent after the voice commit:
 
 - Read `AUDIO_STATUS`, `RENDER_STATUS`, and `MEMORY_STATUS`.
 - Check whether `MEMORY_STATUS` shows line-memory requests and memory responses.
-- Check `DEBUG_EVENT_FLAGS` for underrun, sample drop, or render deadline miss.
+- Check `COMMON_EVENT_FLAGS` for underrun, sample drop, or render deadline miss.
 - Confirm the programmed `BASE_ADDR` includes the SF2 `smpl` payload offset and is
   expressed as a 16-bit word address.
 - Confirm `LENGTH` is nonzero and loop fields are valid for the selected loop

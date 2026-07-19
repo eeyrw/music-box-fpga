@@ -20,8 +20,8 @@ module wavetable_cached_render_core #(
   output logic [31:0]              ext_req_addr,
   input  logic                     ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0] ext_rsp_data,
-  output logic                     mem_debug_response_pulse,
-  output logic [15:0]              mem_debug_response_latency
+  output logic                     mem_response_trace_pulse,
+  output logic [15:0]              mem_response_trace_latency
 );
   logic mem_req_valid;
   logic [31:0] mem_req_addr;
@@ -64,7 +64,7 @@ module wavetable_cached_render_core #(
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .debug_response_pulse(mem_debug_response_pulse),
-    .debug_response_latency(mem_debug_response_latency)
+    .response_trace_pulse(mem_response_trace_pulse),
+    .response_trace_latency(mem_response_trace_latency)
   );
 endmodule

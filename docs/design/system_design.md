@@ -42,13 +42,13 @@ simulation and board-facing transport shape:
   byte-stream reader.
 - `sd_native_pin_phy` implements the reusable native-SD FPGA-pin PHY above
   `SD_CLK`, `CMD`, and `DAT[3:0]`.
-- `wavetable_system_debug_regs` exposes system, audio, memory, and render-latency
+- `wavetable_common_status_regs` exposes system, audio, memory, and render-latency
   observability registers.
 - `wavetable_system_core` exposes the line-memory render core behind an abstract
   register bus and PCM frame output, without SPI or I2S transport.
 - `wavetable_i2s_output` adapts PCM frames through the output FIFO and I2S
   serializer.
-- `wavetable_demo_system` composes SPI control, debug registers, sample-clock
+- `wavetable_demo_system` composes SPI control, common status registers, sample-clock
   generation, the reusable system core, and the I2S output adapter for the
   current pin-level demo path.
 
@@ -88,26 +88,27 @@ PCM frames -> output_sample_fifo -> i2s_tx -> I2S pins
 `fpga/common/rtl/wavetable_demo_system.sv` is the current pin-level demo wrapper:
 
 ```text
-SPI pins -> spi_register_bridge -> system debug registers
-                              \-> external board debug registers
+SPI pins -> spi_register_bridge -> common status registers
+                              \-> platform register window
                               \-> wavetable_system_core -> wavetable_i2s_output
 ```
 
 It defaults to a `100 MHz` system clock and derives `sample_tick` and I2S timing
 from fractional phase-accumulator dividers. It is a simulation integration wrapper, not a board
 constraint or PLL specification.
-The system debug register window is implemented by
-`fpga/common/rtl/wavetable_system_debug_regs.sv`, which keeps status counters,
+The common status register window is implemented by
+`fpga/common/rtl/wavetable_common_status_regs.sv`, which keeps status counters,
 render-latency accounting, and memory-cache counters out of the pin-level
-wrapper. Board-specific platform status and DDR debug-control registers are
+wrapper. Board-specific platform status and DDR register-access registers are
 implemented outside the common wrapper; the Smart Artix board uses
-`fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv`.
+`fpga/smart_artix/rtl/smart_artix_platform_regs.sv`.
 
-The wrapper has two reset levels. `rst` resets the SPI bridge and system debug
+The wrapper has two reset levels. `rst` resets the SPI bridge and common status
 registers. `core_rst` resets only playback-facing blocks: sample tick generation,
 the memory-backed core, output FIFO, I2S transmitter, and render-latency state.
-Debug registers remain readable while `core_rst` is asserted; non-debug core
-register accesses return a bus error rather than holding the SPI transaction open.
+Common status registers remain readable while `core_rst` is asserted; core
+register-window accesses return a bus error rather than holding the SPI
+transaction open.
 
 ## Rendering Pipeline
 
@@ -266,7 +267,7 @@ the generic RTL to one vendor flow.
    state, runtime filter coefficients, and runtime phase/gain/envelope state into
    inferred RAM. Per-voice configuration and runtime registers are directly
    readable through multi-cycle synchronous bus reads instead of through a
-   separate debug indirection. Further savings for one-bit runtime release
+   separate status-read indirection. Further savings for one-bit runtime release
    and filter-enable state should be handled only if post-implementation resource
    or timing data justifies the added control complexity.
 

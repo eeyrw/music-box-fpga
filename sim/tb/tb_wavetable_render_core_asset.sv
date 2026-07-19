@@ -45,8 +45,8 @@ module tb_wavetable_render_core_asset;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
   logic [8*16-1:0] ext_rsp_data;
-  logic mem_debug_response_pulse;
-  logic [15:0] mem_debug_response_latency;
+  logic mem_response_trace_pulse;
+  logic [15:0] mem_response_trace_latency;
   logic unused_status;
   int pcm_fd;
   int produced;
@@ -57,8 +57,8 @@ module tb_wavetable_render_core_asset;
 
   // Keep Verilator from warning about observed-but-unused status outputs. The
   // render harness does not need to inspect read data or busy status.
-  assign unused_status = |bus_rdata | busy | mem_debug_response_pulse |
-                         (|mem_debug_response_latency);
+  assign unused_status = |bus_rdata | busy | mem_response_trace_pulse |
+                         (|mem_response_trace_latency);
 
   wavetable_render_core dut (.*);
 
@@ -75,8 +75,8 @@ module tb_wavetable_render_core_asset;
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .debug_response_pulse(mem_debug_response_pulse),
-    .debug_response_latency(mem_debug_response_latency)
+    .response_trace_pulse(mem_response_trace_pulse),
+    .response_trace_latency(mem_response_trace_latency)
   );
 
   line_memory_model #(.DEPTH(RENDER_MEMORY_DEPTH), .LINE_WORDS(8), .LATENCY(4)) memory_model (

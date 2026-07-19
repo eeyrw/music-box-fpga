@@ -13,8 +13,8 @@ module wave_memory_subsystem #(
   output logic [31:0]                     ext_req_addr,
   input  logic                            ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0]        ext_rsp_data,
-  output logic                            debug_response_pulse,
-  output logic [15:0]                     debug_response_latency
+  output logic                            response_trace_pulse,
+  output logic [15:0]                     response_trace_latency
 );
   import synth_pkg::*;
 
@@ -58,11 +58,11 @@ module wave_memory_subsystem #(
       latency_counter <= '0;
       core_rsp_valid <= 1'b0;
       core_rsp_data <= '0;
-      debug_response_pulse <= 1'b0;
-      debug_response_latency <= '0;
+      response_trace_pulse <= 1'b0;
+      response_trace_latency <= '0;
     end else begin
       core_rsp_valid <= 1'b0;
-      debug_response_pulse <= 1'b0;
+      response_trace_pulse <= 1'b0;
 
       unique case (state)
         STATE_IDLE: begin
@@ -97,8 +97,8 @@ module wave_memory_subsystem #(
 
         STATE_RESPOND: begin
           core_rsp_valid <= 1'b1;
-          debug_response_pulse <= 1'b1;
-          debug_response_latency <= latency_counter;
+          response_trace_pulse <= 1'b1;
+          response_trace_latency <= latency_counter;
           state <= STATE_IDLE;
         end
 

@@ -22,7 +22,7 @@ read_verilog -sv ../../rtl/top/wavetable_render_core.sv
 read_verilog -sv ../../rtl/top/wavetable_cached_render_core.sv
 read_verilog -sv ../common/rtl/fractional_tick_gen.sv
 read_verilog -sv ../common/rtl/spi_register_bridge.sv
-read_verilog -sv ../common/rtl/wavetable_system_debug_regs.sv
+read_verilog -sv ../common/rtl/wavetable_common_status_regs.sv
 read_verilog -sv ../common/rtl/i2s_tx.sv
 read_verilog -sv ../common/rtl/wavetable_system_core.sv
 read_verilog -sv ../common/rtl/wavetable_i2s_output.sv

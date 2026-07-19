@@ -64,8 +64,8 @@ module smart_artix_top (
   logic                     render_deadline_miss_pulse;
   logic [15:0]              render_latency_cycles;
   logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level;
-  logic                     mem_debug_response_pulse;
-  logic [15:0]              mem_debug_response_latency;
+  logic                     mem_response_trace_pulse;
+  logic [15:0]              mem_response_trace_latency;
   logic                     mig_init_calib_complete;
   smart_artix_pkg::mig_app_command_t mig_app_command;
   smart_artix_pkg::mig_app_write_data_t mig_app_write_data;
@@ -79,15 +79,16 @@ module smart_artix_top (
   logic                     sd_cmd_o;
   logic                     sd_cmd_oe;
   logic                     sd_cmd_i;
-  logic                     debug_bus_valid;
-  logic                     debug_bus_write;
-  logic [15:0]              debug_bus_address;
-  logic [31:0]              debug_bus_wdata;
-  logic                     platform_debug_access;
-  logic [31:0]              platform_debug_rdata;
+  logic                     platform_regs_bus_valid;
+  logic                     platform_regs_bus_write;
+  logic [15:0]              platform_regs_bus_address;
+  logic [31:0]              platform_regs_bus_wdata;
+  logic [31:0]              platform_regs_bus_rdata;
+  logic                     platform_regs_bus_ready;
+  logic                     platform_regs_bus_error;
   smart_artix_pkg::platform_status_t platform_status;
-  smart_artix_pkg::ddr_debug_request_t ddr_debug_request;
-  smart_artix_pkg::ddr_debug_status_t ddr_debug_status;
+  smart_artix_pkg::ddr_reg_access_request_t ddr_reg_access_request;
+  smart_artix_pkg::ddr_reg_access_status_t ddr_reg_access_status;
 
   assign clk_sys = mig_ui_clk;
   assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
@@ -158,33 +159,35 @@ module smart_artix_top (
     .line_req(core_line_req),
     .line_req_ready(core_line_req_ready),
     .line_rsp(core_line_rsp),
-    .ddr_debug_request,
-    .ddr_debug_status,
+    .ddr_reg_access_request,
+    .ddr_reg_access_status,
     .platform_status,
     .mig_app_command,
     .mig_app_write_data,
     .mig_app_response
   );
 
-  smart_artix_platform_debug_regs platform_debug_regs (
+  smart_artix_platform_regs platform_regs (
     .clk(clk_sys),
     .rst(rst_sys),
-    .bus_valid(debug_bus_valid),
-    .bus_write(debug_bus_write),
-    .bus_address(debug_bus_address),
-    .bus_wdata(debug_bus_wdata),
-    .debug_access(platform_debug_access),
-    .debug_rdata(platform_debug_rdata),
+    .bus_valid(platform_regs_bus_valid),
+    .bus_write(platform_regs_bus_write),
+    .bus_address(platform_regs_bus_address),
+    .bus_wdata(platform_regs_bus_wdata),
+    .bus_rdata(platform_regs_bus_rdata),
+    .bus_ready(platform_regs_bus_ready),
+    .bus_error(platform_regs_bus_error),
     .platform_status,
-    .ddr_debug_request,
-    .ddr_debug_status
+    .ddr_reg_access_request,
+    .ddr_reg_access_status
   );
 
   wavetable_demo_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
     .SYS_CLK_HZ(SYS_CLK_HZ),
-    .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ)
+    .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ),
+    .PLATFORM_REGS_PRESENT(1'b1)
   ) core_system (
     .clk(clk_sys),
     .rst(rst_sys),
@@ -204,17 +207,18 @@ module smart_artix_top (
     .i2s_sdata(i2s_sdata),
     .underrun_pulse(underrun_pulse),
     .sample_drop_pulse(sample_drop_pulse),
-    .mem_debug_response_pulse(mem_debug_response_pulse),
-    .mem_debug_response_latency(mem_debug_response_latency),
+    .mem_response_trace_pulse(mem_response_trace_pulse),
+    .mem_response_trace_latency(mem_response_trace_latency),
     .output_fifo_level(output_fifo_level),
     .render_deadline_miss_pulse(render_deadline_miss_pulse),
     .render_latency_cycles(render_latency_cycles),
-    .debug_bus_valid,
-    .debug_bus_write,
-    .debug_bus_address,
-    .debug_bus_wdata,
-    .debug_ext_access(platform_debug_access),
-    .debug_ext_rdata(platform_debug_rdata)
+    .platform_regs_bus_valid,
+    .platform_regs_bus_write,
+    .platform_regs_bus_address,
+    .platform_regs_bus_wdata,
+    .platform_regs_bus_rdata,
+    .platform_regs_bus_ready,
+    .platform_regs_bus_error
   );
 
   assign led_underrun = underrun_pulse;
@@ -225,11 +229,11 @@ module smart_artix_top (
                             (platform_status.loader_error_code != 8'd0);
 
 /* verilator lint_off UNUSEDSIGNAL */
-  logic unused_debug;
+  logic unused_status;
 /* verilator lint_on UNUSEDSIGNAL */
-  assign unused_debug = core_line_req.valid ^ (^core_line_req.addr) ^ (^output_fifo_level)
+  assign unused_status = core_line_req.valid ^ (^core_line_req.addr) ^ (^output_fifo_level)
       ^ (^render_latency_cycles)
-      ^ mem_debug_response_pulse ^ (^mem_debug_response_latency) ^ (^mig_app_command.addr)
+      ^ mem_response_trace_pulse ^ (^mem_response_trace_latency) ^ (^mig_app_command.addr)
       ^ (^mig_app_command.cmd) ^ mig_app_command.en ^ mig_app_response.wdf_rdy ^ mig_app_sr_active
       ^ mig_app_ref_ack ^ mig_app_zq_ack ^ (^mig_device_temp)
       ^ platform_status.asset_loader_busy ^ platform_status.sd_initialized

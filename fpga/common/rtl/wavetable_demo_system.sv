@@ -2,7 +2,8 @@ module wavetable_demo_system #(
   parameter int LINE_WORDS = 8,
   parameter int OUTPUT_FIFO_DEPTH = 8,
   parameter int SYS_CLK_HZ = 100_000_000,
-  parameter int SAMPLE_RATE_HZ = 48_000
+  parameter int SAMPLE_RATE_HZ = 48_000,
+  parameter bit PLATFORM_REGS_PRESENT = 1'b0
 ) (
   input  logic                     clk,
   input  logic                     rst,
@@ -22,17 +23,18 @@ module wavetable_demo_system #(
   output logic                     i2s_sdata,
   output logic                     underrun_pulse,
   output logic                     sample_drop_pulse,
-  output logic                     mem_debug_response_pulse,
-  output logic [15:0]              mem_debug_response_latency,
+  output logic                     mem_response_trace_pulse,
+  output logic [15:0]              mem_response_trace_latency,
   output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles,
-  output logic                     debug_bus_valid,
-  output logic                     debug_bus_write,
-  output logic [15:0]              debug_bus_address,
-  output logic [31:0]              debug_bus_wdata,
-  input  logic                     debug_ext_access,
-  input  logic [31:0]              debug_ext_rdata
+  output logic                     platform_regs_bus_valid,
+  output logic                     platform_regs_bus_write,
+  output logic [15:0]              platform_regs_bus_address,
+  output logic [31:0]              platform_regs_bus_wdata,
+  input  logic [31:0]              platform_regs_bus_rdata,
+  input  logic                     platform_regs_bus_ready,
+  input  logic                     platform_regs_bus_error
 );
   logic sample_tick;
   logic spi_bus_valid;
@@ -49,6 +51,13 @@ module wavetable_demo_system #(
   logic [31:0] core_bus_rdata;
   logic core_bus_ready;
   logic core_bus_error;
+  logic common_status_bus_valid;
+  logic common_status_bus_write;
+  logic [15:0] common_status_bus_address;
+  logic [31:0] common_status_bus_wdata;
+  logic [31:0] common_status_bus_rdata;
+  logic common_status_bus_ready;
+  logic common_status_bus_error;
   logic core_sample_valid;
   synth_pkg::pcm_t core_sample_l;
   synth_pkg::pcm_t core_sample_r;
@@ -56,25 +65,8 @@ module wavetable_demo_system #(
   logic i2s_sample_ready;
   logic fifo_sample_valid;
   logic core_reset;
-  logic system_debug_access;
-  logic [31:0] system_debug_rdata;
 
   assign core_reset = rst || core_rst;
-  assign debug_bus_valid = spi_bus_valid;
-  assign debug_bus_write = spi_bus_write;
-  assign debug_bus_address = spi_bus_address;
-  assign debug_bus_wdata = spi_bus_wdata;
-  assign core_bus_valid = spi_bus_valid && !system_debug_access && !debug_ext_access && !core_reset;
-  assign core_bus_write = spi_bus_write;
-  assign core_bus_address = spi_bus_address;
-  assign core_bus_wdata = spi_bus_wdata;
-  assign spi_bus_ready = (system_debug_access || debug_ext_access) ? 1'b1 :
-                         (core_reset ? spi_bus_valid : core_bus_ready);
-  assign spi_bus_error = (system_debug_access || debug_ext_access) ? 1'b0 :
-                         (core_reset ? 1'b1 : core_bus_error);
-  assign spi_bus_rdata = system_debug_access ? system_debug_rdata :
-                         (debug_ext_access ? debug_ext_rdata :
-                         (core_reset ? 32'd0 : core_bus_rdata));
 
   fractional_tick_gen #(
     .SYS_CLK_HZ(SYS_CLK_HZ),
@@ -102,18 +94,53 @@ module wavetable_demo_system #(
     .bus_error(spi_bus_error)
   );
 
-  wavetable_system_debug_regs #(
+  wavetable_register_fabric #(
+    .PLATFORM_REGS_PRESENT(PLATFORM_REGS_PRESENT)
+  ) register_fabric (
+    .master_valid(spi_bus_valid),
+    .master_write(spi_bus_write),
+    .master_address(spi_bus_address),
+    .master_wdata(spi_bus_wdata),
+    .core_reset,
+    .master_rdata(spi_bus_rdata),
+    .master_ready(spi_bus_ready),
+    .master_error(spi_bus_error),
+    .core_valid(core_bus_valid),
+    .core_write(core_bus_write),
+    .core_address(core_bus_address),
+    .core_wdata(core_bus_wdata),
+    .core_rdata(core_bus_rdata),
+    .core_ready(core_bus_ready),
+    .core_error(core_bus_error),
+    .common_status_valid(common_status_bus_valid),
+    .common_status_write(common_status_bus_write),
+    .common_status_address(common_status_bus_address),
+    .common_status_wdata(common_status_bus_wdata),
+    .common_status_rdata(common_status_bus_rdata),
+    .common_status_ready(common_status_bus_ready),
+    .common_status_error(common_status_bus_error),
+    .platform_regs_valid(platform_regs_bus_valid),
+    .platform_regs_write(platform_regs_bus_write),
+    .platform_regs_address(platform_regs_bus_address),
+    .platform_regs_wdata(platform_regs_bus_wdata),
+    .platform_regs_rdata(platform_regs_bus_rdata),
+    .platform_regs_ready(platform_regs_bus_ready),
+    .platform_regs_error(platform_regs_bus_error)
+  );
+
+  wavetable_common_status_regs #(
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH)
-  ) debug_regs (
+  ) common_status_regs (
     .clk,
     .rst,
     .core_reset,
-    .bus_valid(spi_bus_valid),
-    .bus_write(spi_bus_write),
-    .bus_address(spi_bus_address),
-    .bus_wdata(spi_bus_wdata),
-    .debug_access(system_debug_access),
-    .debug_rdata(system_debug_rdata),
+    .bus_valid(common_status_bus_valid),
+    .bus_write(common_status_bus_write),
+    .bus_address(common_status_bus_address),
+    .bus_wdata(common_status_bus_wdata),
+    .bus_rdata(common_status_bus_rdata),
+    .bus_ready(common_status_bus_ready),
+    .bus_error(common_status_bus_error),
     .sample_tick,
     .core_sample_valid,
     .core_busy,
@@ -124,8 +151,8 @@ module wavetable_demo_system #(
     .fifo_sample_valid,
     .underrun_pulse,
     .sample_drop_pulse,
-    .mem_debug_response_pulse,
-    .mem_debug_response_latency,
+    .mem_response_trace_pulse,
+    .mem_response_trace_latency,
     .output_fifo_level,
     .render_deadline_miss_pulse,
     .render_latency_cycles
@@ -151,8 +178,8 @@ module wavetable_demo_system #(
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .mem_debug_response_pulse,
-    .mem_debug_response_latency
+    .mem_response_trace_pulse,
+    .mem_response_trace_latency
   );
 
   wavetable_i2s_output #(

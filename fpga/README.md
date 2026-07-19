@@ -119,7 +119,7 @@ Common board/peripheral adapters live under `fpga/common/rtl`:
 ```text
 fpga/common/rtl/fractional_tick_gen.sv
 fpga/common/rtl/spi_register_bridge.sv
-fpga/common/rtl/wavetable_system_debug_regs.sv
+fpga/common/rtl/wavetable_common_status_regs.sv
 fpga/common/rtl/i2s_tx.sv
 fpga/common/rtl/sd_native_block_reader.sv
 fpga/common/rtl/sd_native_pin_phy.sv

@@ -19,8 +19,9 @@ FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
   top_->ext_req_ready = 1;
   top_->ext_rsp_valid = 0;
   for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
-  top_->debug_ext_access = 0;
-  top_->debug_ext_rdata = 0;
+  top_->platform_regs_bus_rdata = 0;
+  top_->platform_regs_bus_ready = 0;
+  top_->platform_regs_bus_error = 1;
 }
 
 FullSystemHarness::~FullSystemHarness() {
@@ -131,7 +132,7 @@ void FullSystemHarness::tick() {
   if (top_->render_latency_cycles > max_render_latency_cycles_) {
     max_render_latency_cycles_ = top_->render_latency_cycles;
   }
-  if (top_->mem_debug_response_pulse) ++memory_responses_;
+  if (top_->mem_response_trace_pulse) ++memory_responses_;
   observe_i2s();
 
   top_->clk = 0;

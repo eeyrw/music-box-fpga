@@ -19,7 +19,7 @@ namespace {
 
 constexpr uint16_t kVersion = render::regs::kVersion;
 constexpr uint16_t kSystemStatus = render::regs::kSystemStatus;
-constexpr uint16_t kDebugEventFlags = render::regs::kDebugEventFlags;
+constexpr uint16_t kCommonEventFlags = render::regs::kCommonEventFlags;
 constexpr uint16_t kAudioStatus = render::regs::kAudioStatus;
 constexpr uint16_t kRenderStatus = render::regs::kRenderStatus;
 constexpr uint16_t kMemoryStatus = render::regs::kMemoryStatus;
@@ -33,25 +33,25 @@ constexpr uint16_t kPlatformBytesLoaded = render::regs::kPlatformBytesLoaded;
 constexpr uint16_t kPlatformSf2Size = render::regs::kPlatformSf2Size;
 constexpr uint16_t kPlatformCurrentLba = render::regs::kPlatformCurrentLba;
 constexpr uint16_t kPlatformDdrStatus = render::regs::kPlatformDdrStatus;
-constexpr uint16_t kDdrDebugControl = render::regs::kDdrDebugControl;
-constexpr uint16_t kDdrDebugStatus = render::regs::kDdrDebugStatus;
-constexpr uint16_t kDdrDebugAddr = render::regs::kDdrDebugAddr;
-constexpr uint16_t kDdrDebugByteEnable = render::regs::kDdrDebugByteEnable;
-constexpr uint16_t kDdrDebugData0 = render::regs::kDdrDebugData0;
+constexpr uint16_t kDdrAccessControl = render::regs::kDdrAccessControl;
+constexpr uint16_t kDdrAccessStatus = render::regs::kDdrAccessStatus;
+constexpr uint16_t kDdrAccessAddr = render::regs::kDdrAccessAddr;
+constexpr uint16_t kDdrAccessByteEnable = render::regs::kDdrAccessByteEnable;
+constexpr uint16_t kDdrAccessData0 = render::regs::kDdrAccessData0;
 
-constexpr uint32_t kPlatformDebugPresent = render::regs::kPlatformStatusDebugPresentMask;
+constexpr uint32_t kPlatformRegsPresent = render::regs::kPlatformStatusPlatformRegsPresentMask;
 constexpr uint32_t kPlatformErrorPresent = render::regs::kPlatformStatusErrorPresentMask;
 constexpr uint32_t kPlatformDdrCalibrated = render::regs::kPlatformStatusDdrCalibratedMask;
 constexpr uint32_t kPlatformDdrUiReset = render::regs::kPlatformStatusDdrUiResetMask;
 constexpr uint32_t kPlatformSdInitialized = render::regs::kPlatformStatusSdInitializedMask;
 constexpr uint32_t kPlatformAssetLoaded = render::regs::kPlatformStatusAssetLoadedMask;
-constexpr uint32_t kDdrDebugControlStart = render::regs::kDdrDebugControlStartMask;
-constexpr uint32_t kDdrDebugControlWrite = render::regs::kDdrDebugControlWriteMask;
-constexpr uint32_t kDdrDebugControlClear = render::regs::kDdrDebugControlClearMask;
-constexpr uint32_t kDdrDebugStatusPresent = render::regs::kDdrDebugStatusPresentMask;
-constexpr uint32_t kDdrDebugStatusReady = render::regs::kDdrDebugStatusReadyMask;
-constexpr uint32_t kDdrDebugStatusDone = render::regs::kDdrDebugStatusDoneMask;
-constexpr uint32_t kDdrDebugStatusError = render::regs::kDdrDebugStatusErrorMask;
+constexpr uint32_t kDdrAccessControlStart = render::regs::kDdrAccessControlStartMask;
+constexpr uint32_t kDdrAccessControlWrite = render::regs::kDdrAccessControlWriteMask;
+constexpr uint32_t kDdrAccessControlClear = render::regs::kDdrAccessControlClearMask;
+constexpr uint32_t kDdrAccessStatusPresent = render::regs::kDdrAccessStatusPresentMask;
+constexpr uint32_t kDdrAccessStatusReady = render::regs::kDdrAccessStatusReadyMask;
+constexpr uint32_t kDdrAccessStatusDone = render::regs::kDdrAccessStatusDoneMask;
+constexpr uint32_t kDdrAccessStatusError = render::regs::kDdrAccessStatusErrorMask;
 
 struct Args {
   host::Ch347Options ch347;
@@ -135,11 +135,11 @@ void print_usage(const char* argv0) {
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
       << "  --dry-run               Print register accesses without opening CH347\n"
       << "\nTest options:\n"
-      << "  --wait-ddr              Poll until DDR calibration and DDR debug ready\n"
+      << "  --wait-ddr              Poll until DDR calibration and DDR register access ready\n"
       << "  --wait-asset            Poll until SD asset load completes or an error appears\n"
       << "  --timeout-ms N          Poll timeout, default 10000\n"
       << "  --poll-ms N             Poll interval, default 250\n"
-      << "  --ddr-smoke             Write/read one 16-byte DDR debug beat\n"
+      << "  --ddr-smoke             Write/read one 16-byte DDR register access beat\n"
       << "  --ddr-addr ADDR         16-byte aligned DDR byte address, default 0x100\n"
       << "  --ddr-pattern D0 D1 D2 D3\n"
       << "                          Four 32-bit words for --ddr-smoke\n"
@@ -264,7 +264,7 @@ void decode_platform(uint32_t status, uint32_t errors) {
   uint32_t state = (status >> 11) & 0xfu;
   uint32_t sd_error = errors & 0xffu;
   uint32_t loader_error = (errors >> 8) & 0xffu;
-  std::cout << "  platform bits: debug=" << ((status & kPlatformDebugPresent) ? 1 : 0)
+  std::cout << "  platform bits: platform_regs=" << ((status & kPlatformRegsPresent) ? 1 : 0)
             << " error=" << ((status & kPlatformErrorPresent) ? 1 : 0)
             << " ddr_calib=" << ((status & kPlatformDdrCalibrated) ? 1 : 0)
             << " ui_rst=" << ((status & kPlatformDdrUiReset) ? 1 : 0)
@@ -282,7 +282,7 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
   std::cout << "\n== Snapshot ==\n";
   uint32_t version = board.read(kVersion);
   uint32_t system = board.read(kSystemStatus);
-  uint32_t events = board.read(kDebugEventFlags);
+  uint32_t events = board.read(kCommonEventFlags);
   uint32_t audio = board.read(kAudioStatus);
   uint32_t render = board.read(kRenderStatus);
   uint32_t memory = board.read(kMemoryStatus);
@@ -292,11 +292,11 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
   uint32_t sf2_size = board.read(kPlatformSf2Size);
   uint32_t current_lba = board.read(kPlatformCurrentLba);
   uint32_t ddr = board.read(kPlatformDdrStatus);
-  uint32_t ddr_debug = board.read(kDdrDebugStatus);
+  uint32_t ddr_access = board.read(kDdrAccessStatus);
 
   print_reg("VERSION", kVersion, version);
   print_reg("SYSTEM_STATUS", kSystemStatus, system);
-  print_reg("DEBUG_EVENT_FLAGS", kDebugEventFlags, events);
+  print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
   print_reg("AUDIO_STATUS", kAudioStatus, audio);
   print_reg("RENDER_STATUS", kRenderStatus, render);
   print_reg("MEMORY_STATUS", kMemoryStatus, memory);
@@ -306,7 +306,7 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
   print_reg("PLATFORM_SF2_SIZE", kPlatformSf2Size, sf2_size);
   print_reg("PLATFORM_CURRENT_LBA", kPlatformCurrentLba, current_lba);
   print_reg("PLATFORM_DDR_STATUS", kPlatformDdrStatus, ddr);
-  print_reg("DDR_DEBUG_STATUS", kDdrDebugStatus, ddr_debug);
+  print_reg("DDR_ACCESS_STATUS", kDdrAccessStatus, ddr_access);
   decode_platform(platform, errors);
 
   if (dry_run) {
@@ -316,12 +316,12 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
 
   bool bus_stuck_high = version == 0xffffffffu && system == 0xffffffffu &&
                         events == 0xffffffffu && platform == 0xffffffffu &&
-                        errors == 0xffffffffu && ddr_debug == 0xffffffffu;
+                        errors == 0xffffffffu && ddr_access == 0xffffffffu;
   if (bus_stuck_high) {
     print_result("FAIL", "All sampled registers read 0xffffffff; CH347 is present, but no valid FPGA SPI target responded");
     return false;
-  } else if (platform & kPlatformDebugPresent) {
-    print_result("PASS", "SPI reached the Smart Artix platform debug window");
+  } else if (platform & kPlatformRegsPresent) {
+    print_result("PASS", "SPI reached the Smart Artix platform platform register window");
   } else {
     print_result("FAIL", "PLATFORM_STATUS[0] is not set; check bitstream, reset, SPI pins, and MIG UI clock");
     return false;
@@ -349,18 +349,18 @@ bool poll_until(BoardAccess& board, const Args& args, const std::string& label,
     uint32_t errors = board.read(kPlatformErrors);
     uint32_t bytes_loaded = board.read(kPlatformBytesLoaded);
     uint32_t sf2_size = board.read(kPlatformSf2Size);
-    uint32_t ddr_debug = board.read(kDdrDebugStatus);
+    uint32_t ddr_access = board.read(kDdrAccessStatus);
     std::cout << "  t=" << elapsed << "ms platform=" << hex32(platform)
               << " errors=" << hex32(errors) << " bytes=" << bytes_loaded
-              << "/" << sf2_size << " ddr_debug=" << hex32(ddr_debug) << "\n";
+              << "/" << sf2_size << " ddr_access=" << hex32(ddr_access) << "\n";
 
     if (platform & kPlatformErrorPresent) {
       print_result("FAIL", "Platform error appeared while polling");
       return false;
     }
     bool ddr_ready = (platform & kPlatformDdrCalibrated) &&
-                     ((ddr_debug & (kDdrDebugStatusPresent | kDdrDebugStatusReady)) ==
-                      (kDdrDebugStatusPresent | kDdrDebugStatusReady));
+                     ((ddr_access & (kDdrAccessStatusPresent | kDdrAccessStatusReady)) ==
+                      (kDdrAccessStatusPresent | kDdrAccessStatusReady));
     bool asset_ready = ddr_ready && (platform & kPlatformSdInitialized) &&
                        (platform & kPlatformAssetLoaded) &&
                        (sf2_size != 0) && (bytes_loaded == sf2_size);
@@ -383,52 +383,52 @@ bool poll_until(BoardAccess& board, const Args& args, const std::string& label,
 uint32_t wait_ddr_done(BoardAccess& board, uint32_t timeout_ms, uint32_t poll_ms) {
   uint32_t elapsed = 0;
   while (elapsed <= timeout_ms) {
-    uint32_t status = board.read(kDdrDebugStatus);
-    if (status & kDdrDebugStatusError) {
-      throw std::runtime_error("DDR debug command failed, status=" + hex32(status));
+    uint32_t status = board.read(kDdrAccessStatus);
+    if (status & kDdrAccessStatusError) {
+      throw std::runtime_error("DDR register access command failed, status=" + hex32(status));
     }
-    if (status & kDdrDebugStatusDone) return status;
+    if (status & kDdrAccessStatusDone) return status;
     std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
     elapsed += poll_ms;
   }
-  throw std::runtime_error("DDR debug command timed out");
+  throw std::runtime_error("DDR register access command timed out");
 }
 
 void run_ddr_smoke(BoardAccess& board, const Args& args) {
   if ((args.ddr_addr & 0xfu) != 0) throw std::runtime_error("DDR smoke address must be 16-byte aligned");
   std::cout << "\n== DDR Smoke ==\n";
-  board.write(kDdrDebugControl, kDdrDebugControlClear);
-  uint32_t status = board.read(kDdrDebugStatus);
-  if (!args.dry_run && ((status & kDdrDebugStatusReady) == 0)) {
-    throw std::runtime_error("DDR debug window is not ready, status=" + hex32(status));
+  board.write(kDdrAccessControl, kDdrAccessControlClear);
+  uint32_t status = board.read(kDdrAccessStatus);
+  if (!args.dry_run && ((status & kDdrAccessStatusReady) == 0)) {
+    throw std::runtime_error("DDR register access window is not ready, status=" + hex32(status));
   }
-  board.write(kDdrDebugAddr, args.ddr_addr);
-  board.write(kDdrDebugByteEnable, 0xffff);
+  board.write(kDdrAccessAddr, args.ddr_addr);
+  board.write(kDdrAccessByteEnable, 0xffff);
   for (int word = 0; word < 4; ++word) {
-    board.write(uint16_t(kDdrDebugData0 + word * 4), args.ddr_pattern[word]);
+    board.write(uint16_t(kDdrAccessData0 + word * 4), args.ddr_pattern[word]);
   }
-  board.write(kDdrDebugControl, kDdrDebugControlStart | kDdrDebugControlWrite);
+  board.write(kDdrAccessControl, kDdrAccessControlStart | kDdrAccessControlWrite);
   if (!args.dry_run) (void)wait_ddr_done(board, args.timeout_ms, args.poll_ms);
 
-  board.write(kDdrDebugControl, kDdrDebugControlClear);
-  board.write(kDdrDebugAddr, args.ddr_addr);
-  board.write(kDdrDebugControl, kDdrDebugControlStart);
+  board.write(kDdrAccessControl, kDdrAccessControlClear);
+  board.write(kDdrAccessAddr, args.ddr_addr);
+  board.write(kDdrAccessControl, kDdrAccessControlStart);
   if (!args.dry_run) (void)wait_ddr_done(board, args.timeout_ms, args.poll_ms);
 
   bool match = true;
   uint32_t data[4] = {};
   for (int word = 0; word < 4; ++word) {
-    data[word] = board.read(uint16_t(kDdrDebugData0 + word * 4));
+    data[word] = board.read(uint16_t(kDdrAccessData0 + word * 4));
     if (data[word] != args.ddr_pattern[word]) match = false;
   }
   std::cout << "  readback = " << hex32(data[3]) << '_' << hex32(data[2]) << '_'
             << hex32(data[1]) << '_' << hex32(data[0]) << "\n";
   if (args.dry_run) {
-    print_result("DRY", "DDR debug write/read access sequence emitted");
+    print_result("DRY", "DDR register access write/read access sequence emitted");
   } else if (match) {
-    print_result("PASS", "DDR debug write/read pattern matched");
+    print_result("PASS", "DDR register access write/read pattern matched");
   } else {
-    print_result("FAIL", "DDR debug readback did not match written pattern");
+    print_result("FAIL", "DDR register access readback did not match written pattern");
     throw std::runtime_error("DDR smoke mismatch");
   }
 }
@@ -438,7 +438,7 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   if (args.length == 0) throw std::runtime_error("--voice-smoke requires --length");
 
   std::cout << "\n== Voice Smoke ==\n";
-  board.write(kDebugEventFlags, 0x0fu);
+  board.write(kCommonEventFlags, 0x0fu);
 
   render::Region region;
   region.stereo = args.stereo;
@@ -462,11 +462,11 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   print_result("PASS", "Voice configuration writes completed");
 
   if (!args.dry_run) std::this_thread::sleep_for(std::chrono::milliseconds(250));
-  uint32_t events = board.read(kDebugEventFlags);
+  uint32_t events = board.read(kCommonEventFlags);
   uint32_t audio = board.read(kAudioStatus);
   uint32_t memory = board.read(kMemoryStatus);
   uint32_t mem_rsp_count = board.read(kMemResponseCount);
-  print_reg("DEBUG_EVENT_FLAGS", kDebugEventFlags, events);
+  print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
   print_reg("AUDIO_STATUS", kAudioStatus, audio);
   print_reg("MEMORY_STATUS", kMemoryStatus, memory);
   print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, mem_rsp_count);
@@ -503,7 +503,7 @@ int main(int argc, char** argv) {
 
     if (!read_snapshot(board, args.dry_run)) return 2;
     if (args.wait_ddr) {
-      if (!poll_until(board, args, "DDR calibration and debug window", false)) return 2;
+      if (!poll_until(board, args, "DDR calibration and platform register window", false)) return 2;
     }
     if (args.wait_asset) {
       if (!poll_until(board, args, "SD asset load", true)) return 2;

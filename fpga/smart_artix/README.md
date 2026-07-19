@@ -38,9 +38,9 @@ Still required from the board documentation:
 
 `rtl/smart_artix_top.sv` instantiates `wavetable_demo_system` with SPI control,
 line-memory caching, output FIFO, and I2S output. Board-specific SD loading, DDR3
-read/write arbitration, line reads, and DDR debug traffic are grouped behind
+read/write arbitration, line reads, and DDR register access traffic are grouped behind
 `smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
-`smart_artix_platform_debug_regs` through the common wrapper's debug extension
+`smart_artix_platform_regs` through the common wrapper's platform register window
 bus. After MIG calibration completes, the top starts the SD loader, copies the
 raw SF2 byte image into DDR3, and holds the audio core in reset until
 `asset_loaded` is asserted.
@@ -128,7 +128,7 @@ or clocking scheme, update the adapter before connecting hardware. The current
 adapter assumes one MIG read response contains the whole line.
 
 Smart Artix RTL uses `smart_artix_pkg.sv` as the local board-facing contract for
-MIG app command, write-data, response, line-read, platform-status, and DDR debug
+MIG app command, write-data, response, line-read, platform-status, and DDR register access
 structs. Generated MIG IP ports remain explicit at `smart_artix_top`; the struct
 types are used on the board-owned side of that boundary and in the DDR3
 subsystem internals.
@@ -270,7 +270,7 @@ work reintroduces timing pressure, prefer adding focused pipeline stages in
 path.
 
 The timing report also shows expected board-level gaps: SPI input ports and I2S
-or debug output ports do not yet have external input/output delays. Add those
+or status output ports do not yet have external input/output delays. Add those
 only after the real board timing contract is known.
 
 ## Resource Follow-Up

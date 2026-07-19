@@ -275,7 +275,7 @@ void BoardLoaderRenderHarness::observe_sequential_outputs() {
   } else if (!line_pending_ && ready_gap_countdown_ > 0) {
     --ready_gap_countdown_;
   }
-  if (top_->core_mem_debug_response_pulse) ++memory_responses_;
+  if (top_->core_mem_response_trace_pulse) ++memory_responses_;
 }
 
 void BoardLoaderRenderHarness::handle_sd_command() {

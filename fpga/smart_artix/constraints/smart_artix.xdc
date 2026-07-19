@@ -1,6 +1,6 @@
 # Smart Artix XDC for XC7A50T-2FGG484I.
 # Pin locations are taken from fpga/smart_artix/docs/Smart_Artix_Pin_Assignment.txt.
-# Current SPI, I2S, and debug outputs are exported through BANK15 expansion
+# Current SPI, I2S, and status outputs are exported through BANK15 expansion
 # header pins because the pin table does not list dedicated board connectors for
 # those signals.
 
@@ -47,7 +47,7 @@ set_property PACKAGE_PIN Y21 [get_ports {sd_dat[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {sd_dat[*]}]
 set_property PULLUP true [get_ports {sd_dat[*]}]
 
-# Debug status outputs on BANK15 header pins.
+# Status outputs on BANK15 header pins.
 set_property PACKAGE_PIN J15 [get_ports led_spi_error]
 set_property PACKAGE_PIN G20 [get_ports led_underrun]
 set_property PACKAGE_PIN H20 [get_ports led_sample_drop]

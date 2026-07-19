@@ -23,8 +23,8 @@ module smart_artix_ddr3_subsystem #(
   output logic                              line_req_ready,
   output smart_artix_pkg::line_read_response_t line_rsp,
 
-  input  smart_artix_pkg::ddr_debug_request_t ddr_debug_request,
-  output smart_artix_pkg::ddr_debug_status_t  ddr_debug_status,
+  input  smart_artix_pkg::ddr_reg_access_request_t ddr_reg_access_request,
+  output smart_artix_pkg::ddr_reg_access_status_t  ddr_reg_access_status,
   output smart_artix_pkg::platform_status_t   platform_status,
 
   output smart_artix_pkg::mig_app_command_t    mig_app_command,
@@ -33,9 +33,9 @@ module smart_artix_ddr3_subsystem #(
 );
   smart_artix_pkg::mig_app_command_t    read_command;
   smart_artix_pkg::mig_app_response_t   read_response;
-  smart_artix_pkg::mig_app_command_t    debug_command;
-  smart_artix_pkg::mig_app_write_data_t debug_write_data;
-  smart_artix_pkg::mig_app_response_t   debug_response;
+  smart_artix_pkg::mig_app_command_t    reg_access_command;
+  smart_artix_pkg::mig_app_write_data_t reg_access_write_data;
+  smart_artix_pkg::mig_app_response_t   reg_access_response;
   smart_artix_pkg::mig_app_command_t    write_command;
   smart_artix_pkg::mig_app_write_data_t write_data;
   smart_artix_pkg::mig_app_response_t   write_response;
@@ -66,17 +66,17 @@ module smart_artix_ddr3_subsystem #(
   logic                      sd_data_last;
   logic [2:0]                sd_data_status;
   logic [SD_DIV_WIDTH-1:0]   selected_sd_clk_div;
-  logic                      debug_ready;
-  logic                      debug_busy;
-  logic                      debug_done;
-  logic                      debug_error;
-  logic [smart_artix_pkg::MIG_DATA_WIDTH-1:0] debug_rdata;
+  logic                      reg_access_ready;
+  logic                      reg_access_busy;
+  logic                      reg_access_done;
+  logic                      reg_access_error;
+  logic [smart_artix_pkg::MIG_DATA_WIDTH-1:0] reg_access_rdata;
 
-  assign ddr_debug_status.ready = debug_ready;
-  assign ddr_debug_status.busy = debug_busy;
-  assign ddr_debug_status.done = debug_done;
-  assign ddr_debug_status.error = debug_error;
-  assign ddr_debug_status.rdata = debug_rdata;
+  assign ddr_reg_access_status.ready = reg_access_ready;
+  assign ddr_reg_access_status.busy = reg_access_busy;
+  assign ddr_reg_access_status.done = reg_access_done;
+  assign ddr_reg_access_status.error = reg_access_error;
+  assign ddr_reg_access_status.rdata = reg_access_rdata;
 
   assign platform_status.ddr_init_calib_complete = ddr_init_calib_complete;
   assign platform_status.ddr_ui_rst = ddr_ui_rst;
@@ -168,9 +168,9 @@ module smart_artix_ddr3_subsystem #(
     .rst,
     .read_command,
     .read_response,
-    .debug_command,
-    .debug_write_data,
-    .debug_response,
+    .reg_access_command,
+    .reg_access_write_data,
+    .reg_access_response,
     .write_command,
     .write_data,
     .write_response,
@@ -179,22 +179,22 @@ module smart_artix_ddr3_subsystem #(
     .mig_app_response
   );
 
-  smart_artix_ddr3_debug_master debug_master (
+  smart_artix_ddr3_reg_access_master reg_access_master (
     .clk,
     .rst,
-    .start(ddr_debug_request.start),
-    .write(ddr_debug_request.write),
-    .byte_addr(ddr_debug_request.addr),
-    .wdata(ddr_debug_request.wdata),
-    .byte_enable(ddr_debug_request.byte_enable),
-    .ready(debug_ready),
-    .busy(debug_busy),
-    .done_pulse(debug_done),
-    .error_pulse(debug_error),
-    .rdata(debug_rdata),
-    .mig_app_command(debug_command),
-    .mig_app_write_data(debug_write_data),
-    .mig_app_response(debug_response)
+    .start(ddr_reg_access_request.start),
+    .write(ddr_reg_access_request.write),
+    .byte_addr(ddr_reg_access_request.addr),
+    .wdata(ddr_reg_access_request.wdata),
+    .byte_enable(ddr_reg_access_request.byte_enable),
+    .ready(reg_access_ready),
+    .busy(reg_access_busy),
+    .done_pulse(reg_access_done),
+    .error_pulse(reg_access_error),
+    .rdata(reg_access_rdata),
+    .mig_app_command(reg_access_command),
+    .mig_app_write_data(reg_access_write_data),
+    .mig_app_response(reg_access_response)
   );
 
   smart_artix_ddr3_line_reader #(

@@ -69,7 +69,7 @@ It is also split into narrower targets:
 ```text
 test-cpp-unit       = parser, register-control, and render-preparation unit tests
 test-rtl-core       = voice phase, core render, and wave-memory subsystem tests
-test-rtl-peripheral = SPI bridge, I2S transmitter, and demo-system debug tests
+test-rtl-peripheral = SPI bridge, I2S transmitter, and demo-common status tests
 ```
 
 `make render-instrument` builds the legacy single-instrument SoundFont render

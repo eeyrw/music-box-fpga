@@ -915,7 +915,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
                                                   int velocity, int sample_rate, int tick_samples,
                                                   std::vector<int16_t>& memory) {
   (void)memory;
-  // Forced-instrument mode skips preset lookup. This is useful for debugging a
+  // Forced-instrument mode skips preset lookup. This is useful for bring-up a
   // specific SF2 instrument because MIDI program and bank messages cannot change
   // the selected sample set.
   std::vector<Region> regions;

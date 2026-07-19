@@ -44,7 +44,7 @@
   "global_registers": [
     {"name": "VERSION", "address": "0x3000"},
     {"name": "SYSTEM_STATUS", "address": "0x3010"},
-    {"name": "DEBUG_EVENT_FLAGS", "address": "0x3014"},
+    {"name": "COMMON_EVENT_FLAGS", "address": "0x3014"},
     {"name": "AUDIO_STATUS", "address": "0x3018"},
     {"name": "RENDER_STATUS", "address": "0x301c"},
     {"name": "MEMORY_STATUS", "address": "0x3020"},
@@ -58,14 +58,14 @@
     {"name": "PLATFORM_SF2_SIZE", "address": "0x3050"},
     {"name": "PLATFORM_CURRENT_LBA", "address": "0x3058"},
     {"name": "PLATFORM_DDR_STATUS", "address": "0x305c"},
-    {"name": "DDR_DEBUG_CONTROL", "address": "0x3060"},
-    {"name": "DDR_DEBUG_STATUS", "address": "0x3064"},
-    {"name": "DDR_DEBUG_ADDR", "address": "0x3068"},
-    {"name": "DDR_DEBUG_BYTE_ENABLE", "address": "0x306c"},
-    {"name": "DDR_DEBUG_DATA0", "address": "0x3070"},
-    {"name": "DDR_DEBUG_DATA1", "address": "0x3074"},
-    {"name": "DDR_DEBUG_DATA2", "address": "0x3078"},
-    {"name": "DDR_DEBUG_DATA3", "address": "0x307c"}
+    {"name": "DDR_ACCESS_CONTROL", "address": "0x3060"},
+    {"name": "DDR_ACCESS_STATUS", "address": "0x3064"},
+    {"name": "DDR_ACCESS_ADDR", "address": "0x3068"},
+    {"name": "DDR_ACCESS_BYTE_ENABLE", "address": "0x306c"},
+    {"name": "DDR_ACCESS_DATA0", "address": "0x3070"},
+    {"name": "DDR_ACCESS_DATA1", "address": "0x3074"},
+    {"name": "DDR_ACCESS_DATA2", "address": "0x3078"},
+    {"name": "DDR_ACCESS_DATA3", "address": "0x307c"}
   ],
   "fields": {
     "REGION_MODE": {
@@ -86,26 +86,26 @@
     "FILTER_COMMIT": {
       "APPLY_MASK": "0x00000001"
     },
-    "DEBUG_EVENT_FLAGS": {
+    "COMMON_EVENT_FLAGS": {
       "UNDERRUN_MASK": "0x00000001",
       "SAMPLE_DROP_MASK": "0x00000002",
       "RENDER_DEADLINE_MISS_MASK": "0x00000004",
       "MEM_RESPONSE_MASK": "0x00000008"
     },
     "PLATFORM_STATUS": {
-      "DEBUG_PRESENT_MASK": "0x00000001",
+      "PLATFORM_REGS_PRESENT_MASK": "0x00000001",
       "ERROR_PRESENT_MASK": "0x00000002",
       "DDR_CALIBRATED_MASK": "0x00000004",
       "DDR_UI_RESET_MASK": "0x00000008",
       "SD_INITIALIZED_MASK": "0x00000010",
       "ASSET_LOADED_MASK": "0x00000020"
     },
-    "DDR_DEBUG_CONTROL": {
+    "DDR_ACCESS_CONTROL": {
       "START_MASK": "0x00000001",
       "WRITE_MASK": "0x00000002",
       "CLEAR_MASK": "0x00000004"
     },
-    "DDR_DEBUG_STATUS": {
+    "DDR_ACCESS_STATUS": {
       "PRESENT_MASK": "0x00000001",
       "READY_MASK": "0x00000002",
       "DONE_MASK": "0x00000008",

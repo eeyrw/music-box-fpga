@@ -99,7 +99,7 @@ The first Smart Artix implementation provides the board-side middle of this path
   emits write masks for a partial final beat, and tracks the independent MIG
   command and write-data ready handshakes.
 - `smart_artix_ddr3_rw_arbiter` multiplexes wavetable reads, loader writes, and
-  debug reads/writes onto one MIG application port. Read commands have priority
+  reg-access reads/writes onto one MIG application port. Read commands have priority
   when no read response is outstanding; each write command and write-data beat is
   locked to the same owner until both sides of the 7-series MIG app interface
   accept the write.
@@ -256,7 +256,7 @@ Start with one of these modes:
 
 | Mode | Use | Expected result |
 | --- | --- | --- |
-| SPI mode | Simplest bring-up and debugging | Low bandwidth; a 500 MB image may take minutes |
+| SPI mode | Simplest bring-up and bring-up | Low bandwidth; a 500 MB image may take minutes |
 | Native 4-bit SD | Practical product path | Higher PHY complexity; tens of seconds for a 500 MB image |
 
 SD card latency is not deterministic enough for real-time wavetable reads. The SD

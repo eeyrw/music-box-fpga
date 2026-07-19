@@ -8,13 +8,13 @@ verify, and eventually synthesize on the board target.
 ## Current Decision
 
 The per-voice register map must be directly readable. Control software should
-not need a host-side mirror or a staged debug readback window to recover or
+not need a host-side mirror or a staged register-access readback window to recover or
 inspect voice state.
 
 The `READBACK_ADDR` and `READBACK_DATA` registers were removed from the core
 register contract. Addresses `0x3004` and `0x3008` are now unsupported core
 addresses and must report a bus error when routed to `voice_register_bank`.
-System debug registers still begin at `0x3010`.
+System common status registers still begin at `0x3010`.
 
 Per-voice reads use synchronous RAM read paths and therefore may complete after
 multiple `clk` cycles. Register-bus and SPI masters must hold the request until
@@ -87,7 +87,7 @@ Both commands passed. Existing lint warnings unrelated to this change remain.
 
 The per-voice register stride was expanded from `0x80` to `0x100`. Slot 0 still
 starts at `0x0100`; slot N now starts at `0x0100 + N * 0x100`. This keeps the
-current offsets stable while reserving space in each slot for status/debug and
+current offsets stable while reserving space in each slot for status and
 future modulation or envelope controls.
 
 The RTL address decode, C++ harness constants, SystemVerilog tests, and
@@ -206,7 +206,7 @@ Recommended modules:
   - Belongs near `multi_voice_pipeline`, not the register bank.
   - Owns phase, right-channel phase, filter history, and per-voice internal valid
     bits.
-  - Software access, if needed, should be explicitly debug/status oriented rather
+  - Software access, if needed, should be explicitly status oriented rather
     than part of normal voice control.
 
 This split keeps the software-visible control contract stable while allowing the
@@ -221,7 +221,7 @@ The current per-voice stride is `0x100`. Current group layout inside each slot:
 - `0x40` to `0x4f`: initial/runtime gains and runtime envelope.
 - `0x50` to `0x6f`: filter controls and coefficients.
 - `0x70` to `0x7f`: enable, commit, release, and status.
-- `0x80` to `0xff`: reserved for future modulation/envelope controls and debug.
+- `0x80` to `0xff`: reserved for future modulation/envelope controls and status registers.
 
 ## BRAM Strategy
 
@@ -281,7 +281,7 @@ after the control-plane split is stable.
 
 1. Move renderer-owned state into a named store.
    Keep phase and filter history close to `multi_voice_pipeline`, and expose only
-   explicit debug/status reads if needed.
+   explicit status reads if needed.
 
 2. Re-run Smart Artix synthesis for the grouped descriptor and active/runtime
    store split.

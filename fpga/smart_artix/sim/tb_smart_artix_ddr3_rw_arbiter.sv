@@ -3,9 +3,9 @@ module tb_smart_artix_ddr3_rw_arbiter;
   logic rst;
   smart_artix_pkg::mig_app_command_t read_command;
   smart_artix_pkg::mig_app_response_t read_response;
-  smart_artix_pkg::mig_app_command_t debug_command;
-  smart_artix_pkg::mig_app_write_data_t debug_write_data;
-  smart_artix_pkg::mig_app_response_t debug_response;
+  smart_artix_pkg::mig_app_command_t reg_access_command;
+  smart_artix_pkg::mig_app_write_data_t reg_access_write_data;
+  smart_artix_pkg::mig_app_response_t reg_access_response;
   smart_artix_pkg::mig_app_command_t write_command;
   smart_artix_pkg::mig_app_write_data_t write_data;
   smart_artix_pkg::mig_app_response_t write_response;
@@ -19,9 +19,9 @@ module tb_smart_artix_ddr3_rw_arbiter;
     .rst,
     .read_command,
     .read_response,
-    .debug_command,
-    .debug_write_data,
-    .debug_response,
+    .reg_access_command,
+    .reg_access_write_data,
+    .reg_access_response,
     .write_command,
     .write_data,
     .write_response,
@@ -48,9 +48,9 @@ module tb_smart_artix_ddr3_rw_arbiter;
     rst = 1'b1;
     read_command = '0;
     read_command.cmd = 3'b001;
-    debug_command = '0;
-    debug_command.cmd = 3'b001;
-    debug_write_data = '0;
+    reg_access_command = '0;
+    reg_access_command.cmd = 3'b001;
+    reg_access_write_data = '0;
     write_command = '0;
     write_command.cmd = 3'b000;
     write_data = '0;
@@ -143,52 +143,52 @@ module tb_smart_artix_ddr3_rw_arbiter;
     check(read_response.rd_data_valid, "arbiter did not route read data valid");
     check(read_response.rd_data_end, "arbiter did not route read data end");
     check(read_response.rd_data == mig_app_response.rd_data, "arbiter read data mismatch");
-    check(!debug_response.rd_data_valid, "arbiter broadcast read data to debug client");
+    check(!reg_access_response.rd_data_valid, "arbiter broadcast read data to reg-access client");
 
     @(posedge clk);
     @(negedge clk);
     mig_app_response.rd_data_valid = 1'b0;
     mig_app_response.rd_data_end = 1'b0;
-    debug_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0180);
-    debug_command.cmd = 3'b001;
-    debug_command.en = 1'b1;
+    reg_access_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0180);
+    reg_access_command.cmd = 3'b001;
+    reg_access_command.en = 1'b1;
     write_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0200);
     write_command.en = 1'b1;
     write_data.wren = 1'b1;
     #1;
-    check(mig_app_command.en, "arbiter did not forward debug command");
+    check(mig_app_command.en, "arbiter did not forward register-access command");
     check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0180),
-          "arbiter debug address mismatch");
-    check(mig_app_command.cmd == 3'b001, "arbiter debug command mismatch");
-    check(debug_response.rdy, "arbiter did not return debug ready");
-    check(!write_response.rdy, "arbiter returned write ready while debug had priority");
-    check(!mig_app_write_data.wren, "arbiter forwarded loader write data during debug read");
+          "arbiter register-access address mismatch");
+    check(mig_app_command.cmd == 3'b001, "arbiter register-access command mismatch");
+    check(reg_access_response.rdy, "arbiter did not return reg-access ready");
+    check(!write_response.rdy, "arbiter returned write ready while reg-access client had priority");
+    check(!mig_app_write_data.wren, "arbiter forwarded loader write data during reg-access read");
 
     @(posedge clk);
     @(negedge clk);
-    debug_command.en = 1'b0;
+    reg_access_command.en = 1'b0;
     write_command.en = 1'b0;
     write_data.wren = 1'b0;
     mig_app_response.rd_data = 128'h1234_5678_9abc_def0_1111_2222_3333_4444;
     mig_app_response.rd_data_valid = 1'b1;
     mig_app_response.rd_data_end = 1'b1;
     #1;
-    check(debug_response.rd_data_valid, "arbiter did not route debug read data valid");
-    check(debug_response.rd_data_end, "arbiter did not route debug read data end");
-    check(debug_response.rd_data == mig_app_response.rd_data, "arbiter debug read data mismatch");
-    check(!read_response.rd_data_valid, "arbiter broadcast debug read data to read client");
+    check(reg_access_response.rd_data_valid, "arbiter did not route reg-access read data valid");
+    check(reg_access_response.rd_data_end, "arbiter did not route reg-access read data end");
+    check(reg_access_response.rd_data == mig_app_response.rd_data, "arbiter reg-access read data mismatch");
+    check(!read_response.rd_data_valid, "arbiter broadcast reg-access read data to read client");
 
     @(posedge clk);
     @(negedge clk);
     mig_app_response.rd_data_valid = 1'b0;
     mig_app_response.rd_data_end = 1'b0;
-    debug_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0300);
-    debug_command.cmd = 3'b000;
-    debug_command.en = 1'b1;
-    debug_write_data.data = 128'h1111_2222_3333_4444_5555_6666_7777_8888;
-    debug_write_data.mask = 16'h0f0f;
-    debug_write_data.wren = 1'b1;
-    debug_write_data.end_ = 1'b1;
+    reg_access_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0300);
+    reg_access_command.cmd = 3'b000;
+    reg_access_command.en = 1'b1;
+    reg_access_write_data.data = 128'h1111_2222_3333_4444_5555_6666_7777_8888;
+    reg_access_write_data.mask = 16'h0f0f;
+    reg_access_write_data.wren = 1'b1;
+    reg_access_write_data.end_ = 1'b1;
     write_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0340);
     write_command.en = 1'b1;
     write_data.data = 128'haaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111;
@@ -197,14 +197,14 @@ module tb_smart_artix_ddr3_rw_arbiter;
     write_data.end_ = 1'b1;
     #1;
     check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0300),
-          "arbiter debug write command address mismatch");
-    check(debug_response.rdy, "arbiter did not return debug write command ready");
-    check(!write_response.rdy, "arbiter returned loader ready while debug write had priority");
-    check(mig_app_write_data.data == debug_write_data.data, "arbiter debug write data mismatch");
-    check(mig_app_write_data.mask == debug_write_data.mask, "arbiter debug write mask mismatch");
-    check(debug_response.wdf_rdy, "arbiter did not return debug write-data ready");
+          "arbiter reg-access write command address mismatch");
+    check(reg_access_response.rdy, "arbiter did not return reg-access write command ready");
+    check(!write_response.rdy, "arbiter returned loader ready while reg-access write had priority");
+    check(mig_app_write_data.data == reg_access_write_data.data, "arbiter reg-access write data mismatch");
+    check(mig_app_write_data.mask == reg_access_write_data.mask, "arbiter reg-access write mask mismatch");
+    check(reg_access_response.wdf_rdy, "arbiter did not return reg-access write-data ready");
     check(!write_response.wdf_rdy,
-          "arbiter returned loader write-data ready while debug write data active");
+          "arbiter returned loader write-data ready while reg-access write data active");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_rw_arbiter errors=%0d", errors);

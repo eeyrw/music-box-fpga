@@ -97,7 +97,7 @@ With the current model parameters, a cache hit returns with much lower latency
 than a miss because no external line request is issued. During a miss, the
 core-side request port is backpressured because the minimal subsystem supports
 only one outstanding core request. The exact response-latency counter is exposed
-through `debug_response_pulse` and `debug_response_latency` so simulation harnesses
+through `response_trace_pulse` and `response_trace_latency` so simulation harnesses
 can record the observed latency for each request.
 
 The real-SF2 smoke run `make render-instrument SECONDS=1 KEY=60` used

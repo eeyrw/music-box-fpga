@@ -1,4 +1,4 @@
-module tb_wavetable_demo_system_debug;
+module tb_wavetable_demo_common_status;
   import synth_register_pkg::*;
 
   logic clk = 1'b0;
@@ -19,15 +19,15 @@ module tb_wavetable_demo_system_debug;
   logic i2s_sdata;
   logic underrun_pulse;
   logic sample_drop_pulse;
-  logic mem_debug_response_pulse;
-  logic [15:0] mem_debug_response_latency;
+  logic mem_response_trace_pulse;
+  logic [15:0] mem_response_trace_latency;
   logic [3:0] output_fifo_level;
   logic render_deadline_miss_pulse;
   logic [15:0] render_latency_cycles;
-  logic debug_bus_valid;
-  logic debug_bus_write;
-  logic [15:0] debug_bus_address;
-  logic [31:0] debug_bus_wdata;
+  logic platform_regs_bus_valid;
+  logic platform_regs_bus_write;
+  logic [15:0] platform_regs_bus_address;
+  logic [31:0] platform_regs_bus_wdata;
   int errors = 0;
 
   always #5 clk <= ~clk;
@@ -56,17 +56,18 @@ module tb_wavetable_demo_system_debug;
     .i2s_sdata,
     .underrun_pulse,
     .sample_drop_pulse,
-    .mem_debug_response_pulse,
-    .mem_debug_response_latency,
+    .mem_response_trace_pulse,
+    .mem_response_trace_latency,
     .output_fifo_level,
     .render_deadline_miss_pulse,
     .render_latency_cycles,
-    .debug_bus_valid,
-    .debug_bus_write,
-    .debug_bus_address,
-    .debug_bus_wdata,
-    .debug_ext_access(1'b0),
-    .debug_ext_rdata(32'd0)
+    .platform_regs_bus_valid,
+    .platform_regs_bus_write,
+    .platform_regs_bus_address,
+    .platform_regs_bus_wdata,
+    .platform_regs_bus_rdata(32'd0),
+    .platform_regs_bus_ready(1'b0),
+    .platform_regs_bus_error(1'b1)
   );
 
   task automatic spi_clock_bit(input logic bit_value);
@@ -123,11 +124,11 @@ module tb_wavetable_demo_system_debug;
     logic [31:0] actual;
     spi_read_word(address, actual);
     if (actual !== expected) begin
-      $error("system debug SPI read 0x%04x got 0x%08x expected 0x%08x", address, actual, expected);
+      $error("common status SPI read 0x%04x got 0x%08x expected 0x%08x", address, actual, expected);
       errors++;
     end
     if (spi_error) begin
-      $error("system debug SPI read 0x%04x unexpectedly reported error", address);
+      $error("common status SPI read 0x%04x unexpectedly reported error", address);
       errors++;
     end
   endtask
@@ -158,24 +159,24 @@ module tb_wavetable_demo_system_debug;
 
     expect_read(REG_VERSION, REG_VERSION_VALUE);
     expect_read(REG_SYSTEM_STATUS, 32'h0000_0050);
-    expect_read(REG_DEBUG_EVENT_FLAGS, 32'h0000_0000);
+    expect_read(REG_COMMON_EVENT_FLAGS, 32'h0000_0000);
     expect_read(REG_AUDIO_STATUS, 32'h0000_0000);
     expect_read(REG_UNDERRUN_COUNT, 32'h0000_0000);
-    spi_write_word(REG_DEBUG_EVENT_FLAGS,
-                   REG_DEBUG_EVENT_FLAGS_UNDERRUN_MASK |
-                   REG_DEBUG_EVENT_FLAGS_SAMPLE_DROP_MASK |
-                   REG_DEBUG_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK |
-                   REG_DEBUG_EVENT_FLAGS_MEM_RESPONSE_MASK);
+    spi_write_word(REG_COMMON_EVENT_FLAGS,
+                   REG_COMMON_EVENT_FLAGS_UNDERRUN_MASK |
+                   REG_COMMON_EVENT_FLAGS_SAMPLE_DROP_MASK |
+                   REG_COMMON_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK |
+                   REG_COMMON_EVENT_FLAGS_MEM_RESPONSE_MASK);
     if (spi_error) begin
-      $error("system debug flag clear unexpectedly reported error");
+      $error("common status flag clear unexpectedly reported error");
       errors++;
     end
-    expect_read(REG_DEBUG_EVENT_FLAGS, 32'h0000_0000);
+    expect_read(REG_COMMON_EVENT_FLAGS, 32'h0000_0000);
 
     if (errors != 0)
-      $fatal(1, "FAIL: wavetable_demo_system_debug errors=%0d", errors);
+      $fatal(1, "FAIL: wavetable_demo_common_status errors=%0d", errors);
 
-    $display("PASS: wavetable_demo_system_debug");
+    $display("PASS: wavetable_demo_common_status");
     $finish;
   end
 
@@ -184,7 +185,7 @@ module tb_wavetable_demo_system_debug;
 /* verilator lint_on UNUSEDSIGNAL */
   assign unused_outputs = ext_req_valid | (|ext_req_addr) | i2s_bclk | i2s_lrclk | i2s_sdata |
       underrun_pulse | sample_drop_pulse |
-      mem_debug_response_pulse | (|mem_debug_response_latency) | (|output_fifo_level) |
-      render_deadline_miss_pulse | (|render_latency_cycles) | debug_bus_valid |
-      debug_bus_write | (|debug_bus_address) | (|debug_bus_wdata);
+      mem_response_trace_pulse | (|mem_response_trace_latency) | (|output_fifo_level) |
+      render_deadline_miss_pulse | (|render_latency_cycles) | platform_regs_bus_valid |
+      platform_regs_bus_write | (|platform_regs_bus_address) | (|platform_regs_bus_wdata);
 endmodule

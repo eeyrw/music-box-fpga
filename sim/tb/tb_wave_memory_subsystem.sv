@@ -15,8 +15,8 @@ module tb_wave_memory_subsystem;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
   logic [LINE_WORDS*16-1:0] ext_rsp_data;
-  logic debug_response_pulse;
-  logic [15:0] debug_response_latency;
+  logic response_trace_pulse;
+  logic [15:0] response_trace_latency;
   int errors = 0;
   int ext_request_count = 0;
   int response_count = 0;
@@ -36,8 +36,8 @@ module tb_wave_memory_subsystem;
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .debug_response_pulse,
-    .debug_response_latency
+    .response_trace_pulse,
+    .response_trace_latency
   );
 
   line_memory_model #(.DEPTH(64), .LINE_WORDS(LINE_WORDS), .LATENCY(4)) line_model (
@@ -57,7 +57,7 @@ module tb_wave_memory_subsystem;
     end else begin
       if (ext_req_valid && ext_req_ready)
         ext_request_count <= ext_request_count + 1;
-      if (debug_response_pulse)
+      if (response_trace_pulse)
         response_count <= response_count + 1;
     end
   end
@@ -119,11 +119,11 @@ module tb_wave_memory_subsystem;
     end
     @(negedge clk);
     if (response_count != 3) begin
-      $error("debug response counter got %0d expected 3", response_count);
+      $error("response trace counter got %0d expected 3", response_count);
       errors++;
     end
-    if (debug_response_latency === 16'hxxxx) begin
-      $error("debug response latency contains unknown bits");
+    if (response_trace_latency === 16'hxxxx) begin
+      $error("response trace latency contains unknown bits");
       errors++;
     end
 

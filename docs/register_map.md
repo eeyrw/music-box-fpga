@@ -62,7 +62,7 @@ register_addr    = voice_base(slot) + offset
 | `0x7c` | STATUS | bit 0 configuration valid for this voice slot |
 | `0x3000` | VERSION | design version, currently `0x0006_0000` |
 | `0x3010` | SYSTEM_STATUS | system wrapper status bits |
-| `0x3014` | DEBUG_EVENT_FLAGS | sticky event flags, write one to clear |
+| `0x3014` | COMMON_EVENT_FLAGS | sticky event flags, write one to clear |
 | `0x3018` | AUDIO_STATUS | output FIFO and audio flags |
 | `0x301c` | RENDER_STATUS | render pending, deadline flag, and last latency |
 | `0x3020` | MEMORY_STATUS | external line-memory request/response status and last response latency |
@@ -76,14 +76,14 @@ register_addr    = voice_base(slot) + offset
 | `0x3050` | PLATFORM_SF2_SIZE | SF2 byte size from the SD image header |
 | `0x3058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
 | `0x305c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
-| `0x3060` | DDR_DEBUG_CONTROL | single-beat DDR debug command control |
-| `0x3064` | DDR_DEBUG_STATUS | single-beat DDR debug command status |
-| `0x3068` | DDR_DEBUG_ADDR | 128-bit-beat-aligned DDR byte address |
-| `0x306c` | DDR_DEBUG_BYTE_ENABLE | write byte-enable bits, bit 0 controls byte 0 |
-| `0x3070` | DDR_DEBUG_DATA0 | write data/readback bits 31:0 |
-| `0x3074` | DDR_DEBUG_DATA1 | write data/readback bits 63:32 |
-| `0x3078` | DDR_DEBUG_DATA2 | write data/readback bits 95:64 |
-| `0x307c` | DDR_DEBUG_DATA3 | write data/readback bits 127:96 |
+| `0x3060` | DDR_ACCESS_CONTROL | single-beat DDR register-access command control |
+| `0x3064` | DDR_ACCESS_STATUS | single-beat DDR register-access command status |
+| `0x3068` | DDR_ACCESS_ADDR | 128-bit-beat-aligned DDR byte address |
+| `0x306c` | DDR_ACCESS_BYTE_ENABLE | write byte-enable bits, bit 0 controls byte 0 |
+| `0x3070` | DDR_ACCESS_DATA0 | write data/readback bits 31:0 |
+| `0x3074` | DDR_ACCESS_DATA1 | write data/readback bits 63:32 |
+| `0x3078` | DDR_ACCESS_DATA2 | write data/readback bits 95:64 |
+| `0x307c` | DDR_ACCESS_DATA3 | write data/readback bits 127:96 |
 
 A mono configuration is valid when `length != 0`. A stereo configuration is valid
 when both `length != 0` and `length_r != 0`. `length`, `length_r`, loop starts,
@@ -125,18 +125,18 @@ filter group to runtime without a phase reload. Reads from `ENVELOPE_LEVEL`,
 runtime scalar state. `COMMIT` and `FILTER_COMMIT` read as zero. Unsupported
 addresses report a bus error.
 
-The system debug registers are implemented by
-`fpga/common/rtl/wavetable_system_debug_regs.sv` and are composed into the
+The common status registers are implemented by
+`fpga/common/rtl/wavetable_common_status_regs.sv` and are composed into the
 current SPI/I2S system wrapper. They are visible through whichever board-level
-register transport is connected to that wrapper. The platform and DDR debug
-registers are implemented by board-specific debug extensions such as
-`fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv`; wrappers without that
-extension may report those addresses as normal unsupported register accesses.
-The debug window remains available while the playback core/audio path is held in
-`core_rst`; non-debug core register accesses during that reset return a bus
-error instead of stalling the transport bridge.
+register transport is connected to that wrapper. Platform status and DDR
+register-access controls are implemented by board-specific platform register
+windows such as `fpga/smart_artix/rtl/smart_artix_platform_regs.sv`; wrappers
+without that window may report those addresses as normal unsupported register
+accesses. The platform register window remains available while the playback
+core/audio path is held in `core_rst`; core register accesses during that reset
+return a bus error instead of stalling the transport bridge.
 
-All unspecified or reserved bits in the system debug registers read as zero. The
+All unspecified or reserved bits in the common status registers read as zero. The
 status bits below are live snapshots unless explicitly marked sticky or counted.
 
 `SYSTEM_STATUS` (`0x3010`) is the main live activity snapshot:
@@ -153,7 +153,7 @@ status bits below are live snapshots unless explicitly marked sticky or counted.
 | `7` | `ext_rsp_valid` | A packed external memory-line response is valid in this cycle. |
 | `31:8` | reserved | Reads zero. |
 
-`DEBUG_EVENT_FLAGS` (`0x3014`) contains sticky event flags. Write ones to clear
+`COMMON_EVENT_FLAGS` (`0x3014`) contains sticky event flags. Write ones to clear
 selected bits. Events that occur in the same cycle as a clear remain set.
 
 | Bits | Field | Meaning |
@@ -166,15 +166,15 @@ selected bits. Events that occur in the same cycle as a clear remain set.
 
 The matching counters at `0x3024` through `0x3038` increment on the same events
 and saturate at `0xffff_ffff`. They are reset only by system reset and are not
-cleared by writes to `DEBUG_EVENT_FLAGS`.
+cleared by writes to `COMMON_EVENT_FLAGS`.
 
 `AUDIO_STATUS` (`0x3018`) summarizes the output FIFO and audio sticky flags:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
 | `15:0` | `output_fifo_level` | Current number of samples stored in the output FIFO. |
-| `16` | `underrun` | Mirror of sticky `DEBUG_EVENT_FLAGS[0]`. |
-| `17` | `sample_drop` | Mirror of sticky `DEBUG_EVENT_FLAGS[1]`. |
+| `16` | `underrun` | Mirror of sticky `COMMON_EVENT_FLAGS[0]`. |
+| `17` | `sample_drop` | Mirror of sticky `COMMON_EVENT_FLAGS[1]`. |
 | `31:18` | reserved | Reads zero. |
 
 `RENDER_STATUS` (`0x301c`) reports render scheduling state:
@@ -183,7 +183,7 @@ cleared by writes to `DEBUG_EVENT_FLAGS`.
 | --- | --- | --- |
 | `15:0` | `render_latency_cycles` | Last completed render latency in `clk` cycles, measured from `sample_tick` until `core_sample_valid`. Saturates internally while pending at `0xffff`. |
 | `16` | `render_pending` | Same live pending bit as `SYSTEM_STATUS[1]`. |
-| `17` | `render_deadline_miss` | Mirror of sticky `DEBUG_EVENT_FLAGS[2]`. |
+| `17` | `render_deadline_miss` | Mirror of sticky `COMMON_EVENT_FLAGS[2]`. |
 | `31:18` | reserved | Reads zero. |
 
 `MEMORY_STATUS` (`0x3020`) reports line-memory activity:
@@ -194,7 +194,7 @@ cleared by writes to `DEBUG_EVENT_FLAGS`.
 | `16` | `ext_req_valid` | Same live request-valid bit as `SYSTEM_STATUS[5]`. |
 | `17` | `ext_req_ready` | Same live request-ready bit as `SYSTEM_STATUS[6]`. |
 | `18` | `ext_rsp_valid` | Same live response-valid bit as `SYSTEM_STATUS[7]`. |
-| `19` | `mem_response` | Mirror of sticky `DEBUG_EVENT_FLAGS[3]`. |
+| `19` | `mem_response` | Mirror of sticky `COMMON_EVENT_FLAGS[3]`. |
 | `31:20` | reserved | Reads zero. |
 
 The event counters are direct 32-bit saturating reads:
@@ -208,11 +208,11 @@ The event counters are direct 32-bit saturating reads:
 
 `PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. Generic
 wrappers may leave this address unimplemented unless they attach a board-specific
-debug-register extension.
+platform-register extension.
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `platform_debug_present` | `1` when the board wrapper implements this platform debug window. |
+| `0` | `platform_regs_present` | `1` when the board wrapper implements this platform register window. |
 | `1` | `platform_error_present` | `sd_error_code != 0` or `loader_error_code != 0`. |
 | `2` | `ddr_init_calib_complete` | MIG DDR3 calibration complete. This must be `1` before normal DDR-backed playback. |
 | `3` | `ddr_ui_rst` | MIG UI-clock reset is asserted. This should be `0` for normal operation. |
@@ -290,40 +290,40 @@ SD initialization, sector-0 header parsing, and later SF2 data-copy progress.
 | `27:16` | `ddr_device_temp` | MIG `device_temp` field, passed through from the generated DDR3 controller. |
 | `31:28` | reserved | Reads zero. |
 
-The DDR debug window at `0x3060` through `0x307c` is a Smart Artix bring-up path
-for single 128-bit DDR beat reads and writes through the same SPI register
-transport. It is not part of the generic playback memory interface. The address
-is a MIG byte address and must be 16-byte aligned for the current 128-bit board
-configuration. Unaligned commands report `error` and do not access DDR.
+The DDR register-access window at `0x3060` through `0x307c` is a Smart Artix
+bring-up path for single 128-bit DDR beat reads and writes through the same SPI
+register transport. It is not part of the generic playback memory interface. The
+address is a MIG byte address and must be 16-byte aligned for the current 128-bit
+board configuration. Unaligned commands report `error` and do not access DDR.
 
-`DDR_DEBUG_CONTROL` (`0x3060`) starts and clears a command:
+`DDR_ACCESS_CONTROL` (`0x3060`) starts and clears a command:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `start` | Write one to start one DDR debug command when `DDR_DEBUG_STATUS.ready = 1`. |
+| `0` | `start` | Write one to start one DDR register-access command when `DDR_ACCESS_STATUS.ready = 1`. |
 | `1` | `write` | Command direction sampled with `start`: one writes DDR, zero reads DDR. |
 | `2` | `clear` | Write one to clear latched `done` and `error` status bits. |
 | `31:3` | reserved | Reads zero. |
 
-`DDR_DEBUG_STATUS` (`0x3064`) reports command state:
+`DDR_ACCESS_STATUS` (`0x3064`) reports command state:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `present` | DDR debug window is implemented. |
+| `0` | `present` | DDR register-access window is implemented. |
 | `1` | `ready` | A new command can be accepted. |
 | `2` | `busy` | A command is in progress. |
-| `3` | `done` | Sticky completion flag; clear through `DDR_DEBUG_CONTROL.clear`. |
-| `4` | `error` | Sticky command error flag; clear through `DDR_DEBUG_CONTROL.clear`. |
+| `3` | `done` | Sticky completion flag; clear through `DDR_ACCESS_CONTROL.clear`. |
+| `4` | `error` | Sticky command error flag; clear through `DDR_ACCESS_CONTROL.clear`. |
 | `5` | `write` | Direction of the most recently accepted command. |
 | `31:6` | reserved | Reads zero. |
 
-For writes, load `DDR_DEBUG_ADDR`, `DDR_DEBUG_BYTE_ENABLE`, and the four
-`DDR_DEBUG_DATA*` words, then write `DDR_DEBUG_CONTROL = 0x3`. `BYTE_ENABLE`
+For writes, load `DDR_ACCESS_ADDR`, `DDR_ACCESS_BYTE_ENABLE`, and the four
+`DDR_ACCESS_DATA*` words, then write `DDR_ACCESS_CONTROL = 0x3`. `BYTE_ENABLE`
 uses one bit per byte, where one means the byte is written; the board wrapper
 converts it to the MIG active-high write-data mask. A write with no enabled bytes
-reports `error` and does not access DDR. For reads, load `DDR_DEBUG_ADDR`, write
-`DDR_DEBUG_CONTROL = 0x1`, poll `DDR_DEBUG_STATUS.done`, then read
-`DDR_DEBUG_DATA0` through `DDR_DEBUG_DATA3`.
+reports `error` and does not access DDR. For reads, load `DDR_ACCESS_ADDR`, write
+`DDR_ACCESS_CONTROL = 0x1`, poll `DDR_ACCESS_STATUS.done`, then read
+`DDR_ACCESS_DATA0` through `DDR_ACCESS_DATA3`.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
 flag without reloading phase. A commit clears the runtime released flag so a

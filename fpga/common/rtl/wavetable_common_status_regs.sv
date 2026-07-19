@@ -1,4 +1,4 @@
-module wavetable_system_debug_regs #(
+module wavetable_common_status_regs #(
   parameter int OUTPUT_FIFO_DEPTH = 8
 ) (
   input  logic                     clk,
@@ -8,8 +8,9 @@ module wavetable_system_debug_regs #(
   input  logic                     bus_write,
   input  logic [15:0]              bus_address,
   input  logic [31:0]              bus_wdata,
-  output logic                     debug_access,
-  output logic [31:0]              debug_rdata,
+  output logic [31:0]              bus_rdata,
+  output logic                     bus_ready,
+  output logic                     bus_error,
   input  logic                     sample_tick,
   input  logic                     core_sample_valid,
   input  logic                     core_busy,
@@ -20,8 +21,8 @@ module wavetable_system_debug_regs #(
   input  logic                     fifo_sample_valid,
   input  logic                     underrun_pulse,
   input  logic                     sample_drop_pulse,
-  input  logic                     mem_debug_response_pulse,
-  input  logic [15:0]              mem_debug_response_latency,
+  input  logic                     mem_response_trace_pulse,
+  input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles
@@ -29,7 +30,7 @@ module wavetable_system_debug_regs #(
   import synth_register_pkg::*;
 
   localparam logic [15:0] ADDR_SYSTEM_STATUS = REG_SYSTEM_STATUS;
-  localparam logic [15:0] ADDR_DEBUG_EVENT_FLAGS = REG_DEBUG_EVENT_FLAGS;
+  localparam logic [15:0] ADDR_COMMON_EVENT_FLAGS = REG_COMMON_EVENT_FLAGS;
   localparam logic [15:0] ADDR_AUDIO_STATUS = REG_AUDIO_STATUS;
   localparam logic [15:0] ADDR_RENDER_STATUS = REG_RENDER_STATUS;
   localparam logic [15:0] ADDR_MEMORY_STATUS = REG_MEMORY_STATUS;
@@ -40,22 +41,22 @@ module wavetable_system_debug_regs #(
 
   logic render_pending;
   logic [15:0] render_latency_count;
-  logic [31:0] debug_event_flags;
+  logic [31:0] common_event_flags;
   logic [31:0] underrun_count;
   logic [31:0] sample_drop_count;
   logic [31:0] render_deadline_miss_count;
   logic [31:0] mem_response_count;
-  logic [31:0] debug_event_set_mask;
+  logic [31:0] common_event_set_mask;
 
-  function automatic logic is_system_debug_address(input logic [15:0] address);
+  function automatic logic is_common_status_address(input logic [15:0] address);
     unique case (address)
-      ADDR_SYSTEM_STATUS, ADDR_DEBUG_EVENT_FLAGS, ADDR_AUDIO_STATUS,
+      ADDR_SYSTEM_STATUS, ADDR_COMMON_EVENT_FLAGS, ADDR_AUDIO_STATUS,
       ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
       ADDR_MEM_RESPONSE_COUNT: begin
-        is_system_debug_address = 1'b1;
+        is_common_status_address = 1'b1;
       end
-      default: is_system_debug_address = 1'b0;
+      default: is_common_status_address = 1'b0;
     endcase
   endfunction
 
@@ -63,20 +64,24 @@ module wavetable_system_debug_regs #(
     sat_inc = (value == 32'hffff_ffff) ? value : value + 32'd1;
   endfunction
 
-  assign debug_access = bus_valid && is_system_debug_address(bus_address);
-  assign debug_event_set_mask = {
+  logic regs_access;
+
+  assign regs_access = bus_valid && is_common_status_address(bus_address);
+  assign bus_ready = bus_valid;
+  assign bus_error = bus_valid && !is_common_status_address(bus_address);
+  assign common_event_set_mask = {
     28'd0,
-    mem_debug_response_pulse,
+    mem_response_trace_pulse,
     sample_tick && render_pending && !core_sample_valid,
     sample_drop_pulse,
     underrun_pulse
   };
 
   always_comb begin
-    debug_rdata = 32'd0;
+    bus_rdata = 32'd0;
     unique case (bus_address)
       ADDR_SYSTEM_STATUS: begin
-        debug_rdata = {
+        bus_rdata = {
           24'd0,
           ext_rsp_valid,
           ext_req_ready,
@@ -88,33 +93,33 @@ module wavetable_system_debug_regs #(
           core_busy
         };
       end
-      ADDR_DEBUG_EVENT_FLAGS: debug_rdata = debug_event_flags;
+      ADDR_COMMON_EVENT_FLAGS: bus_rdata = common_event_flags;
       ADDR_AUDIO_STATUS: begin
-        debug_rdata = {
+        bus_rdata = {
           14'd0,
-          debug_event_flags[1],
-          debug_event_flags[0],
+          common_event_flags[1],
+          common_event_flags[0],
           16'(output_fifo_level)
         };
       end
       ADDR_RENDER_STATUS: begin
-        debug_rdata = {14'd0, debug_event_flags[2], render_pending, render_latency_cycles};
+        bus_rdata = {14'd0, common_event_flags[2], render_pending, render_latency_cycles};
       end
       ADDR_MEMORY_STATUS: begin
-        debug_rdata = {
+        bus_rdata = {
           12'd0,
-          debug_event_flags[3],
+          common_event_flags[3],
           ext_rsp_valid,
           ext_req_ready,
           ext_req_valid,
-          mem_debug_response_latency
+          mem_response_trace_latency
         };
       end
-      ADDR_UNDERRUN_COUNT: debug_rdata = underrun_count;
-      ADDR_SAMPLE_DROP_COUNT: debug_rdata = sample_drop_count;
-      ADDR_RENDER_DEADLINE_MISS_COUNT: debug_rdata = render_deadline_miss_count;
-      ADDR_MEM_RESPONSE_COUNT: debug_rdata = mem_response_count;
-      default: debug_rdata = 32'd0;
+      ADDR_UNDERRUN_COUNT: bus_rdata = underrun_count;
+      ADDR_SAMPLE_DROP_COUNT: bus_rdata = sample_drop_count;
+      ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rdata = render_deadline_miss_count;
+      ADDR_MEM_RESPONSE_COUNT: bus_rdata = mem_response_count;
+      default: bus_rdata = 32'd0;
     endcase
   end
 
@@ -124,7 +129,7 @@ module wavetable_system_debug_regs #(
       render_latency_count <= '0;
       render_latency_cycles <= '0;
       render_deadline_miss_pulse <= 1'b0;
-      debug_event_flags <= 32'd0;
+      common_event_flags <= 32'd0;
       underrun_count <= 32'd0;
       sample_drop_count <= 32'd0;
       render_deadline_miss_count <= 32'd0;
@@ -132,10 +137,10 @@ module wavetable_system_debug_regs #(
     end else begin
       render_deadline_miss_pulse <= 1'b0;
 
-      if (debug_access && bus_write && (bus_address == ADDR_DEBUG_EVENT_FLAGS)) begin
-        debug_event_flags <= (debug_event_flags & ~bus_wdata) | debug_event_set_mask;
+      if (regs_access && bus_write && (bus_address == ADDR_COMMON_EVENT_FLAGS)) begin
+        common_event_flags <= (common_event_flags & ~bus_wdata) | common_event_set_mask;
       end else begin
-        debug_event_flags <= debug_event_flags | debug_event_set_mask;
+        common_event_flags <= common_event_flags | common_event_set_mask;
       end
 
       if (underrun_pulse)
@@ -144,7 +149,7 @@ module wavetable_system_debug_regs #(
         sample_drop_count <= sat_inc(sample_drop_count);
       if (sample_tick && render_pending && !core_sample_valid)
         render_deadline_miss_count <= sat_inc(render_deadline_miss_count);
-      if (mem_debug_response_pulse)
+      if (mem_response_trace_pulse)
         mem_response_count <= sat_inc(mem_response_count);
 
       if (core_reset) begin

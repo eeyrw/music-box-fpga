@@ -138,9 +138,9 @@ void RtlHarness::tick() {
   top_->clk = 1;
   top_->eval();
 
-  if (top_->mem_debug_response_pulse) {
+  if (top_->mem_response_trace_pulse) {
     ++memory_responses_;
-    uint16_t latency = top_->mem_debug_response_latency;
+    uint16_t latency = top_->mem_response_trace_latency;
     response_latency_sum_ += latency;
     if (latency > response_latency_max_) response_latency_max_ = latency;
   }
