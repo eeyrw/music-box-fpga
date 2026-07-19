@@ -80,7 +80,15 @@ rtl/                    Generic synthesizable SystemVerilog core
 sim/                    Simulation-only code
   models/               Behavioral models that are not synthesis sources
   tb/                   Self-checking SystemVerilog testbenches
-  harness/              C++ SF2/MIDI/reference render and RTL harness code
+  harness/              C++ render harness code
+    apps/               C++ render executable entry points
+    formats/            SF2, MIDI, and byte-stream parsers
+    render/             Shared render types, MCU policy, and reference synth
+    control/            Register-control sequencing shared by sim and host tools
+    dut/                C++ DUT adapters around Verilated top modules
+    common/             WAV writer, memory profiles, and small shared helpers
+    board_loader/       Smart Artix SD-to-DDR loader render harness support
+    generated/          Generated C++ register-map constants
 
 fpga/                   Board-specific FPGA integration workspace
   common/               Reusable board/peripheral adapters
@@ -117,8 +125,9 @@ points:
 
 - [`docs/design/system_design.md`](docs/design/system_design.md): current RTL architecture and
   board-level backlog.
-- [`docs/verification/simulation_design.md`](docs/verification/simulation_design.md): self-checking tests
-  SoundFont render flows, and MIDI/SF2 render calculations.
+- [`docs/verification/simulation_design.md`](docs/verification/simulation_design.md): self-checking tests,
+  SoundFont render flows, C++ harness source layout, and MIDI/SF2 render
+  calculations.
 - [`docs/fixed_point.md`](docs/fixed_point.md): fixed-point arithmetic contracts.
 - [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
   external line-memory interface.
@@ -164,7 +173,9 @@ Build and execute the self-checking simulation:
 make test
 ```
 
-A successful regression ends with:
+`make test` is split into `test-cpp-unit`, `test-rtl-core`, and
+`test-rtl-peripheral`, so focused parser/control checks can run separately from
+the RTL regressions when needed. A successful core regression includes:
 
 ```text
 PASS: multi-voice wavetable core

@@ -42,7 +42,8 @@ change.
 
 - [`verification/simulation_design.md`](verification/simulation_design.md):
   self-checking tests, SoundFont/MIDI render harnesses, memory-profile renders,
-  board-loader simulation, and generated register-map consistency checks.
+  C++ harness source layout, board-loader simulation, and generated register-map
+  consistency checks.
 
 ## Host Control
 

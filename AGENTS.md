@@ -28,6 +28,17 @@ Read these documents before changing interfaces:
 - `rtl/audio`: audio serializers and output timing blocks.
 - `sim/models`: behavioral models that must never appear in synthesis sources.
 - `sim/tb`: self-checking SystemVerilog testbenches.
+- `sim/harness/apps`: C++ render executable entry points.
+- `sim/harness/formats`: MIDI, SF2, and byte-stream parsing utilities.
+- `sim/harness/render`: shared C++ render types, MCU policy, and fixed-point
+  reference synth.
+- `sim/harness/control`: register-control sequencing shared by simulation and
+  host tools.
+- `sim/harness/dut`: C++ adapters around Verilated DUTs. This is simulation
+  support code, not synthesizable RTL.
+- `sim/harness/common`: small shared C++ helpers such as WAV output and memory
+  timing profiles.
+- `sim/harness/board_loader`: Smart Artix board-loader render harness support.
 - `docs`: stable external contracts, design notes, verification flows, host notes,
   and board integration documentation.
 
@@ -72,12 +83,12 @@ package code. A DSP primitive must not depend on a voice controller.
 
 ## Planned Tasks
 
-- Move the real MIDI/SF2 render harness from generated SystemVerilog includes to
-  a C++ Verilator executable. The C++ harness should parse SF2 and MIDI at
-  runtime, model MCU-side preset selection, voice allocation, envelopes,
-  controller policy, wave memory, and WAV output, then drive `wavetable_render_core`
-  through its register and memory ports. Keep the existing SystemVerilog
-  self-checking tests for small exact RTL regressions.
+- Keep the real MIDI/SF2 render flow in C++ Verilator harnesses. These harnesses
+  parse SF2 and MIDI at runtime, model MCU-side preset selection, voice
+  allocation, envelopes, controller policy, wave memory, and WAV output, then
+  drive the RTL through documented register and memory ports.
+- Keep the SystemVerilog self-checking tests focused on small exact RTL
+  regressions.
 
 ## Verification Rules
 

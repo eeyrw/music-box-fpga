@@ -1,15 +1,16 @@
+#include "fanout_sink.h"
 #include "midi_parser.h"
 #include "quick_rtl_harness.h"
 #include "reference_synth.h"
 #include "render_support.h"
 #include "sf2_loader.h"
+#include "wav_writer.h"
 
 #include <verilated.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -17,100 +18,9 @@
 namespace render {
 namespace {
 
-class FanoutSink : public VoiceControlSink {
- public:
-  FanoutSink(VoiceControlSink& a, VoiceControlSink& b) : a_(a), b_(b) {}
-
-  void set_envelope(int voice, int level) override {
-    a_.set_envelope(voice, level);
-    b_.set_envelope(voice, level);
-  }
-
-  void set_gain(int voice, int gain_l, int gain_r) override {
-    a_.set_gain(voice, gain_l, gain_r);
-    b_.set_gain(voice, gain_l, gain_r);
-  }
-
-  void set_phase_inc(int voice, uint32_t phase_inc) override {
-    a_.set_phase_inc(voice, phase_inc);
-    b_.set_phase_inc(voice, phase_inc);
-  }
-
-  void set_filter(int voice, const FilterConfig& filter) override {
-    a_.set_filter(voice, filter);
-    b_.set_filter(voice, filter);
-  }
-
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override {
-    a_.commit_voice(voice, enable, phase_inc, region);
-    b_.commit_voice(voice, enable, phase_inc, region);
-  }
-
-  void release_voice(int voice, const Region& region) override {
-    a_.release_voice(voice, region);
-    b_.release_voice(voice, region);
-  }
-
- private:
-  VoiceControlSink& a_;
-  VoiceControlSink& b_;
-};
-
 int abs_diff(int16_t a, int16_t b) {
   return std::abs(int(a) - int(b));
 }
-
-void put_u16le(std::ofstream& f, uint16_t value) {
-  char b[2] = {char(value & 0xff), char((value >> 8) & 0xff)};
-  f.write(b, 2);
-}
-
-void put_u32le(std::ofstream& f, uint32_t value) {
-  char b[4] = {char(value & 0xff), char((value >> 8) & 0xff),
-               char((value >> 16) & 0xff), char((value >> 24) & 0xff)};
-  f.write(b, 4);
-}
-
-class WavWriter {
- public:
-  WavWriter(const std::string& path, int sample_rate) : f_(path, std::ios::binary), sample_rate_(sample_rate) {
-    if (!f_) throw std::runtime_error("failed to open " + path);
-    write_header(0);
-  }
-
-  ~WavWriter() {
-    if (f_) {
-      f_.seekp(0);
-      write_header(data_bytes_);
-    }
-  }
-
-  void write_stereo(int16_t left, int16_t right) {
-    put_u16le(f_, uint16_t(left));
-    put_u16le(f_, uint16_t(right));
-    data_bytes_ += 4;
-  }
-
- private:
-  void write_header(uint32_t data_bytes) {
-    f_.write("RIFF", 4);
-    put_u32le(f_, 36 + data_bytes);
-    f_.write("WAVEfmt ", 8);
-    put_u32le(f_, 16);
-    put_u16le(f_, 1);
-    put_u16le(f_, 2);
-    put_u32le(f_, uint32_t(sample_rate_));
-    put_u32le(f_, uint32_t(sample_rate_ * 2 * 2));
-    put_u16le(f_, 4);
-    put_u16le(f_, 16);
-    f_.write("data", 4);
-    put_u32le(f_, data_bytes);
-  }
-
-  std::ofstream f_;
-  int sample_rate_ = 48000;
-  uint32_t data_bytes_ = 0;
-};
 
 }  // namespace
 }  // namespace render

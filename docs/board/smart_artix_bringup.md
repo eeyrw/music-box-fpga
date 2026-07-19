@@ -113,8 +113,8 @@ make render-board-loader SECONDS=0.1
 Expected intent:
 
 - `make lint` catches synthesizable RTL issues.
-- `make test` checks exact core register, memory, interpolation, loop, gain, and
-  mix behavior.
+- `make test` checks C++ parser/control helpers plus exact core register,
+  memory, interpolation, loop, gain, mix, SPI, and I2S behavior.
 - `make smart-artix-test` checks the Smart Artix SD, DDR writer, DDR reader,
   read/write arbiter, native SD path, and loader blocks with focused simulations.
 - `make render-board-loader` verifies the raw-image SD-to-DDR path at command level

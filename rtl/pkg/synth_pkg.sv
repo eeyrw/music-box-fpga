@@ -14,9 +14,11 @@ package synth_pkg;
 `endif
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
 
+  /* verilator lint_off UNUSEDPARAM */
   localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
   localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;
   localparam logic [1:0] LOOP_MODE_UNTIL_RELEASE = 2'd2;
+  /* verilator lint_on UNUSEDPARAM */
 
   // Signed 16-bit PCM is the external sample format used by wave memory and by
   // the produced audio stream.

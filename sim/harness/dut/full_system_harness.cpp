@@ -5,28 +5,11 @@
 #include <stdexcept>
 
 namespace render {
-namespace {
-
-void put_u16le(std::ofstream& f, uint16_t value) {
-  char b[2] = {char(value & 0xff), char((value >> 8) & 0xff)};
-  f.write(b, 2);
-}
-
-void put_u32le(std::ofstream& f, uint32_t value) {
-  char b[4] = {char(value & 0xff), char((value >> 8) & 0xff),
-               char((value >> 16) & 0xff), char((value >> 24) & 0xff)};
-  f.write(b, 4);
-}
-
-}  // namespace
 
 FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
                                       const std::string& wav_path, int sample_rate)
     : top_(new Vwavetable_demo_system), voice_control_(*this), memory_(memory),
-      wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
-  if (!wav_) throw std::runtime_error("failed to open " + wav_path);
-  write_wav_header(0);
-
+      wav_(wav_path, sample_rate), sample_rate_(sample_rate) {
   top_->clk = 0;
   top_->rst = 1;
   top_->core_rst = 1;
@@ -41,11 +24,6 @@ FullSystemHarness::FullSystemHarness(const std::vector<int16_t>& memory,
 }
 
 FullSystemHarness::~FullSystemHarness() {
-  if (wav_) {
-    wav_.seekp(0);
-    write_wav_header(data_bytes_);
-    wav_.close();
-  }
   delete top_;
 }
 
@@ -69,7 +47,7 @@ void FullSystemHarness::run_until_frames(uint64_t target_frames) {
 FullSystemStats FullSystemHarness::stats() const {
   FullSystemStats s;
   s.frames = frames_;
-  s.nonzero_output_words = nonzero_output_words_;
+  s.nonzero_output_words = wav_.nonzero_words();
   s.underruns = underruns_;
   s.sample_drops = sample_drops_;
   s.render_deadline_misses = render_deadline_misses_;
@@ -223,31 +201,8 @@ void FullSystemHarness::observe_i2s() {
 }
 
 void FullSystemHarness::decoded_frame(int16_t left, int16_t right) {
-  write_pcm16(left);
-  write_pcm16(right);
+  wav_.write_stereo(left, right);
   ++frames_;
-}
-
-void FullSystemHarness::write_wav_header(uint32_t data_bytes) {
-  wav_.write("RIFF", 4);
-  put_u32le(wav_, 36 + data_bytes);
-  wav_.write("WAVEfmt ", 8);
-  put_u32le(wav_, 16);
-  put_u16le(wav_, 1);
-  put_u16le(wav_, 2);
-  put_u32le(wav_, uint32_t(sample_rate_));
-  put_u32le(wav_, uint32_t(sample_rate_ * 2 * 2));
-  put_u16le(wav_, 4);
-  put_u16le(wav_, 16);
-  wav_.write("data", 4);
-  put_u32le(wav_, data_bytes);
-}
-
-void FullSystemHarness::write_pcm16(int16_t sample) {
-  if (sample != 0) ++nonzero_output_words_;
-  char b[2] = {char(uint16_t(sample) & 0xff), char((uint16_t(sample) >> 8) & 0xff)};
-  wav_.write(b, 2);
-  data_bytes_ += 2;
 }
 
 }  // namespace render

@@ -15,18 +15,6 @@ std::string hex16(uint16_t v) {
   return b;
 }
 
-void put_u16le(std::ofstream& f, uint16_t value) {
-  // WAV files are little-endian regardless of host byte order.
-  char b[2] = {char(value & 0xff), char((value >> 8) & 0xff)};
-  f.write(b, 2);
-}
-
-void put_u32le(std::ofstream& f, uint32_t value) {
-  char b[4] = {char(value & 0xff), char((value >> 8) & 0xff),
-               char((value >> 16) & 0xff), char((value >> 24) & 0xff)};
-  f.write(b, 4);
-}
-
 int sample_timeout_cycles(const MemoryProfile& profile) {
   // The core renders voices serially. A worst-case stereo voice can issue four
   // word reads, and each word read may miss the line cache when many regions are
@@ -40,23 +28,10 @@ int sample_timeout_cycles(const MemoryProfile& profile) {
 
 }  // namespace
 
-MemoryProfile parse_memory_profile(const std::string& name) {
-  if (name == "ddr") return MemoryProfile{"ddr", 10, 4, 0};
-  if (name == "sdram") return MemoryProfile{"sdram", 16, 8, 1};
-  if (name == "parallel-nor" || name == "nor") return MemoryProfile{"parallel-nor", 28, 14, 3};
-  throw std::runtime_error("unknown memory profile: " + name + " (expected ddr, sdram, or parallel-nor)");
-}
-
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                        int sample_rate, const MemoryProfile& memory_profile)
     : top_(new Vwavetable_line_memory_core), voice_control_(*this), memory_(memory),
-      memory_profile_(memory_profile), wav_(wav_path, std::ios::binary), sample_rate_(sample_rate) {
-  if (!wav_) throw std::runtime_error("failed to open " + wav_path);
-  // Write a placeholder WAV header now. The final data length is not known until
-  // all samples have been requested, so the destructor seeks back and rewrites
-  // the header with the completed byte count.
-  write_wav_header(0);
-
+      memory_profile_(memory_profile), wav_(wav_path, sample_rate), sample_rate_(sample_rate) {
   top_->clk = 0;
   top_->rst = 1;
   top_->bus_valid = 0;
@@ -70,11 +45,6 @@ RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wa
 }
 
 RtlHarness::~RtlHarness() {
-  if (wav_) {
-    wav_.seekp(0);
-    write_wav_header(data_bytes_);
-    wav_.close();
-  }
   delete top_;
 }
 
@@ -154,8 +124,7 @@ void RtlHarness::request_sample(int produced) {
                              " ext_req_ready=" + std::to_string(int(top_->ext_req_ready)) +
                              " ext_rsp_valid=" + std::to_string(int(top_->ext_rsp_valid)));
   }
-  write_pcm16(int16_t(top_->sample_l));
-  write_pcm16(int16_t(top_->sample_r));
+  wav_.write_stereo(int16_t(top_->sample_l), int16_t(top_->sample_r));
 }
 
 void RtlHarness::tick() {
@@ -252,33 +221,6 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.ready_gap_cycles = memory_profile_.ready_gap_cycles;
   stats.register_writes = register_write_stats_;
   return stats;
-}
-
-void RtlHarness::write_wav_header(uint32_t data_bytes) {
-  // 16-bit stereo PCM WAV: two channels, 2 bytes per channel, no compression.
-  // data_bytes is the number of PCM payload bytes already written after the
-  // header, not the number of sample frames.
-  wav_.write("RIFF", 4);
-  put_u32le(wav_, 36 + data_bytes);
-  wav_.write("WAVEfmt ", 8);
-  put_u32le(wav_, 16);
-  put_u16le(wav_, 1);
-  put_u16le(wav_, 2);
-  put_u32le(wav_, uint32_t(sample_rate_));
-  put_u32le(wav_, uint32_t(sample_rate_ * 2 * 2));
-  put_u16le(wav_, 4);
-  put_u16le(wav_, 16);
-  wav_.write("data", 4);
-  put_u32le(wav_, data_bytes);
-}
-
-void RtlHarness::write_pcm16(int16_t sample) {
-  // Track whether the render produced any nonzero words. That catches missing
-  // event windows, bad SoundFont region selection, and broken RTL plumbing before
-  // a silent WAV is mistaken for a successful render.
-  if (sample != 0) ++nonzero_output_words_;
-  put_u16le(wav_, uint16_t(sample));
-  data_bytes_ += 2;
 }
 
 }  // namespace render

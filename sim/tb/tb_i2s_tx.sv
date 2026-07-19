@@ -26,7 +26,7 @@ module tb_i2s_tx;
   pcm_t expected_l [0:2];
   pcm_t expected_r [0:2];
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   i2s_tx dut (
     .clk,
@@ -57,18 +57,18 @@ module tb_i2s_tx;
 
   task automatic check_decoded_frame(input pcm_t left, input pcm_t right);
     begin
-      decoded_frames++;
+      decoded_frames <= decoded_frames + 1;
       if (matched_frames == 0) begin
         if (left === expected_l[0] && right === expected_r[0]) begin
-          matched_frames = 1;
+          matched_frames <= 1;
         end
       end else if (matched_frames < 3) begin
         if (left !== expected_l[matched_frames] || right !== expected_r[matched_frames]) begin
           $error("decoded frame %0d got L=%0d R=%0d expected L=%0d R=%0d",
                  matched_frames, left, right, expected_l[matched_frames], expected_r[matched_frames]);
-          errors++;
+          errors <= errors + 1;
         end
-        matched_frames++;
+        matched_frames <= matched_frames + 1;
       end
     end
   endtask
@@ -83,7 +83,7 @@ module tb_i2s_tx;
     end else begin
       bclk_d <= i2s_bclk;
       if (underrun_pulse)
-        underruns++;
+        underruns <= underruns + 1;
 
       if (!bclk_d && i2s_bclk) begin
         if ((i2s_lrclk != rx_lrclk) && (rx_bit_count != 4'd15)) begin

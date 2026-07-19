@@ -23,7 +23,7 @@ module tb_smart_artix_ddr3_line_reader;
   );
 
 /* verilator lint_off BLKSEQ */
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 /* verilator lint_on BLKSEQ */
 
   task automatic check(input bit condition, input string message);

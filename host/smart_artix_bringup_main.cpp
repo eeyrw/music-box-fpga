@@ -1,6 +1,6 @@
 #include "host/ch347_transport.h"
 
-#include "sim/harness/register_control.h"
+#include "sim/harness/control/register_control.h"
 
 #include <chrono>
 #include <cctype>

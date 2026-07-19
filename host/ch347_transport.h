@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-#include "sim/harness/register_control.h"
+#include "sim/harness/control/register_control.h"
 #include "third_party/ch347_linux/ch347_lib.h"
 
 namespace host {

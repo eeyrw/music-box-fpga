@@ -1,9 +1,9 @@
 #pragma once
 
 #include "register_control.h"
+#include "wav_writer.h"
 
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -57,13 +57,11 @@ class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
   void service_external_memory();
   void observe_i2s();
   void decoded_frame(int16_t left, int16_t right);
-  void write_wav_header(uint32_t data_bytes);
-  void write_pcm16(int16_t sample);
 
   Vwavetable_demo_system* top_ = nullptr;
   RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
-  std::ofstream wav_;
+  WavWriter wav_;
   int sample_rate_ = 48000;
   bool line_pending_ = false;
   uint32_t line_pending_addr_ = 0;
@@ -75,9 +73,7 @@ class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
   int rx_bit_count_ = 0;
   uint16_t rx_shift_ = 0;
   int16_t rx_left_ = 0;
-  uint32_t data_bytes_ = 0;
   uint64_t frames_ = 0;
-  uint64_t nonzero_output_words_ = 0;
   uint64_t underruns_ = 0;
   uint64_t sample_drops_ = 0;
   uint64_t render_deadline_misses_ = 0;

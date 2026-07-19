@@ -32,7 +32,7 @@ module tb_wavetable_demo_system_debug;
   logic [31:0] debug_bus_wdata;
   int errors = 0;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   wavetable_demo_system #(
     .LINE_WORDS(8),

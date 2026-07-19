@@ -9,14 +9,18 @@ such as CH347.
 The simulation harness already contains reusable control-side code under
 `sim/harness/`:
 
-- `midi_parser.*`: parses MIDI events and converts them to timed note events.
-- `sf2_loader.*`: extracts SoundFont regions and builds the wave-memory image.
-- `render_support.*`: contains `McuModel`, which owns voice allocation, note on,
-  note off, ADSR stepping, and region selection for the current render path.
-- `register_control.*`: converts voice-control operations into register writes.
+- `formats/midi_parser.*`: parses MIDI events and converts them to timed note
+  events.
+- `formats/sf2_loader.*`: extracts SoundFont regions and builds the wave-memory
+  image.
+- `render/render_support.*`: contains `McuModel`, which owns voice allocation,
+  note on, note off, ADSR stepping, and region selection for the current render
+  path.
+- `control/register_control.*`: converts voice-control operations into register
+  writes.
 
-`register_control.*` is the boundary intended for real hardware transport. It
-defines:
+`control/register_control.*` is the boundary intended for real hardware
+transport. It defines:
 
 ```cpp
 class RegisterWriteSink {
@@ -27,9 +31,10 @@ class RegisterWriteSink {
 ```
 
 `RegisterVoiceControl` implements the documented voice register sequence on top
-of that interface. The Verilator bus harness, demo full-system harness, and
-future CH347 host tool should all share this class so that note setup, envelope
-updates, release handling, and commit ordering stay identical.
+of that interface. The C++ DUT adapters under `sim/harness/dut/`, the demo
+full-system harness, the board-loader harness, and the CH347 host tools all share
+this class so that note setup, envelope updates, release handling, and commit
+ordering stay identical.
 
 ## CH347 Transport Shape
 

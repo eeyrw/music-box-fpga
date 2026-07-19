@@ -54,7 +54,7 @@ module tb_wavetable_render_core_asset;
   int produced;
 
 /* verilator lint_off BLKSEQ */
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 /* verilator lint_on BLKSEQ */
 
   // Keep Verilator from warning about observed-but-unused status outputs. The

@@ -109,7 +109,7 @@ module tb_smart_artix_sd_native_asset_loader;
   );
 
 /* verilator lint_off BLKSEQ */
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 /* verilator lint_on BLKSEQ */
 
 /* verilator lint_off BLKSEQ */

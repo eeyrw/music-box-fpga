@@ -6,6 +6,16 @@ VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
+HARNESS_INCLUDE_FLAGS := \
+	-I$(abspath sim/harness) \
+	-I$(abspath sim/harness/common) \
+	-I$(abspath sim/harness/formats) \
+	-I$(abspath sim/harness/render) \
+	-I$(abspath sim/harness/control) \
+	-I$(abspath sim/harness/dut) \
+	-I$(abspath sim/harness/board_loader)
+CXX_STD_FLAGS := -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
+HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 
 # Defaults for the SoundFont render flow. Users can override any of these on the
 # make command line, for example: make render-instrument INSTRUMENT=10 KEY=64.
@@ -77,6 +87,22 @@ SYSTEM_DEBUG_SIM_SOURCES := \
 VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
 
+HARNESS_RENDER_COMMON_SRCS := \
+	$(abspath sim/harness/render/render_support.cpp) \
+	$(abspath sim/harness/control/register_control.cpp) \
+	$(abspath sim/harness/formats/midi_parser.cpp) \
+	$(abspath sim/harness/formats/sf2_loader.cpp)
+
+HARNESS_WAV_SRC := \
+	$(abspath sim/harness/common/wav_writer.cpp)
+
+HARNESS_MEMORY_PROFILE_SRC := \
+	$(abspath sim/harness/common/memory_profile.cpp)
+
+HARNESS_BOARD_LOADER_SRCS := \
+	$(abspath sim/harness/board_loader/board_loader_render_harness.cpp) \
+	$(abspath sim/harness/board_loader/board_loader_render_utils.cpp)
+
 SMART_ARTIX_RTL_SOURCES := \
 	rtl/pkg/synth_register_pkg.sv \
 	fpga/smart_artix/rtl/smart_artix_pkg.sv \
@@ -96,6 +122,9 @@ SMART_ARTIX_SIM_MODELS := \
 	fpga/smart_artix/sim/fake_sd_native_phy_model.sv \
 	fpga/smart_artix/sim/fake_sd_native_pin_model.sv
 
+SMART_ARTIX_WITH_CORE_RTL_SOURCES := \
+	$(filter-out rtl/pkg/synth_register_pkg.sv,$(SMART_ARTIX_RTL_SOURCES))
+
 SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_asset_loader \
 	tb_smart_artix_ddr3_asset_writer \
@@ -110,7 +139,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_sd_native_pin_phy \
 	tb_smart_artix_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map check-register-map lint test smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
+.PHONY: all generate-register-map check-register-map lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 
 all: test
 
@@ -131,25 +160,30 @@ lint:
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 
-test:
+test: test-cpp-unit test-rtl-core test-rtl-peripheral
+
+test-cpp-unit:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
-		sim/harness/midi_parser.cpp sim/harness/midi_parser_test.cpp \
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/formats/midi_parser.cpp sim/harness/formats/midi_parser_test.cpp \
 		-o $(BUILD_DIR)/midi_parser_test
 	$(BUILD_DIR)/midi_parser_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
-		sim/harness/register_control.cpp sim/harness/register_control_test.cpp \
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/control/register_control.cpp sim/harness/control/register_control_test.cpp \
 		-o $(BUILD_DIR)/register_control_test
 	$(BUILD_DIR)/register_control_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
-		sim/harness/sf2_loader.cpp sim/harness/sf2_loader_test.cpp \
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) \
-		sim/harness/render_support.cpp sim/harness/sf2_loader.cpp \
-		sim/harness/midi_parser.cpp sim/harness/render_support_test.cpp \
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/render_support.cpp sim/harness/formats/sf2_loader.cpp \
+		sim/harness/formats/midi_parser.cpp sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
+
+test-rtl-core:
+	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_phase_obj_dir --top-module tb_voice_phase_frame \
 		$(RTL_SOURCES) $(VOICE_PHASE_SIM_SOURCES)
@@ -160,13 +194,16 @@ test:
 		$(RTL_SOURCES) $(SIM_SOURCES)
 	$(BUILD_DIR)/obj_dir/V$(TOP)
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
-		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SPI_SIM_SOURCES)
-	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
 		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
+
+test-rtl-peripheral:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
+		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SPI_SIM_SOURCES)
+	$(BUILD_DIR)/spi_obj_dir/Vtb_spi_register_bridge
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv $(I2S_SIM_SOURCES)
@@ -188,16 +225,16 @@ $(SMART_ARTIX_TESTBENCHES):
 
 host-ch347:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) -I. \
+	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
-		sim/harness/register_control.cpp \
+		sim/harness/control/register_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
 
 host-smart-artix-bringup:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) -I. \
+	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/smart_artix_bringup_main.cpp host/ch347_transport.cpp \
-		sim/harness/register_control.cpp \
+		sim/harness/control/register_control.cpp \
 		-o $(BUILD_DIR)/smart_artix_bringup -ldl
 
 list-instruments:
@@ -240,14 +277,12 @@ render-quick:
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_quick_cpp_obj_dir --top-module wavetable_render_core \
 		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/render_quick_main.cpp) \
-		$(abspath sim/harness/render_support.cpp) \
-		$(abspath sim/harness/register_control.cpp) \
-		$(abspath sim/harness/midi_parser.cpp) \
-		$(abspath sim/harness/sf2_loader.cpp) \
-		$(abspath sim/harness/reference_synth.cpp) \
-		$(abspath sim/harness/quick_rtl_harness.cpp) \
-		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		$(abspath sim/harness/apps/render_quick_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_WAV_SRC) \
+		$(abspath sim/harness/render/reference_synth.cpp) \
+		$(abspath sim/harness/dut/quick_rtl_harness.cpp) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)"
 	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_quick_cpp_obj_dir -f Vwavetable_render_core.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
@@ -263,13 +298,12 @@ render-memory:
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_line_memory_core \
 		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/render_memory_main.cpp) \
-		$(abspath sim/harness/render_support.cpp) \
-		$(abspath sim/harness/register_control.cpp) \
-		$(abspath sim/harness/midi_parser.cpp) \
-		$(abspath sim/harness/sf2_loader.cpp) \
-		$(abspath sim/harness/rtl_harness.cpp) \
-		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		$(abspath sim/harness/apps/render_memory_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_MEMORY_PROFILE_SRC) \
+		$(HARNESS_WAV_SRC) \
+		$(abspath sim/harness/dut/rtl_harness.cpp) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)"
 	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_line_memory_core.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_line_memory_core --sf2 "$(SF2)" \
@@ -285,13 +319,11 @@ render-full-system:
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_demo_system \
 		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) --exe \
-		$(abspath sim/harness/render_full_system_main.cpp) \
-		$(abspath sim/harness/render_support.cpp) \
-		$(abspath sim/harness/register_control.cpp) \
-		$(abspath sim/harness/midi_parser.cpp) \
-		$(abspath sim/harness/sf2_loader.cpp) \
-		$(abspath sim/harness/full_system_harness.cpp) \
-		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		$(abspath sim/harness/apps/render_full_system_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_WAV_SRC) \
+		$(abspath sim/harness/dut/full_system_harness.cpp) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)"
 	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_demo_system.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_demo_system --sf2 "$(SF2)" \
@@ -306,14 +338,14 @@ render-board-loader:
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_board_loader_cpp_obj_dir \
 		--top-module board_loader_render_tops \
-		$(RTL_SOURCES) $(SMART_ARTIX_RTL_SOURCES) sim/tb/board_loader_render_tops.sv --exe \
-		$(abspath sim/harness/board_loader_render_main.cpp) \
-		$(abspath sim/harness/render_support.cpp) \
-		$(abspath sim/harness/register_control.cpp) \
-		$(abspath sim/harness/midi_parser.cpp) \
-		$(abspath sim/harness/sf2_loader.cpp) \
-		$(abspath sim/harness/reference_synth.cpp) \
-		-CFLAGS "-std=c++17 $(CXX_DEFINES)"
+		$(RTL_SOURCES) $(SMART_ARTIX_WITH_CORE_RTL_SOURCES) sim/tb/board_loader_render_tops.sv --exe \
+		$(abspath sim/harness/apps/board_loader_render_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_MEMORY_PROFILE_SRC) \
+		$(HARNESS_WAV_SRC) \
+		$(HARNESS_BOARD_LOADER_SRCS) \
+		$(abspath sim/harness/render/reference_synth.cpp) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)"
 	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_board_loader_cpp_obj_dir -f Vboard_loader_render_tops.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
 	$(BUILD_DIR)/render_board_loader_cpp_obj_dir/Vboard_loader_render_tops --sf2 "$(SF2)" \

@@ -28,11 +28,17 @@ RENDER_OPT_FAST=-Os` to compare against Verilator's size-optimized default.
 
 ## Source Groups
 
-The `Makefile` separates files into two groups:
+The `Makefile` separates RTL and simulation sources into focused groups:
 
 ```text
-RTL_SOURCES = synthesizable hardware
-SIM_SOURCES = behavioral memory model + self-checking testbench
+RTL_SOURCES                    = synthesizable generic hardware
+FPGA_COMMON_RTL_SOURCES        = reusable board-facing RTL adapters
+SMART_ARTIX_RTL_SOURCES        = Smart Artix board RTL
+SIM_SOURCES                    = behavioral memory model + core testbench
+HARNESS_RENDER_COMMON_SRCS     = shared C++ MIDI/SF2/render/control sources
+HARNESS_WAV_SRC                = shared WAV writer
+HARNESS_MEMORY_PROFILE_SRC     = shared external-memory timing profile parser
+HARNESS_BOARD_LOADER_SRCS      = Smart Artix board-loader C++ harness support
 ```
 
 `make lint` runs Verilator lint only on `RTL_SOURCES`. That keeps simulation-only
@@ -51,10 +57,19 @@ Run `make generate-register-map` after changing the JSON source. Run
 `make check-register-map` before committing to verify the checked-in generated
 files still match the JSON register contract.
 
-`make test` builds the synthetic-data regression testbench:
+`make test` is the top-level regression. It runs C++ unit tests and focused RTL
+testbenches, including the synthetic-data multi-voice regression:
 
 ```text
 sim/tb/tb_wavetable_render_core.sv
+```
+
+It is also split into narrower targets:
+
+```text
+test-cpp-unit       = parser, register-control, and render-preparation unit tests
+test-rtl-core       = voice phase, core render, and wave-memory subsystem tests
+test-rtl-peripheral = SPI bridge, I2S transmitter, and demo-system debug tests
 ```
 
 `make render-instrument` builds the legacy single-instrument SoundFont render
@@ -63,6 +78,27 @@ testbench:
 ```text
 sim/tb/tb_wavetable_render_core_asset.sv
 ```
+
+## C++ Harness Layout
+
+The C++ harness code under `sim/harness/` is organized by role:
+
+```text
+apps/          Executable entry points for render-quick, render-memory,
+               render-full-system, and render-board-loader.
+formats/       SF2 and MIDI parsers plus shared byte-reader utilities.
+render/        Shared render data types, `McuModel`, render preparation, and
+               the exact fixed-point reference synthesizer.
+control/       Register write sink interfaces and voice register programming.
+dut/           C++ adapters around Verilated DUTs.
+common/        WAV output, memory timing profiles, and small shared helpers.
+board_loader/  Raw-SD image helpers and Smart Artix SD/DDR loader harness model.
+generated/     Generated C++ register-map constants.
+```
+
+The directory named `dut/` is intentionally C++ simulation code. It wraps
+Verilated top modules and should not be confused with synthesizable RTL under
+the repository-level `rtl/` directory.
 
 ## Behavioral Memory Model
 
@@ -444,17 +480,17 @@ profiles are `ddr`, `sdram`, and `parallel-nor`.
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
 
-`sim/harness/render_support_test.cpp` is the focused regression for the shared
-render-preparation policy. It builds a small synthetic SF2 with a melodic preset,
-a bank-128 drum preset, and an intentionally nonmatching extra layer. The test
-checks that channel-10 Note On events select the percussion bank, that a playable
-layer survives when another layer misses the key range, and that a fully unmapped
-Note On is silenced instead of aborting the render.
+`sim/harness/render/render_support_test.cpp` is the focused regression for the
+shared render-preparation policy. It builds a small synthetic SF2 with a melodic
+preset, a bank-128 drum preset, and an intentionally nonmatching extra layer. The
+test checks that channel-10 Note On events select the percussion bank, that a
+playable layer survives when another layer misses the key range, and that a fully
+unmapped Note On is silenced instead of aborting the render.
 
 ## MIDI/SF2 Render Calculation
 
 The C++ harnesses share the same preparation and MCU policy code in
-`sim/harness/render_support.cpp`.
+`sim/harness/render/render_support.cpp`.
 
 Event timing:
 
@@ -517,8 +553,8 @@ At Note Off, loop-until-release samples receive `RELEASE_CONTROL.released = 1`.
 The MCU model then continues release envelope writes and eventually disables and
 commits the slot when the envelope reaches zero.
 
-`sim/harness/render_support.cpp` models the MCU at the precision used by this FPGA
-project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
+`sim/harness/render/render_support.cpp` models the MCU at the precision used by
+this FPGA project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
 volume-envelope step values, free-voice-first allocation, and oldest-voice
 stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes

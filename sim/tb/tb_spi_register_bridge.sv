@@ -22,11 +22,12 @@ module tb_spi_register_bridge;
   voice_runtime_t render_runtime;
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
+  logic unused_register_outputs;
   int errors = 0;
   localparam logic [15:0] INVALID_VERSION_NEIGHBOR_0 = REG_VERSION + 16'h0004;
   localparam logic [15:0] INVALID_VERSION_NEIGHBOR_1 = REG_VERSION + 16'h0008;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   spi_register_bridge bridge (
     .clk,
@@ -62,6 +63,10 @@ module tb_spi_register_bridge;
     .config_valid,
     .commit_pulse
   );
+
+  assign unused_register_outputs = (|render_voice_index) | (|render_runtime) |
+                                   (|config_valid[NUM_VOICES-1:1]) |
+                                   (|render_config) | (|commit_pulse);
 
   task automatic spi_clock_bit(input logic bit_value);
     spi_mosi = bit_value;

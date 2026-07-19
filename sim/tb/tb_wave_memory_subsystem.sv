@@ -25,7 +25,7 @@ module tb_wave_memory_subsystem;
   int miss_count = 0;
   int response_count = 0;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) dut (
     .clk,

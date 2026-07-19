@@ -35,14 +35,15 @@ module tb_wavetable_render_core;
   logic unused_mem_debug;
   int errors = 0;
   int last_latency_cycles = 0;
+  string current_case = "startup";
 
   // Testbench clock only; production RTL still uses one rising-edge system
   // clock and synchronous reset.
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   wavetable_render_core dut (.*);
 
-  assign unused_mem_debug = mem_debug_hit_pulse | mem_debug_miss_pulse |
+  assign unused_mem_debug = busy | mem_debug_hit_pulse | mem_debug_miss_pulse |
                             mem_debug_response_pulse | (|mem_debug_response_latency);
 
   wave_memory_subsystem #(.LINE_WORDS(8)) memory_subsystem (
@@ -74,6 +75,11 @@ module tb_wavetable_render_core;
     .rsp_data(ext_rsp_data)
   );
 
+  task automatic begin_case(input string name);
+    current_case = name;
+    $display("CASE: %s", current_case);
+  endtask
+
   task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
     // Hold the request until the register bank accepts it. Most writes complete
     // in one cycle; commit writes may take longer while shadow BRAM is read.
@@ -86,7 +92,7 @@ module tb_wavetable_render_core;
       @(negedge clk);
     end while (!bus_ready);
     if (!bus_ready || bus_error) begin
-      $error("bus write failed at 0x%04x", address);
+      $error("[%s] bus write failed at 0x%04x", current_case, address);
       errors++;
     end
     bus_valid = 1'b0;
@@ -103,10 +109,11 @@ module tb_wavetable_render_core;
       @(negedge clk);
     end while (!bus_ready);
     if (!bus_ready || bus_error) begin
-      $error("bus read failed at 0x%04x", address);
+      $error("[%s] bus read failed at 0x%04x", current_case, address);
       errors++;
     end else if (bus_rdata !== expected) begin
-      $error("bus read 0x%04x got 0x%08x expected 0x%08x", address, bus_rdata, expected);
+      $error("[%s] bus read 0x%04x got 0x%08x expected 0x%08x",
+             current_case, address, bus_rdata, expected);
       errors++;
     end
     bus_valid = 1'b0;
@@ -127,15 +134,17 @@ module tb_wavetable_render_core;
     end
     last_latency_cycles = timeout;
     if (!sample_valid) begin
-      $error("sample response timed out");
+      $error("[%s] sample response timed out", current_case);
       errors++;
     end else begin
-      if ($signed(sample_l) !== expected_l) begin
-        $error("left sample got %0d expected %0d", $signed(sample_l), expected_l);
+      if ($signed({{16{sample_l[15]}}, sample_l}) !== expected_l) begin
+        $error("[%s] left sample got %0d expected %0d",
+               current_case, $signed(sample_l), expected_l);
         errors++;
       end
-      if ($signed(sample_r) !== expected_r) begin
-        $error("right sample got %0d expected %0d", $signed(sample_r), expected_r);
+      if ($signed({{16{sample_r[15]}}, sample_r}) !== expected_r) begin
+        $error("[%s] right sample got %0d expected %0d",
+               current_case, $signed(sample_r), expected_r);
         errors++;
       end
     end
@@ -160,15 +169,17 @@ module tb_wavetable_render_core;
     end
     last_latency_cycles = timeout;
     if (!sample_valid) begin
-      $error("sample response timed out");
+      $error("[%s] sample response timed out", current_case);
       errors++;
     end else begin
-      if ($signed(sample_l) !== expected_l) begin
-        $error("left sample got %0d expected %0d", $signed(sample_l), expected_l);
+      if ($signed({{16{sample_l[15]}}, sample_l}) !== expected_l) begin
+        $error("[%s] left sample got %0d expected %0d",
+               current_case, $signed(sample_l), expected_l);
         errors++;
       end
-      if ($signed(sample_r) !== expected_r) begin
-        $error("right sample got %0d expected %0d", $signed(sample_r), expected_r);
+      if ($signed({{16{sample_r[15]}}, sample_r}) !== expected_r) begin
+        $error("[%s] right sample got %0d expected %0d",
+               current_case, $signed(sample_r), expected_r);
         errors++;
       end
     end
@@ -254,7 +265,7 @@ module tb_wavetable_render_core;
   endtask
 
   task automatic configure_mono_slot(
-    input int voice,
+    input logic [15:0] voice,
     input int base_addr,
     input logic [31:0] phase_init,
     input logic signed [15:0] gain,
@@ -361,36 +372,43 @@ module tb_wavetable_render_core;
 
     // Check mono interpolation, gain, and the fact that mono is duplicated to
     // left/right before channel gains are applied.
+    begin_case("mono interpolation gain envelope");
     configure_mono();
     request_write_envelope_mid_render_and_check(32'h0000_4000, 250, 250);
     request_and_check(375, 375);
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_7fff);
 
     // A shadow-only base-address write must not disturb active playback.
+    begin_case("shadow write isolation");
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
     request_and_check(1250, 1250);
 
     // The MCU owns envelope progression. A runtime envelope write must affect
     // the next rendered sample without committing or resetting voice phase.
+    begin_case("runtime envelope update");
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_4000);
     request_and_check(375, 375);
 
     // Runtime stereo gain writes affect both active channels atomically without a commit.
+    begin_case("runtime gain update");
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h2000_2000);
     request_and_check(62, 62);
 
     // Check stereo addressing and exclusive loop wrapping.
+    begin_case("stereo exclusive loop");
     configure_stereo_loop();
     request_and_check(1250, -1250);
     request_and_check(1250, -1250);
 
     // Linked stereo samples can carry different right-channel loop metadata.
+    begin_case("stereo independent right loop");
     configure_stereo_independent_right_loop();
     request_and_check(2999, -3000);
     request_and_check(1999, -4000);
     request_and_check(2999, -5000);
 
     // Runtime PHASE_INC writes retune playback without reloading phase.
+    begin_case("runtime phase increment update");
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
@@ -399,6 +417,7 @@ module tb_wavetable_render_core;
     request_and_check(2999, 2999);
 
     // No-loop voices stop contributing once phase reaches the sample length.
+    begin_case("no-loop voice completion");
     configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_NONE,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
@@ -406,6 +425,7 @@ module tb_wavetable_render_core;
     request_and_check(0, 0);
 
     // Loop-until-release wraps while held, then plays through to sample end.
+    begin_case("loop until release");
     configure_voice0_basic(0, 4, 1, 3, 32'h0000_0200, 32'h0000_0100, LOOP_MODE_UNTIL_RELEASE,
                            1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(1999, 1999);
@@ -417,6 +437,7 @@ module tb_wavetable_render_core;
 
     // Biquad IIR is applied after interpolation and before channel gain. This
     // coefficient set is a two-tap FIR case: y[n] = 0.5*x[n] + 0.5*x[n-1].
+    begin_case("filter datapath");
     configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b1, 32'sh0800_0000, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(999, 999);
@@ -425,6 +446,7 @@ module tb_wavetable_render_core;
     // Runtime filter coefficients update as one committed group. Coefficient
     // writes alone update shadow state only; FILTER_COMMIT commits the packed
     // coefficient word and enable bit to the renderer-facing RAM.
+    begin_case("runtime filter commit");
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
                            1'b1, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
     request_and_check(0, 0);
@@ -436,20 +458,23 @@ module tb_wavetable_render_core;
 
     // Register decode must reach the expanded 32nd voice slot in the default
     // 32-voice build. Smaller NUM_VOICES configurations intentionally omit it.
+    begin_case("highest voice register decode");
     if (NUM_VOICES >= 32) begin
       bus_write_word(reg_voice_addr(31, REG_OFF_BASE_ADDR_R), 32'h0000_0020);
     end
 
     // Check that two active voice slots render in one output request and the
     // mixer adds their current enveloped samples with saturation at the end.
+    begin_case("two-voice mix");
     configure_mono_slot(0, 0, 32'h0000_0080, 16'sh4000, 16'sh7fff);
     configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
     request_and_check(750, 750);
 
     // All configured voice slots can be addressed and mixed. Each contributes 15
     // after Q1.15 gain scaling.
+    begin_case("all-voice mix latency");
     for (int v = 0; v < NUM_VOICES; v++)
-      configure_mono_slot(v, 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
+      configure_mono_slot(16'(v), 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
     request_and_check(NUM_VOICES * 15, NUM_VOICES * 15);
     // The pipelined biquad and filter input stage spread filter math across
     // several states, so a full 32-voice active mono frame is expected to take

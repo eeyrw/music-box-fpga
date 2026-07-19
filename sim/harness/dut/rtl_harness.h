@@ -1,9 +1,10 @@
 #pragma once
 
+#include "memory_profile.h"
 #include "register_control.h"
+#include "wav_writer.h"
 
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -27,15 +28,6 @@ struct MemoryStats {
   RegisterWriteStats register_writes;
 };
 
-struct MemoryProfile {
-  std::string name;
-  int random_latency_cycles = 0;
-  int sequential_latency_cycles = 0;
-  int ready_gap_cycles = 0;
-};
-
-MemoryProfile parse_memory_profile(const std::string& name);
-
 // Thin Verilator-side driver for wavetable_line_memory_core. It owns the top
 // module, models the external line-memory slave, writes the generated stereo PCM
 // stream as a WAV file, and exposes firmware-like helpers for voice register
@@ -55,7 +47,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void release_voice(int voice, const Region& region) override;
   void request_sample(int produced);
 
-  int nonzero_output_words() const { return nonzero_output_words_; }
+  int nonzero_output_words() const { return int(wav_.nonzero_words()); }
   MemoryStats memory_stats() const;
   void print_memory_stats() const;
 
@@ -65,8 +57,6 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void write_register(uint16_t address, uint32_t data) override;
   void tick();
   void service_external_memory();
-  void write_wav_header(uint32_t data_bytes);
-  void write_pcm16(int16_t sample);
 
   Vwavetable_line_memory_core* top_ = nullptr;
   RegisterVoiceControl voice_control_;
@@ -74,7 +64,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   // image, with regions pointing at absolute sample words inside smpl.
   const std::vector<int16_t>& memory_;
   MemoryProfile memory_profile_;
-  std::ofstream wav_;
+  WavWriter wav_;
   int sample_rate_ = 48000;
   bool line_pending_ = false;
   uint32_t line_pending_addr_ = 0;
@@ -82,8 +72,6 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   int ready_gap_countdown_ = 0;
   bool have_last_line_addr_ = false;
   uint32_t last_line_addr_ = 0;
-  uint32_t data_bytes_ = 0;
-  int nonzero_output_words_ = 0;
   uint64_t memory_hits_ = 0;
   uint64_t memory_misses_ = 0;
   uint64_t memory_responses_ = 0;
