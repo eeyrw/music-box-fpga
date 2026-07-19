@@ -167,6 +167,29 @@ filter group to runtime without a phase reload. Reads from `ENVELOPE_LEVEL`,
 runtime scalar state. `COMMIT` and `FILTER_COMMIT` read as zero. Unsupported
 addresses report a bus error.
 
+The per-voice register bank keeps three classes of state. Shadow state is the
+software-editable configuration staged for the next commit. Active state is the
+stable renderer-facing region configuration copied from shadow by `COMMIT`.
+Runtime state holds controls that may change while a voice is playing.
+
+| Register or field | Shadow | Active | Runtime | Notes |
+| --- | --- | --- | --- | --- |
+| `BASE_ADDR`, `BASE_ADDR_R` | yes | yes | no | Sample-region word base addresses. |
+| `LENGTH`, `LENGTH_R` | yes | yes | no | Sample-frame counts. |
+| `LOOP_START`, `LOOP_START_R`, `LOOP_END`, `LOOP_END_R` | yes | yes | no | Loop-window frame counts. |
+| `REGION_MODE` | yes | yes | no | Stereo and loop-mode configuration. |
+| `CONTROL.enable` | yes | yes | no | Voice enable copied on `COMMIT`. |
+| `PHASE_INIT` | yes | yes | no | Initial phase used when a commit reloads the voice. |
+| `PHASE_INC` | yes | no | yes | Initial phase increment copied into runtime on voice `COMMIT`. |
+| `PHASE_INC_RUNTIME` | no | no | yes | Immediate runtime pitch update; does not change shadow. |
+| `GAIN_L`, `GAIN_R` | yes | no | yes | Initial channel gains copied into runtime on voice `COMMIT`. |
+| `GAIN_RUNTIME` | no | no | yes | Immediate packed runtime gain update; does not change shadow. |
+| `ENVELOPE_LEVEL` | yes | no | yes | Runtime envelope write also stages the committed envelope value. If never written for a slot, commit initializes runtime envelope to full scale. |
+| `RELEASE_CONTROL` | no | no | yes | Runtime release flag; voice `COMMIT` clears it. |
+| `FILTER_CONTROL`, `FILTER_B0` through `FILTER_A2` | yes | no | yes | Shadow filter group is copied to runtime by voice `COMMIT` or `FILTER_COMMIT`. |
+| `STATUS` | no | no | no | Read-only view of the committed configuration-valid bit. |
+| `COMMIT`, `FILTER_COMMIT` | no | no | no | Write-only action registers; reads return zero. |
+
 The common status registers are implemented by
 `fpga/common/rtl/wavetable_common_status_regs.sv` and are composed into the
 current SPI/I2S system wrapper. They are visible through whichever board-level

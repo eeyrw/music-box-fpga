@@ -23,7 +23,6 @@ module voice_descriptor_store (
   localparam logic [15:0] OFF_REGION_MODE  = REG_OFF_REGION_MODE;
   localparam logic [15:0] OFF_GAIN_L       = REG_OFF_GAIN_L;
   localparam logic [15:0] OFF_GAIN_R       = REG_OFF_GAIN_R;
-  localparam logic [15:0] OFF_GAIN_RT      = REG_OFF_GAIN_RUNTIME;
   localparam logic [15:0] OFF_ENVELOPE     = REG_OFF_ENVELOPE_LEVEL;
   localparam logic [15:0] OFF_FILTER_CTL   = REG_OFF_FILTER_CONTROL;
   localparam logic [15:0] OFF_CONTROL      = REG_OFF_CONTROL;
@@ -47,9 +46,6 @@ module voice_descriptor_store (
       end
       OFF_GAIN_L, OFF_GAIN_R, OFF_ENVELOPE: begin
         normalized_write_data = {{16{write_data[15]}}, write_data[15:0]};
-      end
-      OFF_GAIN_RT: begin
-        normalized_write_data = write_data;
       end
       OFF_REGION_MODE: begin
         normalized_write_data = {29'd0, write_data[2:0]};
