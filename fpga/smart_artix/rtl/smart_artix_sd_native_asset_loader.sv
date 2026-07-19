@@ -83,7 +83,7 @@ module smart_artix_sd_native_asset_loader #(
     end
   end
 
-  smart_artix_sd_native_block_reader #(
+  sd_native_block_reader #(
     .LBA_WIDTH(LBA_WIDTH)
   ) sd_reader (
     .clk,

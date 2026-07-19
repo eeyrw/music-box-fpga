@@ -134,7 +134,7 @@ module smart_artix_ddr3_subsystem #(
     .mig_app_response(write_response)
   );
 
-  smart_artix_sd_native_pin_phy #(
+  sd_native_pin_phy #(
     .DIV_WIDTH(SD_DIV_WIDTH)
   ) sd_phy (
     .clk,

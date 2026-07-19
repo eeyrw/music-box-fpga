@@ -38,6 +38,10 @@ simulation and board-facing transport shape:
 - `spi_register_bridge` adapts SPI pins to the abstract register bus.
 - `fractional_tick_gen` derives sample and bit-clock ticks from a system clock.
 - `i2s_tx` serializes stereo PCM to I2S pins.
+- `sd_native_block_reader` implements the reusable native-SD command and block
+  byte-stream reader.
+- `sd_native_pin_phy` implements the reusable native-SD FPGA-pin PHY above
+  `SD_CLK`, `CMD`, and `DAT[3:0]`.
 - `wavetable_system_debug_regs` exposes system, audio, memory, and render-latency
   observability registers.
 - `wavetable_system_core` exposes the line-memory render core behind an abstract

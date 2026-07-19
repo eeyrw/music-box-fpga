@@ -1,4 +1,4 @@
-module tb_smart_artix_sd_native_pin_phy;
+module tb_sd_native_pin_phy;
   logic clk;
   logic rst;
   logic [3:0] clk_div;
@@ -30,7 +30,7 @@ module tb_smart_artix_sd_native_pin_phy;
   int data_seen;
   logic [15:0] crc_dat [0:3];
 
-  smart_artix_sd_native_pin_phy #(
+  sd_native_pin_phy #(
     .DIV_WIDTH(4),
     .RESPONSE_TIMEOUT_CYCLES(32),
     .DATA_TIMEOUT_CYCLES(64),
@@ -219,15 +219,15 @@ module tb_smart_artix_sd_native_pin_phy;
     repeat (2) @(posedge clk);
 
     if (errors != 0)
-      $fatal(1, "FAIL: smart_artix_sd_native_pin_phy errors=%0d", errors);
+      $fatal(1, "FAIL: sd_native_pin_phy errors=%0d", errors);
 
-    $display("PASS: smart_artix_sd_native_pin_phy");
+    $display("PASS: sd_native_pin_phy");
     $finish;
   end
 
   initial begin
     repeat (20000) @(posedge clk);
-    $fatal(1, "FAIL: smart_artix_sd_native_pin_phy timed out phase=%0d data_seen=%0d cmd_bits_seen=%0d", phase, data_seen, cmd_bits_seen);
+    $fatal(1, "FAIL: sd_native_pin_phy timed out phase=%0d data_seen=%0d cmd_bits_seen=%0d", phase, data_seen, cmd_bits_seen);
   end
 
 /* verilator lint_off UNUSEDSIGNAL */

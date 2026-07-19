@@ -1,4 +1,4 @@
-module tb_smart_artix_sd_native_block_reader_fake;
+module tb_sd_native_block_reader_fake;
   localparam int LBA_WIDTH = 32;
 
   logic clk;
@@ -39,7 +39,7 @@ module tb_smart_artix_sd_native_block_reader_fake;
   int errors;
   int data_seen;
 
-  smart_artix_sd_native_block_reader #(
+  sd_native_block_reader #(
     .LBA_WIDTH(LBA_WIDTH),
     .INIT_RETRY_LIMIT(8)
   ) dut (
@@ -172,9 +172,9 @@ module tb_smart_artix_sd_native_block_reader_fake;
     check(error_code == 8'd0, "fake SD native read error");
 
     if (errors != 0)
-      $fatal(1, "FAIL: smart_artix_sd_native_block_reader_fake errors=%0d", errors);
+      $fatal(1, "FAIL: sd_native_block_reader_fake errors=%0d", errors);
 
-    $display("PASS: smart_artix_sd_native_block_reader_fake");
+    $display("PASS: sd_native_block_reader_fake");
     $finish;
   end
 endmodule

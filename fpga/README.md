@@ -121,6 +121,8 @@ fpga/common/rtl/fractional_tick_gen.sv
 fpga/common/rtl/spi_register_bridge.sv
 fpga/common/rtl/wavetable_system_debug_regs.sv
 fpga/common/rtl/i2s_tx.sv
+fpga/common/rtl/sd_native_block_reader.sv
+fpga/common/rtl/sd_native_pin_phy.sv
 fpga/common/rtl/wavetable_system_core.sv
 fpga/common/rtl/wavetable_i2s_output.sv
 fpga/common/rtl/wavetable_demo_system.sv
@@ -130,5 +132,7 @@ Use `wavetable_render_core` for the smallest datapath integration,
 `wavetable_cached_render_core` when a standalone Verilated top should include the
 line-memory adapter, `wavetable_system_core` when a board/common wrapper should
 compose the render core and line-memory adapter behind an abstract register bus,
-`wavetable_i2s_output` when adapting PCM frames to I2S, or
+`wavetable_i2s_output` when adapting PCM frames to I2S,
+`sd_native_block_reader` and `sd_native_pin_phy` when a board loader needs the
+native SD command/pin layer without tying it to a specific memory controller, or
 `wavetable_demo_system` when keeping the current SPI plus I2S board demo shape.

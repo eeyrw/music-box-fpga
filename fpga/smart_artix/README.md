@@ -50,9 +50,9 @@ The intended memory replacement is:
 ```text
 SD native pins: CLK, CMD, DAT[3:0]
   -> smart_artix_ddr3_subsystem
-  -> smart_artix_sd_native_pin_phy
+  -> sd_native_pin_phy
   -> smart_artix_sd_native_asset_loader
-  -> smart_artix_sd_native_block_reader
+  -> sd_native_block_reader
   -> smart_artix_asset_loader
   -> smart_artix_ddr3_asset_writer
   -> smart_artix_ddr3_rw_arbiter
@@ -76,9 +76,9 @@ The native 4-bit path is connected to `smart_artix_top`:
 
 ```text
 native SD pins: CLK, CMD, DAT[3:0]
-  -> smart_artix_sd_native_pin_phy
+  -> sd_native_pin_phy
   -> smart_artix_sd_native_asset_loader
-  -> smart_artix_sd_native_block_reader
+  -> sd_native_block_reader
   -> smart_artix_asset_loader
   -> smart_artix_ddr3_asset_writer
   -> smart_artix_ddr3_rw_arbiter

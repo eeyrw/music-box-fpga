@@ -1,4 +1,4 @@
-module tb_smart_artix_sd_native_pin_phy_fake;
+module tb_sd_native_pin_phy_fake;
   logic clk;
   logic rst;
   logic [3:0] clk_div;
@@ -29,7 +29,7 @@ module tb_smart_artix_sd_native_pin_phy_fake;
   int errors;
   int data_seen;
 
-  smart_artix_sd_native_pin_phy #(
+  sd_native_pin_phy #(
     .DIV_WIDTH(4),
     .RESPONSE_TIMEOUT_CYCLES(64),
     .DATA_TIMEOUT_CYCLES(128),
@@ -145,9 +145,9 @@ module tb_smart_artix_sd_native_pin_phy_fake;
     check(last_cmd_arg == 32'h0000_1234, "pin fake command arg mismatch");
 
     if (errors != 0)
-      $fatal(1, "FAIL: smart_artix_sd_native_pin_phy_fake errors=%0d", errors);
+      $fatal(1, "FAIL: sd_native_pin_phy_fake errors=%0d", errors);
 
-    $display("PASS: smart_artix_sd_native_pin_phy_fake");
+    $display("PASS: sd_native_pin_phy_fake");
     $finish;
   end
 

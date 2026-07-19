@@ -1,4 +1,4 @@
-module smart_artix_sd_native_block_reader #(
+module sd_native_block_reader #(
   parameter int LBA_WIDTH = 32,
   parameter int INIT_RETRY_LIMIT = 1024,
   parameter bit ENABLE_HIGH_SPEED = 1'b1

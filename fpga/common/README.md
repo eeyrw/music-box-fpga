@@ -10,12 +10,15 @@ or system-integration details:
 - board/system debug register windows,
 - sample or serial-clock tick generation,
 - audio serializers such as I2S,
+- reusable SD native command/pin adapters that do not depend on a board memory
+  controller,
 - reusable wrappers that compose those adapters around `rtl/top` core blocks.
 
 Do not put voice allocation, MIDI/SF2 policy, DSP algorithms, wave-memory format
 logic, vendor IP, board pin constraints, or simulation-only models here. Vendor
 IP and concrete board tops belong under `fpga/<board>/`; behavioral models belong
-under `sim/` or `fpga/<board>/sim/`.
+under `sim/`, `fpga/common/sim/`, or `fpga/<board>/sim/` depending on the RTL
+they cover.
 
 The common register-transport boundary is the core bus:
 

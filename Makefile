@@ -63,6 +63,8 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/spi_register_bridge.sv \
 	fpga/common/rtl/wavetable_system_debug_regs.sv \
 	fpga/common/rtl/i2s_tx.sv \
+	fpga/common/rtl/sd_native_block_reader.sv \
+	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/common/rtl/wavetable_system_core.sv \
 	fpga/common/rtl/wavetable_i2s_output.sv \
 	fpga/common/rtl/wavetable_demo_system.sv
@@ -105,12 +107,12 @@ HARNESS_BOARD_LOADER_SRCS := \
 
 SMART_ARTIX_RTL_SOURCES := \
 	rtl/pkg/synth_register_pkg.sv \
+	fpga/common/rtl/sd_native_block_reader.sv \
+	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/smart_artix/rtl/smart_artix_pkg.sv \
 	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_native_block_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
-	fpga/smart_artix/rtl/smart_artix_sd_native_pin_phy.sv \
 	fpga/smart_artix/rtl/smart_artix_mig_stub.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_debug_master.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
@@ -119,8 +121,8 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_platform_debug_regs.sv
 
 SMART_ARTIX_SIM_MODELS := \
-	fpga/smart_artix/sim/fake_sd_native_phy_model.sv \
-	fpga/smart_artix/sim/fake_sd_native_pin_model.sv
+	fpga/common/sim/fake_sd_native_phy_model.sv \
+	fpga/common/sim/fake_sd_native_pin_model.sv
 
 SMART_ARTIX_WITH_CORE_RTL_SOURCES := \
 	$(filter-out rtl/pkg/synth_register_pkg.sv,$(SMART_ARTIX_RTL_SOURCES))
@@ -134,10 +136,10 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_mig_stub \
 	tb_smart_artix_platform_debug_regs \
 	tb_smart_artix_sd_native_asset_loader \
-	tb_smart_artix_sd_native_block_reader \
-	tb_smart_artix_sd_native_block_reader_fake \
-	tb_smart_artix_sd_native_pin_phy \
-	tb_smart_artix_sd_native_pin_phy_fake
+	tb_sd_native_block_reader \
+	tb_sd_native_block_reader_fake \
+	tb_sd_native_pin_phy \
+	tb_sd_native_pin_phy_fake
 
 .PHONY: all generate-register-map check-register-map lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
 
@@ -220,7 +222,7 @@ $(SMART_ARTIX_TESTBENCHES):
 	$(VERILATOR) $(RTL_DEFINES) --binary -j 1 --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/$@_obj_dir --top-module $@ \
 		$(SMART_ARTIX_RTL_SOURCES) $(SMART_ARTIX_SIM_MODELS) \
-		fpga/smart_artix/sim/$@.sv
+		$(if $(wildcard fpga/smart_artix/sim/$@.sv),fpga/smart_artix/sim/$@.sv,fpga/common/sim/$@.sv)
 	$(BUILD_DIR)/$@_obj_dir/V$@
 
 host-ch347:

@@ -103,14 +103,14 @@ The first Smart Artix implementation provides the board-side middle of this path
   when no read response is outstanding; each write command and write-data beat is
   locked to the same owner until both sides of the 7-series MIG app interface
   accept the write.
-- `smart_artix_sd_native_block_reader` implements the matching command-level
+- `sd_native_block_reader` implements the matching command-level
   native SD path above the pin PHY: `CMD0`, `CMD8`,
   `CMD55`/`ACMD41`, `CMD2`, `CMD3`, `CMD7`, `CMD55`/`ACMD6` to enter 4-bit bus
   mode, `CMD6` to switch high-speed timing, then `CMD17` single-block reads and
   `CMD23`/`CMD18` predeclared multi-block reads.
 - `smart_artix_sd_native_asset_loader` connects the native reader to the raw
   image loader and DDR3 writer at the command/data interface.
-- `smart_artix_sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
+- `sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
   `SD_CLK`, bidirectional `CMD` through `cmd_o/cmd_oe/cmd_i`, and `DAT[3:0]` read
   sampling. It generates command CRC7, captures short/long responses, and converts
   4-bit data nibbles into the reader's byte stream, and validates the four
@@ -139,7 +139,7 @@ while still stopping at the command/data interface rather than modeling pin-leve
 `CMD`/`DAT` electrical timing.
 `fake_sd_native_pin_model` complements it at the pin-transport layer by observing
 48-bit command frames from `sd_cmd_o/sd_cmd_oe`, driving `sd_cmd_i` responses, and
-driving `DAT[3:0]` data nibbles into `smart_artix_sd_native_pin_phy`.
+driving `DAT[3:0]` data nibbles into `sd_native_pin_phy`.
 
 The SD initialization sequence intentionally borrows the practical bring-up shape
 used by simple FPGA SD readers:

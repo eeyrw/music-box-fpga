@@ -1,4 +1,4 @@
-module smart_artix_sd_native_pin_phy #(
+module sd_native_pin_phy #(
   parameter int DIV_WIDTH = 16,
   parameter int RESPONSE_TIMEOUT_CYCLES = 4096,
   parameter int DATA_TIMEOUT_CYCLES = 65535,
