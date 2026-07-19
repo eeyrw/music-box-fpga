@@ -17,8 +17,6 @@ namespace {
 void write_memory_stats(const std::string& path, const MemoryStats& stats) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
-  uint64_t requests = stats.hits + stats.misses;
-  double hit_rate = requests == 0 ? 0.0 : (double(stats.hits) / double(requests));
   double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
   f << "{\n"
     << "  \"profile\": \"" << stats.profile << "\",\n"
@@ -26,9 +24,6 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats) {
     << "  \"random_latency_cycles\": " << stats.random_latency_cycles << ",\n"
     << "  \"sequential_latency_cycles\": " << stats.sequential_latency_cycles << ",\n"
     << "  \"ready_gap_cycles\": " << stats.ready_gap_cycles << ",\n"
-    << "  \"hits\": " << stats.hits << ",\n"
-    << "  \"misses\": " << stats.misses << ",\n"
-    << "  \"hit_rate\": " << hit_rate << ",\n"
     << "  \"external_line_requests\": " << stats.external_line_requests << ",\n"
     << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
     << "  \"responses\": " << stats.responses << ",\n"

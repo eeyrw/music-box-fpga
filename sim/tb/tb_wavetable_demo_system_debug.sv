@@ -19,8 +19,6 @@ module tb_wavetable_demo_system_debug;
   logic i2s_sdata;
   logic underrun_pulse;
   logic sample_drop_pulse;
-  logic mem_debug_hit_pulse;
-  logic mem_debug_miss_pulse;
   logic mem_debug_response_pulse;
   logic [15:0] mem_debug_response_latency;
   logic [3:0] output_fifo_level;
@@ -58,8 +56,6 @@ module tb_wavetable_demo_system_debug;
     .i2s_sdata,
     .underrun_pulse,
     .sample_drop_pulse,
-    .mem_debug_hit_pulse,
-    .mem_debug_miss_pulse,
     .mem_debug_response_pulse,
     .mem_debug_response_latency,
     .output_fifo_level,
@@ -169,8 +165,6 @@ module tb_wavetable_demo_system_debug;
                    REG_DEBUG_EVENT_FLAGS_UNDERRUN_MASK |
                    REG_DEBUG_EVENT_FLAGS_SAMPLE_DROP_MASK |
                    REG_DEBUG_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK |
-                   REG_DEBUG_EVENT_FLAGS_MEM_HIT_MASK |
-                   REG_DEBUG_EVENT_FLAGS_MEM_MISS_MASK |
                    REG_DEBUG_EVENT_FLAGS_MEM_RESPONSE_MASK);
     if (spi_error) begin
       $error("system debug flag clear unexpectedly reported error");
@@ -189,7 +183,7 @@ module tb_wavetable_demo_system_debug;
   logic unused_outputs;
 /* verilator lint_on UNUSEDSIGNAL */
   assign unused_outputs = ext_req_valid | (|ext_req_addr) | i2s_bclk | i2s_lrclk | i2s_sdata |
-      underrun_pulse | sample_drop_pulse | mem_debug_hit_pulse | mem_debug_miss_pulse |
+      underrun_pulse | sample_drop_pulse |
       mem_debug_response_pulse | (|mem_debug_response_latency) | (|output_fifo_level) |
       render_deadline_miss_pulse | (|render_latency_cycles) | debug_bus_valid |
       debug_bus_write | (|debug_bus_address) | (|debug_bus_wdata);

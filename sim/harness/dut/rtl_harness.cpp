@@ -138,8 +138,6 @@ void RtlHarness::tick() {
   top_->clk = 1;
   top_->eval();
 
-  if (top_->mem_debug_hit_pulse) ++memory_hits_;
-  if (top_->mem_debug_miss_pulse) ++memory_misses_;
   if (top_->mem_debug_response_pulse) {
     ++memory_responses_;
     uint16_t latency = top_->mem_debug_response_latency;
@@ -187,13 +185,8 @@ void RtlHarness::service_external_memory() {
 
 void RtlHarness::print_memory_stats() const {
   MemoryStats stats = memory_stats();
-  uint64_t requests = stats.hits + stats.misses;
-  double hit_rate = requests == 0 ? 0.0 : (100.0 * double(memory_hits_) / double(requests));
   double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
-  std::cout << "memory_subsystem hits=" << stats.hits
-            << " misses=" << stats.misses
-            << " hit_rate=" << hit_rate << "%"
-            << " profile=" << stats.profile
+  std::cout << "memory_subsystem profile=" << stats.profile
             << " external_line_requests=" << stats.external_line_requests
             << " sequential_line_requests=" << stats.sequential_line_requests
             << " responses=" << stats.responses
@@ -208,8 +201,6 @@ void RtlHarness::print_memory_stats() const {
 MemoryStats RtlHarness::memory_stats() const {
   MemoryStats stats;
   stats.profile = memory_profile_.name;
-  stats.hits = memory_hits_;
-  stats.misses = memory_misses_;
   stats.responses = memory_responses_;
   stats.external_line_requests = external_line_requests_;
   stats.sequential_line_requests = sequential_line_requests_;

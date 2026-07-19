@@ -25,8 +25,6 @@ void write_full_system_stats(const std::string& path, const FullSystemStats& sta
     << "  \"sample_drops\": " << stats.sample_drops << ",\n"
     << "  \"render_deadline_misses\": " << stats.render_deadline_misses << ",\n"
     << "  \"max_render_latency_cycles\": " << stats.max_render_latency_cycles << ",\n"
-    << "  \"memory_hits\": " << stats.memory_hits << ",\n"
-    << "  \"memory_misses\": " << stats.memory_misses << ",\n"
     << "  \"memory_responses\": " << stats.memory_responses << ",\n"
     << "  \"external_line_requests\": " << stats.external_line_requests << ",\n"
     << "  \"sequential_line_requests\": " << stats.sequential_line_requests << ",\n"
@@ -97,8 +95,7 @@ int main(int argc, char** argv) {
               << " sample_drops=" << stats.sample_drops
               << " render_deadline_misses=" << stats.render_deadline_misses
               << " max_render_latency_cycles=" << stats.max_render_latency_cycles
-              << " memory_hits=" << stats.memory_hits
-              << " memory_misses=" << stats.memory_misses
+              << " memory_responses=" << stats.memory_responses
               << " register_writes=" << stats.register_writes.total
               << " filter_writes=" << stats.register_writes.filter << "\n";
     return 0;

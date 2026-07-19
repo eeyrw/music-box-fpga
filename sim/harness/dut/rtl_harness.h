@@ -14,8 +14,6 @@ namespace render {
 
 struct MemoryStats {
   std::string profile;
-  uint64_t hits = 0;
-  uint64_t misses = 0;
   uint64_t responses = 0;
   uint64_t external_line_requests = 0;
   uint64_t sequential_line_requests = 0;
@@ -72,8 +70,6 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   int ready_gap_countdown_ = 0;
   bool have_last_line_addr_ = false;
   uint32_t last_line_addr_ = 0;
-  uint64_t memory_hits_ = 0;
-  uint64_t memory_misses_ = 0;
   uint64_t memory_responses_ = 0;
   uint64_t external_line_requests_ = 0;
   uint64_t sequential_line_requests_ = 0;

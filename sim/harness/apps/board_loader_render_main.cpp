@@ -92,8 +92,6 @@ int main(int argc, char** argv) {
         ",\n  \"sf2_size_bytes\": " + std::to_string(sf2_bytes.size()) +
         ",\n  \"loaded_words\": " + std::to_string(wave_memory.size()) +
         ",\n  \"nonzero_output_words\": " + std::to_string(board.nonzero_output_words()) +
-        ",\n  \"memory_hits\": " + std::to_string(board.memory_hits()) +
-        ",\n  \"memory_misses\": " + std::to_string(board.memory_misses()) +
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
         ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
         ",\n  \"wav_path\": \"" + wav_path + "\"";
@@ -107,8 +105,7 @@ int main(int argc, char** argv) {
               << " regions=" << regions.size()
               << " events=" << events.size()
               << " nonzero_output_words=" << board.nonzero_output_words()
-              << " memory_hits=" << board.memory_hits()
-              << " memory_misses=" << board.memory_misses()
+              << " memory_responses=" << board.memory_responses()
               << " register_writes=" << reg.total << "\n";
     return 0;
   } catch (const std::exception& e) {

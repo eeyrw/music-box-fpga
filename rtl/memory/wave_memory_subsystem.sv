@@ -13,8 +13,6 @@ module wave_memory_subsystem #(
   output logic [31:0]                     ext_req_addr,
   input  logic                            ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0]        ext_rsp_data,
-  output logic                            debug_hit_pulse,
-  output logic                            debug_miss_pulse,
   output logic                            debug_response_pulse,
   output logic [15:0]                     debug_response_latency
 );
@@ -60,14 +58,10 @@ module wave_memory_subsystem #(
       latency_counter <= '0;
       core_rsp_valid <= 1'b0;
       core_rsp_data <= '0;
-      debug_hit_pulse <= 1'b0;
-      debug_miss_pulse <= 1'b0;
       debug_response_pulse <= 1'b0;
       debug_response_latency <= '0;
     end else begin
       core_rsp_valid <= 1'b0;
-      debug_hit_pulse <= 1'b0;
-      debug_miss_pulse <= 1'b0;
       debug_response_pulse <= 1'b0;
 
       unique case (state)
@@ -79,10 +73,8 @@ module wave_memory_subsystem #(
             latency_counter <= 16'd0;
             if (pending_hit) begin
               core_rsp_data <= cache_line[core_req_addr[INDEX_WIDTH-1:0] * 16 +: 16];
-              debug_hit_pulse <= 1'b1;
               state <= STATE_RESPOND;
             end else begin
-              debug_miss_pulse <= 1'b1;
               state <= STATE_EXT_REQ;
             end
           end

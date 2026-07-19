@@ -15,14 +15,10 @@ module tb_wave_memory_subsystem;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
   logic [LINE_WORDS*16-1:0] ext_rsp_data;
-  logic debug_hit_pulse;
-  logic debug_miss_pulse;
   logic debug_response_pulse;
   logic [15:0] debug_response_latency;
   int errors = 0;
   int ext_request_count = 0;
-  int hit_count = 0;
-  int miss_count = 0;
   int response_count = 0;
 
   always #5 clk <= ~clk;
@@ -40,8 +36,6 @@ module tb_wave_memory_subsystem;
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .debug_hit_pulse,
-    .debug_miss_pulse,
     .debug_response_pulse,
     .debug_response_latency
   );
@@ -59,16 +53,10 @@ module tb_wave_memory_subsystem;
   always_ff @(posedge clk) begin
     if (rst) begin
       ext_request_count <= 0;
-      hit_count <= 0;
-      miss_count <= 0;
       response_count <= 0;
     end else begin
       if (ext_req_valid && ext_req_ready)
         ext_request_count <= ext_request_count + 1;
-      if (debug_hit_pulse)
-        hit_count <= hit_count + 1;
-      if (debug_miss_pulse)
-        miss_count <= miss_count + 1;
       if (debug_response_pulse)
         response_count <= response_count + 1;
     end
@@ -130,8 +118,8 @@ module tb_wave_memory_subsystem;
       errors++;
     end
     @(negedge clk);
-    if (hit_count != 1 || miss_count != 2 || response_count != 3) begin
-      $error("debug counters got hits=%0d misses=%0d responses=%0d expected 1/2/3", hit_count, miss_count, response_count);
+    if (response_count != 3) begin
+      $error("debug response counter got %0d expected 3", response_count);
       errors++;
     end
     if (debug_response_latency === 16'hxxxx) begin

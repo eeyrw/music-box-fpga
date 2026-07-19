@@ -5,7 +5,7 @@
 package synth_register_pkg;
   localparam int REG_BUS_ADDR_WIDTH = 16;
   localparam int REG_BUS_DATA_WIDTH = 32;
-  localparam logic [31:0] REG_VERSION_VALUE = 32'h00050000;
+  localparam logic [31:0] REG_VERSION_VALUE = 32'h00060000;
   localparam logic [15:0] REG_VOICE_BASE = 16'h0100;
   localparam logic [15:0] REG_VOICE_STRIDE = 16'h0100;
 
@@ -46,8 +46,6 @@ package synth_register_pkg;
   localparam logic [15:0] REG_UNDERRUN_COUNT = 16'h3024;
   localparam logic [15:0] REG_SAMPLE_DROP_COUNT = 16'h3028;
   localparam logic [15:0] REG_RENDER_DEADLINE_MISS_COUNT = 16'h302c;
-  localparam logic [15:0] REG_MEM_HIT_COUNT = 16'h3030;
-  localparam logic [15:0] REG_MEM_MISS_COUNT = 16'h3034;
   localparam logic [15:0] REG_MEM_RESPONSE_COUNT = 16'h3038;
   localparam logic [15:0] REG_PLATFORM_STATUS = 16'h3040;
   localparam logic [15:0] REG_PLATFORM_ERRORS = 16'h3044;
@@ -75,9 +73,7 @@ package synth_register_pkg;
   localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_UNDERRUN_MASK = 32'h00000001;
   localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_SAMPLE_DROP_MASK = 32'h00000002;
   localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK = 32'h00000004;
-  localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_MEM_HIT_MASK = 32'h00000008;
-  localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_MEM_MISS_MASK = 32'h00000010;
-  localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_MEM_RESPONSE_MASK = 32'h00000020;
+  localparam logic [31:0] REG_DEBUG_EVENT_FLAGS_MEM_RESPONSE_MASK = 32'h00000008;
   localparam logic [31:0] REG_PLATFORM_STATUS_DEBUG_PRESENT_MASK = 32'h00000001;
   localparam logic [31:0] REG_PLATFORM_STATUS_ERROR_PRESENT_MASK = 32'h00000002;
   localparam logic [31:0] REG_PLATFORM_STATUS_DDR_CALIBRATED_MASK = 32'h00000004;

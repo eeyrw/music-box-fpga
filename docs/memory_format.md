@@ -104,11 +104,12 @@ The real-SF2 smoke run `make render-instrument SECONDS=1 KEY=60` used
 `assets/soundfonts/MT6276.sf2`, selected the `Vibes` instrument sample
 `vibes52`, rendered 48,000 stereo samples, and passed with this memory path.
 
-The focused tests assert hit/miss behavior through debug pulses, external request
-counts, and exact PCM output. The C++ MIDI render path records aggregate counters
-for real render traffic in `build/render_memory/memory_stats.json`, including total
-hits, total misses, hit rate, external line requests, average response latency,
-and maximum response latency.
+The focused tests assert cache behavior through external request counts and exact
+PCM output: a same-line cached access must not issue another external line
+request. The C++ MIDI render path records aggregate counters for real render
+traffic in `build/render_memory/memory_stats.json`, including external line
+requests, sequential line requests, response count, average response latency, and
+maximum response latency.
 
 ## External Memory Profiles
 
@@ -135,9 +136,9 @@ Current C++ render profiles:
 
 Using the built-in one-second MIDI smoke render against
 `assets/soundfonts/MT6276.sf2`, all three profiles produced the same audible
-render result and the same cache request mix: 85,278 hits, 50,562 misses, 50,562
-external line requests, 8,490 sequential line requests, 135,840 responses, and a
-62.78% hit rate. The latency counters changed by profile:
+render result and the same external request mix: 50,562 external line requests,
+8,490 sequential line requests, and 135,840 responses. The latency counters
+changed by profile:
 
 | Profile | Avg response latency | Max response latency |
 | --- | ---: | ---: |
@@ -183,8 +184,8 @@ voice index, phase, loop range, and stereo mode are already visible. Any such
 change must update the RTL interface documentation and add focused tests for hit,
 miss, prefetch, loop-boundary, mono/stereo, and backpressure behavior.
 
-Use `render-memory` counters as the comparison baseline: hit rate, external line
-requests, average and maximum response latency, full render latency, deadline
-misses, and output underruns. A representative stress case is a layered stereo
-piano MIDI render, which currently stresses the one-line cache with many
-interleaved region streams.
+Use `render-memory` counters as the comparison baseline: external line requests,
+sequential line requests, average and maximum response latency, full render
+latency, deadline misses, and output underruns. A representative stress case is a
+layered stereo piano MIDI render, which currently stresses the one-line cache
+with many interleaved region streams.

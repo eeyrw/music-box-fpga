@@ -26,8 +26,6 @@ constexpr uint16_t kMemoryStatus = render::regs::kMemoryStatus;
 constexpr uint16_t kUnderrunCount = render::regs::kUnderrunCount;
 constexpr uint16_t kSampleDropCount = render::regs::kSampleDropCount;
 constexpr uint16_t kRenderDeadlineMissCount = render::regs::kRenderDeadlineMissCount;
-constexpr uint16_t kMemHitCount = render::regs::kMemHitCount;
-constexpr uint16_t kMemMissCount = render::regs::kMemMissCount;
 constexpr uint16_t kMemResponseCount = render::regs::kMemResponseCount;
 constexpr uint16_t kPlatformStatus = render::regs::kPlatformStatus;
 constexpr uint16_t kPlatformErrors = render::regs::kPlatformErrors;
@@ -440,7 +438,7 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   if (args.length == 0) throw std::runtime_error("--voice-smoke requires --length");
 
   std::cout << "\n== Voice Smoke ==\n";
-  board.write(kDebugEventFlags, 0x3fu);
+  board.write(kDebugEventFlags, 0x0fu);
 
   render::Region region;
   region.stereo = args.stereo;
@@ -467,16 +465,14 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   uint32_t events = board.read(kDebugEventFlags);
   uint32_t audio = board.read(kAudioStatus);
   uint32_t memory = board.read(kMemoryStatus);
-  uint32_t mem_miss_count = board.read(kMemMissCount);
   uint32_t mem_rsp_count = board.read(kMemResponseCount);
   print_reg("DEBUG_EVENT_FLAGS", kDebugEventFlags, events);
   print_reg("AUDIO_STATUS", kAudioStatus, audio);
   print_reg("MEMORY_STATUS", kMemoryStatus, memory);
-  print_reg("MEM_MISS_COUNT", kMemMissCount, mem_miss_count);
   print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, mem_rsp_count);
 
-  if (events & ((1u << 4) | (1u << 5))) {
-    print_result("PASS", "Voice caused memory miss/response activity");
+  if (events & (1u << 3)) {
+    print_result("PASS", "Voice caused memory response activity");
   } else {
     print_result("WARN", "No memory activity observed yet; check base address, length, and asset load");
   }
@@ -490,8 +486,6 @@ void read_counters(BoardAccess& board) {
   print_reg("UNDERRUN_COUNT", kUnderrunCount, board.read(kUnderrunCount));
   print_reg("SAMPLE_DROP_COUNT", kSampleDropCount, board.read(kSampleDropCount));
   print_reg("RENDER_DEADLINE_MISS_COUNT", kRenderDeadlineMissCount, board.read(kRenderDeadlineMissCount));
-  print_reg("MEM_HIT_COUNT", kMemHitCount, board.read(kMemHitCount));
-  print_reg("MEM_MISS_COUNT", kMemMissCount, board.read(kMemMissCount));
   print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, board.read(kMemResponseCount));
 }
 

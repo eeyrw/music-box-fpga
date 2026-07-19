@@ -64,8 +64,6 @@ module smart_artix_top (
   logic                     render_deadline_miss_pulse;
   logic [15:0]              render_latency_cycles;
   logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level;
-  logic                     mem_debug_hit_pulse;
-  logic                     mem_debug_miss_pulse;
   logic                     mem_debug_response_pulse;
   logic [15:0]              mem_debug_response_latency;
   logic                     mig_init_calib_complete;
@@ -206,8 +204,6 @@ module smart_artix_top (
     .i2s_sdata(i2s_sdata),
     .underrun_pulse(underrun_pulse),
     .sample_drop_pulse(sample_drop_pulse),
-    .mem_debug_hit_pulse(mem_debug_hit_pulse),
-    .mem_debug_miss_pulse(mem_debug_miss_pulse),
     .mem_debug_response_pulse(mem_debug_response_pulse),
     .mem_debug_response_latency(mem_debug_response_latency),
     .output_fifo_level(output_fifo_level),
@@ -232,7 +228,7 @@ module smart_artix_top (
   logic unused_debug;
 /* verilator lint_on UNUSEDSIGNAL */
   assign unused_debug = core_line_req.valid ^ (^core_line_req.addr) ^ (^output_fifo_level)
-      ^ (^render_latency_cycles) ^ mem_debug_hit_pulse ^ mem_debug_miss_pulse
+      ^ (^render_latency_cycles)
       ^ mem_debug_response_pulse ^ (^mem_debug_response_latency) ^ (^mig_app_command.addr)
       ^ (^mig_app_command.cmd) ^ mig_app_command.en ^ mig_app_response.wdf_rdy ^ mig_app_sr_active
       ^ mig_app_ref_ack ^ mig_app_zq_ack ^ (^mig_device_temp)

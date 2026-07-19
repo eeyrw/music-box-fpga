@@ -62,8 +62,6 @@ module board_top (
     .i2s_sdata(i2s_sdata),
     .underrun_pulse(led_underrun),
     .sample_drop_pulse(led_sample_drop),
-    .mem_debug_hit_pulse(),
-    .mem_debug_miss_pulse(),
     .mem_debug_response_pulse(),
     .mem_debug_response_latency(),
     .output_fifo_level(output_fifo_level),

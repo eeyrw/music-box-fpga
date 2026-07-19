@@ -60,17 +60,15 @@ register_addr    = voice_base(slot) + offset
 | `0x74` | COMMIT | write bit 0 as one to activate this voice slot and stage render-boundary reload |
 | `0x78` | RELEASE_CONTROL | bit 0 released runtime flag |
 | `0x7c` | STATUS | bit 0 configuration valid for this voice slot |
-| `0x3000` | VERSION | design version, currently `0x0005_0000` |
+| `0x3000` | VERSION | design version, currently `0x0006_0000` |
 | `0x3010` | SYSTEM_STATUS | system wrapper status bits |
 | `0x3014` | DEBUG_EVENT_FLAGS | sticky event flags, write one to clear |
 | `0x3018` | AUDIO_STATUS | output FIFO and audio flags |
 | `0x301c` | RENDER_STATUS | render pending, deadline flag, and last latency |
-| `0x3020` | MEMORY_STATUS | memory request/cache status and last response latency |
+| `0x3020` | MEMORY_STATUS | external line-memory request/response status and last response latency |
 | `0x3024` | UNDERRUN_COUNT | saturating I2S underrun counter |
 | `0x3028` | SAMPLE_DROP_COUNT | saturating output FIFO overflow/drop counter |
 | `0x302c` | RENDER_DEADLINE_MISS_COUNT | saturating render deadline miss counter |
-| `0x3030` | MEM_HIT_COUNT | saturating line-cache hit counter |
-| `0x3034` | MEM_MISS_COUNT | saturating line-cache miss counter |
 | `0x3038` | MEM_RESPONSE_COUNT | saturating external memory response counter |
 | `0x3040` | PLATFORM_STATUS | Smart Artix SD/DDR/asset-loader status bits |
 | `0x3044` | PLATFORM_ERRORS | SD error, loader error, and loader state |
@@ -163,10 +161,8 @@ selected bits. Events that occur in the same cycle as a clear remain set.
 | `0` | `underrun` | I2S needed a sample when the output FIFO was empty. |
 | `1` | `sample_drop` | The core produced a sample when the output FIFO could not accept it. |
 | `2` | `render_deadline_miss` | A new sample tick arrived while the previous render was still pending. |
-| `3` | `mem_hit` | The wave-memory subsystem served a word from its line cache. |
-| `4` | `mem_miss` | The wave-memory subsystem missed its line cache and requested an external line. |
-| `5` | `mem_response` | The wrapper observed an external memory-line response. |
-| `31:6` | reserved | Reads zero. |
+| `3` | `mem_response` | The wrapper observed an external memory-line response. |
+| `31:4` | reserved | Reads zero. |
 
 The matching counters at `0x3024` through `0x3038` increment on the same events
 and saturate at `0xffff_ffff`. They are reset only by system reset and are not
@@ -198,10 +194,8 @@ cleared by writes to `DEBUG_EVENT_FLAGS`.
 | `16` | `ext_req_valid` | Same live request-valid bit as `SYSTEM_STATUS[5]`. |
 | `17` | `ext_req_ready` | Same live request-ready bit as `SYSTEM_STATUS[6]`. |
 | `18` | `ext_rsp_valid` | Same live response-valid bit as `SYSTEM_STATUS[7]`. |
-| `19` | `mem_hit` | Mirror of sticky `DEBUG_EVENT_FLAGS[3]`. |
-| `20` | `mem_miss` | Mirror of sticky `DEBUG_EVENT_FLAGS[4]`. |
-| `21` | `mem_response` | Mirror of sticky `DEBUG_EVENT_FLAGS[5]`. |
-| `31:22` | reserved | Reads zero. |
+| `19` | `mem_response` | Mirror of sticky `DEBUG_EVENT_FLAGS[3]`. |
+| `31:20` | reserved | Reads zero. |
 
 The event counters are direct 32-bit saturating reads:
 
@@ -210,8 +204,6 @@ The event counters are direct 32-bit saturating reads:
 | `0x3024` | `UNDERRUN_COUNT` | I2S underrun pulses. |
 | `0x3028` | `SAMPLE_DROP_COUNT` | Output FIFO sample-drop pulses. |
 | `0x302c` | `RENDER_DEADLINE_MISS_COUNT` | New sample ticks that arrive while a previous render is pending. |
-| `0x3030` | `MEM_HIT_COUNT` | Wave-memory line-cache hit pulses. |
-| `0x3034` | `MEM_MISS_COUNT` | Wave-memory line-cache miss pulses. |
 | `0x3038` | `MEM_RESPONSE_COUNT` | External memory-line response pulses. |
 
 `PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. Generic

@@ -20,8 +20,6 @@ module wavetable_system_debug_regs #(
   input  logic                     fifo_sample_valid,
   input  logic                     underrun_pulse,
   input  logic                     sample_drop_pulse,
-  input  logic                     mem_debug_hit_pulse,
-  input  logic                     mem_debug_miss_pulse,
   input  logic                     mem_debug_response_pulse,
   input  logic [15:0]              mem_debug_response_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
@@ -38,8 +36,6 @@ module wavetable_system_debug_regs #(
   localparam logic [15:0] ADDR_UNDERRUN_COUNT = REG_UNDERRUN_COUNT;
   localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = REG_SAMPLE_DROP_COUNT;
   localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = REG_RENDER_DEADLINE_MISS_COUNT;
-  localparam logic [15:0] ADDR_MEM_HIT_COUNT = REG_MEM_HIT_COUNT;
-  localparam logic [15:0] ADDR_MEM_MISS_COUNT = REG_MEM_MISS_COUNT;
   localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = REG_MEM_RESPONSE_COUNT;
 
   logic render_pending;
@@ -48,8 +44,6 @@ module wavetable_system_debug_regs #(
   logic [31:0] underrun_count;
   logic [31:0] sample_drop_count;
   logic [31:0] render_deadline_miss_count;
-  logic [31:0] mem_hit_count;
-  logic [31:0] mem_miss_count;
   logic [31:0] mem_response_count;
   logic [31:0] debug_event_set_mask;
 
@@ -58,7 +52,7 @@ module wavetable_system_debug_regs #(
       ADDR_SYSTEM_STATUS, ADDR_DEBUG_EVENT_FLAGS, ADDR_AUDIO_STATUS,
       ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
-      ADDR_MEM_HIT_COUNT, ADDR_MEM_MISS_COUNT, ADDR_MEM_RESPONSE_COUNT: begin
+      ADDR_MEM_RESPONSE_COUNT: begin
         is_system_debug_address = 1'b1;
       end
       default: is_system_debug_address = 1'b0;
@@ -71,10 +65,8 @@ module wavetable_system_debug_regs #(
 
   assign debug_access = bus_valid && is_system_debug_address(bus_address);
   assign debug_event_set_mask = {
-    26'd0,
+    28'd0,
     mem_debug_response_pulse,
-    mem_debug_miss_pulse,
-    mem_debug_hit_pulse,
     sample_tick && render_pending && !core_sample_valid,
     sample_drop_pulse,
     underrun_pulse
@@ -110,9 +102,7 @@ module wavetable_system_debug_regs #(
       end
       ADDR_MEMORY_STATUS: begin
         debug_rdata = {
-          10'd0,
-          debug_event_flags[5],
-          debug_event_flags[4],
+          12'd0,
           debug_event_flags[3],
           ext_rsp_valid,
           ext_req_ready,
@@ -123,8 +113,6 @@ module wavetable_system_debug_regs #(
       ADDR_UNDERRUN_COUNT: debug_rdata = underrun_count;
       ADDR_SAMPLE_DROP_COUNT: debug_rdata = sample_drop_count;
       ADDR_RENDER_DEADLINE_MISS_COUNT: debug_rdata = render_deadline_miss_count;
-      ADDR_MEM_HIT_COUNT: debug_rdata = mem_hit_count;
-      ADDR_MEM_MISS_COUNT: debug_rdata = mem_miss_count;
       ADDR_MEM_RESPONSE_COUNT: debug_rdata = mem_response_count;
       default: debug_rdata = 32'd0;
     endcase
@@ -140,8 +128,6 @@ module wavetable_system_debug_regs #(
       underrun_count <= 32'd0;
       sample_drop_count <= 32'd0;
       render_deadline_miss_count <= 32'd0;
-      mem_hit_count <= 32'd0;
-      mem_miss_count <= 32'd0;
       mem_response_count <= 32'd0;
     end else begin
       render_deadline_miss_pulse <= 1'b0;
@@ -158,10 +144,6 @@ module wavetable_system_debug_regs #(
         sample_drop_count <= sat_inc(sample_drop_count);
       if (sample_tick && render_pending && !core_sample_valid)
         render_deadline_miss_count <= sat_inc(render_deadline_miss_count);
-      if (mem_debug_hit_pulse)
-        mem_hit_count <= sat_inc(mem_hit_count);
-      if (mem_debug_miss_pulse)
-        mem_miss_count <= sat_inc(mem_miss_count);
       if (mem_debug_response_pulse)
         mem_response_count <= sat_inc(mem_response_count);
 

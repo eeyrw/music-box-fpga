@@ -97,8 +97,6 @@ std::pair<int16_t, int16_t> BoardLoaderRenderHarness::request_sample(int produce
                              " ext_req_valid=" + std::to_string(int(top_->core_ext_req_valid)) +
                              " ext_req_ready=" + std::to_string(int(top_->core_ext_req_ready)) +
                              " ext_rsp_valid=" + std::to_string(int(top_->core_ext_rsp_valid)) +
-                             " hits=" + std::to_string(memory_hits_) +
-                             " misses=" + std::to_string(memory_misses_) +
                              " responses=" + std::to_string(memory_responses_));
   }
   int16_t l = int16_t(top_->core_sample_l);
@@ -277,8 +275,6 @@ void BoardLoaderRenderHarness::observe_sequential_outputs() {
   } else if (!line_pending_ && ready_gap_countdown_ > 0) {
     --ready_gap_countdown_;
   }
-  if (top_->core_mem_debug_hit_pulse) ++memory_hits_;
-  if (top_->core_mem_debug_miss_pulse) ++memory_misses_;
   if (top_->core_mem_debug_response_pulse) ++memory_responses_;
 }
 

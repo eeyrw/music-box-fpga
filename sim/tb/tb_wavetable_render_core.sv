@@ -28,8 +28,6 @@ module tb_wavetable_render_core;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
   logic [8*16-1:0] ext_rsp_data;
-  logic mem_debug_hit_pulse;
-  logic mem_debug_miss_pulse;
   logic mem_debug_response_pulse;
   logic [15:0] mem_debug_response_latency;
   logic unused_mem_debug;
@@ -43,7 +41,7 @@ module tb_wavetable_render_core;
 
   wavetable_render_core dut (.*);
 
-  assign unused_mem_debug = busy | mem_debug_hit_pulse | mem_debug_miss_pulse |
+  assign unused_mem_debug = busy |
                             mem_debug_response_pulse | (|mem_debug_response_latency);
 
   wave_memory_subsystem #(.LINE_WORDS(8)) memory_subsystem (
@@ -59,8 +57,6 @@ module tb_wavetable_render_core;
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .debug_hit_pulse(mem_debug_hit_pulse),
-    .debug_miss_pulse(mem_debug_miss_pulse),
     .debug_response_pulse(mem_debug_response_pulse),
     .debug_response_latency(mem_debug_response_latency)
   );

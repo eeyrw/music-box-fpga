@@ -64,8 +64,6 @@ module board_loader_render_tops #(
   output logic [31:0]               core_ext_req_addr,
   input  logic                      core_ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0]  core_ext_rsp_data,
-  output logic                      core_mem_debug_hit_pulse,
-  output logic                      core_mem_debug_miss_pulse,
   output logic                      core_mem_debug_response_pulse,
   output logic [15:0]               core_mem_debug_response_latency
 );
@@ -149,8 +147,6 @@ module board_loader_render_tops #(
     .ext_req_addr(core_ext_req_addr),
     .ext_rsp_valid(core_ext_rsp_valid),
     .ext_rsp_data(core_ext_rsp_data),
-    .mem_debug_hit_pulse(core_mem_debug_hit_pulse),
-    .mem_debug_miss_pulse(core_mem_debug_miss_pulse),
     .mem_debug_response_pulse(core_mem_debug_response_pulse),
     .mem_debug_response_latency(core_mem_debug_response_latency)
   );

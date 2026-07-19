@@ -7,7 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x00050000u;
+constexpr uint32_t kVersionValue = 0x00060000u;
 constexpr uint16_t kVoiceBase = 0x0100u;
 constexpr uint16_t kVoiceStride = 0x0100u;
 
@@ -48,8 +48,6 @@ constexpr uint16_t kMemoryStatus = 0x3020u;
 constexpr uint16_t kUnderrunCount = 0x3024u;
 constexpr uint16_t kSampleDropCount = 0x3028u;
 constexpr uint16_t kRenderDeadlineMissCount = 0x302cu;
-constexpr uint16_t kMemHitCount = 0x3030u;
-constexpr uint16_t kMemMissCount = 0x3034u;
 constexpr uint16_t kMemResponseCount = 0x3038u;
 constexpr uint16_t kPlatformStatus = 0x3040u;
 constexpr uint16_t kPlatformErrors = 0x3044u;
@@ -77,9 +75,7 @@ constexpr uint32_t kFilterCommitApplyMask = 0x00000001u;
 constexpr uint32_t kDebugEventFlagsUnderrunMask = 0x00000001u;
 constexpr uint32_t kDebugEventFlagsSampleDropMask = 0x00000002u;
 constexpr uint32_t kDebugEventFlagsRenderDeadlineMissMask = 0x00000004u;
-constexpr uint32_t kDebugEventFlagsMemHitMask = 0x00000008u;
-constexpr uint32_t kDebugEventFlagsMemMissMask = 0x00000010u;
-constexpr uint32_t kDebugEventFlagsMemResponseMask = 0x00000020u;
+constexpr uint32_t kDebugEventFlagsMemResponseMask = 0x00000008u;
 constexpr uint32_t kPlatformStatusDebugPresentMask = 0x00000001u;
 constexpr uint32_t kPlatformStatusErrorPresentMask = 0x00000002u;
 constexpr uint32_t kPlatformStatusDdrCalibratedMask = 0x00000004u;

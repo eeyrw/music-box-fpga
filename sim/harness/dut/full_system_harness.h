@@ -18,8 +18,6 @@ struct FullSystemStats {
   uint64_t sample_drops = 0;
   uint64_t render_deadline_misses = 0;
   uint64_t max_render_latency_cycles = 0;
-  uint64_t memory_hits = 0;
-  uint64_t memory_misses = 0;
   uint64_t memory_responses = 0;
   uint64_t external_line_requests = 0;
   uint64_t sequential_line_requests = 0;
@@ -78,8 +76,6 @@ class FullSystemHarness : public VoiceControlSink, private RegisterWriteSink {
   uint64_t sample_drops_ = 0;
   uint64_t render_deadline_misses_ = 0;
   uint64_t max_render_latency_cycles_ = 0;
-  uint64_t memory_hits_ = 0;
-  uint64_t memory_misses_ = 0;
   uint64_t memory_responses_ = 0;
   uint64_t external_line_requests_ = 0;
   uint64_t sequential_line_requests_ = 0;

@@ -36,8 +36,6 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   uint64_t loader_cycles() const { return loader_cycles_; }
   int nonzero_output_words() const { return int(wav_.nonzero_words()); }
   const RegisterWriteStats& register_write_stats() const { return register_write_stats_; }
-  uint64_t memory_hits() const { return memory_hits_; }
-  uint64_t memory_misses() const { return memory_misses_; }
   uint64_t memory_responses() const { return memory_responses_; }
 
  private:
@@ -89,8 +87,6 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   uint32_t last_line_addr_ = 0;
   uint64_t total_cycles_ = 0;
   uint64_t loader_cycles_ = 0;
-  uint64_t memory_hits_ = 0;
-  uint64_t memory_misses_ = 0;
   uint64_t memory_responses_ = 0;
   uint64_t sd_commands_ = 0;
   int last_cmd_ = -1;

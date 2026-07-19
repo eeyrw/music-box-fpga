@@ -471,11 +471,11 @@ build/render_memory/memory_stats.json
 ```
 
 The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
-`sequential_latency_cycles`, `ready_gap_cycles`, `hits`, `misses`, `hit_rate`,
-`external_line_requests`, `sequential_line_requests`, `responses`,
-`avg_response_latency_cycles`, `max_response_latency_cycles`, and the same
-register-write breakdown used by `render-quick`. The supported read-only timing
-profiles are `ddr`, `sdram`, and `parallel-nor`.
+`sequential_latency_cycles`, `ready_gap_cycles`, `external_line_requests`,
+`sequential_line_requests`, `responses`, `avg_response_latency_cycles`,
+`max_response_latency_cycles`, and the same register-write breakdown used by
+`render-quick`. The supported read-only timing profiles are `ddr`, `sdram`, and
+`parallel-nor`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.

@@ -379,7 +379,7 @@ configuration and live runtime scalar state.
 If audio is silent after the voice commit:
 
 - Read `AUDIO_STATUS`, `RENDER_STATUS`, and `MEMORY_STATUS`.
-- Check whether `MEMORY_STATUS` shows line-cache misses and memory responses.
+- Check whether `MEMORY_STATUS` shows line-memory requests and memory responses.
 - Check `DEBUG_EVENT_FLAGS` for underrun, sample drop, or render deadline miss.
 - Confirm the programmed `BASE_ADDR` includes the SF2 `smpl` payload offset and is
   expressed as a 16-bit word address.
@@ -399,7 +399,7 @@ Use this order when a stage fails:
 | `PLATFORM_STATUS[1] = 1` | SD or loader | Decode `PLATFORM_ERRORS`, check raw image header and current LBA. |
 | `asset_loaded = 1` but no memory responses | DDR read path | DDR arbiter, line reader, voice base address, memory status counters. |
 | Memory responses but silent I2S | voice configuration or I2S | gains, envelope, length, loop mode, codec wiring, LRCLK/BCLK. |
-| I2S underruns or deadline misses | throughput | active voice count, DDR latency, output FIFO level, memory cache hit rate. |
+| I2S underruns or deadline misses | throughput | active voice count, DDR latency, output FIFO level, external line request rate. |
 
 ## Suggested Milestones
 

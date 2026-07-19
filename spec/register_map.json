@@ -6,7 +6,7 @@
   "version": {
     "name": "VERSION",
     "address": "0x3000",
-    "value": "0x00050000"
+    "value": "0x00060000"
   },
   "voice_window": {
     "base": "0x0100",
@@ -51,8 +51,6 @@
     {"name": "UNDERRUN_COUNT", "address": "0x3024"},
     {"name": "SAMPLE_DROP_COUNT", "address": "0x3028"},
     {"name": "RENDER_DEADLINE_MISS_COUNT", "address": "0x302c"},
-    {"name": "MEM_HIT_COUNT", "address": "0x3030"},
-    {"name": "MEM_MISS_COUNT", "address": "0x3034"},
     {"name": "MEM_RESPONSE_COUNT", "address": "0x3038"},
     {"name": "PLATFORM_STATUS", "address": "0x3040"},
     {"name": "PLATFORM_ERRORS", "address": "0x3044"},
@@ -92,9 +90,7 @@
       "UNDERRUN_MASK": "0x00000001",
       "SAMPLE_DROP_MASK": "0x00000002",
       "RENDER_DEADLINE_MISS_MASK": "0x00000004",
-      "MEM_HIT_MASK": "0x00000008",
-      "MEM_MISS_MASK": "0x00000010",
-      "MEM_RESPONSE_MASK": "0x00000020"
+      "MEM_RESPONSE_MASK": "0x00000008"
     },
     "PLATFORM_STATUS": {
       "DEBUG_PRESENT_MASK": "0x00000001",

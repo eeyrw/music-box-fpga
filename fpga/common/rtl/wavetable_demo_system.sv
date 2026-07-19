@@ -22,8 +22,6 @@ module wavetable_demo_system #(
   output logic                     i2s_sdata,
   output logic                     underrun_pulse,
   output logic                     sample_drop_pulse,
-  output logic                     mem_debug_hit_pulse,
-  output logic                     mem_debug_miss_pulse,
   output logic                     mem_debug_response_pulse,
   output logic [15:0]              mem_debug_response_latency,
   output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
@@ -126,8 +124,6 @@ module wavetable_demo_system #(
     .fifo_sample_valid,
     .underrun_pulse,
     .sample_drop_pulse,
-    .mem_debug_hit_pulse,
-    .mem_debug_miss_pulse,
     .mem_debug_response_pulse,
     .mem_debug_response_latency,
     .output_fifo_level,
@@ -155,8 +151,6 @@ module wavetable_demo_system #(
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .mem_debug_hit_pulse,
-    .mem_debug_miss_pulse,
     .mem_debug_response_pulse,
     .mem_debug_response_latency
   );

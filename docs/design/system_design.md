@@ -210,8 +210,8 @@ The hardware contract is register-level:
 The generic simulation wrapper and current Smart Artix board wrapper both use a
 `100 MHz` system clock by default. A 48 kHz output frame has about 2083 core
 cycles on average with the fractional sample-tick divider. The renderer is
-sequential: more active voices and more memory misses increase the latency
-between `sample_tick` and `sample_valid`.
+sequential: more active voices and more external line requests increase the
+latency between `sample_tick` and `sample_valid`.
 
 `fractional_tick_gen` owns the phase-accumulator divider used for both output
 frame ticks and I2S BCLK edges when `SYS_CLK_HZ` is not an integer multiple of
@@ -253,8 +253,8 @@ memory-controller, audio, asset-image, and tool-flow decisions without binding
 the generic RTL to one vendor flow.
 
 1. Strengthen output FIFO and deadline accounting.
-   The full-system wrapper now records render latency, FIFO level, deadline
-   misses, I2S underruns, and sample drops. Next, fail longer full-system stress
+   The full-system wrapper now records render latency, FIFO level, memory
+   responses, deadline misses, I2S underruns, and sample drops. Next, fail longer full-system stress
    tests on steady-state deadline misses, underruns, or sample drops.
 
 2. Continue voice-control storage reduction where it is worth the protocol cost.
@@ -273,13 +273,13 @@ the generic RTL to one vendor flow.
    for the next interpolated frame or loop-wrapped frame. This likely requires
    adding a voice identifier to the core memory-request interface, or extending
    `voice_endpoint_fetch` with locality policy while keeping phase and DSP
-   algorithms out of the memory adapter. Use `render-memory` hit/miss,
+   algorithms out of the memory adapter. Use `render-memory` external-request,
    response-latency, render-latency, and deadline-miss counters to compare any
    new policy against the current one-line baseline.
 
 4. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a
-   Xilinx MIG wrapper. Model burst alignment, calibration delay, cache misses,
+   Xilinx MIG wrapper. Model burst alignment, calibration delay, cache fills,
    prefetch, and request backpressure before relying on hardware timing.
 
 5. Split board clocks and reset sequencing.
