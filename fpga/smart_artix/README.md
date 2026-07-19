@@ -393,7 +393,7 @@ make render-board-loader SECONDS=0.1
 
 This C++ harness constructs a raw SD image from the selected SF2, drives the
 native-SD command/data loader RTL into a DDR byte model, checks the loaded DDR
-bytes against the source SF2, then renders through `wavetable_line_memory_core` and
+bytes against the source SF2, then renders through `wavetable_cached_render_core` and
 compares every output sample against the C++ fixed-point reference. It uses a
 command-level SD model for speed; pin-level SD behavior is covered by the focused
 native pin PHY tests inside `make smart-artix-test`.

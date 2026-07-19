@@ -25,7 +25,13 @@ module wavetable_system_core #(
   output logic                     mem_debug_response_pulse,
   output logic [15:0]              mem_debug_response_latency
 );
-  wavetable_line_memory_core #(.LINE_WORDS(LINE_WORDS)) core (
+  logic mem_req_valid;
+  logic [31:0] mem_req_addr;
+  logic mem_req_ready;
+  logic mem_rsp_valid;
+  synth_pkg::pcm_t mem_rsp_data;
+
+  wavetable_render_core core (
     .clk,
     .rst,
     .bus_valid,
@@ -40,14 +46,29 @@ module wavetable_system_core #(
     .sample_l,
     .sample_r,
     .busy,
+    .mem_req_valid,
+    .mem_req_addr,
+    .mem_req_ready,
+    .mem_rsp_valid,
+    .mem_rsp_data
+  );
+
+  wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) memory (
+    .clk,
+    .rst,
+    .core_req_valid(mem_req_valid),
+    .core_req_ready(mem_req_ready),
+    .core_req_addr(mem_req_addr),
+    .core_rsp_valid(mem_rsp_valid),
+    .core_rsp_data(mem_rsp_data),
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .mem_debug_hit_pulse,
-    .mem_debug_miss_pulse,
-    .mem_debug_response_pulse,
-    .mem_debug_response_latency
+    .debug_hit_pulse(mem_debug_hit_pulse),
+    .debug_miss_pulse(mem_debug_miss_pulse),
+    .debug_response_pulse(mem_debug_response_pulse),
+    .debug_response_latency(mem_debug_response_latency)
   );
 endmodule

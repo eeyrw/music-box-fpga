@@ -56,7 +56,7 @@ RTL_SOURCES := \
 	rtl/voice/voice_endpoint_fetch.sv \
 	rtl/voice/multi_voice_pipeline.sv \
 	rtl/top/wavetable_render_core.sv \
-	rtl/top/wavetable_line_memory_core.sv
+	rtl/top/wavetable_cached_render_core.sv
 
 FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/fractional_tick_gen.sv \
@@ -153,7 +153,7 @@ check-register-map:
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_render_core $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_line_memory_core $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_cached_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_system_core $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
@@ -292,11 +292,11 @@ render-quick:
 		--out-dir $(RENDER_QUICK_OUT_DIR)
 
 render-memory:
-	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_line_memory_core.
+	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_cached_render_core.
 	mkdir -p $(RENDER_MEMORY_OUT_DIR)
 	rm -f $(RENDER_MEMORY_OUT_DIR)/out.pcm
 	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_line_memory_core \
+		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_cached_render_core \
 		$(RTL_SOURCES) --exe \
 		$(abspath sim/harness/apps/render_memory_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
@@ -304,9 +304,9 @@ render-memory:
 		$(HARNESS_WAV_SRC) \
 		$(abspath sim/harness/dut/rtl_harness.cpp) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_line_memory_core.mk \
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_cached_render_core.mk \
 		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_line_memory_core --sf2 "$(SF2)" \
+	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_cached_render_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \

@@ -1,6 +1,6 @@
 #include "rtl_harness.h"
 
-#include "Vwavetable_line_memory_core.h"
+#include "Vwavetable_cached_render_core.h"
 
 #include <cstdio>
 #include <iostream>
@@ -30,7 +30,7 @@ int sample_timeout_cycles(const MemoryProfile& profile) {
 
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                        int sample_rate, const MemoryProfile& memory_profile)
-    : top_(new Vwavetable_line_memory_core), voice_control_(*this), memory_(memory),
+    : top_(new Vwavetable_cached_render_core), voice_control_(*this), memory_(memory),
       memory_profile_(memory_profile), wav_(wav_path, sample_rate), sample_rate_(sample_rate) {
   top_->clk = 0;
   top_->rst = 1;

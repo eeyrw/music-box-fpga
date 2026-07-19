@@ -61,7 +61,7 @@ register bus -> voice_register_bank -> multi_voice_pipeline
                                       -> sample_valid + sample_l/sample_r
 ```
 
-`rtl/top/wavetable_line_memory_core.sv` adds the line-memory subsystem:
+`rtl/top/wavetable_cached_render_core.sv` adds the line-memory subsystem:
 
 ```text
 wavetable_render_core -> wave_memory_subsystem -> external line-read interface
@@ -70,10 +70,9 @@ wavetable_render_core -> wave_memory_subsystem -> external line-read interface
 `fpga/common/rtl/wavetable_system_core.sv` is the reusable system core:
 
 ```text
-register bus -> wavetable_line_memory_core -> PCM frames
-                                      |
-                                      v
-                             external line-memory pins
+register bus -> wavetable_render_core -> wave_memory_subsystem -> external line-memory pins
+                                      \
+                                       -> PCM frames
 ```
 
 `fpga/common/rtl/wavetable_i2s_output.sv` is the reusable audio-output adapter:

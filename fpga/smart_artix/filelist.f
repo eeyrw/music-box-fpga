@@ -17,7 +17,7 @@
 ../../rtl/voice/voice_endpoint_fetch.sv
 ../../rtl/voice/multi_voice_pipeline.sv
 ../../rtl/top/wavetable_render_core.sv
-../../rtl/top/wavetable_line_memory_core.sv
+../../rtl/top/wavetable_cached_render_core.sv
 
 # Common board/peripheral RTL.
 ../common/rtl/fractional_tick_gen.sv

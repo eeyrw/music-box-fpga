@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-class Vwavetable_line_memory_core;
+class Vwavetable_cached_render_core;
 
 namespace render {
 
@@ -28,7 +28,7 @@ struct MemoryStats {
   RegisterWriteStats register_writes;
 };
 
-// Thin Verilator-side driver for wavetable_line_memory_core. It owns the top
+// Thin Verilator-side driver for wavetable_cached_render_core. It owns the top
 // module, models the external line-memory slave, writes the generated stereo PCM
 // stream as a WAV file, and exposes firmware-like helpers for voice register
 // writes.
@@ -58,7 +58,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void tick();
   void service_external_memory();
 
-  Vwavetable_line_memory_core* top_ = nullptr;
+  Vwavetable_cached_render_core* top_ = nullptr;
   RegisterVoiceControl voice_control_;
   // Shared wave-memory image. For SF2-backed renders this is the complete file
   // image, with regions pointing at absolute sample words inside smpl.

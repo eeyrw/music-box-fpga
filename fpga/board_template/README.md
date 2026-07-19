@@ -21,7 +21,7 @@ the selected board details.
 ## Integration Decisions
 
 - Top-level module name:
-- Core wrapper used: `wavetable_render_core`, `wavetable_line_memory_core`,
+- Core wrapper used: `wavetable_render_core`, `wavetable_cached_render_core`,
   `wavetable_system_core`, `wavetable_i2s_output`, or `wavetable_demo_system`
 - Clock generation method:
 - Reset sequencing method:

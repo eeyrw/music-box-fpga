@@ -127,7 +127,7 @@ module board_loader_render_tops #(
     .mig_app_response(loader_mig_response)
   );
 
-  wavetable_line_memory_core #(
+  wavetable_cached_render_core #(
     .LINE_WORDS(LINE_WORDS)
   ) core (
     .clk,

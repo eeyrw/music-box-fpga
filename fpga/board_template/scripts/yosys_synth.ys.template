@@ -19,7 +19,7 @@ read_verilog -sv ../../rtl/voice/voice_phase_frame.sv
 read_verilog -sv ../../rtl/voice/voice_endpoint_fetch.sv
 read_verilog -sv ../../rtl/voice/multi_voice_pipeline.sv
 read_verilog -sv ../../rtl/top/wavetable_render_core.sv
-read_verilog -sv ../../rtl/top/wavetable_line_memory_core.sv
+read_verilog -sv ../../rtl/top/wavetable_cached_render_core.sv
 read_verilog -sv ../common/rtl/fractional_tick_gen.sv
 read_verilog -sv ../common/rtl/spi_register_bridge.sv
 read_verilog -sv ../common/rtl/wavetable_system_debug_regs.sv

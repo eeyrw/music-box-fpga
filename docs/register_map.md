@@ -145,7 +145,7 @@ status bits below are live snapshots unless explicitly marked sticky or counted.
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| `0` | `core_busy` | `wavetable_line_memory_core` is currently rendering or servicing work. |
+| `0` | `core_busy` | `wavetable_cached_render_core` is currently rendering or servicing work. |
 | `1` | `render_pending` | A sample tick has been accepted and the wrapper is waiting for `core_sample_valid`. |
 | `2` | `core_sample_valid` | The core produced a stereo sample in the current cycle. |
 | `3` | `fifo_sample_valid` | The output FIFO contains at least one sample for I2S. |

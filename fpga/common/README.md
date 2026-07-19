@@ -25,4 +25,4 @@ bus_ready, bus_error, bus_rdata
 ```
 
 New transports should adapt to that bus instead of changing
-`wavetable_render_core` or `wavetable_line_memory_core`.
+`wavetable_render_core` or `wavetable_cached_render_core`.

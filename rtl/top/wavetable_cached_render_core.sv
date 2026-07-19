@@ -1,4 +1,4 @@
-module wavetable_line_memory_core #(
+module wavetable_cached_render_core #(
   parameter int LINE_WORDS = 8
 ) (
   input  logic                     clk,

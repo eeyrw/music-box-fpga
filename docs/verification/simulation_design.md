@@ -332,8 +332,8 @@ precision for those regions.
 wrapper that combines:
 
 - `spi_register_bridge` for control writes.
-- `wavetable_system_core`, wrapping `wavetable_line_memory_core`, for the audio
-  core and line-memory interface.
+- `wavetable_system_core`, composing the render core and line-memory adapter for
+  the audio core and line-memory interface.
 - `wavetable_i2s_output` for the output FIFO and I2S adapter.
 - A `100 MHz` system clock with `fractional_tick_gen` instances for sample ticks
   and I2S BCLK edges.
@@ -396,7 +396,7 @@ containing:
 
 - `smart_artix_sd_native_asset_loader`, including the native SD command-level
   block reader and DDR3 asset writer.
-- `wavetable_line_memory_core`, including the line-cache memory subsystem.
+- `wavetable_cached_render_core`, including the line-cache memory subsystem.
 
 The C++ side models the SD card at the command/data boundary, not at `CMD` and
 `DAT[3:0]` pins. This keeps full-SF2 regressions fast enough to run regularly
@@ -431,7 +431,7 @@ mismatch fails the run.
 
 ## C++ Memory-Profile Render Flow
 
-`make render-memory` renders a short score through `wavetable_line_memory_core`, which
+`make render-memory` renders a short score through `wavetable_cached_render_core`, which
 wraps the core with `wave_memory_subsystem`. The C++ harness parses SF2 and MIDI
 at runtime, models the MCU-side policy, drives the register bus, serves the
 external line-read memory interface, and writes the WAV file directly. The FPGA
@@ -461,7 +461,7 @@ The C++ harness performs only simulation-side work:
   tuning, and output sample rate.
 - Convert SF2 volume and modulation envelope attack, decay, sustain, release,
   and sampleModes into per-region control values used by the C++ MCU model.
-- Drive `wavetable_line_memory_core` through its public Verilated ports, including the
+- Drive `wavetable_cached_render_core` through its public Verilated ports, including the
   external line-memory request/response interface.
 
 Each `make render-memory` run writes memory subsystem counters to:

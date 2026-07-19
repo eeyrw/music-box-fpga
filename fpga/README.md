@@ -58,7 +58,7 @@ fpga/<board-name>/
    timing for SPI, I2S, and memory interfaces.
 
 5. Replace abstract memory with a physical memory controller.
-   `wavetable_line_memory_core` exposes a line-read interface, not real DDR3 pins or
+   `wavetable_cached_render_core` exposes a line-read interface, not real DDR3 pins or
    a MIG app interface. The Smart Artix path should translate line requests into
    reads from a MIG controller configured for the Micron `MT41K256M16TW`.
 
@@ -111,7 +111,7 @@ rtl/voice/voice_phase_frame.sv
 rtl/voice/voice_endpoint_fetch.sv
 rtl/voice/multi_voice_pipeline.sv
 rtl/top/wavetable_render_core.sv
-rtl/top/wavetable_line_memory_core.sv
+rtl/top/wavetable_cached_render_core.sv
 ```
 
 Common board/peripheral adapters live under `fpga/common/rtl`:
@@ -127,8 +127,8 @@ fpga/common/rtl/wavetable_demo_system.sv
 ```
 
 Use `wavetable_render_core` for the smallest datapath integration,
-`wavetable_line_memory_core` when attaching a line-memory controller,
-`wavetable_system_core` when you want the line-memory core behind a system reset
-and abstract register bus, `wavetable_i2s_output` when adapting PCM frames to
-I2S, or `wavetable_demo_system` when keeping the current SPI plus I2S board
-demo shape.
+`wavetable_cached_render_core` when a standalone Verilated top should include the
+line-memory adapter, `wavetable_system_core` when a board/common wrapper should
+compose the render core and line-memory adapter behind an abstract register bus,
+`wavetable_i2s_output` when adapting PCM frames to I2S, or
+`wavetable_demo_system` when keeping the current SPI plus I2S board demo shape.
