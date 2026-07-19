@@ -279,21 +279,53 @@ after the control-plane split is stable.
 
 ## Next Implementation Steps
 
-1. Move renderer-owned state into a named store.
+1. Align the documented RTL ownership rules with the current tree.
+   Add `rtl/memory` to the agent/developer ownership notes, keep the generic
+   memory adapter policy-light, and keep board-specific memory controllers under
+   `fpga/`.
+
+2. Normalize the phase-format contract across documentation.
+   The current RTL uses unsigned Q24.8 sample-frame phase and phase increments.
+   Update any stale Q16.16 references before changing phase, loop, or pitch
+   behavior.
+
+3. Move renderer-owned state into a named store.
    Keep phase and filter history close to `multi_voice_pipeline`, and expose only
    explicit status reads if needed.
 
-2. Re-run Smart Artix synthesis for the grouped descriptor and active/runtime
+4. Split the frame scheduler from per-voice render state.
+   Keep `multi_voice_pipeline` as a composition layer around the scheduler,
+   phase/frame calculation, endpoint fetch, DSP pipeline, and mixer. The
+   scheduler should own voice scanning, prefetch/read latency handling,
+   outstanding-context accounting, and frame completion policy.
+
+5. Extract reusable DSP arithmetic from `voice_dsp_pipeline`.
+   Start with the biquad filter arithmetic and shared PCM/filter-state
+   saturation helpers. Keep DSP primitives free of voice scanning, register
+   decode, and memory-request policy.
+
+6. Add module-level contract comments at the major boundaries.
+   Document what `multi_voice_pipeline`, the new renderer state store, the
+   scheduler, `voice_endpoint_fetch`, and `voice_dsp_pipeline` own and explicitly
+   do not own.
+
+7. Add focused tests before or alongside each split.
+   Prioritize `tb_voice_endpoint_fetch`, `tb_voice_dsp_pipeline`, and a focused
+   test for the new renderer-owned state store. Keep exact integer checks for
+   interpolation, filter, gain, envelope, saturation, mono/stereo fetch order,
+   commit reset behavior, and runtime updates that must not reload phase.
+
+8. Re-run Smart Artix synthesis for the grouped descriptor and active/runtime
    store split.
    Record LUT, register, BRAM, DSP, and timing deltas against the previous
    voice-bank resource pass before making further area/timing claims.
 
-3. Design the first per-voice wave cache.
+9. Design the first per-voice wave cache.
    Add metrics before changing policy: demand hit/miss, prefetch hit, line fill
    count, external request count, response latency, render latency, deadline
    misses, and underruns.
 
-4. Compare against the current memory baseline.
+10. Compare against the current memory baseline.
    Use `make render-memory` with the existing DDR, SDRAM, and parallel-NOR
    profiles. Require identical PCM output and better or clearly explained memory
    statistics before replacing the baseline.

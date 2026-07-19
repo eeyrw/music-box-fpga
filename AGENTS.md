@@ -25,6 +25,9 @@ Read these documents before changing interfaces:
 - `rtl/control`: register decoding and shadow/active control state.
 - `rtl/voice`: phase and sample-fetch sequencing.
 - `rtl/dsp`: stateless or streaming fixed-point signal processing.
+- `rtl/memory`: generic memory adapters and caches between core word reads and
+  external line or burst memory interfaces. Keep board-specific controllers under
+  `fpga/`.
 - `rtl/audio`: audio serializers and output timing blocks.
 - `sim/models`: behavioral models that must never appear in synthesis sources.
 - `sim/tb`: self-checking SystemVerilog testbenches.
@@ -62,11 +65,11 @@ package code. A DSP primitive must not depend on a voice controller.
 ## Behavioral Contracts
 
 - PCM samples are signed 16-bit values.
-- Playback position and increment use unsigned Q16.16 sample-frame units.
+- Playback position and increment use unsigned Q24.8 sample-frame units.
 - Gains use signed Q1.15. Normal operating gains are from zero through 0x7fff.
 - `loop_end` is exclusive. Valid loops satisfy
   `loop_start < loop_end <= length`.
-- V1 requires `phase_inc < (loop_end - loop_start) << 16`; phase wrapping
+- V1 requires `phase_inc < (loop_end - loop_start) << 8`; phase wrapping
   therefore needs at most one subtraction per output sample.
 - Mono samples are duplicated before independent left/right gain is applied.
 - Stereo samples use independent absolute left/right base addresses, lengths, and
