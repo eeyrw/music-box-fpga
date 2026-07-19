@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "sim/harness/control/register_control.h"
 #include "third_party/ch347_linux/ch347_lib.h"
@@ -27,6 +28,8 @@ class Ch347RegisterTransport : public render::RegisterWriteSink {
 
   void write_register(uint16_t address, uint32_t data) override;
   uint32_t read_register(uint16_t address);
+  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data);
+  std::vector<uint32_t> read_registers(uint16_t start_address, size_t count);
 
  private:
   using SpiConfig = mSpiCfgS;

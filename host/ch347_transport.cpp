@@ -84,6 +84,48 @@ uint32_t Ch347RegisterTransport::read_register(uint16_t address) {
          (uint32_t(frame[5]) << 8) | uint32_t(frame[6]);
 }
 
+void Ch347RegisterTransport::write_registers(uint16_t start_address, const std::vector<uint32_t>& data) {
+  if (data.empty()) return;
+  const size_t frame_size = 3 + data.size() * 4;
+  if (frame_size > 256) throw std::runtime_error("CH347 SPI burst write is too large");
+
+  std::array<uint8_t, 256> frame{};
+  frame[0] = 0xc0;
+  frame[1] = uint8_t(start_address >> 8);
+  frame[2] = uint8_t(start_address);
+  for (size_t i = 0; i < data.size(); ++i) {
+    const uint32_t word = data[i];
+    const size_t offset = 3 + i * 4;
+    frame[offset + 0] = uint8_t(word >> 24);
+    frame[offset + 1] = uint8_t(word >> 16);
+    frame[offset + 2] = uint8_t(word >> 8);
+    frame[offset + 3] = uint8_t(word);
+  }
+  write_spi(frame.data(), frame_size);
+}
+
+std::vector<uint32_t> Ch347RegisterTransport::read_registers(uint16_t start_address, size_t count) {
+  if (count == 0) return {};
+  const size_t frame_size = 3 + count * 4;
+  if (frame_size > 256) throw std::runtime_error("CH347 SPI burst read is too large");
+
+  std::array<uint8_t, 256> frame{};
+  frame[0] = 0x40;
+  frame[1] = uint8_t(start_address >> 8);
+  frame[2] = uint8_t(start_address);
+  transfer_spi(frame.data(), frame_size);
+
+  std::vector<uint32_t> data(count);
+  for (size_t i = 0; i < count; ++i) {
+    const size_t offset = 3 + i * 4;
+    data[i] = (uint32_t(frame[offset + 0]) << 24) |
+              (uint32_t(frame[offset + 1]) << 16) |
+              (uint32_t(frame[offset + 2]) << 8) |
+              uint32_t(frame[offset + 3]);
+  }
+  return data;
+}
+
 unsigned char Ch347RegisterTransport::clock_code_for_hz(int requested_hz) {
   if (requested_hz <= 0) throw std::runtime_error("CH347 SPI clock must be positive");
   for (const ClockChoice& choice : kClockChoices) {

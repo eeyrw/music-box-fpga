@@ -97,6 +97,40 @@ module tb_spi_register_bridge;
     repeat (4) @(negedge clk);
   endtask
 
+  task automatic spi_write_burst4(input logic [15:0] address,
+                                  input logic [31:0] data0,
+                                  input logic [31:0] data1,
+                                  input logic [31:0] data2,
+                                  input logic [31:0] data3);
+    spi_cs_n = 1'b0;
+    repeat (3) @(negedge clk);
+    spi_send_byte(8'hc0);
+    spi_send_byte(address[15:8]);
+    spi_send_byte(address[7:0]);
+    spi_send_byte(data0[31:24]);
+    spi_send_byte(data0[23:16]);
+    spi_send_byte(data0[15:8]);
+    spi_send_byte(data0[7:0]);
+    repeat (8) @(negedge clk);
+    spi_send_byte(data1[31:24]);
+    spi_send_byte(data1[23:16]);
+    spi_send_byte(data1[15:8]);
+    spi_send_byte(data1[7:0]);
+    repeat (8) @(negedge clk);
+    spi_send_byte(data2[31:24]);
+    spi_send_byte(data2[23:16]);
+    spi_send_byte(data2[15:8]);
+    spi_send_byte(data2[7:0]);
+    repeat (8) @(negedge clk);
+    spi_send_byte(data3[31:24]);
+    spi_send_byte(data3[23:16]);
+    spi_send_byte(data3[15:8]);
+    spi_send_byte(data3[7:0]);
+    repeat (8) @(negedge clk);
+    spi_cs_n = 1'b1;
+    repeat (4) @(negedge clk);
+  endtask
+
   task automatic spi_read_word(input logic [15:0] address, output logic [31:0] data);
     data = '0;
     spi_cs_n = 1'b0;
@@ -118,6 +152,41 @@ module tb_spi_register_bridge;
     repeat (4) @(negedge clk);
   endtask
 
+  task automatic spi_read_data_word(output logic [31:0] data);
+    data = '0;
+    for (int b = 31; b >= 0; b--) begin
+      repeat (2) @(negedge clk);
+      spi_sclk = 1'b1;
+      repeat (2) @(negedge clk);
+      data[b] = spi_miso;
+      spi_sclk = 1'b0;
+      repeat (2) @(negedge clk);
+    end
+  endtask
+
+  task automatic spi_read_burst4(input logic [15:0] address,
+                                 output logic [31:0] data0,
+                                 output logic [31:0] data1,
+                                 output logic [31:0] data2,
+                                 output logic [31:0] data3);
+    spi_cs_n = 1'b0;
+    repeat (3) @(negedge clk);
+    spi_send_byte(8'h40);
+    spi_send_byte(address[15:8]);
+    spi_send_byte(address[7:0]);
+    repeat (8) @(negedge clk);
+    spi_read_data_word(data0);
+    repeat (8) @(negedge clk);
+    spi_read_data_word(data1);
+    repeat (8) @(negedge clk);
+    spi_read_data_word(data2);
+    repeat (8) @(negedge clk);
+    spi_read_data_word(data3);
+    repeat (4) @(negedge clk);
+    spi_cs_n = 1'b1;
+    repeat (4) @(negedge clk);
+  endtask
+
   task automatic expect_read(input logic [15:0] address, input logic [31:0] expected);
     logic [31:0] actual;
     spi_read_word(address, actual);
@@ -127,6 +196,29 @@ module tb_spi_register_bridge;
     end
     if (spi_error) begin
       $error("SPI read 0x%04x unexpectedly reported error", address);
+      errors++;
+    end
+  endtask
+
+  task automatic expect_burst_read4(input logic [15:0] address,
+                                    input logic [31:0] expected0,
+                                    input logic [31:0] expected1,
+                                    input logic [31:0] expected2,
+                                    input logic [31:0] expected3);
+    logic [31:0] actual0;
+    logic [31:0] actual1;
+    logic [31:0] actual2;
+    logic [31:0] actual3;
+    spi_read_burst4(address, actual0, actual1, actual2, actual3);
+    if ((actual0 !== expected0) || (actual1 !== expected1) ||
+        (actual2 !== expected2) || (actual3 !== expected3)) begin
+      $error("SPI burst read 0x%04x got 0x%08x 0x%08x 0x%08x 0x%08x expected 0x%08x 0x%08x 0x%08x 0x%08x",
+             address, actual0, actual1, actual2, actual3,
+             expected0, expected1, expected2, expected3);
+      errors++;
+    end
+    if (spi_error) begin
+      $error("SPI burst read 0x%04x unexpectedly reported error", address);
       errors++;
     end
   endtask
@@ -207,6 +299,17 @@ module tb_spi_register_bridge;
     write_expect(reg_voice_addr(1, REG_OFF_LENGTH_R), 32'hffab_cdef, 32'h00ab_cdef);
     write_expect(reg_voice_addr(1, REG_OFF_LOOP_START_R), 32'hff00_0022, 32'h0000_0022);
     write_expect(reg_voice_addr(1, REG_OFF_LOOP_END_R), 32'hff00_0055, 32'h0000_0055);
+
+    spi_write_burst4(reg_voice_addr(2, REG_OFF_BASE_ADDR),
+                     32'h1111_0000, 32'h2222_0004,
+                     32'hff00_0008, 32'hff00_000c);
+    if (spi_error) begin
+      $error("SPI burst write unexpectedly reported error");
+      errors++;
+    end
+    expect_burst_read4(reg_voice_addr(2, REG_OFF_BASE_ADDR),
+                       32'h1111_0000, 32'h2222_0004,
+                       32'h0000_0008, 32'h0000_000c);
 
     spi_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'h0000_0004);
     spi_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_4000);

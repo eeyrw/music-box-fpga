@@ -9,23 +9,61 @@ values exported to generated RTL and C++ headers. Run
 pick up the same register contract.
 
 The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
-single-beat and 32-bit aligned. The 32-bit data word is the bus container; many
-fields are narrower and explicitly define which bits are meaningful. Wave-memory
-base addresses are 32-bit word addresses. Writes to configuration registers
-update per-voice shadow state. `COMMIT` copies the selected shadow configuration
-into renderer-facing active storage and stages a render-boundary commit pulse for
-phase reload and filter-history clear. Writes to runtime registers do not require
-`COMMIT`, update live runtime state directly, and do not reload playback phase.
+single-beat and 32-bit aligned. The abstract register bus carries a numeric
+32-bit word; it is not a byte-addressable memory port and does not define a CPU
+little-endian or big-endian storage order. Register fields use normal
+SystemVerilog bit numbering: bit 0 is the least-significant bit, and ranges such
+as bits 15:0 or 31:16 refer to positions in that 32-bit word. Many fields are
+narrower than 32 bits and explicitly define which bits are meaningful.
+Wave-memory base addresses are 32-bit word addresses. Writes to configuration
+registers update per-voice shadow state. `COMMIT` copies the selected shadow
+configuration into renderer-facing active storage and stages a render-boundary
+commit pulse for phase reload and filter-history clear. Writes to runtime
+registers do not require `COMMIT`, update live runtime state directly, and do not
+reload playback phase.
 
 Board-level adapters expose this same register bus through the selected physical
-transport. The current `fpga/common/rtl/spi_register_bridge.sv` adapter uses a
-simple 56-bit SPI frame: 8-bit command, 16-bit byte address, then 32-bit data
-phase. Command bit 7 selects write when set and read when clear; command bits
-6:0 are reserved. Read data is shifted out most-significant bit first during the
-data phase. The SPI master must leave enough system-clock cycles between the
-address phase and read data phase for the bridge to complete the internal
-register-bus access. This is a simulation-friendly transport, not a board timing
-contract.
+transport. The current `fpga/common/rtl/spi_register_bridge.sv` adapter supports
+single-register and auto-increment SPI frames. Each frame starts with an 8-bit
+command and a 16-bit byte address. Command bit 7 selects write when set and read
+when clear. Command bit 6 selects an auto-increment burst when set. Command bits
+5:0 are reserved. Single-register writes use `0x80`, single-register reads use
+`0x00`, burst writes use `0xc0`, and burst reads use `0x40`.
+
+Each SPI data beat is one 32-bit register word serialized most-significant byte
+first and most-significant bit first within each byte. For example, register
+value `0x12345678` is transferred on SPI as bytes `12 34 56 78`, with bit 31
+seen first on the data phase. Burst frames keep chip select asserted after the
+first data beat and access the next register at `address + 4` for each
+additional beat. Chip-select deassertion ends the burst. The SPI master must
+leave enough system-clock cycles between the address phase and the first read
+data phase, and between burst read data beats, for the bridge to complete the
+internal register-bus access. Burst writes also require enough system-clock
+cycles between data beats for the previous internal write to be accepted. This is
+a simulation-friendly transport, not a board timing contract.
+
+The current SPI bridge is not a nonstop streaming SPI target. The SPI pins are
+sampled into `clk`, and the bridge has no wire-level ready/backpressure signal.
+For a `100 MHz` system clock, start hardware bring-up around `1 MHz` SCLK. After
+basic read/write smoke tests pass, `2 MHz` and `5 MHz` are reasonable next test
+points. Treat `10 MHz` as something that must be measured on the selected board,
+and do not assume higher rates without adding board timing constraints and a more
+complete SPI front end. A rough edge-sampling limit is `SCLK <= clk / 10`, but
+internal register latency can require slower operation or explicit gaps even
+when edge sampling itself is reliable.
+
+Single-register writes are the least sensitive case because the data word is
+captured before the internal write starts, but chip select must remain asserted
+long enough for the accepted write to reach `bus_ready`. Single-register reads
+must leave a turnaround gap after the address phase before the 32 read-data
+clocks. Burst writes must leave a gap after each 32-bit data beat so the previous
+internal write can complete; otherwise later MOSI bits can be ignored while the
+bridge is in its write-wait state. Burst reads must leave a gap before each
+readback word so the next internal read can complete. Put long-latency writes
+such as `COMMIT` at the end of a burst or issue them as separate single-register
+writes. Supporting gapless high-speed burst traffic requires additional RTL, such
+as a write-side RX FIFO and read-side prefetch/FIFO or a protocol-defined fixed
+dummy-cycle interval.
 
 The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
 uses `0x0100 + N * 0x100` plus the offsets below.

@@ -121,10 +121,30 @@ address:      16-bit byte address, most-significant byte first
 data clocks:  32-bit readback, most-significant bit first on MISO
 ```
 
+The transport also exposes auto-increment helpers for consecutive 32-bit
+registers. Burst writes use command byte `0xc0` followed by the start address and
+one or more 32-bit data words. Burst reads use command byte `0x40` followed by
+the start address and one 32-bit readback phase per requested word. The bridge
+increments the byte address by four after each beat and ends the burst when chip
+select deasserts.
+
 Per-voice configuration and runtime registers read back through their normal
 addresses. Some reads take multiple system-clock cycles because the register bank
 uses synchronous RAM internally; the SPI bridge waits for the internal
-`bus_ready` response before shifting out the 32-bit read data.
+`bus_ready` response before shifting out the 32-bit read data. Hardware-facing
+burst transfers must leave enough system-clock cycles between readback words, and
+between write data words, for the internal register-bus beat to complete.
+
+For a `100 MHz` FPGA system clock, use `--clock-hz 1000000` for initial
+hardware bring-up. After basic single-register reads and writes are stable,
+`2000000` and `5000000` are reasonable next test points. Treat `10000000` as a
+board-measured target, not a default guarantee. The current SPI bridge is sampled
+by the FPGA system clock and has no wire-level ready signal, so gapless
+high-speed burst transfers are not guaranteed. Single reads need an
+address-to-data turnaround gap; burst reads need a gap before each readback word;
+burst writes need a gap after each data word. Long-latency writes such as
+`COMMIT` should be the final word of a burst or sent as separate single-register
+writes.
 
 The command-line tool also wraps the Smart Artix DDR register-access window:
 

@@ -192,7 +192,11 @@ build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
 ```
 
 Then use the selected CH347 library and conservative SPI speed. Start around
-`1 MHz` until the board-level SPI timing contract is measured:
+`1 MHz` until the board-level SPI timing contract is measured. The common SPI
+register bridge samples SCLK into the FPGA system clock and cannot backpressure a
+fast master, so do not treat burst register frames as gapless high-speed streams.
+After `1 MHz` smoke tests pass, try `2 MHz` and `5 MHz`; treat `10 MHz` as a
+board-measured target rather than a guaranteed setting.
 
 ```bash
 build/smart_artix_bringup --device 0 \

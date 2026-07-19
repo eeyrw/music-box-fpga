@@ -36,6 +36,7 @@ module spi_register_bridge (
   logic [31:0] tx_shift;
   logic [5:0] bit_count;
   logic command_write;
+  logic command_burst;
   logic read_sample_seen;
   logic sclk_rise;
   logic sclk_fall;
@@ -67,6 +68,7 @@ module spi_register_bridge (
       tx_shift <= '0;
       bit_count <= '0;
       command_write <= 1'b0;
+      command_burst <= 1'b0;
       read_sample_seen <= 1'b0;
       spi_miso <= 1'b0;
       spi_error <= 1'b0;
@@ -88,6 +90,7 @@ module spi_register_bridge (
         tx_shift <= '0;
         bit_count <= '0;
         command_write <= 1'b0;
+        command_burst <= 1'b0;
         read_sample_seen <= 1'b0;
         spi_miso <= 1'b0;
         spi_error <= 1'b0;
@@ -100,6 +103,8 @@ module spi_register_bridge (
             if (sclk_rise) begin
               if (bit_count == 6'd0)
                 command_write <= mosi_sync[1];
+              if (bit_count == 6'd1)
+                command_burst <= mosi_sync[1];
               if (bit_count == 6'd7) begin
                 bit_count <= '0;
                 state <= STATE_ADDRESS;
@@ -147,9 +152,15 @@ module spi_register_bridge (
             bus_valid <= 1'b1;
             bus_write <= 1'b1;
             if (bus_ready) begin
-              spi_error <= bus_error;
+              spi_error <= spi_error || bus_error;
               bus_valid <= 1'b0;
-              state <= STATE_IDLE;
+              bit_count <= '0;
+              if (command_burst) begin
+                bus_address <= bus_address + 16'd4;
+                state <= STATE_WRITE_DATA;
+              end else begin
+                state <= STATE_IDLE;
+              end
             end
           end
 
@@ -157,9 +168,9 @@ module spi_register_bridge (
             bus_valid <= 1'b1;
             bus_write <= 1'b0;
             if (bus_ready) begin
-              tx_shift <= {bus_rdata[30:0], 1'b0};
-              spi_miso <= bus_rdata[31];
-              spi_error <= bus_error;
+              tx_shift <= bus_error ? 32'd0 : {bus_rdata[30:0], 1'b0};
+              spi_miso <= bus_error ? 1'b0 : bus_rdata[31];
+              spi_error <= spi_error || bus_error;
               bus_valid <= 1'b0;
               bit_count <= '0;
               read_sample_seen <= 1'b0;
@@ -172,7 +183,16 @@ module spi_register_bridge (
               read_sample_seen <= 1'b1;
             end else if (sclk_fall && read_sample_seen) begin
               read_sample_seen <= 1'b0;
-              if (bit_count != 6'd31) begin
+              if (bit_count == 6'd31) begin
+                bit_count <= '0;
+                if (command_burst) begin
+                  bus_address <= bus_address + 16'd4;
+                  spi_miso <= 1'b0;
+                  state <= STATE_READ_WAIT;
+                end else begin
+                  state <= STATE_IDLE;
+                end
+              end else begin
                 spi_miso <= tx_shift[31];
                 tx_shift <= {tx_shift[30:0], 1'b0};
                 bit_count <= bit_count + 6'd1;
