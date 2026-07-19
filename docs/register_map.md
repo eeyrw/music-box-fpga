@@ -1,8 +1,12 @@
 # Multi-Voice Register Map
 
 The address and bit-mask constants in this document are mirrored from
-`spec/register_map.json`. Run `make generate-register-map` after changing the
-JSON source so RTL and C++ users pick up the same register contract.
+`spec/register_map.json`. The JSON source uses a CMSIS-SVD-inspired structure:
+`device.peripherals[].registers[].fields[]` describes the software-visible
+address space, while top-level `constants` holds shared non-register numeric
+values exported to generated RTL and C++ headers. Run
+`make generate-register-map` after changing the JSON source so RTL and C++ users
+pick up the same register contract.
 
 The simplified bus uses 16-bit byte addresses and 32-bit data. Transactions are
 single-beat and 32-bit aligned. The 32-bit data word is the bus container; many

@@ -24,12 +24,110 @@ def macro_name(prefix, name):
     return f"{prefix}_{name}"
 
 
+FIELD_GROUP_ORDER = [
+    "REGION_MODE",
+    "CONTROL",
+    "COMMIT",
+    "FILTER_CONTROL",
+    "FILTER_COMMIT",
+    "COMMON_EVENT_FLAGS",
+    "PLATFORM_STATUS",
+    "DDR_ACCESS_CONTROL",
+    "DDR_ACCESS_STATUS",
+]
+
+
 def load_spec(path):
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
+def normalize_spec(spec):
+    if "device" not in spec:
+        return spec
+
+    device = spec["device"]
+    normalized = {
+        "bus": {
+            "address_width": device["addressWidth"],
+            "data_width": device["width"],
+        },
+        "voice_window": {},
+        "voice_registers": [],
+        "global_registers": [],
+        "fields": {},
+        "numeric_constants": {},
+    }
+
+    for peripheral in device["peripherals"]:
+        base = parse_int(peripheral["baseAddress"])
+        if peripheral["name"] == "VOICE":
+            normalized["voice_window"] = {
+                "base": peripheral["baseAddress"],
+                "stride": peripheral["dimIncrement"],
+            }
+            for reg in peripheral["registers"]:
+                normalized["voice_registers"].append({
+                    "name": reg["name"],
+                    "offset": reg["addressOffset"],
+                })
+                normalize_fields(normalized["fields"], reg)
+        else:
+            for reg in peripheral["registers"]:
+                address = base + parse_int(reg["addressOffset"])
+                normalized["global_registers"].append({
+                    "name": reg["name"],
+                    "address": address,
+                })
+                if reg["name"] == "VERSION":
+                    normalized["version"] = {
+                        "name": reg["name"],
+                        "address": address,
+                        "value": reg["resetValue"],
+                    }
+                normalize_fields(normalized["fields"], reg)
+
+    for constant in spec.get("constants", []):
+        normalized["numeric_constants"][constant["name"]] = constant["value"]
+
+    normalized["fields"] = order_field_groups(normalized["fields"])
+
+    return normalized
+
+
+def order_field_groups(groups):
+    ordered = {}
+    for name in FIELD_GROUP_ORDER:
+        if name in groups:
+            ordered[name] = groups[name]
+    for name, fields in groups.items():
+        if name not in ordered:
+            ordered[name] = fields
+    return ordered
+
+
+def normalize_fields(groups, reg):
+    fields = {}
+    for field in reg.get("fields", []):
+        name = field["name"]
+        if "value" in field:
+            fields[name] = field["value"]
+        if "mask" in field:
+            fields[f"{name}_MASK"] = field["mask"]
+        elif "bitOffset" in field and "bitWidth" in field:
+            offset = parse_int(field["bitOffset"])
+            width = parse_int(field["bitWidth"])
+            if width == 1:
+                fields[f"{name}_BIT"] = offset
+            else:
+                fields[f"{name}_LSB"] = offset
+                fields[f"{name}_WIDTH"] = width
+    if fields:
+        groups[reg["name"]] = fields
+
+
 def render_sv(spec):
+    spec = normalize_spec(spec)
     addr_width = parse_int(spec["bus"]["address_width"])
     data_width = parse_int(spec["bus"]["data_width"])
     version_value = parse_int(spec["version"]["value"])
@@ -88,6 +186,7 @@ def render_sv(spec):
 
 
 def render_cpp(spec):
+    spec = normalize_spec(spec)
     addr_width = parse_int(spec["bus"]["address_width"])
     data_width = parse_int(spec["bus"]["data_width"])
     version_value = parse_int(spec["version"]["value"])
