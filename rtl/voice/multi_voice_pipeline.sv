@@ -11,11 +11,9 @@ module multi_voice_pipeline (
   output logic                       sample_valid,
   output synth_pkg::pcm_t            sample_l,
   output synth_pkg::pcm_t            sample_r,
-  output logic                       mem_req_valid,
-  output logic [31:0]                mem_req_addr,
+  output synth_pkg::wave_word_req_t  mem_req,
   input  logic                       mem_req_ready,
-  input  logic                       mem_rsp_valid,
-  input  synth_pkg::pcm_t            mem_rsp_data
+  input  synth_pkg::wave_word_rsp_t  mem_rsp
 );
   import synth_pkg::*;
 
@@ -229,11 +227,9 @@ module multi_voice_pipeline (
     .context_valid(endpoint_context_valid),
     .context_o(dsp_context),
     .empty(endpoint_empty),
-    .mem_req_valid,
-    .mem_req_addr,
+    .mem_req,
     .mem_req_ready,
-    .mem_rsp_valid,
-    .mem_rsp_data
+    .mem_rsp
   );
 
   voice_dsp_pipeline dsp_pipeline (

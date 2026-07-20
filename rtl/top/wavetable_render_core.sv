@@ -28,21 +28,31 @@ module wavetable_render_core (
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
   logic voices_busy;
   logic frame_boundary;
+  synth_pkg::reg_bus_req_t bus_req;
+  synth_pkg::reg_bus_rsp_t bus_rsp;
+  synth_pkg::wave_word_req_t core_mem_req;
+  synth_pkg::wave_word_rsp_t core_mem_rsp;
 
   assign frame_boundary = sample_tick && !voices_busy;
   assign busy = voices_busy;
+  assign bus_req.valid = bus_valid;
+  assign bus_req.write = bus_write;
+  assign bus_req.address = bus_address;
+  assign bus_req.wdata = bus_wdata;
+  assign bus_rdata = bus_rsp.rdata;
+  assign bus_ready = bus_rsp.ready;
+  assign bus_error = bus_rsp.error;
+  assign mem_req_valid = core_mem_req.valid;
+  assign mem_req_addr = core_mem_req.addr;
+  assign core_mem_rsp.valid = mem_rsp_valid;
+  assign core_mem_rsp.data = mem_rsp_data;
 
   voice_register_bank registers (
     .clk,
     .rst,
-    .bus_valid,
-    .bus_write,
-    .bus_address,
-    .bus_wdata,
+    .bus_req,
     .frame_boundary,
-    .bus_rdata,
-    .bus_ready,
-    .bus_error,
+    .bus_rsp,
     .render_voice_index(voice_read_index),
     .render_config,
     .render_runtime,
@@ -63,10 +73,8 @@ module wavetable_render_core (
     .sample_valid,
     .sample_l,
     .sample_r,
-    .mem_req_valid,
-    .mem_req_addr,
+    .mem_req(core_mem_req),
     .mem_req_ready,
-    .mem_rsp_valid,
-    .mem_rsp_data
+    .mem_rsp(core_mem_rsp)
   );
 endmodule

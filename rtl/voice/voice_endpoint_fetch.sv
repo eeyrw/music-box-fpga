@@ -14,11 +14,9 @@ module voice_endpoint_fetch (
   output logic                                  context_valid,
   output synth_pkg::voice_dsp_context_t         context_o,
   output logic                                  empty,
-  output logic                                  mem_req_valid,
-  output logic [31:0]                           mem_req_addr,
+  output synth_pkg::wave_word_req_t             mem_req,
   input  logic                                  mem_req_ready,
-  input  logic                                  mem_rsp_valid,
-  input  synth_pkg::pcm_t                       mem_rsp_data
+  input  synth_pkg::wave_word_rsp_t             mem_rsp
 );
   import synth_pkg::*;
 
@@ -48,7 +46,7 @@ module voice_endpoint_fetch (
   } enq_state_t;
 
   typedef struct packed {
-    logic [31:0] addr;
+    wave_word_req_t req;
     logic [FETCH_SLOT_PTR_WIDTH-1:0] slot;
     endpoint_kind_t endpoint;
   } word_req_t;
@@ -122,14 +120,14 @@ module voice_endpoint_fetch (
   assign empty = (enq_state == ENQ_IDLE) && !issue_accept && !context_valid &&
                  (fetch_slot_count == '0) && (fetch_queue_count == '0) &&
                  (word_req_count == '0) && (rsp_meta_count == '0);
-  assign mem_req_valid = !word_req_empty && !rsp_meta_full;
+  assign mem_req.valid = !word_req_empty && !rsp_meta_full;
   assign word_req_accept = !word_req_empty && !rsp_meta_full && mem_req_ready;
-  assign rsp_meta_pop = mem_rsp_valid && !rsp_meta_empty;
+  assign rsp_meta_pop = mem_rsp.valid && !rsp_meta_empty;
 
   always_comb begin
-    mem_req_addr = 32'd0;
+    mem_req.addr = 32'd0;
     if (!word_req_empty)
-      mem_req_addr = word_req_queue[word_req_rd].addr;
+      mem_req.addr = word_req_queue[word_req_rd].req.addr;
 
     enqueue_word_req = 1'b0;
     enqueue_word_req_data = '0;
@@ -138,26 +136,26 @@ module voice_endpoint_fetch (
       ENQ_L0: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_L0;
-        enqueue_word_req_data.addr = enq_base_addr +
-                                     {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_0};
+        enqueue_word_req_data.req.addr = enq_base_addr +
+                                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_0};
       end
       ENQ_L1: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_L1;
-        enqueue_word_req_data.addr = enq_base_addr +
-                                     {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_1};
+        enqueue_word_req_data.req.addr = enq_base_addr +
+                                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_1};
       end
       ENQ_R0: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_R0;
-        enqueue_word_req_data.addr = enq_base_addr_r +
-                                     {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r0};
+        enqueue_word_req_data.req.addr = enq_base_addr_r +
+                                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r0};
       end
       ENQ_R1: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_R1;
-        enqueue_word_req_data.addr = enq_base_addr_r +
-                                     {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r1};
+        enqueue_word_req_data.req.addr = enq_base_addr_r +
+                                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r1};
       end
       default: begin
       end
@@ -171,16 +169,16 @@ module voice_endpoint_fetch (
     completed_fetch_context.raw_r1 = fetch_slot_raw_r1[rsp_meta_head.slot];
 
     unique case (rsp_meta_head.endpoint)
-      ENDPOINT_L0: completed_fetch_context.raw_l0 = mem_rsp_data;
+      ENDPOINT_L0: completed_fetch_context.raw_l0 = mem_rsp.data;
       ENDPOINT_L1: begin
-        completed_fetch_context.raw_l1 = mem_rsp_data;
+        completed_fetch_context.raw_l1 = mem_rsp.data;
         if (fetch_slot_pending[rsp_meta_head.slot] == 3'd1) begin
           completed_fetch_context.raw_r0 = fetch_slot_raw_l0[rsp_meta_head.slot];
-          completed_fetch_context.raw_r1 = mem_rsp_data;
+          completed_fetch_context.raw_r1 = mem_rsp.data;
         end
       end
-      ENDPOINT_R0: completed_fetch_context.raw_r0 = mem_rsp_data;
-      ENDPOINT_R1: completed_fetch_context.raw_r1 = mem_rsp_data;
+      ENDPOINT_R0: completed_fetch_context.raw_r0 = mem_rsp.data;
+      ENDPOINT_R1: completed_fetch_context.raw_r1 = mem_rsp.data;
       default: begin
       end
     endcase
@@ -254,10 +252,10 @@ module voice_endpoint_fetch (
 
       if (rsp_meta_pop) begin
         unique case (rsp_meta_head.endpoint)
-          ENDPOINT_L0: fetch_slot_raw_l0[rsp_meta_head.slot] <= mem_rsp_data;
-          ENDPOINT_L1: fetch_slot_raw_l1[rsp_meta_head.slot] <= mem_rsp_data;
-          ENDPOINT_R0: fetch_slot_raw_r0[rsp_meta_head.slot] <= mem_rsp_data;
-          ENDPOINT_R1: fetch_slot_raw_r1[rsp_meta_head.slot] <= mem_rsp_data;
+          ENDPOINT_L0: fetch_slot_raw_l0[rsp_meta_head.slot] <= mem_rsp.data;
+          ENDPOINT_L1: fetch_slot_raw_l1[rsp_meta_head.slot] <= mem_rsp.data;
+          ENDPOINT_R0: fetch_slot_raw_r0[rsp_meta_head.slot] <= mem_rsp.data;
+          ENDPOINT_R1: fetch_slot_raw_r1[rsp_meta_head.slot] <= mem_rsp.data;
           default: begin
           end
         endcase

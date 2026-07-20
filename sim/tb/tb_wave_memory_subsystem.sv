@@ -5,11 +5,9 @@ module tb_wave_memory_subsystem;
 
   logic clk = 1'b0;
   logic rst;
-  logic core_req_valid;
   logic core_req_ready;
-  logic [31:0] core_req_addr;
-  logic core_rsp_valid;
-  pcm_t core_rsp_data;
+  wave_word_req_t core_req;
+  wave_word_rsp_t core_rsp;
   logic ext_req_valid;
   logic ext_req_ready;
   logic [31:0] ext_req_addr;
@@ -26,11 +24,9 @@ module tb_wave_memory_subsystem;
   wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) dut (
     .clk,
     .rst,
-    .core_req_valid,
+    .core_req,
     .core_req_ready,
-    .core_req_addr,
-    .core_rsp_valid,
-    .core_rsp_data,
+    .core_rsp,
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,
@@ -66,23 +62,23 @@ module tb_wave_memory_subsystem;
     int timeout;
     begin
       @(negedge clk);
-      core_req_valid = 1'b1;
-      core_req_addr = address;
+      core_req.valid = 1'b1;
+      core_req.addr = address;
       while (!core_req_ready)
         @(negedge clk);
       @(negedge clk);
-      core_req_valid = 1'b0;
+      core_req.valid = 1'b0;
 
       timeout = 0;
-      while (!core_rsp_valid && timeout < 50) begin
+      while (!core_rsp.valid && timeout < 50) begin
         @(negedge clk);
         timeout++;
       end
-      if (!core_rsp_valid) begin
+      if (!core_rsp.valid) begin
         $error("memory subsystem read timed out at 0x%08x", address);
         errors++;
-      end else if ($signed({{16{core_rsp_data[15]}}, core_rsp_data}) !== expected) begin
-        $error("memory subsystem read 0x%08x got %0d expected %0d", address, $signed(core_rsp_data), expected);
+      end else if ($signed({{16{core_rsp.data[15]}}, core_rsp.data}) !== expected) begin
+        $error("memory subsystem read 0x%08x got %0d expected %0d", address, $signed(core_rsp.data), expected);
         errors++;
       end
     end
@@ -90,8 +86,7 @@ module tb_wave_memory_subsystem;
 
   initial begin
     rst = 1'b1;
-    core_req_valid = 1'b0;
-    core_req_addr = '0;
+    core_req = '0;
 
     for (int i = 0; i < 64; i++)
       line_model.memory[i] = 16'(i * 11 - 100);

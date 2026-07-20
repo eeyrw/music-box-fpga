@@ -39,9 +39,12 @@ so the pair is triggered and pitched as one stereo voice.
 ## Abstract Memory Handshake
 
 The core issues one 32-bit word-address request at a time. A request transfers
-when `mem_req_valid && mem_req_ready`. A response transfers when
-`mem_rsp_valid`; responses must arrive in request order. The initial simulation
-model accepts every request and returns its signed 16-bit value one cycle later.
+when the request struct's `valid` field is high and the separate ready signal is
+high. A response transfers when the response struct's `valid` field is high;
+responses must arrive in request order. In RTL, generic core-internal module
+boundaries use `synth_pkg::wave_word_req_t` and `synth_pkg::wave_word_rsp_t` for
+the request and response payloads. The initial simulation model accepts every
+request and returns its signed 16-bit value one cycle later.
 
 This single-word core-side contract is intentional. The renderer must not require
 a line, burst, pair-endpoint, or cache-line extraction interface because future
@@ -61,7 +64,9 @@ one outstanding core request:
 
 - Core side: `core_req_valid`, `core_req_ready`, `core_req_addr`,
   `core_rsp_valid`, and `core_rsp_data` match the existing 16-bit word-addressed
-  wavetable read contract.
+  wavetable read contract at legacy wrapper boundaries. Inside generic RTL
+  module connections, the same contract is carried as `core_req` with
+  `valid/addr`, `core_req_ready`, and `core_rsp` with `valid/data`.
 - External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
   aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
   on `ext_rsp_data`, with word 0 in bits `[15:0]`.

@@ -3,11 +3,9 @@ module wave_memory_subsystem #(
 ) (
   input  logic                            clk,
   input  logic                            rst,
-  input  logic                            core_req_valid,
+  input  synth_pkg::wave_word_req_t       core_req,
   output logic                            core_req_ready,
-  input  logic [31:0]                     core_req_addr,
-  output logic                            core_rsp_valid,
-  output synth_pkg::pcm_t                 core_rsp_data,
+  output synth_pkg::wave_word_rsp_t       core_rsp,
   output logic                            ext_req_valid,
   input  logic                            ext_req_ready,
   output logic [31:0]                     ext_req_addr,
@@ -43,7 +41,7 @@ module wave_memory_subsystem #(
   assign ext_req_addr = pending_line_addr;
 
   always_comb begin
-    pending_hit = cache_valid && (cache_tag == core_req_addr[31:INDEX_WIDTH]);
+    pending_hit = cache_valid && (cache_tag == core_req.addr[31:INDEX_WIDTH]);
   end
 
   always_ff @(posedge clk) begin
@@ -56,23 +54,22 @@ module wave_memory_subsystem #(
       pending_index <= '0;
       pending_line_addr <= '0;
       latency_counter <= '0;
-      core_rsp_valid <= 1'b0;
-      core_rsp_data <= '0;
+      core_rsp <= '0;
       response_trace_pulse <= 1'b0;
       response_trace_latency <= '0;
     end else begin
-      core_rsp_valid <= 1'b0;
+      core_rsp.valid <= 1'b0;
       response_trace_pulse <= 1'b0;
 
       unique case (state)
         STATE_IDLE: begin
-          if (core_req_valid) begin
-            pending_tag <= core_req_addr[31:INDEX_WIDTH];
-            pending_index <= core_req_addr[INDEX_WIDTH-1:0];
-            pending_line_addr <= {core_req_addr[31:INDEX_WIDTH], {INDEX_WIDTH{1'b0}}};
+          if (core_req.valid) begin
+            pending_tag <= core_req.addr[31:INDEX_WIDTH];
+            pending_index <= core_req.addr[INDEX_WIDTH-1:0];
+            pending_line_addr <= {core_req.addr[31:INDEX_WIDTH], {INDEX_WIDTH{1'b0}}};
             latency_counter <= 16'd0;
             if (pending_hit) begin
-              core_rsp_data <= cache_line[core_req_addr[INDEX_WIDTH-1:0] * 16 +: 16];
+              core_rsp.data <= cache_line[core_req.addr[INDEX_WIDTH-1:0] * 16 +: 16];
               state <= STATE_RESPOND;
             end else begin
               state <= STATE_EXT_REQ;
@@ -90,13 +87,13 @@ module wave_memory_subsystem #(
             cache_valid <= 1'b1;
             cache_tag <= pending_tag;
             cache_line <= ext_rsp_data;
-            core_rsp_data <= ext_rsp_data[pending_index * 16 +: 16];
+            core_rsp.data <= ext_rsp_data[pending_index * 16 +: 16];
             state <= STATE_RESPOND;
           end
         end
 
         STATE_RESPOND: begin
-          core_rsp_valid <= 1'b1;
+          core_rsp.valid <= 1'b1;
           response_trace_pulse <= 1'b1;
           response_trace_latency <= latency_counter;
           state <= STATE_IDLE;

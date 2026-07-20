@@ -28,6 +28,13 @@ module wavetable_system_core #(
   logic mem_req_ready;
   logic mem_rsp_valid;
   synth_pkg::pcm_t mem_rsp_data;
+  synth_pkg::wave_word_req_t mem_req;
+  synth_pkg::wave_word_rsp_t mem_rsp;
+
+  assign mem_req.valid = mem_req_valid;
+  assign mem_req.addr = mem_req_addr;
+  assign mem_rsp_valid = mem_rsp.valid;
+  assign mem_rsp_data = mem_rsp.data;
 
   wavetable_render_core core (
     .clk,
@@ -54,11 +61,9 @@ module wavetable_system_core #(
   wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) memory (
     .clk,
     .rst,
-    .core_req_valid(mem_req_valid),
+    .core_req(mem_req),
     .core_req_ready(mem_req_ready),
-    .core_req_addr(mem_req_addr),
-    .core_rsp_valid(mem_rsp_valid),
-    .core_rsp_data(mem_rsp_data),
+    .core_rsp(mem_rsp),
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,

@@ -1,14 +1,9 @@
 module voice_register_bank (
   input  logic                       clk,
   input  logic                       rst,
-  input  logic                       bus_valid,
-  input  logic                       bus_write,
-  input  logic [15:0]                bus_address,
-  input  logic [31:0]                bus_wdata,
+  input  synth_pkg::reg_bus_req_t    bus_req,
   input  logic                       frame_boundary,
-  output logic [31:0]                bus_rdata,
-  output logic                       bus_ready,
-  output logic                       bus_error,
+  output synth_pkg::reg_bus_rsp_t    bus_rsp,
   input  logic [$clog2(synth_pkg::NUM_VOICES)-1:0] render_voice_index,
   output synth_pkg::voice_config_t   render_config,
   output synth_pkg::voice_runtime_t  render_runtime,
@@ -161,16 +156,16 @@ module voice_register_bank (
     .inspect_gain(runtime_gain_inspect_data),
     .inspect_envelope(runtime_envelope_inspect_data),
     .inspect_release(runtime_release_inspect_data),
-    .bus_phase_write(bus_valid && bus_write && voice_address &&
+    .bus_phase_write(bus_req.valid && bus_req.write && voice_address &&
                      (selected_offset == OFF_PHASE_RT) && (bus_state == BUS_IDLE)),
-    .bus_gain_write(bus_valid && bus_write && voice_address &&
+    .bus_gain_write(bus_req.valid && bus_req.write && voice_address &&
                     (selected_offset == OFF_GAIN_RT) && (bus_state == BUS_IDLE)),
-    .bus_envelope_write(bus_valid && bus_write && voice_address &&
+    .bus_envelope_write(bus_req.valid && bus_req.write && voice_address &&
                         (selected_offset == OFF_ENVELOPE) && (bus_state == BUS_IDLE)),
-    .bus_release_write(bus_valid && bus_write && voice_address &&
+    .bus_release_write(bus_req.valid && bus_req.write && voice_address &&
                        (selected_offset == OFF_RELEASE) && (bus_state == BUS_IDLE)),
     .bus_write_voice(selected_voice),
-    .bus_wdata(bus_wdata),
+    .bus_wdata(bus_req.wdata),
     .commit_phase_write(commit_runtime_phase_write),
     .commit_gain_write(commit_runtime_gain_write),
     .commit_envelope_write(commit_runtime_envelope_write),
@@ -221,19 +216,19 @@ module voice_register_bank (
     .write_en(descriptor_write),
     .write_voice(selected_voice),
     .write_offset(selected_offset),
-    .write_data(bus_wdata),
+    .write_data(bus_req.wdata),
     .read_voice(descriptor_read_voice),
     .read_offset(descriptor_read_offset),
     .read_data(descriptor_read_data)
   );
 
   always_comb begin
-    voice_relative = bus_address - VOICE_BASE;
+    voice_relative = bus_req.address - VOICE_BASE;
     selected_voice = voice_relative[8 +: VOICE_INDEX_WIDTH];
     selected_offset = {8'd0, voice_relative[7:0]};
-    voice_address = (bus_address >= VOICE_BASE) &&
+    voice_address = (bus_req.address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
-    global_address = (bus_address == ADDR_VERSION);
+    global_address = (bus_req.address == ADDR_VERSION);
 
     inspect_address = bus_read_address;
     inspect_relative = inspect_address - VOICE_BASE;
@@ -242,16 +237,16 @@ module voice_register_bank (
     inspect_voice_address = (inspect_address >= VOICE_BASE) &&
                             (inspect_relative < VOICE_LIMIT);
 
-    commit_start_voice = bus_valid && bus_write && voice_address &&
-                         (selected_offset == OFF_COMMIT) && bus_wdata[0] &&
+    commit_start_voice = bus_req.valid && bus_req.write && voice_address &&
+                         (selected_offset == OFF_COMMIT) && bus_req.wdata[0] &&
                          (bus_state == BUS_IDLE);
-    commit_start_filter = bus_valid && bus_write && voice_address &&
-                          (selected_offset == OFF_FILTER_COMMIT) && bus_wdata[0] &&
+    commit_start_filter = bus_req.valid && bus_req.write && voice_address &&
+                          (selected_offset == OFF_FILTER_COMMIT) && bus_req.wdata[0] &&
                           (bus_state == BUS_IDLE);
-    bus_read_start = bus_valid && !bus_write && voice_address &&
+    bus_read_start = bus_req.valid && !bus_req.write && voice_address &&
                      known_voice_offset(selected_offset) && (bus_state == BUS_IDLE);
 
-    descriptor_write = bus_valid && bus_write && voice_address &&
+    descriptor_write = bus_req.valid && bus_req.write && voice_address &&
                        shadow_offset(selected_offset) && (bus_state == BUS_IDLE);
 
     descriptor_read_voice = '0;
@@ -281,26 +276,26 @@ module voice_register_bank (
     end
 
     address_valid = (voice_address && known_voice_offset(selected_offset)) || global_address;
-    bus_rdata = 32'd0;
+    bus_rsp.rdata = 32'd0;
     if ((bus_state == BUS_READ_DONE) && inspect_voice_address) begin
-      bus_rdata = inspect_data;
+      bus_rsp.rdata = inspect_data;
     end else if (voice_address && !known_voice_offset(selected_offset)) begin
       address_valid = 1'b0;
-    end else if (bus_address == ADDR_VERSION) begin
-      bus_rdata = REG_VERSION_VALUE;
+    end else if (bus_req.address == ADDR_VERSION) begin
+      bus_rsp.rdata = REG_VERSION_VALUE;
     end
 
-    bus_ready = 1'b0;
-    if (bus_valid) begin
+    bus_rsp.ready = 1'b0;
+    if (bus_req.valid) begin
       if (bus_state == BUS_IDLE) begin
-        bus_ready = !commit_start_voice && !commit_start_filter && !bus_read_start;
+        bus_rsp.ready = !commit_start_voice && !commit_start_filter && !bus_read_start;
       end else if (bus_state == BUS_READ_DONE) begin
-        bus_ready = 1'b1;
+        bus_rsp.ready = 1'b1;
       end else if (bus_state == BUS_DONE) begin
-        bus_ready = 1'b1;
+        bus_rsp.ready = 1'b1;
       end
     end
-    bus_error = bus_valid && !address_valid && (bus_state == BUS_IDLE);
+    bus_rsp.error = bus_req.valid && !address_valid && (bus_state == BUS_IDLE);
   end
 
   always_ff @(posedge clk) begin
@@ -312,11 +307,11 @@ module voice_register_bank (
       unique case (bus_state)
         BUS_IDLE: begin
           if (bus_read_start) begin
-            bus_read_address <= bus_address;
+            bus_read_address <= bus_req.address;
             bus_state <= BUS_READ_WAIT;
           end else if (commit_start_voice || commit_start_filter) begin
             bus_state <= BUS_COMMIT_WAIT;
-          end else if (bus_valid && bus_write && voice_address) begin
+          end else if (bus_req.valid && bus_req.write && voice_address) begin
             if (selected_offset == OFF_ENVELOPE) begin
               shadow_envelope_written[selected_voice] <= 1'b1;
             end
@@ -326,7 +321,7 @@ module voice_register_bank (
           bus_state <= BUS_READ_DONE;
         end
         BUS_READ_DONE: begin
-          if (!bus_valid) begin
+          if (!bus_req.valid) begin
             bus_state <= BUS_IDLE;
           end
         end
@@ -336,7 +331,7 @@ module voice_register_bank (
           end
         end
         BUS_DONE: begin
-          if (!bus_valid) begin
+          if (!bus_req.valid) begin
             bus_state <= BUS_IDLE;
           end
         end

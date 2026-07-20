@@ -23,6 +23,8 @@ module tb_wavetable_render_core;
   logic mem_req_ready;
   logic mem_rsp_valid;
   pcm_t mem_rsp_data;
+  wave_word_req_t core_mem_req;
+  wave_word_rsp_t core_mem_rsp;
   logic ext_req_valid;
   logic ext_req_ready;
   logic [31:0] ext_req_addr;
@@ -41,17 +43,20 @@ module tb_wavetable_render_core;
 
   wavetable_render_core dut (.*);
 
+  assign core_mem_req.valid = mem_req_valid;
+  assign core_mem_req.addr = mem_req_addr;
+  assign mem_rsp_valid = core_mem_rsp.valid;
+  assign mem_rsp_data = core_mem_rsp.data;
+
   assign unused_mem_trace = busy |
                             mem_response_trace_pulse | (|mem_response_trace_latency);
 
   wave_memory_subsystem #(.LINE_WORDS(8)) memory_subsystem (
     .clk,
     .rst,
-    .core_req_valid(mem_req_valid),
+    .core_req(core_mem_req),
     .core_req_ready(mem_req_ready),
-    .core_req_addr(mem_req_addr),
-    .core_rsp_valid(mem_rsp_valid),
-    .core_rsp_data(mem_rsp_data),
+    .core_rsp(core_mem_rsp),
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,

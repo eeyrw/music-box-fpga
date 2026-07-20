@@ -52,6 +52,14 @@ simulation and board-facing transport shape:
   generation, the reusable system core, and the I2S output adapter for the
   current pin-level demo path.
 
+Generic RTL module-to-module connections use shared packed structs from
+`rtl/pkg/synth_pkg.sv` where a group of fields is a stable protocol: the register
+bank consumes `reg_bus_req_t` and emits `reg_bus_rsp_t`, while the core-side
+wavetable read path uses `wave_word_req_t` and `wave_word_rsp_t` plus a separate
+request-ready signal. External wrapper ports may keep those same fields expanded
+as individual pins so Verilator harnesses, board transports, and top-level
+integration points remain explicit.
+
 ## Top-Level Variants
 
 For a directory-by-directory RTL reading map and full instantiation tree, see

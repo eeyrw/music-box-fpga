@@ -24,6 +24,54 @@ package synth_pkg;
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
 
+  typedef struct packed {
+    pcm_t l;
+    pcm_t r;
+  } stereo_pcm_t;
+
+  typedef struct packed {
+    logic                  valid;
+    logic [ADDR_WIDTH-1:0] addr;
+  } wave_word_req_t;
+
+  typedef struct packed {
+    logic valid;
+    pcm_t data;
+  } wave_word_rsp_t;
+
+  typedef struct packed {
+    logic        valid;
+    logic        write;
+    logic [15:0] address;
+    logic [31:0] wdata;
+  } reg_bus_req_t;
+
+  typedef struct packed {
+    logic [31:0] rdata;
+    logic        ready;
+    logic        error;
+  } reg_bus_rsp_t;
+
+  typedef struct packed {
+    logic signed [15:0] l;
+    logic signed [15:0] r;
+  } stereo_gain_t;
+
+  typedef struct packed {
+    logic signed [31:0] b0;
+    logic signed [31:0] b1;
+    logic signed [31:0] b2;
+    logic signed [31:0] a1;
+    logic signed [31:0] a2;
+  } biquad_coeff_t;
+
+  typedef struct packed {
+    logic signed [FILTER_STATE_WIDTH-1:0] z1_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] z2_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] z1_r;
+    logic signed [FILTER_STATE_WIDTH-1:0] z2_r;
+  } stereo_biquad_state_t;
+
   // One committed voice configuration. These fields describe the sample region
   // and static playback mode that must become visible atomically on COMMIT.
   typedef struct packed {

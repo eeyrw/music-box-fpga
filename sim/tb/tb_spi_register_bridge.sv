@@ -17,6 +17,8 @@ module tb_spi_register_bridge;
   logic [31:0] bus_rdata;
   logic bus_ready;
   logic bus_error;
+  reg_bus_req_t bus_req;
+  reg_bus_rsp_t bus_rsp;
   logic [$clog2(NUM_VOICES)-1:0] render_voice_index;
   voice_config_t render_config;
   voice_runtime_t render_runtime;
@@ -46,17 +48,20 @@ module tb_spi_register_bridge;
     .bus_error
   );
 
+  assign bus_req.valid = bus_valid;
+  assign bus_req.write = bus_write;
+  assign bus_req.address = bus_address;
+  assign bus_req.wdata = bus_wdata;
+  assign bus_rdata = bus_rsp.rdata;
+  assign bus_ready = bus_rsp.ready;
+  assign bus_error = bus_rsp.error;
+
   voice_register_bank registers (
     .clk,
     .rst,
-    .bus_valid,
-    .bus_write,
-    .bus_address,
-    .bus_wdata,
+    .bus_req,
     .frame_boundary,
-    .bus_rdata,
-    .bus_ready,
-    .bus_error,
+    .bus_rsp,
     .render_voice_index,
     .render_config,
     .render_runtime,

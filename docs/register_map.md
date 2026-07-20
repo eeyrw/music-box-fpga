@@ -15,6 +15,11 @@ little-endian or big-endian storage order. Register fields use normal
 SystemVerilog bit numbering: bit 0 is the least-significant bit, and ranges such
 as bits 15:0 or 31:16 refer to positions in that 32-bit word. Many fields are
 narrower than 32 bits and explicitly define which bits are meaningful.
+RTL module boundaries that consume the generic register bus use
+`synth_pkg::reg_bus_req_t` for `valid/write/address/wdata` and
+`synth_pkg::reg_bus_rsp_t` for `rdata/ready/error`. Top-level and board transport
+wrappers may still expose the same fields as separate pins when that keeps
+external integration stable.
 Wave-memory base addresses are 32-bit word addresses. Writes to configuration
 registers update per-voice shadow state. `COMMIT` copies the selected shadow
 configuration into renderer-facing active storage and stages a render-boundary
