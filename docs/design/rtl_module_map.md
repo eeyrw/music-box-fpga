@@ -64,10 +64,6 @@ wavetable_render_core
    +- voice_dsp_pipeline
       +- linear_interpolator
       +- linear_interpolator
-      +- gain_saturate
-      +- gain_saturate
-      +- gain_saturate
-      +- gain_saturate
 ```
 
 `wavetable_cached_render_core` wraps that tree and adds the memory adapter:
@@ -213,11 +209,10 @@ Internal DSP primitives are:
 | Module | Role |
 | --- | --- |
 | `linear_interpolator` | Interpolates between two signed PCM16 endpoints using the phase fraction and saturates back to PCM16. |
-| `gain_saturate` | Applies signed Q1.15 gain to a signed PCM16 sample and saturates back to PCM16. |
 
 `multi_voice_pipeline` does not duplicate the per-voice DSP arithmetic. It
-delegates interpolation, filter arithmetic, gain, envelope, and PCM saturation to
-`voice_dsp_pipeline`.
+delegates interpolation, filter arithmetic, combined output gain/envelope scaling,
+and PCM saturation to `voice_dsp_pipeline`.
 
 ## Memory Layer
 

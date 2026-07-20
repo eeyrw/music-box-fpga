@@ -34,16 +34,19 @@ The mathematical result remains in the signed 16-bit sample range.
 ## Gain
 
 Left and right gains are signed Q1.15 values. `0x0000` is silence and `0x7fff`
-is just below unity. Multiplication uses a signed 32-bit product, arithmetic
-right shift by 15, and saturation to signed 16-bit PCM.
+is just below unity. For output scaling, the post-filter PCM sample is multiplied
+by the channel gain and envelope level in one wide signed product, then
+arithmetically shifted and saturated once to signed 16-bit PCM. If
+`envelope_level == 0x7fff`, the envelope multiply is bypassed and the sample is
+scaled by channel gain only with a signed 32-bit product shifted right by 15.
 
 ## Envelope Level
 
-Each voice has a signed Q1.15 `envelope_level` applied after channel gain and
-before mixing. Software supplies the current level at runtime; the RTL does not
-calculate an SF2 ADSR curve. Updating `envelope_level` does not reload playback
-phase. `0x7fff` means full level and is treated as a bypass to preserve exact
-samples from the gain stage.
+Each voice has a signed Q1.15 `envelope_level` folded into the per-channel output
+gain before mixing. Software supplies the current level at runtime; the RTL does
+not calculate an SF2 ADSR curve. Updating `envelope_level` does not reload
+playback phase. `0x7fff` means full level and is treated as a bypass to preserve
+exact samples from the channel-gain stage.
 
 ## Biquad IIR Filter
 
@@ -215,23 +218,17 @@ post_filter_l = filter_enable ? biquad_l(filter_in_l) : filter_in_l
 post_filter_r = filter_enable ? biquad_r(filter_in_r) : filter_in_r
 ```
 
-Channel gain is applied next using runtime gains:
-
-```text
-gained_l = saturate_pcm((post_filter_l * gain_l_runtime) >>> 15)
-gained_r = saturate_pcm((post_filter_r * gain_r_runtime) >>> 15)
-```
-
-Envelope level is applied after channel gain. The value `0x7fff` is a special
-full-level bypass to preserve exact gained samples:
+Runtime channel gain and envelope level are then applied as one output scaling
+step. The value `0x7fff` is a special full-level envelope bypass to preserve
+exact channel-gain samples:
 
 ```text
 if envelope_level == 0x7fff:
-  voice_l = gained_l
-  voice_r = gained_r
+  voice_l = saturate_pcm((post_filter_l * gain_l_runtime) >>> 15)
+  voice_r = saturate_pcm((post_filter_r * gain_r_runtime) >>> 15)
 else:
-  voice_l = saturate_pcm((gained_l * envelope_level) >>> 15)
-  voice_r = saturate_pcm((gained_r * envelope_level) >>> 15)
+  voice_l = saturate_pcm((post_filter_l * gain_l_runtime * envelope_level) >>> 30)
+  voice_r = saturate_pcm((post_filter_r * gain_r_runtime * envelope_level) >>> 30)
 ```
 
 All contributing voices are accumulated in signed 32-bit integer PCM units:
@@ -255,8 +252,7 @@ phase/frame selection
   -> memory endpoint fetch
   -> linear interpolation
   -> optional biquad filter
-  -> channel gain
-  -> envelope/full-level bypass
+  -> combined channel gain and envelope/full-level bypass
   -> 32-bit mix accumulation
   -> final 16-bit saturation
 ```

@@ -52,8 +52,7 @@ the `ACCUMULATE` state evaluated the full DSP chain combinationally:
 raw endpoints
   -> linear interpolation
   -> optional biquad IIR
-  -> channel gain
-  -> envelope gain or full-level bypass
+  -> combined channel gain and envelope/full-level bypass
   -> signed 32-bit mix accumulator
 ```
 
@@ -375,9 +374,9 @@ next filter state for retire-time writeback.
 | `S0_INTERP` | Interpolate left and right raw endpoints using the captured fraction. | Voice index, gains, envelope, filter enable, coefficients, filter state. |
 | `S1_FILTER_X` | Multiply `x` by `b0`, `b1`, and `b2`; sign-extend `z1/z2`. | Filter coefficients, filter state products, raw/bypass sample. |
 | `S2_FILTER_Y` | Compute `y = b0*x + z1`, saturate to PCM, and preserve feed-forward products for feedback state. | Saturated `y`, bypass sample, feedback inputs. |
-| `S3_FILTER_STATE` | Compute raw next `z1/z2`; select filtered or bypass sample for gain. | Raw next filter state, selected post-filter sample, gain/envelope context. |
-| `S4_GAIN` | Apply left/right channel gain and saturate raw `z1/z2` into the 34-bit filter-state format. | Gained samples and next filter state. |
-| Output | Apply envelope or full-level bypass and emit `voice_dsp_result_t` when `valid_pipe[5]` is set. | Voice index, filter enable, next filter state, final contribution. |
+| `S3_FILTER_STATE` | Compute raw next `z1/z2`; select filtered or bypass sample for output scaling. | Raw next filter state, selected post-filter sample, gain/envelope context. |
+| `S4_GAIN` | Register the selected post-filter samples and saturate raw `z1/z2` into the 34-bit filter-state format. | Selected samples and next filter state. |
+| Output | Apply combined channel gain plus envelope or full-level bypass and emit `voice_dsp_result_t` when `valid_pipe[5]` is set. | Voice index, filter enable, next filter state, final contribution. |
 
 The DSP pipe can accept a new complete context every cycle when the front end can
 provide one. With the current memory interface it normally sees bubbles, but the
@@ -534,8 +533,8 @@ For filtered voices, the long DSP calculation is now split across
 - interpolation is separated from filter coefficient multiplication,
 - feed-forward multiplication, output saturation, feedback multiplication, and
   next-state saturation occupy separate pipeline stages,
-- channel gain is isolated from envelope scaling,
-- envelope scaling and final contribution generation happen at the DSP output,
+- selected post-filter samples are registered before output scaling,
+- channel gain, envelope scaling, and final contribution generation happen at the DSP output,
 - accumulator update and filter-state writeback happen only in the retire path.
 
 Post-synthesis Smart Artix timing improved from a `clk_pll_i` setup WNS of
@@ -551,8 +550,9 @@ The change preserves these contracts:
 
 - PCM samples remain signed 16-bit values.
 - Linear interpolation math and rounding behavior are unchanged.
-- Channel gain and envelope gain still use signed Q1.15 multiplication and the
-  same saturation behavior.
+- Channel gain and envelope gain still use signed Q1.15 multiplication, but
+  non-full envelope values are folded into one wide output product with one final
+  PCM16 saturation.
 - `0x7fff` envelope level still bypasses envelope multiplication.
 - Filter coefficients remain signed Q4.28 and use the same transposed direct-form
   II equation.

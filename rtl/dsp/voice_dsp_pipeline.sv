@@ -77,8 +77,8 @@ module voice_dsp_pipeline (
 
   typedef struct packed {
     dsp_base_context_t base;
-    pcm_t gained_l;
-    pcm_t gained_r;
+    pcm_t selected_l;
+    pcm_t selected_r;
     logic signed [FILTER_STATE_WIDTH-1:0] next_z1_l;
     logic signed [FILTER_STATE_WIDTH-1:0] next_z2_l;
     logic signed [FILTER_STATE_WIDTH-1:0] next_z1_r;
@@ -92,9 +92,7 @@ module voice_dsp_pipeline (
   filter_x_stage_t s1_filter_x;
   filter_y_stage_t s2_filter_y;
   filter_state_stage_t s3_filter_state;
-  pcm_t gained_l_out, gained_r_out;
   gain_stage_t s4_gain;
-  pcm_t envelope_l_out, envelope_r_out;
   logic signed [FILTER_RAW_WIDTH-1:0] y_q_l, y_q_r;
   logic signed [63:0] y_q_l_ext, y_q_r_ext;
   logic signed [31:0] y_pcm_ext_l, y_pcm_ext_r;
@@ -125,6 +123,31 @@ module voice_dsp_pipeline (
     end
   endfunction
 
+  function automatic pcm_t apply_output_gain(
+    input pcm_t sample,
+    input logic signed [15:0] gain,
+    input logic signed [15:0] envelope_level
+  );
+    logic signed [63:0] sample_ext;
+    logic signed [63:0] gain_ext;
+    logic signed [63:0] envelope_ext;
+    logic signed [63:0] product;
+    logic signed [63:0] scaled;
+    begin
+      sample_ext = {{48{sample[15]}}, sample};
+      gain_ext = {{48{gain[15]}}, gain};
+      envelope_ext = {{48{envelope_level[15]}}, envelope_level};
+      if (envelope_level == 16'sh7fff) begin
+        product = sample_ext * gain_ext;
+        scaled = product >>> 15;
+      end else begin
+        product = sample_ext * gain_ext * envelope_ext;
+        scaled = product >>> 30;
+      end
+      apply_output_gain = saturate_pcm(scaled);
+    end
+  endfunction
+
   linear_interpolator interp_l (
     .clk(clk),
     .rst(rst),
@@ -141,30 +164,6 @@ module voice_dsp_pipeline (
     .sample_1(s0_context.raw_r1),
     .fraction(s0_context.fraction),
     .sample_out(interp_r_out)
-  );
-
-  gain_saturate gain_l_inst (
-    .sample_in(s3_filter_state.selected_l),
-    .gain(s3_filter_state.base.gain_l),
-    .sample_out(gained_l_out)
-  );
-
-  gain_saturate gain_r_inst (
-    .sample_in(s3_filter_state.selected_r),
-    .gain(s3_filter_state.base.gain_r),
-    .sample_out(gained_r_out)
-  );
-
-  gain_saturate envelope_l_inst (
-    .sample_in(s4_gain.gained_l),
-    .gain(s4_gain.base.envelope_level),
-    .sample_out(envelope_l_out)
-  );
-
-  gain_saturate envelope_r_inst (
-    .sample_in(s4_gain.gained_r),
-    .gain(s4_gain.base.envelope_level),
-    .sample_out(envelope_r_out)
   );
 
   always_comb begin
@@ -197,8 +196,10 @@ module voice_dsp_pipeline (
   assign result_o.next_z2_l = s4_gain.next_z2_l;
   assign result_o.next_z1_r = s4_gain.next_z1_r;
   assign result_o.next_z2_r = s4_gain.next_z2_r;
-  assign result_o.contribution_l = (s4_gain.base.envelope_level == 16'sh7fff) ? s4_gain.gained_l : envelope_l_out;
-  assign result_o.contribution_r = (s4_gain.base.envelope_level == 16'sh7fff) ? s4_gain.gained_r : envelope_r_out;
+  assign result_o.contribution_l = apply_output_gain(s4_gain.selected_l, s4_gain.base.gain_l,
+                                                     s4_gain.base.envelope_level);
+  assign result_o.contribution_r = apply_output_gain(s4_gain.selected_r, s4_gain.base.gain_r,
+                                                     s4_gain.base.envelope_level);
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -281,8 +282,8 @@ module voice_dsp_pipeline (
 
       if (valid_pipe[5]) begin
         s4_gain.base <= s3_filter_state.base;
-        s4_gain.gained_l <= gained_l_out;
-        s4_gain.gained_r <= gained_r_out;
+        s4_gain.selected_l <= s3_filter_state.selected_l;
+        s4_gain.selected_r <= s3_filter_state.selected_r;
         s4_gain.next_z1_l <= saturate_filter_state(s3_filter_state.next_z1_raw_l);
         s4_gain.next_z2_l <= saturate_filter_state(s3_filter_state.next_z2_raw_l);
         s4_gain.next_z1_r <= saturate_filter_state(s3_filter_state.next_z1_raw_r);

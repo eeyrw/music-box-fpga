@@ -428,9 +428,10 @@ The RTL does not implement SF2 preset selection, velocity mapping, modulators, o
 coefficient calculation; software writes already-quantized signed Q2.14 filter
 coefficients. `FILTER_A2[16]` is a write-only commit strobe; `FILTER_A2[31:17]`
 is unused. Reads return all `FILTER_A2` upper bits as zero.
-A value of `0x7fff` is treated as full envelope level and bypasses the extra
-envelope multiply so existing full-scale voice gains are not attenuated by one
-least-significant bit.
+A value of `0x7fff` is treated as full envelope level and bypasses the envelope
+factor. For other envelope values, the renderer applies channel gain and envelope
+as one wide output-scale product and saturates once to PCM16, avoiding the extra
+precision loss of an intermediate gain-stage PCM16 truncation.
 
 ## Minimal Control Sequences
 

@@ -159,10 +159,9 @@ frame_0      = phase[31:8]
 frame_1      = next frame, clamped or loop-wrapped as needed
 fraction     = phase[7:0]
 interpolated = sample_0 + ((sample_1 - sample_0) * fraction >>> 8)
-gained       = saturate(interpolated * gain >>> 15)
-enveloped    = gained when envelope_level == 0x7fff
-enveloped    = saturate(gained * envelope_level >>> 15) otherwise
-mix_accum   += enveloped
+voice_sample = saturate(interpolated * gain >>> 15) when envelope_level == 0x7fff
+voice_sample = saturate(interpolated * gain * envelope_level >>> 30) otherwise
+mix_accum   += voice_sample
 ```
 
 `START_VOICE` snapshots the selected voice's configuration, runtime controls,

@@ -55,6 +55,7 @@ class ReferenceSynth : public VoiceControlSink {
 
   static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction);
   static int16_t apply_gain(int16_t sample, int16_t gain);
+  static int16_t apply_output_gain(int16_t sample, int16_t gain, int16_t envelope);
   static int16_t saturate(int32_t value);
   static int64_t saturate_filter_state(int64_t value);
   static int16_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v);

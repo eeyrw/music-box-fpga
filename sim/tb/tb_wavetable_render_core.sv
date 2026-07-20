@@ -362,6 +362,12 @@ module tb_wavetable_render_core;
     for (int a = 36; a < 68; a++)
       memory_model.memory[a] = 16'sd2000;
 
+    // Precision regression for combined gain/envelope scaling. The old two-step
+    // PCM16 path produced 13; one wide product with a single final truncation
+    // preserves 14.
+    for (int a = 68; a < 72; a++)
+      memory_model.memory[a] = 16'sd10000;
+
     repeat (3) @(negedge clk);
     rst = 1'b0;
 
@@ -388,6 +394,12 @@ module tb_wavetable_render_core;
     begin_case("runtime gain update");
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h2000_2000);
     request_and_check(62, 62);
+
+    // Channel gain and envelope are applied as one wide output gain so the
+    // datapath does not lose precision to an intermediate PCM16 truncation.
+    begin_case("combined gain envelope precision");
+    configure_mono_slot(0, 68, 32'h0000_0000, 16'sh0100, 16'sh16f8);
+    request_and_check(14, 14);
 
     // Check stereo addressing and exclusive loop wrapping.
     begin_case("stereo exclusive loop");
@@ -459,7 +471,7 @@ module tb_wavetable_render_core;
     end
 
     // Check that two active voice slots render in one output request and the
-    // mixer adds their current enveloped samples with saturation at the end.
+    // mixer adds their current output-scaled samples with saturation at the end.
     begin_case("two-voice mix");
     configure_mono_slot(0, 0, 32'h0000_0080, 16'sh4000, 16'sh7fff);
     configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);

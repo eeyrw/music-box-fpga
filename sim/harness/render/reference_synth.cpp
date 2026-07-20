@@ -132,12 +132,8 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);
     int16_t filter_l = v.filter_enable ? biquad(interp_l, v.filter_z1_l, v.filter_z2_l, v) : interp_l;
     int16_t filter_r = v.filter_enable ? biquad(interp_r, v.filter_z1_r, v.filter_z2_r, v) : interp_r;
-    int16_t gained_l = apply_gain(filter_l, v.gain_l);
-    int16_t gained_r = apply_gain(filter_r, v.gain_r);
-    int16_t env_l = v.envelope == int16_t(0x7fff) ? gained_l : apply_gain(gained_l, v.envelope);
-    int16_t env_r = v.envelope == int16_t(0x7fff) ? gained_r : apply_gain(gained_r, v.envelope);
-    accum_l += env_l;
-    accum_r += env_r;
+    accum_l += apply_output_gain(filter_l, v.gain_l, v.envelope);
+    accum_r += apply_output_gain(filter_r, v.gain_r, v.envelope);
   }
 
   return {saturate(accum_l), saturate(accum_r)};
@@ -153,6 +149,12 @@ int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint32_t
 int16_t ReferenceSynth::apply_gain(int16_t sample, int16_t gain) {
   int32_t product = int32_t(sample) * int32_t(gain);
   return saturate(product >> 15);
+}
+
+int16_t ReferenceSynth::apply_output_gain(int16_t sample, int16_t gain, int16_t envelope) {
+  if (envelope == int16_t(0x7fff)) return apply_gain(sample, gain);
+  int64_t product = int64_t(sample) * int64_t(gain) * int64_t(envelope);
+  return saturate(int32_t(product >> 30));
 }
 
 int16_t ReferenceSynth::saturate(int32_t value) {
