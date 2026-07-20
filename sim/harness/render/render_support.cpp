@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 
 namespace render {
@@ -177,6 +179,28 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
   f << "  ]\n}\n";
 }
 
+std::string diagnostics_json_fields(const RenderDiagnostics& d) {
+  std::ostringstream s;
+  s << "  \"diagnostics_frames\": " << d.frames
+    << ",\n  \"diagnostics_filter_y_saturated_frames\": " << d.filter_y_saturated_frames
+    << ",\n  \"diagnostics_filter_y_saturations\": " << d.filter_y_saturations
+    << ",\n  \"diagnostics_filter_state_saturated_frames\": " << d.filter_state_saturated_frames
+    << ",\n  \"diagnostics_filter_state_saturations\": " << d.filter_state_saturations
+    << ",\n  \"diagnostics_contribution_saturated_frames\": " << d.contribution_saturated_frames
+    << ",\n  \"diagnostics_contribution_saturations\": " << d.contribution_saturations
+    << ",\n  \"diagnostics_mix_saturated_frames\": " << d.mix_saturated_frames
+    << ",\n  \"diagnostics_mix_saturations\": " << d.mix_saturations
+    << ",\n  \"diagnostics_voice_steals\": " << d.voice_steals
+    << ",\n  \"diagnostics_runtime_gain_updates\": " << d.runtime_gain_updates
+    << ",\n  \"diagnostics_runtime_phase_updates\": " << d.runtime_phase_updates
+    << ",\n  \"diagnostics_runtime_filter_updates\": " << d.runtime_filter_updates
+    << ",\n  \"diagnostics_max_runtime_gain_jump_l\": " << d.max_runtime_gain_jump_l
+    << ",\n  \"diagnostics_max_runtime_gain_jump_r\": " << d.max_runtime_gain_jump_r
+    << ",\n  \"diagnostics_max_runtime_phase_inc_jump\": " << d.max_runtime_phase_inc_jump
+    << ",\n  \"diagnostics_max_runtime_filter_coeff_jump\": " << d.max_runtime_filter_coeff_jump;
+  return s.str();
+}
+
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
                                 int adsr_tick_samples, std::vector<NoteEvent>& events,
                                 std::vector<Region>& regions,
@@ -262,8 +286,9 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   });
 }
 
-McuModel::McuModel(VoiceControlSink& sink, const std::vector<Region>& regions)
-    : sink_(sink), regions_(regions) {}
+McuModel::McuModel(VoiceControlSink& sink, const std::vector<Region>& regions,
+                   RenderDiagnostics* diagnostics)
+    : sink_(sink), regions_(regions), diagnostics_(diagnostics) {}
 
 void McuModel::handle_event(const NoteEvent& event) {
   if (event.type == NoteEvent::EVENT_CONTROL) control_change(event);
@@ -540,6 +565,61 @@ void McuModel::reset_controllers(int channel) {
   }
 }
 
+void McuModel::record_runtime_gain_update(int voice, int gain_l, int gain_r) {
+  if (diagnostics_) {
+    diagnostics_->runtime_gain_updates += 1;
+    if (runtime_gain_valid_[voice]) {
+      auto diff = [](int a, int b) {
+        return uint32_t(std::abs(int64_t(a) - int64_t(b)));
+      };
+      diagnostics_->max_runtime_gain_jump_l = std::max(diagnostics_->max_runtime_gain_jump_l,
+                                                       diff(gain_l, last_runtime_gain_l_[voice]));
+      diagnostics_->max_runtime_gain_jump_r = std::max(diagnostics_->max_runtime_gain_jump_r,
+                                                       diff(gain_r, last_runtime_gain_r_[voice]));
+    }
+  }
+  runtime_gain_valid_[voice] = true;
+  last_runtime_gain_l_[voice] = gain_l;
+  last_runtime_gain_r_[voice] = gain_r;
+}
+
+void McuModel::record_runtime_phase_update(int voice, uint32_t phase_inc) {
+  if (diagnostics_) {
+    diagnostics_->runtime_phase_updates += 1;
+    if (runtime_phase_valid_[voice]) {
+      uint32_t jump = phase_inc >= last_runtime_phase_inc_[voice]
+                          ? phase_inc - last_runtime_phase_inc_[voice]
+                          : last_runtime_phase_inc_[voice] - phase_inc;
+      diagnostics_->max_runtime_phase_inc_jump = std::max(diagnostics_->max_runtime_phase_inc_jump, jump);
+    }
+  }
+  runtime_phase_valid_[voice] = true;
+  last_runtime_phase_inc_[voice] = phase_inc;
+}
+
+void McuModel::record_runtime_filter_update(int voice, const FilterConfig& filter) {
+  if (diagnostics_) {
+    diagnostics_->runtime_filter_updates += 1;
+    if (runtime_filter_valid_[voice]) {
+      const FilterConfig& last = last_runtime_filter_[voice];
+      auto diff = [](int a, int b) {
+        return uint32_t(std::abs(int64_t(a) - int64_t(b)));
+      };
+      uint32_t max_jump = 0;
+      max_jump = std::max(max_jump, diff(filter.b0, last.b0));
+      max_jump = std::max(max_jump, diff(filter.b1, last.b1));
+      max_jump = std::max(max_jump, diff(filter.b2, last.b2));
+      max_jump = std::max(max_jump, diff(filter.a1, last.a1));
+      max_jump = std::max(max_jump, diff(filter.a2, last.a2));
+      if (filter.enable != last.enable) max_jump = std::max(max_jump, uint32_t(1));
+      diagnostics_->max_runtime_filter_coeff_jump = std::max(diagnostics_->max_runtime_filter_coeff_jump,
+                                                             max_jump);
+    }
+  }
+  runtime_filter_valid_[voice] = true;
+  last_runtime_filter_[voice] = filter;
+}
+
 void McuModel::update_channel_controls(int channel) {
   for (int v = 0; v < kNumVoices; ++v) {
     if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel) update_voice_controls(v);
@@ -551,6 +631,7 @@ void McuModel::update_voice_controls(int voice) {
   const Region& r = regions_.at(state.region);
   const ChannelState& c = channels_.at(state.channel & 0x0f);
   auto gains = runtime_gains(r, state, c);
+  record_runtime_gain_update(voice, gains.first, gains.second);
   sink_.set_gain(voice, gains.first, gains.second);
   update_voice_modulation(voice);
 }
@@ -611,7 +692,9 @@ void McuModel::update_voice_modulation(int voice) {
                             modulator_sum(r, state, c, kGenModLfoToPitch));
   pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
   pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
-  sink_.set_phase_inc(voice, modulated_phase_inc(r.phase_inc, pitch_cents));
+  uint32_t phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
+  record_runtime_phase_update(voice, phase_inc);
+  sink_.set_phase_inc(voice, phase_inc);
 
   double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
                         modulator_sum(r, state, c, kGenInitialFilterFc) +
@@ -621,11 +704,14 @@ void McuModel::update_voice_modulation(int voice) {
                         env * (double(r.mod_env_to_filter_fc) +
                                c.generator_offsets[kGenModEnvToFilterFc] +
                                modulator_sum(r, state, c, kGenModEnvToFilterFc));
-  sink_.set_filter(voice, filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate));
+  FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate);
+  record_runtime_filter_update(voice, filter);
+  sink_.set_filter(voice, filter);
   state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
                                             c.generator_offsets[kGenModLfoToVolume] +
                                             modulator_sum(r, state, c, kGenModLfoToVolume));
   auto gains = runtime_gains(r, state, c);
+  record_runtime_gain_update(voice, gains.first, gains.second);
   sink_.set_gain(voice, gains.first, gains.second);
 
   if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
@@ -667,6 +753,7 @@ void McuModel::note_on(const NoteEvent& event) {
   }
 
   int slot = first_free_or_oldest_slot();
+  if (voices_[slot].state != ENV_SILENT && diagnostics_) diagnostics_->voice_steals += 1;
   alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
   if (alloc_stamp_ == 0) alloc_stamp_ = 1;
 
@@ -681,6 +768,9 @@ void McuModel::note_on(const NoteEvent& event) {
     }
   }
   voices_[slot].note = event.note & 0x7f;
+  runtime_gain_valid_[slot] = false;
+  runtime_phase_valid_[slot] = false;
+  runtime_filter_valid_[slot] = false;
   voices_[slot].channel = event.channel;
   voices_[slot].region = event.region;
   voices_[slot].state = r.delay_ticks > 0 ? ENV_DELAY : ENV_ATTACK;

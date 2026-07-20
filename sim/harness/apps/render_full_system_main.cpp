@@ -15,7 +15,8 @@
 namespace render {
 namespace {
 
-void write_full_system_stats(const std::string& path, const FullSystemStats& stats) {
+void write_full_system_stats(const std::string& path, const FullSystemStats& stats,
+                             const RenderDiagnostics& diagnostics) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   f << "{\n"
@@ -35,7 +36,8 @@ void write_full_system_stats(const std::string& path, const FullSystemStats& sta
     << "  \"register_writes_filter\": " << stats.register_writes.filter << ",\n"
     << "  \"register_writes_commit\": " << stats.register_writes.commit << ",\n"
     << "  \"register_writes_release\": " << stats.register_writes.release << ",\n"
-    << "  \"register_writes_config\": " << stats.register_writes.config << "\n"
+    << "  \"register_writes_config\": " << stats.register_writes.config << ",\n"
+    << diagnostics_json_fields(diagnostics) << "\n"
     << "}\n";
 }
 
@@ -64,7 +66,8 @@ int main(int argc, char** argv) {
     std::string wav_path = args.out_dir + "/out.wav";
     render::FullSystemHarness full_system(wave_memory, wav_path, args.sample_rate);
     full_system.reset();
-    render::McuModel mcu(full_system, regions);
+    render::RenderDiagnostics diagnostics;
+    render::McuModel mcu(full_system, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -81,7 +84,7 @@ int main(int argc, char** argv) {
     }
 
     render::FullSystemStats stats = full_system.stats();
-    render::write_full_system_stats(args.out_dir + "/full_system_stats.json", stats);
+    render::write_full_system_stats(args.out_dir + "/full_system_stats.json", stats, diagnostics);
     if (stats.nonzero_output_words == 0) {
       throw std::runtime_error("full-system render produced all-zero I2S PCM; increase SECONDS or inspect event/region mapping");
     }

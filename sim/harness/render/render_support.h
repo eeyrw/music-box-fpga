@@ -15,6 +15,7 @@ Args parse_args(int argc, char** argv);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events,
                    const std::string& extra_fields = "");
+std::string diagnostics_json_fields(const RenderDiagnostics& diagnostics);
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
                                 int adsr_tick_samples, std::vector<NoteEvent>& events,
                                 std::vector<Region>& regions,
@@ -22,7 +23,8 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 
 class McuModel {
  public:
-  McuModel(VoiceControlSink& sink, const std::vector<Region>& regions);
+  McuModel(VoiceControlSink& sink, const std::vector<Region>& regions,
+           RenderDiagnostics* diagnostics = nullptr);
 
   void handle_event(const NoteEvent& event);
   void envelope_tick();
@@ -62,6 +64,9 @@ class McuModel {
   void release_deferred_pedal_voices(int channel);
   void apply_data_entry_msb(int channel, int value);
   void reset_controllers(int channel);
+  void record_runtime_gain_update(int voice, int gain_l, int gain_r);
+  void record_runtime_phase_update(int voice, uint32_t phase_inc);
+  void record_runtime_filter_update(int voice, const FilterConfig& filter);
   void release_voice(int voice);
   void note_off(int channel, int note);
   void note_on(const NoteEvent& event);
@@ -80,6 +85,14 @@ class McuModel {
   int sample_rate_ = 48000;
   std::array<ChannelState, 16> channels_{};
   std::array<VoiceState, kNumVoices> voices_{};
+  std::array<bool, kNumVoices> runtime_gain_valid_{};
+  std::array<int, kNumVoices> last_runtime_gain_l_{};
+  std::array<int, kNumVoices> last_runtime_gain_r_{};
+  std::array<bool, kNumVoices> runtime_phase_valid_{};
+  std::array<uint32_t, kNumVoices> last_runtime_phase_inc_{};
+  std::array<bool, kNumVoices> runtime_filter_valid_{};
+  std::array<FilterConfig, kNumVoices> last_runtime_filter_{};
+  RenderDiagnostics* diagnostics_ = nullptr;
   int alloc_stamp_ = 0;
 };
 

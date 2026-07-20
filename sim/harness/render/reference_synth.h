@@ -10,7 +10,7 @@ namespace render {
 
 class ReferenceSynth : public VoiceControlSink {
  public:
-  explicit ReferenceSynth(const std::vector<int16_t>& memory);
+  explicit ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics = nullptr);
 
   void set_envelope(int voice, int level) override;
   void set_gain(int voice, int gain_l, int gain_r) override;
@@ -54,15 +54,18 @@ class ReferenceSynth : public VoiceControlSink {
   };
 
   static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction);
-  static int16_t apply_gain(int16_t sample, int16_t gain);
-  static int16_t apply_output_gain(int16_t sample, int16_t gain, int16_t envelope);
-  static int16_t saturate(int32_t value);
-  static int64_t saturate_filter_state(int64_t value);
-  static int16_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v);
+  static int16_t apply_gain(int16_t sample, int16_t gain, bool* saturated = nullptr);
+  static int16_t apply_output_gain(int16_t sample, int16_t gain, int16_t envelope,
+                                   bool* saturated = nullptr);
+  static int16_t saturate(int32_t value, bool* saturated = nullptr);
+  static int64_t saturate_filter_state(int64_t value, bool* saturated = nullptr);
+  static int16_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v,
+                        bool* y_saturated = nullptr, bool* state_saturated = nullptr);
   int16_t read_word(uint32_t address) const;
 
   const std::vector<int16_t>& memory_;
   std::vector<VoiceConfig> voices_;
+  RenderDiagnostics* diagnostics_ = nullptr;
 };
 
 }  // namespace render

@@ -4,8 +4,8 @@
 
 namespace render {
 
-ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory)
-    : memory_(memory), voices_(kNumVoices) {}
+ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics)
+    : memory_(memory), voices_(kNumVoices), diagnostics_(diagnostics) {}
 
 void ReferenceSynth::set_envelope(int voice, int level) {
   voices_.at(voice).envelope = int16_t(clamp_q15(level));
@@ -76,6 +76,14 @@ void ReferenceSynth::release_voice(int voice, const Region& region) {
 std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
   int32_t accum_l = 0;
   int32_t accum_r = 0;
+  bool frame_filter_y_saturated = false;
+  bool frame_filter_state_saturated = false;
+  bool frame_contribution_saturated = false;
+  bool frame_mix_saturated = false;
+  uint64_t filter_y_saturations = 0;
+  uint64_t filter_state_saturations = 0;
+  uint64_t contribution_saturations = 0;
+  uint64_t mix_saturations = 0;
 
   for (VoiceConfig& v : voices_) {
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
@@ -131,13 +139,48 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
     int16_t interp_l = interpolate(raw_l0, raw_l1, fraction);
     int16_t interp_r = interpolate(raw_r0, raw_r1, fraction);
-    int16_t filter_l = v.filter_enable ? biquad(interp_l, v.filter_z1_l, v.filter_z2_l, v) : interp_l;
-    int16_t filter_r = v.filter_enable ? biquad(interp_r, v.filter_z1_r, v.filter_z2_r, v) : interp_r;
-    accum_l += apply_output_gain(filter_l, v.gain_l, v.envelope);
-    accum_r += apply_output_gain(filter_r, v.gain_r, v.envelope);
+    bool filter_l_y_saturated = false;
+    bool filter_l_state_saturated = false;
+    bool filter_r_y_saturated = false;
+    bool filter_r_state_saturated = false;
+    int16_t filter_l = v.filter_enable ? biquad(interp_l, v.filter_z1_l, v.filter_z2_l, v,
+                                                &filter_l_y_saturated, &filter_l_state_saturated) : interp_l;
+    int16_t filter_r = v.filter_enable ? biquad(interp_r, v.filter_z1_r, v.filter_z2_r, v,
+                                                &filter_r_y_saturated, &filter_r_state_saturated) : interp_r;
+    if (filter_l_y_saturated || filter_r_y_saturated) frame_filter_y_saturated = true;
+    if (filter_l_state_saturated || filter_r_state_saturated) frame_filter_state_saturated = true;
+    if (filter_l_y_saturated) filter_y_saturations += 1;
+    if (filter_r_y_saturated) filter_y_saturations += 1;
+    if (filter_l_state_saturated) filter_state_saturations += 1;
+    if (filter_r_state_saturated) filter_state_saturations += 1;
+    bool contribution_l_saturated = false;
+    bool contribution_r_saturated = false;
+    accum_l += apply_output_gain(filter_l, v.gain_l, v.envelope, &contribution_l_saturated);
+    accum_r += apply_output_gain(filter_r, v.gain_r, v.envelope, &contribution_r_saturated);
+    if (contribution_l_saturated || contribution_r_saturated) frame_contribution_saturated = true;
+    if (contribution_l_saturated) contribution_saturations += 1;
+    if (contribution_r_saturated) contribution_saturations += 1;
   }
 
-  return {saturate(accum_l), saturate(accum_r)};
+  bool mix_l_saturated = false;
+  bool mix_r_saturated = false;
+  auto out = std::make_pair(saturate(accum_l, &mix_l_saturated), saturate(accum_r, &mix_r_saturated));
+  if (mix_l_saturated || mix_r_saturated) frame_mix_saturated = true;
+  if (mix_l_saturated) mix_saturations += 1;
+  if (mix_r_saturated) mix_saturations += 1;
+
+  if (diagnostics_) {
+    diagnostics_->frames += 1;
+    if (frame_filter_y_saturated) diagnostics_->filter_y_saturated_frames += 1;
+    diagnostics_->filter_y_saturations += filter_y_saturations;
+    if (frame_filter_state_saturated) diagnostics_->filter_state_saturated_frames += 1;
+    diagnostics_->filter_state_saturations += filter_state_saturations;
+    if (frame_contribution_saturated) diagnostics_->contribution_saturated_frames += 1;
+    diagnostics_->contribution_saturations += contribution_saturations;
+    if (frame_mix_saturated) diagnostics_->mix_saturated_frames += 1;
+    diagnostics_->mix_saturations += mix_saturations;
+  }
+  return out;
 }
 
 int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction) {
@@ -147,40 +190,58 @@ int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint32_t
   return saturate(int32_t(sample_0) + scaled_difference);
 }
 
-int16_t ReferenceSynth::apply_gain(int16_t sample, int16_t gain) {
+int16_t ReferenceSynth::apply_gain(int16_t sample, int16_t gain, bool* saturated) {
   int32_t product = int32_t(sample) * int32_t(gain);
-  return saturate(product >> 15);
+  return saturate(product >> 15, saturated);
 }
 
-int16_t ReferenceSynth::apply_output_gain(int16_t sample, int16_t gain, int16_t envelope) {
-  if (envelope == int16_t(0x7fff)) return apply_gain(sample, gain);
+int16_t ReferenceSynth::apply_output_gain(int16_t sample, int16_t gain, int16_t envelope,
+                                          bool* saturated) {
+  if (envelope == int16_t(0x7fff)) return apply_gain(sample, gain, saturated);
   int64_t product = int64_t(sample) * int64_t(gain) * int64_t(envelope);
-  return saturate(int32_t(product >> 30));
+  return saturate(int32_t(product >> 30), saturated);
 }
 
-int16_t ReferenceSynth::saturate(int32_t value) {
-  if (value > 32767) return int16_t(0x7fff);
-  if (value < -32768) return int16_t(0x8000);
+int16_t ReferenceSynth::saturate(int32_t value, bool* saturated) {
+  if (value > 32767) {
+    if (saturated) *saturated = true;
+    return int16_t(0x7fff);
+  }
+  if (value < -32768) {
+    if (saturated) *saturated = true;
+    return int16_t(0x8000);
+  }
   return int16_t(value);
 }
 
-int64_t ReferenceSynth::saturate_filter_state(int64_t value) {
+int64_t ReferenceSynth::saturate_filter_state(int64_t value, bool* saturated) {
   constexpr int64_t kMax = (int64_t(1) << 33) - 1;
   constexpr int64_t kMin = -(int64_t(1) << 33);
-  if (value > kMax) return kMax;
-  if (value < kMin) return kMin;
+  if (value > kMax) {
+    if (saturated) *saturated = true;
+    return kMax;
+  }
+  if (value < kMin) {
+    if (saturated) *saturated = true;
+    return kMin;
+  }
   return value;
 }
 
-int16_t ReferenceSynth::biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v) {
+int16_t ReferenceSynth::biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v,
+                               bool* y_saturated, bool* state_saturated) {
   int64_t y_q14 = int64_t(v.filter_b0) * int64_t(sample) + z1;
   int64_t y_shift = y_q14 >> 14;
-  int16_t y = y_shift > 32767 ? int16_t(0x7fff) :
-              (y_shift < -32768 ? int16_t(0x8000) : int16_t(y_shift));
+  bool local_y_saturated = false;
+  int16_t y = y_shift > 32767 ? (local_y_saturated = true, int16_t(0x7fff)) :
+              (y_shift < -32768 ? (local_y_saturated = true, int16_t(0x8000)) : int16_t(y_shift));
   int64_t next_z1 = int64_t(v.filter_b1) * sample - int64_t(v.filter_a1) * y + z2;
   int64_t next_z2 = int64_t(v.filter_b2) * sample - int64_t(v.filter_a2) * y;
-  z1 = saturate_filter_state(next_z1);
-  z2 = saturate_filter_state(next_z2);
+  bool local_state_saturated = false;
+  z1 = saturate_filter_state(next_z1, &local_state_saturated);
+  z2 = saturate_filter_state(next_z2, &local_state_saturated);
+  if (local_y_saturated && y_saturated) *y_saturated = true;
+  if (local_state_saturated && state_saturated) *state_saturated = true;
   return y;
 }
 

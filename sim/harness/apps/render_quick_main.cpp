@@ -38,11 +38,12 @@ int main(int argc, char** argv) {
     std::vector<int16_t> wave_memory = sf2.file_words;
     std::vector<render::Region> regions;
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
-    render::ReferenceSynth reference(wave_memory);
+    render::RenderDiagnostics diagnostics;
+    render::ReferenceSynth reference(wave_memory, &diagnostics);
     render::QuickRtlHarness rtl(wave_memory);
     rtl.reset();
     render::FanoutSink control(reference, rtl);
-    render::McuModel mcu(control, regions);
+    render::McuModel mcu(control, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -114,6 +115,7 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_max_filtered_voices\": " << rtl.max_filtered_voices()
           << ",\n  \"rtl_avg_stereo_voices\": " << avg(rtl.stereo_voice_sum())
           << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices()
+          << ",\n" << render::diagnostics_json_fields(diagnostics)
           << ",\n  \"register_writes_total\": " << reg.total
           << ",\n  \"register_writes_envelope\": " << reg.envelope
           << ",\n  \"register_writes_gain_runtime\": " << reg.gain_runtime

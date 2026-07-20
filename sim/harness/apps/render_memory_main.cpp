@@ -14,7 +14,8 @@
 namespace render {
 namespace {
 
-void write_memory_stats(const std::string& path, const MemoryStats& stats) {
+void write_memory_stats(const std::string& path, const MemoryStats& stats,
+                        const RenderDiagnostics& diagnostics) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
@@ -36,7 +37,8 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats) {
     << "  \"register_writes_filter\": " << stats.register_writes.filter << ",\n"
     << "  \"register_writes_commit\": " << stats.register_writes.commit << ",\n"
     << "  \"register_writes_release\": " << stats.register_writes.release << ",\n"
-    << "  \"register_writes_config\": " << stats.register_writes.config << "\n"
+    << "  \"register_writes_config\": " << stats.register_writes.config << ",\n"
+    << diagnostics_json_fields(diagnostics) << "\n"
     << "}\n";
 }
 
@@ -64,7 +66,8 @@ int main(int argc, char** argv) {
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
     render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);
     rtl.reset();
-    render::McuModel mcu(rtl, regions);
+    render::RenderDiagnostics diagnostics;
+    render::McuModel mcu(rtl, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -89,7 +92,7 @@ int main(int argc, char** argv) {
               << " nonzero_output_words=" << rtl.nonzero_output_words()
               << " register_writes=" << stats.register_writes.total
               << " filter_writes=" << stats.register_writes.filter << "\n";
-    render::write_memory_stats(args.out_dir + "/memory_stats.json", stats);
+    render::write_memory_stats(args.out_dir + "/memory_stats.json", stats, diagnostics);
     rtl.print_memory_stats();
     return 0;
   } catch (const std::exception& e) {

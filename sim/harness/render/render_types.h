@@ -177,6 +177,26 @@ struct RegisterWriteStats {
   uint64_t config = 0;
 };
 
+struct RenderDiagnostics {
+  uint64_t frames = 0;
+  uint64_t filter_y_saturated_frames = 0;
+  uint64_t filter_y_saturations = 0;
+  uint64_t filter_state_saturated_frames = 0;
+  uint64_t filter_state_saturations = 0;
+  uint64_t contribution_saturated_frames = 0;
+  uint64_t contribution_saturations = 0;
+  uint64_t mix_saturated_frames = 0;
+  uint64_t mix_saturations = 0;
+  uint64_t voice_steals = 0;
+  uint64_t runtime_gain_updates = 0;
+  uint64_t runtime_phase_updates = 0;
+  uint64_t runtime_filter_updates = 0;
+  uint32_t max_runtime_gain_jump_l = 0;
+  uint32_t max_runtime_gain_jump_r = 0;
+  uint32_t max_runtime_phase_inc_jump = 0;
+  uint32_t max_runtime_filter_coeff_jump = 0;
+};
+
 class VoiceControlSink {
  public:
   virtual ~VoiceControlSink() = default;

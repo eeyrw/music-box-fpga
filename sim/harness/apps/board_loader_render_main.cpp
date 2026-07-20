@@ -50,10 +50,11 @@ int main(int argc, char** argv) {
 
     std::vector<render::Region> regions;
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
-    render::ReferenceSynth reference(wave_memory);
+    render::RenderDiagnostics diagnostics;
+    render::ReferenceSynth reference(wave_memory, &diagnostics);
     board.reset_core();
     render::FanoutSink control(board, reference);
-    render::McuModel mcu(control, regions);
+    render::McuModel mcu(control, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -94,6 +95,7 @@ int main(int argc, char** argv) {
         ",\n  \"nonzero_output_words\": " + std::to_string(board.nonzero_output_words()) +
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
         ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
+        ",\n" + render::diagnostics_json_fields(diagnostics) +
         ",\n  \"wav_path\": \"" + wav_path + "\"";
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,
                           args.sample_rate, sample_count, int(events.size()), extra);

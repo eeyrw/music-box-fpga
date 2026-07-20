@@ -297,6 +297,16 @@ The summary includes aggregate RTL render counters and MCU-control traffic:
 `register_writes_filter`, `register_writes_commit`,
 `register_writes_release`, and `register_writes_config`.
 
+It also includes `diagnostics_*` fields for auditioning artifacts that are not
+visible from final WAV peak level alone. `ReferenceSynth` records how many frames
+and channel/voice occurrences hit filter output saturation, filter-state
+saturation, per-voice contribution saturation, and final mix saturation. The MCU
+policy records `diagnostics_voice_steals` plus the largest runtime gain,
+`PHASE_INC_RUNTIME`, and filter-coefficient jumps. `render-memory` and
+`render-full-system` write the same MCU-side diagnostics into their stats JSON
+files; they do not currently expose RTL-internal filter/contribution saturation
+because those paths do not run `ReferenceSynth` in parallel.
+
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
 
@@ -425,9 +435,10 @@ build/render_board_loader/board_loader_render_config.json
 ```
 
 The JSON summary records the loaded SF2 byte count, raw SD image size, loader
-cycle count, register-write count, memory hit/miss counters, and render workload
-summary. The render samples are compared exactly against `ReferenceSynth`; any
-mismatch fails the run.
+cycle count, register-write count, memory hit/miss counters, render workload
+summary, and the same `diagnostics_*` fields used by `render-quick`. The render
+samples are compared exactly against `ReferenceSynth`; any mismatch fails the
+run.
 
 ## C++ Memory-Profile Render Flow
 
