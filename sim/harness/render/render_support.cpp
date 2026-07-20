@@ -127,6 +127,10 @@ bool same_filter_config(const FilterConfig& a, const FilterConfig& b) {
          a.b2 == b.b2 && a.a1 == b.a1 && a.a2 == b.a2;
 }
 
+bool same_runtime_gain(int gain_l, int gain_r, int last_gain_l, int last_gain_r) {
+  return gain_l == last_gain_l && gain_r == last_gain_r;
+}
+
 }  // namespace
 
 Args parse_args(int argc, char** argv) {
@@ -636,8 +640,11 @@ void McuModel::update_voice_controls(int voice) {
   const Region& r = regions_.at(state.region);
   const ChannelState& c = channels_.at(state.channel & 0x0f);
   auto gains = runtime_gains(r, state, c);
-  record_runtime_gain_update(voice, gains.first, gains.second);
-  sink_.set_gain(voice, gains.first, gains.second);
+  if (!runtime_gain_valid_[voice] ||
+      !same_runtime_gain(gains.first, gains.second, last_runtime_gain_l_[voice], last_runtime_gain_r_[voice])) {
+    record_runtime_gain_update(voice, gains.first, gains.second);
+    sink_.set_gain(voice, gains.first, gains.second);
+  }
   update_voice_modulation(voice);
 }
 
@@ -698,8 +705,10 @@ void McuModel::update_voice_modulation(int voice) {
   pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
   pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
   uint32_t phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
-  record_runtime_phase_update(voice, phase_inc);
-  sink_.set_phase_inc(voice, phase_inc);
+  if (!runtime_phase_valid_[voice] || phase_inc != last_runtime_phase_inc_[voice]) {
+    record_runtime_phase_update(voice, phase_inc);
+    sink_.set_phase_inc(voice, phase_inc);
+  }
 
   double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
                         modulator_sum(r, state, c, kGenInitialFilterFc) +
@@ -718,8 +727,11 @@ void McuModel::update_voice_modulation(int voice) {
                                             c.generator_offsets[kGenModLfoToVolume] +
                                             modulator_sum(r, state, c, kGenModLfoToVolume));
   auto gains = runtime_gains(r, state, c);
-  record_runtime_gain_update(voice, gains.first, gains.second);
-  sink_.set_gain(voice, gains.first, gains.second);
+  if (!runtime_gain_valid_[voice] ||
+      !same_runtime_gain(gains.first, gains.second, last_runtime_gain_l_[voice], last_runtime_gain_r_[voice])) {
+    record_runtime_gain_update(voice, gains.first, gains.second);
+    sink_.set_gain(voice, gains.first, gains.second);
+  }
 
   if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
   else state.mod_lfo_phase += r.mod_lfo_step;

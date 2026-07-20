@@ -17,6 +17,8 @@ struct RecordingSink : public render::VoiceControlSink {
   int last_gain_l = -1;
   int last_gain_r = -1;
   uint32_t last_phase_inc = 0;
+  int gain_count = 0;
+  int phase_count = 0;
   int last_initial_envelope = -1;
   int last_commit_voice = -1;
   int filter_count = 0;
@@ -25,10 +27,14 @@ struct RecordingSink : public render::VoiceControlSink {
 
   void set_envelope(int, int level) override { envelopes.push_back(level); }
   void set_gain(int, int gain_l, int gain_r) override {
+    ++gain_count;
     last_gain_l = gain_l;
     last_gain_r = gain_r;
   }
-  void set_phase_inc(int, uint32_t phase_inc) override { last_phase_inc = phase_inc; }
+  void set_phase_inc(int, uint32_t phase_inc) override {
+    ++phase_count;
+    last_phase_inc = phase_inc;
+  }
   void set_filter(int, const render::FilterConfig& filter) override {
     ++filter_count;
     last_filter = filter;
@@ -370,6 +376,38 @@ int main() {
     }
     if (steady_filter_diag.runtime_filter_updates != uint64_t(steady_filter_writes)) {
       throw std::runtime_error("filter diagnostics counted skipped runtime filter writes");
+    }
+
+    render::Region steady_runtime_region;
+    steady_runtime_region.length = 4;
+    steady_runtime_region.loop_end = 4;
+    steady_runtime_region.phase_inc = render::kPhaseFracScale;
+    steady_runtime_region.gain_l = 0x4000;
+    steady_runtime_region.gain_r = 0x4000;
+    steady_runtime_region.output_sample_rate = 48000;
+    std::vector<render::Region> steady_runtime_regions{steady_runtime_region};
+    RecordingSink steady_runtime_sink;
+    render::RenderDiagnostics steady_runtime_diag;
+    render::McuModel steady_runtime_mcu(steady_runtime_sink, steady_runtime_regions, &steady_runtime_diag);
+    render::NoteEvent steady_runtime_note;
+    steady_runtime_note.on = true;
+    steady_runtime_note.velocity = 100;
+    steady_runtime_note.phase_inc = steady_runtime_region.phase_inc;
+    steady_runtime_mcu.handle_event(steady_runtime_note);
+    int steady_gain_writes = steady_runtime_sink.gain_count;
+    int steady_phase_writes = steady_runtime_sink.phase_count;
+    int steady_filter_runtime_writes = steady_runtime_sink.filter_count;
+    steady_runtime_mcu.envelope_tick();
+    steady_runtime_mcu.envelope_tick();
+    if (steady_runtime_sink.gain_count != steady_gain_writes ||
+        steady_runtime_sink.phase_count != steady_phase_writes ||
+        steady_runtime_sink.filter_count != steady_filter_runtime_writes) {
+      throw std::runtime_error("unchanged runtime control values were written again");
+    }
+    if (steady_runtime_diag.runtime_gain_updates != uint64_t(steady_gain_writes) ||
+        steady_runtime_diag.runtime_phase_updates != uint64_t(steady_phase_writes) ||
+        steady_runtime_diag.runtime_filter_updates != uint64_t(steady_filter_runtime_writes)) {
+      throw std::runtime_error("runtime diagnostics counted skipped control writes");
     }
 
     render::Region bend_range_region;
