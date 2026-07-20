@@ -19,6 +19,7 @@ struct RecordingSink : public render::VoiceControlSink {
   uint32_t last_phase_inc = 0;
   int last_initial_envelope = -1;
   int filter_count = 0;
+  render::FilterConfig last_filter;
   std::vector<int> envelopes;
 
   void set_envelope(int, int level) override { envelopes.push_back(level); }
@@ -27,7 +28,10 @@ struct RecordingSink : public render::VoiceControlSink {
     last_gain_r = gain_r;
   }
   void set_phase_inc(int, uint32_t phase_inc) override { last_phase_inc = phase_inc; }
-  void set_filter(int, const render::FilterConfig&) override { ++filter_count; }
+  void set_filter(int, const render::FilterConfig& filter) override {
+    ++filter_count;
+    last_filter = filter;
+  }
   void commit_voice(int, int enable, uint32_t phase_inc, const render::Region& region) override {
     ++commit_count;
     if (!enable) ++disable_count;
@@ -217,6 +221,13 @@ int main() {
     bend.type = render::NoteEvent::EVENT_PITCH_BEND;
     bend.pitch_bend = 4096;
     events.push_back(bend);
+    render::NoteEvent expression;
+    expression.time_seconds = 0.055;
+    expression.channel = 0;
+    expression.type = render::NoteEvent::EVENT_CONTROL;
+    expression.controller = 11;
+    expression.value = 32;
+    events.push_back(expression);
     render::NoteEvent all_notes_off;
     all_notes_off.time_seconds = 0.07;
     all_notes_off.channel = 0;
@@ -243,13 +254,28 @@ int main() {
     render::McuModel mcu(sink, regions);
     bool checked_bend = false;
     bool checked_volume = false;
+    bool checked_expression = false;
     for (const auto& e : events) {
       mcu.handle_event(e);
       if (e.type == render::NoteEvent::EVENT_NOTE && e.on && e.channel == 0 && e.note == 60) {
-        if (sink.last_gain_l <= 0 || sink.last_gain_l >= regions[0].gain_l) {
-          throw std::runtime_error("CC7 volume did not reduce active voice gain");
+        int expected_gain = int(std::round(double(regions[0].gain_l) *
+                                           double(render::concave_attenuation_q15(64)) /
+                                           double(render::kQ15Full)));
+        if (sink.last_gain_l != expected_gain) {
+          throw std::runtime_error("CC7 volume did not use SF2 concave attenuation");
         }
         checked_volume = true;
+      }
+      if (e.type == render::NoteEvent::EVENT_CONTROL && e.channel == 0 && e.controller == 11) {
+        int expected_gain = int(std::round(double(regions[0].gain_l) *
+                                           double(render::concave_attenuation_q15(64)) *
+                                           double(render::concave_attenuation_q15(32)) /
+                                           double(render::kQ15Full) /
+                                           double(render::kQ15Full)));
+        if (sink.last_gain_l != expected_gain) {
+          throw std::runtime_error("CC11 expression did not use SF2 concave attenuation");
+        }
+        checked_expression = true;
       }
       if (e.type == render::NoteEvent::EVENT_PITCH_BEND && e.channel == 0) {
         uint32_t bent = uint32_t(std::round(double(regions[0].phase_inc) * std::pow(2.0, 100.0 / 1200.0)));
@@ -258,6 +284,7 @@ int main() {
       }
     }
     if (!checked_volume) throw std::runtime_error("test did not observe the controlled melodic note");
+    if (!checked_expression) throw std::runtime_error("test did not observe the expression event");
     if (!checked_bend) throw std::runtime_error("test did not observe the pitch-bend event");
     if (sink.release_count == 0) throw std::runtime_error("All Notes Off did not release active melodic voices");
 
@@ -280,18 +307,135 @@ int main() {
     mod_note.velocity = 100;
     mod_note.phase_inc = mod_region.phase_inc;
     mod_mcu.handle_event(mod_note);
+    if (mod_sink.last_phase_inc != mod_region.phase_inc) {
+      throw std::runtime_error("mod LFO did not start its ramp at zero excursion");
+    }
+    mod_mcu.envelope_tick();
     if (mod_sink.last_phase_inc <= mod_region.phase_inc) {
-      throw std::runtime_error("mod LFO pitch generator did not raise runtime phase increment");
+      throw std::runtime_error("mod LFO pitch generator did not raise runtime phase increment on the next tick");
     }
     if (mod_sink.filter_count == 0) {
       throw std::runtime_error("mod LFO filter generator did not issue runtime filter updates");
+    }
+
+    render::Region velocity_filter_region;
+    velocity_filter_region.length = 4;
+    velocity_filter_region.loop_end = 4;
+    velocity_filter_region.phase_inc = render::kPhaseFracScale;
+    velocity_filter_region.gain_l = 0x4000;
+    velocity_filter_region.gain_r = 0x4000;
+    velocity_filter_region.initial_filter_fc = 6900;
+    velocity_filter_region.output_sample_rate = 48000;
+    std::vector<render::Region> velocity_filter_regions{velocity_filter_region};
+    render::NoteEvent high_velocity_note;
+    high_velocity_note.on = true;
+    high_velocity_note.velocity = 127;
+    high_velocity_note.phase_inc = render::kPhaseFracScale;
+    RecordingSink high_velocity_sink;
+    render::McuModel high_velocity_mcu(high_velocity_sink, velocity_filter_regions);
+    high_velocity_mcu.handle_event(high_velocity_note);
+    render::NoteEvent low_velocity_note = high_velocity_note;
+    low_velocity_note.velocity = 1;
+    RecordingSink low_velocity_sink;
+    render::McuModel low_velocity_mcu(low_velocity_sink, velocity_filter_regions);
+    low_velocity_mcu.handle_event(low_velocity_note);
+    if (high_velocity_sink.last_filter.b0 == low_velocity_sink.last_filter.b0) {
+      throw std::runtime_error("default velocity-to-filter-cutoff did not change filter coefficients");
+    }
+
+    render::Region bend_range_region;
+    bend_range_region.length = 4;
+    bend_range_region.loop_end = 4;
+    bend_range_region.phase_inc = render::kPhaseFracScale;
+    bend_range_region.gain_l = 0x4000;
+    bend_range_region.gain_r = 0x4000;
+    std::vector<render::Region> bend_range_regions{bend_range_region};
+    RecordingSink bend_range_sink;
+    render::McuModel bend_range_mcu(bend_range_sink, bend_range_regions);
+    render::NoteEvent rpn_msb;
+    rpn_msb.type = render::NoteEvent::EVENT_CONTROL;
+    rpn_msb.controller = 101;
+    rpn_msb.value = 0;
+    render::NoteEvent rpn_lsb = rpn_msb;
+    rpn_lsb.controller = 100;
+    render::NoteEvent data_entry = rpn_msb;
+    data_entry.controller = 6;
+    data_entry.value = 12;
+    bend_range_mcu.handle_event(rpn_msb);
+    bend_range_mcu.handle_event(rpn_lsb);
+    bend_range_mcu.handle_event(data_entry);
+    render::NoteEvent bend_range_note;
+    bend_range_note.on = true;
+    bend_range_note.velocity = 127;
+    bend_range_note.phase_inc = render::kPhaseFracScale;
+    bend_range_mcu.handle_event(bend_range_note);
+    render::NoteEvent wide_bend;
+    wide_bend.type = render::NoteEvent::EVENT_PITCH_BEND;
+    wide_bend.pitch_bend = 4096;
+    bend_range_mcu.handle_event(wide_bend);
+    double wide_bend_cents = 12700.0 * (4096.0 / 8192.0) * (12.0 / 128.0);
+    uint32_t wide_bent = uint32_t(std::round(double(render::kPhaseFracScale) *
+                                             std::pow(2.0, wide_bend_cents / 1200.0)));
+    if (bend_range_sink.last_phase_inc != wide_bent) {
+      throw std::runtime_error("RPN pitch-bend sensitivity did not widen bend range");
+    }
+
+    render::Region default_vibrato_region;
+    default_vibrato_region.length = 4;
+    default_vibrato_region.loop_end = 4;
+    default_vibrato_region.phase_inc = render::kPhaseFracScale;
+    default_vibrato_region.gain_l = 0x4000;
+    default_vibrato_region.gain_r = 0x4000;
+    default_vibrato_region.vib_lfo_step = 0x4000;
+    std::vector<render::Region> default_vibrato_regions{default_vibrato_region};
+    RecordingSink default_vibrato_sink;
+    render::McuModel default_vibrato_mcu(default_vibrato_sink, default_vibrato_regions);
+    render::NoteEvent mod_wheel;
+    mod_wheel.type = render::NoteEvent::EVENT_CONTROL;
+    mod_wheel.controller = 1;
+    mod_wheel.value = 127;
+    default_vibrato_mcu.handle_event(mod_wheel);
+    render::NoteEvent default_vibrato_note;
+    default_vibrato_note.on = true;
+    default_vibrato_note.velocity = 127;
+    default_vibrato_note.phase_inc = render::kPhaseFracScale;
+    default_vibrato_mcu.handle_event(default_vibrato_note);
+    if (default_vibrato_sink.last_phase_inc != render::kPhaseFracScale) {
+      throw std::runtime_error("default vibrato LFO did not start at zero excursion");
+    }
+    default_vibrato_mcu.envelope_tick();
+    if (default_vibrato_sink.last_phase_inc <= render::kPhaseFracScale) {
+      throw std::runtime_error("CC1 default modulator did not add vibrato pitch depth");
+    }
+
+    render::Region custom_mod_region;
+    custom_mod_region.length = 4;
+    custom_mod_region.loop_end = 4;
+    custom_mod_region.phase_inc = render::kPhaseFracScale;
+    custom_mod_region.gain_l = 0x4000;
+    custom_mod_region.gain_r = 0x4000;
+    custom_mod_region.vib_lfo_step = 0x4000;
+    custom_mod_region.modulators.push_back({0x0081, 6, 200, 0, 0});
+    std::vector<render::Region> custom_mod_regions{custom_mod_region};
+    RecordingSink custom_mod_sink;
+    render::McuModel custom_mod_mcu(custom_mod_sink, custom_mod_regions);
+    custom_mod_mcu.handle_event(mod_wheel);
+    render::NoteEvent custom_mod_note = default_vibrato_note;
+    custom_mod_mcu.handle_event(custom_mod_note);
+    custom_mod_mcu.envelope_tick();
+    double custom_mod_cents = 200.0 * (127.0 / 128.0);
+    uint32_t custom_mod_phase = uint32_t(std::round(double(render::kPhaseFracScale) *
+                                                    std::pow(2.0, custom_mod_cents / 1200.0)));
+    if (custom_mod_sink.last_phase_inc != custom_mod_phase) {
+      throw std::runtime_error("custom SF2 modulator did not drive vibrato pitch depth");
     }
 
     render::Region curve_region;
     curve_region.length = 4;
     curve_region.loop_end = 4;
     curve_region.attack_ticks = 4;
-    curve_region.decay_ticks = 1;
+    curve_region.decay_ticks = 4;
+    curve_region.sustain_level = render::kQ15Full / 16;
     curve_region.release_ticks = 4;
     curve_region.gain_l = 0x4000;
     curve_region.gain_r = 0x4000;
@@ -307,8 +451,79 @@ int main() {
     if (curve_sink.last_initial_envelope != 0) {
       throw std::runtime_error("volume envelope initial level was not staged in commit");
     }
-    if (curve_sink.envelopes.empty() || curve_sink.envelopes.back() >= render::kQ15Full / 4) {
-      throw std::runtime_error("volume envelope attack did not use a convex curve");
+    int expected_attack = int(std::round(double(render::kQ15Full) / 4.0));
+    if (curve_sink.envelopes.empty() || std::abs(curve_sink.envelopes.back() - expected_attack) > 1) {
+      throw std::runtime_error("volume envelope attack did not use a linear-amplitude SF2 approximation");
+    }
+    for (int i = 0; i < 4; ++i) curve_mcu.envelope_tick();
+    int first_decay = curve_sink.envelopes.back();
+    int linear_decay = int(std::round(double(render::kQ15Full) +
+                                      double(curve_region.sustain_level - render::kQ15Full) / 4.0));
+    if (first_decay >= linear_decay) {
+      throw std::runtime_error("volume envelope decay did not use a dB-linear curve");
+    }
+    render::NoteEvent curve_off = curve_note;
+    curve_off.on = false;
+    curve_mcu.handle_event(curve_off);
+    curve_mcu.envelope_tick();
+    int first_release = curve_sink.envelopes.back();
+    int linear_release = int(std::round(double(first_decay) * 3.0 / 4.0));
+    if (first_release >= linear_release) {
+      throw std::runtime_error("volume envelope release did not use a dB-linear curve");
+    }
+
+    render::Region pan_region;
+    pan_region.length = 4;
+    pan_region.loop_end = 4;
+    pan_region.phase_inc = render::kPhaseFracScale;
+    pan_region.base_gain = 0x4000;
+    pan_region.pan = 250;
+    std::vector<render::Region> pan_regions{pan_region};
+    RecordingSink pan_sink;
+    render::McuModel pan_mcu(pan_sink, pan_regions);
+    render::NoteEvent pan_note;
+    pan_note.on = true;
+    pan_note.velocity = 127;
+    pan_note.phase_inc = render::kPhaseFracScale;
+    pan_mcu.handle_event(pan_note);
+    if (pan_sink.last_gain_l != 8192 || pan_sink.last_gain_r != 24576) {
+      throw std::runtime_error("SF2 pan did not set initial runtime balance");
+    }
+    render::NoteEvent pan_cc = pan_note;
+    pan_cc.type = render::NoteEvent::EVENT_CONTROL;
+    pan_cc.controller = 10;
+    pan_cc.value = 0;
+    pan_mcu.handle_event(pan_cc);
+    if (pan_sink.last_gain_l != render::kQ15Full || pan_sink.last_gain_r != 0) {
+      throw std::runtime_error("CC10 pan did not add to SF2 pan before clamping");
+    }
+
+    render::Region exclusive_region;
+    exclusive_region.length = 4;
+    exclusive_region.loop_end = 4;
+    exclusive_region.phase_inc = render::kPhaseFracScale;
+    exclusive_region.gain_l = 0x4000;
+    exclusive_region.gain_r = 0x4000;
+    exclusive_region.program = 0;
+    exclusive_region.bank = 128;
+    exclusive_region.preset = "Drums";
+    exclusive_region.exclusive_class = 7;
+    std::vector<render::Region> exclusive_regions{exclusive_region};
+    RecordingSink exclusive_sink;
+    render::McuModel exclusive_mcu(exclusive_sink, exclusive_regions);
+    render::NoteEvent first_exclusive;
+    first_exclusive.on = true;
+    first_exclusive.channel = 0;
+    first_exclusive.note = 42;
+    first_exclusive.velocity = 127;
+    first_exclusive.phase_inc = render::kPhaseFracScale;
+    render::NoteEvent second_exclusive = first_exclusive;
+    second_exclusive.channel = 1;
+    second_exclusive.note = 46;
+    exclusive_mcu.handle_event(first_exclusive);
+    exclusive_mcu.handle_event(second_exclusive);
+    if (exclusive_sink.release_count != 1) {
+      throw std::runtime_error("exclusiveClass did not terminate same-preset voice on another channel");
     }
 
     std::cout << "PASS: render support maps channel-10 percussion to SF2 bank 128 and silences unmapped notes\n";

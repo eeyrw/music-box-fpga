@@ -80,6 +80,15 @@ void push_gen(std::vector<uint8_t>& out, uint16_t oper, uint16_t amount) {
   push_u16(out, amount);
 }
 
+void push_mod(std::vector<uint8_t>& out, uint16_t src, uint16_t dest, int16_t amount,
+              uint16_t amount_src, uint16_t transform) {
+  push_u16(out, src);
+  push_u16(out, dest);
+  push_u16(out, uint16_t(amount));
+  push_u16(out, amount_src);
+  push_u16(out, transform);
+}
+
 void push_sample(std::vector<uint8_t>& out, const std::string& name, uint32_t start,
                  uint32_t end, uint32_t start_loop, uint32_t end_loop,
                  uint32_t sample_rate, uint8_t original_pitch, int8_t correction,
@@ -115,7 +124,7 @@ std::string write_test_sf2() {
   std::vector<uint8_t> pbag;
   push_bag(pbag, 0, 0);
   push_bag(pbag, 1, 0);
-  push_bag(pbag, 6, 0);
+  push_bag(pbag, 7, 0);
 
   std::vector<uint8_t> pgen;
   push_gen(pgen, 48, 100);             // global initialAttenuation, additive
@@ -123,17 +132,20 @@ std::string write_test_sf2() {
   push_gen(pgen, 17, bits(250));       // local pan, additive with instrument pan
   push_gen(pgen, 58, 69);              // illegal at preset level, must be ignored
   push_gen(pgen, 52, bits(-5));        // local fineTune, additive
+  push_gen(pgen, 34, bits(12000));     // local attackVolEnv, additive with default
   push_gen(pgen, 41, 0);               // terminal instrument
   push_gen(pgen, 0, 0);                // terminal record
 
   std::vector<uint8_t> inst;
   push_inst(inst, "Inst", 0);
-  push_inst(inst, "EOI", 2);
+  push_inst(inst, "ClampInst", 2);
+  push_inst(inst, "EOI", 3);
 
   std::vector<uint8_t> ibag;
   push_bag(ibag, 0, 0);
   push_bag(ibag, 1, 0);
   push_bag(ibag, 20, 0);
+  push_bag(ibag, 23, 0);
 
   std::vector<uint8_t> igen;
   push_gen(igen, 52, bits(10));        // global fineTune, absolute at instrument level
@@ -148,13 +160,17 @@ std::string write_test_sf2() {
   push_gen(igen, 7, bits(-10));        // modEnvToPitch
   push_gen(igen, 10, bits(1200));      // modLfoToFilterFc
   push_gen(igen, 11, bits(-600));      // modEnvToFilterFc
-  push_gen(igen, 22, bits(0));         // freqModLFO, 8.176 Hz
+  // No freqModLFO: SF2 default is 0 cents, or 8.176 Hz.
   push_gen(igen, 24, bits(1200));      // freqVibLFO, 16.352 Hz
   push_gen(igen, 26, bits(-1200));     // attackModEnv
+  push_gen(igen, 29, 600);             // sustainModEnv, 40% of peak
   push_gen(igen, 0, 2);                // startAddrsOffset
   push_gen(igen, 1, bits(-4));         // endAddrsOffset
   push_gen(igen, 2, 1);                // startloopAddrsOffset
   push_gen(igen, 3, bits(-1));         // endloopAddrsOffset
+  push_gen(igen, 53, 0);               // terminal sampleID
+  push_gen(igen, 48, bits(-120));      // negative attenuation clamps to 0 cB
+  push_gen(igen, 17, 0);               // centered pan
   push_gen(igen, 53, 0);               // terminal sampleID
   push_gen(igen, 0, 0);                // terminal record
 
@@ -182,6 +198,79 @@ std::string write_test_sf2() {
   riff[7] = uint8_t(riff_size >> 24);
 
   const std::string path = "build/sf2_loader_test.sf2";
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to create " + path);
+  out.write(reinterpret_cast<const char*>(riff.data()), riff.size());
+  return path;
+}
+
+std::string write_stereo_sf2() {
+  std::vector<uint8_t> smpl;
+  for (int i = 0; i < 160; ++i) push_u16(smpl, uint16_t(int16_t(i * 64 - 4096)));
+  for (int i = 0; i < 46; ++i) push_u16(smpl, 0);
+
+  std::vector<uint8_t> phdr;
+  push_phdr(phdr, "StereoPreset", 0, 0, 0);
+  push_phdr(phdr, "EOP", 0, 0, 1);
+
+  std::vector<uint8_t> pbag;
+  push_bag(pbag, 0, 0);
+  push_bag(pbag, 1, 1);
+
+  std::vector<uint8_t> pgen;
+  push_gen(pgen, 41, 0);
+  push_gen(pgen, 0, 0);
+
+  std::vector<uint8_t> pmod;
+  push_mod(pmod, 0x0081, 6, 25, 0, 0);  // CC1 -> vibLfoToPitch, additive to default 50.
+  push_mod(pmod, 0, 0, 0, 0, 0);
+
+  std::vector<uint8_t> inst;
+  push_inst(inst, "StereoInst", 0);
+  push_inst(inst, "EOI", 2);
+
+  std::vector<uint8_t> ibag;
+  push_bag(ibag, 0, 0);
+  push_bag(ibag, 4, 0);
+  push_bag(ibag, 9, 0);
+
+  std::vector<uint8_t> igen;
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 0, 2);
+  push_gen(igen, 52, 0);
+  push_gen(igen, 53, 0);
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 0, 5);
+  push_gen(igen, 52, 1200);
+  push_gen(igen, 5, 777);
+  push_gen(igen, 53, 1);
+  push_gen(igen, 0, 0);
+
+  std::vector<uint8_t> shdr;
+  push_sample(shdr, "Left", 0, 64, 8, 40, 48000, 60, 0, 1, 4);
+  push_sample(shdr, "Right", 64, 128, 72, 104, 48000, 60, 0, 0, 2);
+  push_sample(shdr, "EOS", 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+  std::vector<uint8_t> riff;
+  riff.insert(riff.end(), {'R', 'I', 'F', 'F'});
+  push_u32(riff, 0);
+  riff.insert(riff.end(), {'s', 'f', 'b', 'k'});
+  auto info = make_list("INFO", {{"ifil", make_version(2, 4)}, {"isng", make_text("EMU8000")},
+                                  {"INAM", make_text("Stereo SF2")}});
+  auto sdta = make_list("sdta", {{"smpl", smpl}});
+  auto pdta = make_list("pdta", {{"phdr", phdr}, {"pbag", pbag}, {"pmod", pmod},
+                                  {"pgen", pgen}, {"inst", inst}, {"ibag", ibag},
+                                  {"imod", std::vector<uint8_t>(10, 0)}, {"igen", igen}, {"shdr", shdr}});
+  riff.insert(riff.end(), info.begin(), info.end());
+  riff.insert(riff.end(), sdta.begin(), sdta.end());
+  riff.insert(riff.end(), pdta.begin(), pdta.end());
+  uint32_t riff_size = uint32_t(riff.size() - 8);
+  riff[4] = uint8_t(riff_size);
+  riff[5] = uint8_t(riff_size >> 8);
+  riff[6] = uint8_t(riff_size >> 16);
+  riff[7] = uint8_t(riff_size >> 24);
+
+  const std::string path = "build/sf2_loader_stereo_test.sf2";
   std::ofstream out(path, std::ios::binary);
   if (!out) throw std::runtime_error("failed to create " + path);
   out.write(reinterpret_cast<const char*>(riff.data()), riff.size());
@@ -245,7 +334,10 @@ int main() {
     expect_equal(int(preset.loop_start_r), 7, "mono right startloop mirrors left startloop");
     expect_equal(int(preset.loop_end), 37, "sample endloop offset");
     expect_equal(int(preset.loop_end_r), 37, "mono right endloop mirrors left endloop");
-    expect_equal(sf2.smpl.at(2), -659, "sm24 rounded sample merge");
+    expect_equal(preset.attack_ticks, 100, "preset attackVolEnv adds to default");
+    expect_equal(preset.mod_env_sustain_level, int(std::round(render::kQ15Full * 0.4)),
+                 "modulation envelope sustain percent");
+    expect_equal(sf2.smpl.at(2), -660, "sm24 ignored by 16-bit renderer");
     expect_equal(int(memory.size()), int(sf2.file_words.size()), "region build does not repack wave memory");
     if (!preset.filter_enable || preset.filter_b0 <= 0 || preset.filter_b1 <= 0 || preset.filter_b2 <= 0) {
       throw std::runtime_error("SF2 filter generators did not produce enabled biquad feed-forward coefficients");
@@ -265,6 +357,33 @@ int main() {
     render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);
     expect_equal(inst.gain_l, 24576, "instrument pan left gain");
     expect_equal(inst.gain_r, 8192, "instrument pan right gain");
+    render::Region clamped = render::make_region_for_instrument(sf2, 1, 60, 100, 48000, 480, memory);
+    expect_equal(clamped.gain_l, 0x4000, "negative initial attenuation clamps left gain");
+    expect_equal(clamped.gain_r, 0x4000, "negative initial attenuation clamps right gain");
+
+    render::Sf2Data stereo_sf2 = render::load_sf2(write_stereo_sf2());
+    std::vector<int16_t> stereo_memory = stereo_sf2.file_words;
+    auto stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480, stereo_memory);
+    expect_equal(int(stereo_regions.size()), 1, "linked stereo pair creates one region");
+    const auto& stereo = stereo_regions.at(0);
+    if (!stereo.stereo) throw std::runtime_error("linked stereo pair was not marked stereo");
+    expect_equal(stereo.sample_left == "Left" ? 1 : 0, 1, "linked stereo left sample name");
+    expect_equal(stereo.sample_right == "Right" ? 1 : 0, 1, "linked stereo right sample name");
+    expect_equal(int(stereo.base_addr), int(stereo_sf2.smpl_word_offset + 2),
+                 "linked stereo left zone start offset");
+    expect_equal(int(stereo.base_addr_r), int(stereo_sf2.smpl_word_offset + 69),
+                 "linked stereo right zone start offset");
+    expect_equal(int(stereo.phase_inc), render::kPhaseFracScale * 2,
+                 "linked stereo phase uses right sample pitch generators");
+    expect_equal(stereo.mod_lfo_to_pitch, 777, "linked stereo pitch generator uses right zone");
+    bool saw_cc1 = false;
+    for (const auto& mod : stereo.modulators) {
+      if (mod.src == 0x0081 && mod.dest == 6) {
+        expect_equal(mod.amount, 75, "pmod CC1 adds to default vibrato modulator");
+        saw_cc1 = true;
+      }
+    }
+    if (!saw_cc1) throw std::runtime_error("pmod CC1 vibrato modulator was not preserved");
 
     std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";
     return 0;

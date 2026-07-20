@@ -83,6 +83,14 @@ struct NoteEvent {
   int region = 0;
 };
 
+struct Sf2Modulator {
+  uint16_t src = 0;
+  uint16_t dest = 0;
+  int amount = 0;
+  uint16_t amount_src = 0;
+  uint16_t transform = 0;
+};
+
 struct Region {
   int key = 0;
   int output_sample_rate = 48000;
@@ -104,6 +112,8 @@ struct Region {
   uint32_t phase_inc = 1;
   int gain_l = 0x4000;
   int gain_r = 0x4000;
+  int base_gain = 0x4000;
+  int pan = 0;
   int initial_envelope = 0;
   bool filter_enable = false;
   int filter_b0 = int(regs::kFilterB0UnityQ214);
@@ -143,6 +153,7 @@ struct Region {
   int mod_env_attack_step = kQ15Full;
   int mod_env_decay_step = kQ15Full;
   int mod_env_release_step = kQ15Full;
+  std::vector<Sf2Modulator> modulators;
 };
 
 struct FilterConfig {
@@ -198,6 +209,7 @@ struct VoiceState {
   int mod_env_ticks_remaining = 0;
   int mod_env_stage_tick = 0;
   int mod_env_release_start = 0;
+  int velocity = 127;
 };
 
 enum EnvState {
@@ -216,13 +228,18 @@ inline int clamp_q15(int value) {
   return value;
 }
 
-inline int velocity_target(int velocity) {
-  int vel = velocity < 0 ? 0 : (velocity > 127 ? 127 : velocity);
-  if (vel == 0) return 0;
-  double missing = double(127 - vel) / 127.0;
+inline int concave_attenuation_q15(int value) {
+  int v = value < 0 ? 0 : (value > 127 ? 127 : value);
+  double missing = double(127 - v) / 128.0;
   double attenuation_cb = 960.0 * missing * missing;
   int level = int(std::round(double(kQ15Full) * std::pow(10.0, -attenuation_cb / 200.0)));
   return clamp_q15(level);
+}
+
+inline int velocity_target(int velocity) {
+  int vel = velocity < 0 ? 0 : (velocity > 127 ? 127 : velocity);
+  if (vel == 0) return 0;
+  return concave_attenuation_q15(vel);
 }
 
 inline uint16_t voice_addr(int voice, int offset) {

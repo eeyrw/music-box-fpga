@@ -26,6 +26,9 @@ constexpr int GEN_INITIAL_FILTER_Q = 9;
 constexpr int GEN_MOD_LFO_TO_FILTER_FC = 10;
 constexpr int GEN_MOD_ENV_TO_FILTER_FC = 11;
 constexpr int GEN_END_ADDRS_COARSE_OFFSET = 12;
+constexpr int GEN_MOD_LFO_TO_VOLUME = 13;
+constexpr int GEN_CHORUS_EFFECTS_SEND = 15;
+constexpr int GEN_REVERB_EFFECTS_SEND = 16;
 constexpr int GEN_DELAY_MOD_LFO = 21;
 constexpr int GEN_FREQ_MOD_LFO = 22;
 constexpr int GEN_DELAY_VIB_LFO = 23;
@@ -68,7 +71,40 @@ constexpr int SAMPLE_LEFT = 4;
 constexpr int SAMPLE_LINKED = 8;
 constexpr int SAMPLE_ROM_FLAG = 0x8000;
 
+constexpr uint16_t MOD_SRC_NONE = 0x0000;
+constexpr uint16_t MOD_SRC_NOTE_ON_VELOCITY = 0x0502;
+constexpr uint16_t MOD_SRC_NOTE_ON_VELOCITY_LINEAR_NEG = 0x0102;
+constexpr uint16_t MOD_SRC_CHANNEL_PRESSURE = 0x000d;
+constexpr uint16_t MOD_SRC_CC1 = 0x0081;
+constexpr uint16_t MOD_SRC_CC7 = 0x0587;
+constexpr uint16_t MOD_SRC_CC10 = 0x028a;
+constexpr uint16_t MOD_SRC_CC11 = 0x058b;
+constexpr uint16_t MOD_SRC_PITCH_WHEEL = 0x020e;
+constexpr uint16_t MOD_SRC_PITCH_WHEEL_SENSITIVITY = 0x0010;
+
+constexpr uint16_t MOD_TRANS_LINEAR = 0;
+constexpr uint16_t MOD_TRANS_ABSOLUTE_VALUE = 2;
+
 using Zone = std::map<int, int>;
+
+struct ModKey {
+  uint16_t src = 0;
+  uint16_t dest = 0;
+  uint16_t amount_src = 0;
+  uint16_t transform = 0;
+
+  bool operator<(const ModKey& other) const {
+    if (src != other.src) return src < other.src;
+    if (dest != other.dest) return dest < other.dest;
+    if (amount_src != other.amount_src) return amount_src < other.amount_src;
+    return transform < other.transform;
+  }
+};
+
+struct ArticulationZone {
+  Zone generators;
+  std::vector<Sf2Modulator> modulators;
+};
 
 struct ChunkRef {
   std::vector<uint8_t> data;
@@ -217,14 +253,6 @@ std::string version_chunk(const std::map<std::string, std::vector<uint8_t>>& chu
   return std::to_string(read_u16le(it->second, 0)) + "." + std::to_string(read_u16le(it->second, 2));
 }
 
-int16_t merge_smpl_sm24(int16_t high, uint8_t low) {
-  int32_t full = (int32_t(high) << 8) | int32_t(low);
-  int32_t rounded = full >= 0 ? ((full + 128) >> 8) : -(((-full) + 128) >> 8);
-  rounded = std::max<int32_t>(std::numeric_limits<int16_t>::min(),
-                              std::min<int32_t>(std::numeric_limits<int16_t>::max(), rounded));
-  return int16_t(rounded);
-}
-
 std::vector<Preset> parse_presets(const std::vector<uint8_t>& c) {
   std::vector<Preset> out;
   for (size_t i = 0; i + 38 <= c.size(); i += 38) {
@@ -254,6 +282,16 @@ std::vector<Generator> parse_generators(const std::vector<uint8_t>& c) {
   std::vector<Generator> out;
   for (size_t i = 0; i + 4 <= c.size(); i += 4) {
     out.push_back({read_u16le(c, i), read_u16le(c, i + 2)});
+  }
+  return out;
+}
+
+std::vector<Sf2Modulator> parse_modulators(const std::vector<uint8_t>& c) {
+  std::vector<Sf2Modulator> out;
+  for (size_t i = 0; i + 10 <= c.size(); i += 10) {
+    out.push_back({read_u16le(c, i), read_u16le(c, i + 2),
+                   int(int16_t(read_u16le(c, i + 4))), read_u16le(c, i + 6),
+                   read_u16le(c, i + 8)});
   }
   return out;
 }
@@ -304,6 +342,12 @@ void validate_index_tables(const Sf2Data& sf2) {
   if (sf2.instrument_bags.back().gen_index + 1 != int(sf2.instrument_generators.size())) {
     throw std::runtime_error("SF2 ibag terminal generator index does not match igen size");
   }
+  if (sf2.preset_bags.back().mod_index + 1 != int(sf2.preset_modulators.size())) {
+    throw std::runtime_error("SF2 pbag terminal modulator index does not match pmod size");
+  }
+  if (sf2.instrument_bags.back().mod_index + 1 != int(sf2.instrument_modulators.size())) {
+    throw std::runtime_error("SF2 ibag terminal modulator index does not match imod size");
+  }
   if (sf2.samples.size() < 2) throw std::runtime_error("SF2 shdr has no usable samples");
 
   int usable_presets = std::max(0, int(sf2.presets.size()) - 1);
@@ -320,6 +364,28 @@ void validate_index_tables(const Sf2Data& sf2) {
   }
 
   int usable_samples = std::max(0, int(sf2.samples.size()) - 1);
+  int usable_instruments = std::max(0, int(sf2.instruments.size()) - 1);
+  for (size_t bag = 0; bag + 1 < sf2.preset_bags.size(); ++bag) {
+    int start = sf2.preset_bags[bag].gen_index;
+    int end = sf2.preset_bags[bag + 1].gen_index;
+    for (int i = start; i < end; ++i) {
+      if (sf2.preset_generators.at(i).oper == GEN_INSTRUMENT &&
+          sf2.preset_generators.at(i).amount >= usable_instruments) {
+        throw std::runtime_error("SF2 preset generator references terminal or missing instrument");
+      }
+    }
+  }
+  for (size_t bag = 0; bag + 1 < sf2.instrument_bags.size(); ++bag) {
+    int start = sf2.instrument_bags[bag].gen_index;
+    int end = sf2.instrument_bags[bag + 1].gen_index;
+    for (int i = start; i < end; ++i) {
+      if (sf2.instrument_generators.at(i).oper == GEN_SAMPLE_ID &&
+          sf2.instrument_generators.at(i).amount >= usable_samples) {
+        throw std::runtime_error("SF2 instrument generator references terminal or missing sample");
+      }
+    }
+  }
+
   for (int i = 0; i < usable_samples; ++i) {
     const auto& s = sf2.samples[i];
     if (s.end < s.start || s.start_loop < s.start || s.end_loop > s.end || s.end_loop < s.start_loop) {
@@ -374,10 +440,160 @@ Zone generators_for_zone_checked(const std::vector<Generator>& gens, int start, 
   return zone;
 }
 
+ModKey mod_key(const Sf2Modulator& mod) {
+  return {mod.src, mod.dest, mod.amount_src, mod.transform};
+}
+
+bool valid_mod_source(uint16_t source, bool amount_source) {
+  if (source == MOD_SRC_NONE) return true;
+  int type = (source >> 10) & 0x3f;
+  if (type > 3) return false;
+  bool cc = (source & 0x0080u) != 0;
+  int index = source & 0x007fu;
+  if (cc) {
+    if (index == 0 || index == 6 || index == 32 || index == 38 || (98 <= index && index <= 101) ||
+        120 <= index) {
+      return false;
+    }
+    return true;
+  }
+  if (index == 127) return !amount_source;
+  return index == 0 || index == 2 || index == 3 || index == 10 || index == 13 ||
+         index == 14 || index == 16;
+}
+
+bool valid_mod_destination(uint16_t dest, size_t mod_count) {
+  if (dest & 0x8000u) return (dest & 0x7fffu) < mod_count;
+  return dest == 0 || dest == GEN_MOD_LFO_TO_PITCH || dest == GEN_VIB_LFO_TO_PITCH ||
+         dest == GEN_MOD_ENV_TO_PITCH || dest == GEN_INITIAL_FILTER_FC ||
+         dest == GEN_INITIAL_FILTER_Q || dest == GEN_MOD_LFO_TO_FILTER_FC ||
+         dest == GEN_MOD_ENV_TO_FILTER_FC || dest == GEN_MOD_LFO_TO_VOLUME ||
+         dest == GEN_CHORUS_EFFECTS_SEND || dest == GEN_REVERB_EFFECTS_SEND ||
+         dest == GEN_PAN || dest == GEN_INITIAL_ATTENUATION ||
+         dest == GEN_COARSE_TUNE || dest == GEN_FINE_TUNE;
+}
+
+bool valid_transform(uint16_t transform) {
+  return transform == MOD_TRANS_LINEAR || transform == MOD_TRANS_ABSOLUTE_VALUE;
+}
+
+std::vector<Sf2Modulator> default_modulators() {
+  return {
+    {MOD_SRC_NOTE_ON_VELOCITY, GEN_INITIAL_ATTENUATION, 960, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_NOTE_ON_VELOCITY_LINEAR_NEG, GEN_INITIAL_FILTER_FC, -2400, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_CHANNEL_PRESSURE, GEN_VIB_LFO_TO_PITCH, 50, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_CC1, GEN_VIB_LFO_TO_PITCH, 50, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_CC7, GEN_INITIAL_ATTENUATION, 960, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_CC10, GEN_PAN, 1000, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_CC11, GEN_INITIAL_ATTENUATION, 960, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    {MOD_SRC_PITCH_WHEEL, 0, 12700, MOD_SRC_PITCH_WHEEL_SENSITIVITY, MOD_TRANS_LINEAR},
+  };
+}
+
+std::vector<Sf2Modulator> modulators_for_zone_checked(const std::vector<Sf2Modulator>& mods,
+                                                      int start, int end) {
+  std::map<ModKey, Sf2Modulator> by_key;
+  size_t count = size_t(std::max(0, end - start));
+  for (int i = start; i < end; ++i) {
+    const auto& mod = mods.at(i);
+    if (mod.src == 0 && mod.dest == 0 && mod.amount == 0 &&
+        mod.amount_src == 0 && mod.transform == 0) {
+      continue;
+    }
+    if (!valid_mod_source(mod.src, false) || !valid_mod_source(mod.amount_src, true) ||
+        !valid_mod_destination(mod.dest, count) || !valid_transform(mod.transform)) {
+      continue;
+    }
+    if (mod.amount_src == 127) continue;
+    by_key[mod_key(mod)] = mod;
+  }
+  std::vector<Sf2Modulator> out;
+  for (const auto& kv : by_key) out.push_back(kv.second);
+  return out;
+}
+
+std::map<ModKey, Sf2Modulator> modulator_map(const std::vector<Sf2Modulator>& mods) {
+  std::map<ModKey, Sf2Modulator> out;
+  for (const auto& mod : mods) out[mod_key(mod)] = mod;
+  return out;
+}
+
+std::vector<Sf2Modulator> modulators_from_map(const std::map<ModKey, Sf2Modulator>& mods) {
+  std::vector<Sf2Modulator> out;
+  for (const auto& kv : mods) out.push_back(kv.second);
+  return out;
+}
+
+void replace_modulators(std::map<ModKey, Sf2Modulator>& base,
+                        const std::vector<Sf2Modulator>& overlay) {
+  for (const auto& mod : overlay) base[mod_key(mod)] = mod;
+}
+
+void add_modulators(std::map<ModKey, Sf2Modulator>& base,
+                    const std::vector<Sf2Modulator>& overlay) {
+  for (const auto& mod : overlay) {
+    auto key = mod_key(mod);
+    auto it = base.find(key);
+    if (it == base.end()) {
+      base[key] = mod;
+    } else {
+      int amount = it->second.amount + mod.amount;
+      it->second.amount = std::max(-32768, std::min(32767, amount));
+    }
+  }
+}
+
 int add_amount_bits(int a, int b) {
   int sum = signed_amount(a) + signed_amount(b);
   sum = std::max(-32768, std::min(32767, sum));
   return int(uint16_t(int16_t(sum)));
+}
+
+bool default_generator_amount(int oper, int& amount) {
+  switch (oper) {
+    case GEN_INITIAL_FILTER_FC:
+      amount = 13500;
+      return true;
+    case GEN_DELAY_MOD_LFO:
+    case GEN_DELAY_VIB_LFO:
+    case GEN_DELAY_MOD_ENV:
+    case GEN_ATTACK_MOD_ENV:
+    case GEN_HOLD_MOD_ENV:
+    case GEN_DECAY_MOD_ENV:
+    case GEN_RELEASE_MOD_ENV:
+    case GEN_DELAY_VOL_ENV:
+    case GEN_ATTACK_VOL_ENV:
+    case GEN_HOLD_VOL_ENV:
+    case GEN_DECAY_VOL_ENV:
+    case GEN_RELEASE_VOL_ENV:
+      amount = int(uint16_t(int16_t(-12000)));
+      return true;
+    case GEN_SCALE_TUNING:
+      amount = 100;
+      return true;
+    case GEN_MOD_LFO_TO_PITCH:
+    case GEN_VIB_LFO_TO_PITCH:
+    case GEN_MOD_ENV_TO_PITCH:
+    case GEN_INITIAL_FILTER_Q:
+    case GEN_MOD_LFO_TO_FILTER_FC:
+    case GEN_MOD_ENV_TO_FILTER_FC:
+    case GEN_PAN:
+    case GEN_FREQ_MOD_LFO:
+    case GEN_FREQ_VIB_LFO:
+    case GEN_SUSTAIN_MOD_ENV:
+    case GEN_KEYNUM_TO_MOD_ENV_HOLD:
+    case GEN_KEYNUM_TO_MOD_ENV_DECAY:
+    case GEN_SUSTAIN_VOL_ENV:
+    case GEN_KEYNUM_TO_VOL_ENV_HOLD:
+    case GEN_KEYNUM_TO_VOL_ENV_DECAY:
+    case GEN_INITIAL_ATTENUATION:
+    case GEN_COARSE_TUNE:
+    case GEN_FINE_TUNE:
+      amount = 0;
+      return true;
+    default:
+      return false;
+  }
 }
 
 int sample_offset(const Zone& zone, int fine_oper, int coarse_oper) {
@@ -413,59 +629,79 @@ bool zone_matches(const Zone& zone, int key, int velocity) {
   return kr.first <= key && key <= kr.second && vr.first <= velocity && velocity <= vr.second;
 }
 
-std::vector<Zone> instrument_zones(const Sf2Data& sf2, int inst_index) {
+std::vector<ArticulationZone> instrument_zones(const Sf2Data& sf2, int inst_index) {
   int start = sf2.instruments.at(inst_index).bag_index;
   int end = sf2.instruments.at(inst_index + 1).bag_index;
-  std::vector<Zone> zones;
+  std::vector<ArticulationZone> zones;
   Zone global;
+  std::vector<Sf2Modulator> global_mods;
   for (int bag = start; bag < end; ++bag) {
     bool has_sample = false;
     Zone z = generators_for_zone_checked(sf2.instrument_generators,
                                          sf2.instrument_bags.at(bag).gen_index,
                                          sf2.instrument_bags.at(bag + 1).gen_index,
                                          GEN_SAMPLE_ID, false, has_sample);
+    std::vector<Sf2Modulator> mods = modulators_for_zone_checked(sf2.instrument_modulators,
+                                                                 sf2.instrument_bags.at(bag).mod_index,
+                                                                 sf2.instrument_bags.at(bag + 1).mod_index);
     if (!has_sample) {
       // Only the first zone can be global. Later zones without sampleID are
       // malformed local zones and are ignored by the SF2 spec.
-      if (bag == start) for (const auto& kv : z) global[kv.first] = kv.second;
+      if (bag == start) {
+        for (const auto& kv : z) global[kv.first] = kv.second;
+        global_mods = mods;
+      }
     } else {
       // A local sample zone overrides any matching global generator. The merged
       // result is what Note On region selection consumes.
       Zone merged = global;
       for (const auto& kv : z) merged[kv.first] = kv.second;
-      zones.push_back(merged);
+      auto merged_mods = modulator_map(default_modulators());
+      replace_modulators(merged_mods, global_mods);
+      replace_modulators(merged_mods, mods);
+      zones.push_back({merged, modulators_from_map(merged_mods)});
     }
   }
   return zones;
 }
 
-std::vector<Zone> preset_zones(const Sf2Data& sf2, int preset_index) {
+std::vector<ArticulationZone> preset_zones(const Sf2Data& sf2, int preset_index) {
   int start = sf2.presets.at(preset_index).bag_index;
   int end = sf2.presets.at(preset_index + 1).bag_index;
-  std::vector<Zone> zones;
+  std::vector<ArticulationZone> zones;
   Zone global;
+  std::vector<Sf2Modulator> global_mods;
   for (int bag = start; bag < end; ++bag) {
     bool has_instrument = false;
     Zone z = generators_for_zone_checked(sf2.preset_generators,
                                          sf2.preset_bags.at(bag).gen_index,
                                          sf2.preset_bags.at(bag + 1).gen_index,
                                          GEN_INSTRUMENT, true, has_instrument);
+    std::vector<Sf2Modulator> mods = modulators_for_zone_checked(sf2.preset_modulators,
+                                                                 sf2.preset_bags.at(bag).mod_index,
+                                                                 sf2.preset_bags.at(bag + 1).mod_index);
     if (!has_instrument) {
       // Only the first zone can be global. Later zones without instrument are
       // malformed local zones and are ignored by the SF2 spec.
-      if (bag == start) for (const auto& kv : z) global[kv.first] = kv.second;
+      if (bag == start) {
+        for (const auto& kv : z) global[kv.first] = kv.second;
+        global_mods = mods;
+      }
     } else {
       Zone merged = global;
       for (const auto& kv : z) merged[kv.first] = kv.second;
-      zones.push_back(merged);
+      auto merged_mods = modulator_map(global_mods);
+      replace_modulators(merged_mods, mods);
+      zones.push_back({merged, modulators_from_map(merged_mods)});
     }
   }
   return zones;
 }
 
-std::vector<Zone> matching_zones_for_velocity(const std::vector<Zone>& zones, int key, int velocity) {
-  std::vector<Zone> out;
-  for (const auto& z : zones) if (zone_matches(z, key, velocity)) out.push_back(z);
+std::vector<ArticulationZone> matching_zones_for_velocity(const std::vector<ArticulationZone>& zones,
+                                                          int key, int velocity) {
+  std::vector<ArticulationZone> out;
+  for (const auto& z : zones) if (zone_matches(z.generators, key, velocity)) out.push_back(z);
   return out;
 }
 
@@ -517,29 +753,31 @@ uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample
   return uint32_t(raw);
 }
 
-std::pair<int, int> pan_gains(const Zone& zone) {
-  // The RTL has independent signed Q1.15 gains per channel. The render harness
-  // uses a conservative base gain of 0x4000, applies SF2 pan as a simple linear
-  // balance, then applies initial attenuation in centibels.
+void pitch_modulation_generators(const Zone& zone, Region& region) {
+  region.mod_lfo_to_pitch = zone.count(GEN_MOD_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_LFO_TO_PITCH)) : 0;
+  region.vib_lfo_to_pitch = zone.count(GEN_VIB_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_VIB_LFO_TO_PITCH)) : 0;
+  region.mod_env_to_pitch = zone.count(GEN_MOD_ENV_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_ENV_TO_PITCH)) : 0;
+}
+
+void gain_config(const Zone& zone, Region& region) {
   int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
-  pan = std::max(-500, std::min(500, pan));
-  int left = int(std::round(0x4000 * double(500 - pan) / 500.0));
-  int right = int(std::round(0x4000 * double(500 + pan) / 500.0));
+  region.pan = std::max(-500, std::min(500, pan));
   int atten = zone.count(GEN_INITIAL_ATTENUATION) ? signed_amount(zone.at(GEN_INITIAL_ATTENUATION)) : 0;
-  if (atten) {
-    double scale = std::pow(10.0, -double(atten) / 200.0);
-    left = int(std::round(left * scale));
-    right = int(std::round(right * scale));
-  }
-  return {std::max(0, std::min(0x7fff, left)), std::max(0, std::min(0x7fff, right))};
+  atten = std::max(0, std::min(1440, atten));
+  int gain = 0x4000;
+  if (atten) gain = int(std::round(double(gain) * std::pow(10.0, -double(atten) / 200.0)));
+  region.base_gain = std::max(0, std::min(0x7fff, gain));
+  int left = int(std::round(double(region.base_gain) * double(500 - region.pan) / 500.0));
+  int right = int(std::round(double(region.base_gain) * double(500 + region.pan) / 500.0));
+  region.gain_l = std::max(0, std::min(0x7fff, left));
+  region.gain_r = std::max(0, std::min(0x7fff, right));
 }
 
 double timecents_to_seconds(int value, bool present, int default_timecents) {
   // SF2 envelope times use timecents: seconds = 2^(timecents / 1200). The spec's
-  // very negative values represent zero-time stages, which become immediate in
-  // the software envelope model.
+  // most negative value conventionally represents an immediate stage.
   int tc = present ? signed_amount(value) : default_timecents;
-  if (tc <= -12000) return 0.0;
+  if (tc <= -32768) return 0.0;
   return std::min(100.0, std::pow(2.0, double(tc) / 1200.0));
 }
 
@@ -548,6 +786,12 @@ int centibels_to_level(int cb) {
   // software envelope's Q1.15 level range.
   if (cb <= 0) return kQ15Full;
   int level = int(std::round(kQ15Full * std::pow(10.0, -double(cb) / 200.0)));
+  return std::max(0, std::min(kQ15Full, level));
+}
+
+int percent_drop_to_level(int tenth_percent_drop) {
+  int drop = std::max(0, std::min(1000, tenth_percent_drop));
+  int level = int(std::round(kQ15Full * double(1000 - drop) / 1000.0));
   return std::max(0, std::min(kQ15Full, level));
 }
 
@@ -562,6 +806,11 @@ int envelope_step(double seconds, int tick_samples, int sample_rate) {
 int envelope_tick_count(double seconds, int tick_samples, int sample_rate) {
   if (seconds <= 0.0) return 1;
   return std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
+}
+
+int scaled_envelope_tick_count(double seconds, double fraction, int tick_samples, int sample_rate) {
+  if (fraction <= 0.0) return 1;
+  return envelope_tick_count(seconds * std::min(1.0, fraction), tick_samples, sample_rate);
 }
 
 int q2_14(double value) {
@@ -611,11 +860,10 @@ void filter_coefficients(const Zone& zone, int output_sample_rate, Region& regio
 
 int envelope_ticks(double seconds, int tick_samples, int sample_rate) {
   if (seconds <= 0.0) return 0;
-  return std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
+  return std::max(0, int(std::round(seconds * sample_rate / tick_samples)));
 }
 
-uint32_t lfo_step(int freq_cents, bool present, int tick_samples, int sample_rate) {
-  if (!present) return 0;
+uint32_t lfo_step(int freq_cents, int tick_samples, int sample_rate) {
   double hz = 8.176 * std::pow(2.0, double(signed_amount(freq_cents)) / 1200.0);
   double cycles_per_tick = hz * double(tick_samples) / double(sample_rate);
   double raw = std::round(cycles_per_tick * 65536.0);
@@ -632,12 +880,10 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
                                                               zone.count(GEN_DELAY_VIB_LFO), -12000),
                                              tick_samples, sample_rate);
   region.mod_lfo_step = lfo_step(zone.count(GEN_FREQ_MOD_LFO) ? zone.at(GEN_FREQ_MOD_LFO) : 0,
-                                 zone.count(GEN_FREQ_MOD_LFO), tick_samples, sample_rate);
+                                 tick_samples, sample_rate);
   region.vib_lfo_step = lfo_step(zone.count(GEN_FREQ_VIB_LFO) ? zone.at(GEN_FREQ_VIB_LFO) : 0,
-                                 zone.count(GEN_FREQ_VIB_LFO), tick_samples, sample_rate);
-  region.mod_lfo_to_pitch = zone.count(GEN_MOD_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_LFO_TO_PITCH)) : 0;
-  region.vib_lfo_to_pitch = zone.count(GEN_VIB_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_VIB_LFO_TO_PITCH)) : 0;
-  region.mod_env_to_pitch = zone.count(GEN_MOD_ENV_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_ENV_TO_PITCH)) : 0;
+                                 tick_samples, sample_rate);
+  pitch_modulation_generators(zone, region);
   region.mod_lfo_to_filter_fc = zone.count(GEN_MOD_LFO_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_LFO_TO_FILTER_FC)) : 0;
   region.mod_env_to_filter_fc = zone.count(GEN_MOD_ENV_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_ENV_TO_FILTER_FC)) : 0;
 
@@ -655,9 +901,12 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
                                       zone.count(GEN_DELAY_MOD_ENV), -12000);
   region.mod_env_delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
   region.mod_env_hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
-  region.mod_env_sustain_level = centibels_to_level(zone.count(GEN_SUSTAIN_MOD_ENV) ? zone.at(GEN_SUSTAIN_MOD_ENV) : 0);
+  int mod_sustain_drop = signed_amount(zone.count(GEN_SUSTAIN_MOD_ENV) ? zone.at(GEN_SUSTAIN_MOD_ENV) : 0);
+  mod_sustain_drop = std::max(0, std::min(1000, mod_sustain_drop));
+  region.mod_env_sustain_level = percent_drop_to_level(mod_sustain_drop);
   region.mod_env_attack_ticks = envelope_tick_count(a, tick_samples, sample_rate);
-  region.mod_env_decay_ticks = envelope_tick_count(d, tick_samples, sample_rate);
+  region.mod_env_decay_ticks = scaled_envelope_tick_count(d, double(mod_sustain_drop) / 1000.0,
+                                                          tick_samples, sample_rate);
   region.mod_env_release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
   region.mod_env_attack_step = envelope_step(a, tick_samples, sample_rate);
   region.mod_env_decay_step = envelope_step(d, tick_samples, sample_rate);
@@ -681,9 +930,12 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
                                       zone.count(GEN_DELAY_VOL_ENV), -12000);
   region.delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
   region.hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
-  region.sustain_level = centibels_to_level(zone.count(GEN_SUSTAIN_VOL_ENV) ? zone.at(GEN_SUSTAIN_VOL_ENV) : 0);
+  int vol_sustain_cb = signed_amount(zone.count(GEN_SUSTAIN_VOL_ENV) ? zone.at(GEN_SUSTAIN_VOL_ENV) : 0);
+  vol_sustain_cb = std::max(0, std::min(1440, vol_sustain_cb));
+  region.sustain_level = centibels_to_level(vol_sustain_cb);
   region.attack_ticks = envelope_tick_count(a, tick_samples, sample_rate);
-  region.decay_ticks = envelope_tick_count(d, tick_samples, sample_rate);
+  region.decay_ticks = scaled_envelope_tick_count(d, double(std::min(1000, vol_sustain_cb)) / 1000.0,
+                                                  tick_samples, sample_rate);
   region.release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
   region.attack_step = envelope_step(a, tick_samples, sample_rate);
   region.decay_step = envelope_step(d, tick_samples, sample_rate);
@@ -695,9 +947,23 @@ Zone combine_preset_and_instrument_zones(const Zone& preset, const Zone& instrum
   for (const auto& kv : preset) {
     if (!additive_preset_generator(kv.first)) continue;
     auto it = zone.find(kv.first);
-    zone[kv.first] = (it == zone.end()) ? kv.second : add_amount_bits(it->second, kv.second);
+    if (it != zone.end()) {
+      zone[kv.first] = add_amount_bits(it->second, kv.second);
+    } else {
+      int default_amount = 0;
+      zone[kv.first] = default_generator_amount(kv.first, default_amount)
+                           ? add_amount_bits(default_amount, kv.second)
+                           : kv.second;
+    }
   }
   return zone;
+}
+
+std::vector<Sf2Modulator> combine_preset_and_instrument_modulators(
+    const std::vector<Sf2Modulator>& preset, const std::vector<Sf2Modulator>& instrument) {
+  auto mods = modulator_map(instrument);
+  add_modulators(mods, preset);
+  return modulators_from_map(mods);
 }
 
 int loop_mode_from_zone(const Zone& zone) {
@@ -720,6 +986,14 @@ std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
   if (t == SAMPLE_RIGHT && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) return {s.sample_link, selected};
   if (t == SAMPLE_LINKED) throw std::runtime_error("SF2 linkedSample type is not directly playable by this renderer");
   return {selected, -1};
+}
+
+const ArticulationZone* find_zone_for_sample(const std::vector<ArticulationZone>& zones, int sample_id) {
+  for (const auto& zone : zones) {
+    auto it = zone.generators.find(GEN_SAMPLE_ID);
+    if (it != zone.generators.end() && it->second == sample_id) return &zone;
+  }
+  return nullptr;
 }
 
 struct SampleWindow {
@@ -748,20 +1022,21 @@ SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone
   return w;
 }
 
-void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& zone, Region& region) {
+void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& left_zone,
+                           const Zone& right_zone, Region& region) {
   // The external wave memory is a word-addressed image of the complete SF2 file.
   // SampleHeader positions are word indexes into smpl, so add the smpl payload's
   // file word offset and keep loop points relative to the selected playback window.
   auto rel = [](uint32_t value, uint32_t base) -> uint32_t { return value > base ? value - base : 0; };
   auto pair = linked_pair(sf2, selected_sample);
   const auto& left = sf2.samples.at(pair.first);
-  SampleWindow left_window = sample_window(sf2, left, zone);
+  SampleWindow left_window = sample_window(sf2, left, left_zone);
   region.sample_left = left.name;
   region.base_addr = sf2.smpl_word_offset + left_window.start;
 
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
     const auto& right = sf2.samples.at(pair.second);
-    SampleWindow right_window = sample_window(sf2, right, zone);
+    SampleWindow right_window = sample_window(sf2, right, right_zone);
     uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
     uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
     region.stereo = true;
@@ -793,6 +1068,56 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   }
 }
 
+bool selected_right_with_matching_left_zone(const Sf2Data& sf2, int sample_id,
+                                            const std::vector<ArticulationZone>& zones) {
+  int sample_type = sanitize_sample_type(sf2.samples.at(sample_id).sample_type);
+  if (sample_type != SAMPLE_RIGHT) return false;
+  auto pair = linked_pair(sf2, sample_id);
+  return pair.first >= 0 && find_zone_for_sample(zones, pair.first) != nullptr;
+}
+
+void linked_stereo_zone_selection(const Sf2Data& sf2, int sample_id,
+                                  const ArticulationZone& selected_zone,
+                                  const std::vector<ArticulationZone>& zones,
+                                  const ArticulationZone*& left_zone,
+                                  const ArticulationZone*& right_zone,
+                                  const ArticulationZone*& pitch_zone,
+                                  int& pitch_sample_id) {
+  auto pair = linked_pair(sf2, sample_id);
+  left_zone = &selected_zone;
+  right_zone = &selected_zone;
+  pitch_zone = &selected_zone;
+  pitch_sample_id = pair.first;
+  if (pair.second < 0) return;
+
+  const ArticulationZone* matching_left = find_zone_for_sample(zones, pair.first);
+  const ArticulationZone* matching_right = find_zone_for_sample(zones, pair.second);
+  if (matching_left) left_zone = matching_left;
+  if (matching_right) {
+    right_zone = matching_right;
+    pitch_zone = matching_right;
+  }
+  pitch_sample_id = pair.second;
+}
+
+bool pitch_destination(uint16_t dest) {
+  return dest == 0 || dest == GEN_MOD_LFO_TO_PITCH || dest == GEN_VIB_LFO_TO_PITCH ||
+         dest == GEN_MOD_ENV_TO_PITCH;
+}
+
+std::vector<Sf2Modulator> stereo_runtime_modulators(const ArticulationZone& selected,
+                                                    const ArticulationZone& pitch_zone) {
+  auto mods = modulator_map(selected.modulators);
+  for (auto it = mods.begin(); it != mods.end();) {
+    if (pitch_destination(it->second.dest)) it = mods.erase(it);
+    else ++it;
+  }
+  for (const auto& mod : pitch_zone.modulators) {
+    if (pitch_destination(mod.dest)) mods[mod_key(mod)] = mod;
+  }
+  return modulators_from_map(mods);
+}
+
 }  // namespace
 
 Sf2Data load_sf2(const std::string& path) {
@@ -819,20 +1144,16 @@ Sf2Data load_sf2(const std::string& path) {
   if (sf2.isng.empty()) throw std::runtime_error("SF2 INFO is missing required isng target engine");
   if (sf2.inam.empty()) throw std::runtime_error("SF2 INFO is missing required INAM name");
   const auto& smpl = require_chunk(sdta, "smpl", 2, 0);
-  auto sm24_it = sdta.find("sm24");
-  bool use_sm24 = sm24_it != sdta.end() && sm24_it->second.size() >= smpl.size() / 2;
   for (size_t i = 0; i + 2 <= smpl.size(); i += 2) {
-    int16_t high = int16_t(read_u16le(smpl, i));
-    if (use_sm24) sf2.smpl.push_back(merge_smpl_sm24(high, sm24_it->second[i / 2]));
-    else sf2.smpl.push_back(high);
+    sf2.smpl.push_back(int16_t(read_u16le(smpl, i)));
   }
   sf2.presets = parse_presets(require_chunk(pdta, "phdr", 38, 2));
   sf2.preset_bags = parse_bags(require_chunk(pdta, "pbag", 4, 1));
-  require_chunk(pdta, "pmod", 10, 1);
+  sf2.preset_modulators = parse_modulators(require_chunk(pdta, "pmod", 10, 1));
   sf2.preset_generators = parse_generators(require_chunk(pdta, "pgen", 4, 1));
   sf2.instruments = parse_instruments(require_chunk(pdta, "inst", 22, 2));
   sf2.instrument_bags = parse_bags(require_chunk(pdta, "ibag", 4, 1));
-  require_chunk(pdta, "imod", 10, 1);
+  sf2.instrument_modulators = parse_modulators(require_chunk(pdta, "imod", 10, 1));
   sf2.instrument_generators = parse_generators(require_chunk(pdta, "igen", 4, 1));
   sf2.samples = parse_samples(require_chunk(pdta, "shdr", 46, 2));
   validate_index_tables(sf2);
@@ -874,11 +1195,27 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
   // playable sample region.
   int preset_idx = select_preset(sf2, program, bank);
   std::vector<Region> regions;
-  for (const Zone& pzone : matching_zones_for_velocity(preset_zones(sf2, preset_idx), key, velocity)) {
-    int inst_idx = pzone.at(GEN_INSTRUMENT);
-    for (const Zone& izone : matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity)) {
-      Zone zone = combine_preset_and_instrument_zones(pzone, izone);
+  for (const ArticulationZone& pzone : matching_zones_for_velocity(preset_zones(sf2, preset_idx), key, velocity)) {
+    int inst_idx = pzone.generators.at(GEN_INSTRUMENT);
+    std::vector<ArticulationZone> matching_izones =
+        matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
+    std::vector<ArticulationZone> combined_zones;
+    combined_zones.reserve(matching_izones.size());
+    for (const ArticulationZone& peer : matching_izones) {
+      combined_zones.push_back({
+          combine_preset_and_instrument_zones(pzone.generators, peer.generators),
+          combine_preset_and_instrument_modulators(pzone.modulators, peer.modulators)});
+    }
+    for (const ArticulationZone& articulation : combined_zones) {
+      const Zone& zone = articulation.generators;
       int sample_id = zone.at(GEN_SAMPLE_ID);
+      if (selected_right_with_matching_left_zone(sf2, sample_id, combined_zones)) continue;
+      const ArticulationZone* left_zone = &articulation;
+      const ArticulationZone* right_zone = &articulation;
+      const ArticulationZone* pitch_zone = &articulation;
+      int pitch_sample_id = sample_id;
+      linked_stereo_zone_selection(sf2, sample_id, articulation, combined_zones, left_zone, right_zone,
+                                   pitch_zone, pitch_sample_id);
       Region r;
       r.key = key;
       r.output_sample_rate = sample_rate;
@@ -886,18 +1223,17 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       r.bank = bank;
       r.preset = sf2.presets.at(preset_idx).name;
       r.instrument = sf2.instruments.at(inst_idx).name;
-      fill_region_addresses(sf2, sample_id, zone, r);
-      const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
-      r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
-      auto gains = pan_gains(zone);
-      r.gain_l = gains.first;
-      r.gain_r = gains.second;
+      fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+      r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
+      gain_config(zone, r);
       r.loop_mode = loop_mode_from_zone(zone);
       r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
       r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
       volume_envelope(zone, key, tick_samples, sample_rate, r);
       modulation_generators(zone, key, tick_samples, sample_rate, r);
+      pitch_modulation_generators(pitch_zone->generators, r);
       filter_coefficients(zone, sample_rate, r);
+      r.modulators = stereo_runtime_modulators(articulation, *pitch_zone);
       regions.push_back(r);
     }
   }
@@ -919,25 +1255,33 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
   // specific SF2 instrument because MIDI program and bank messages cannot change
   // the selected sample set.
   std::vector<Region> regions;
-  for (const Zone& zone : matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity)) {
+  std::vector<ArticulationZone> matching = matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
+  for (const ArticulationZone& articulation : matching) {
+    const Zone& zone = articulation.generators;
     int sample_id = zone.at(GEN_SAMPLE_ID);
+    if (selected_right_with_matching_left_zone(sf2, sample_id, matching)) continue;
+    const ArticulationZone* left_zone = &articulation;
+    const ArticulationZone* right_zone = &articulation;
+    const ArticulationZone* pitch_zone = &articulation;
+    int pitch_sample_id = sample_id;
+    linked_stereo_zone_selection(sf2, sample_id, articulation, matching, left_zone, right_zone,
+                                 pitch_zone, pitch_sample_id);
     Region r;
     r.key = key;
     r.output_sample_rate = sample_rate;
     r.instrument = sf2.instruments.at(inst_idx).name;
     r.preset = r.instrument;
-    fill_region_addresses(sf2, sample_id, zone, r);
-    const auto& left = sf2.samples.at(linked_pair(sf2, sample_id).first);
-    r.phase_inc = phase_inc_for_key(key, zone, left, sample_rate);
-    auto gains = pan_gains(zone);
-    r.gain_l = gains.first;
-    r.gain_r = gains.second;
+    fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+    r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
+    gain_config(zone, r);
     r.loop_mode = loop_mode_from_zone(zone);
     r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
     r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
     volume_envelope(zone, key, tick_samples, sample_rate, r);
     modulation_generators(zone, key, tick_samples, sample_rate, r);
+    pitch_modulation_generators(pitch_zone->generators, r);
     filter_coefficients(zone, sample_rate, r);
+    r.modulators = stereo_runtime_modulators(articulation, *pitch_zone);
     regions.push_back(r);
   }
   if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");

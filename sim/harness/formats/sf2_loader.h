@@ -39,6 +39,8 @@ struct Sf2Data {
   std::vector<Bag> instrument_bags;
   std::vector<Generator> preset_generators;
   std::vector<Generator> instrument_generators;
+  std::vector<Sf2Modulator> preset_modulators;
+  std::vector<Sf2Modulator> instrument_modulators;
   std::vector<SampleHeader> samples;
 };
 

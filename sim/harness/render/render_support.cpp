@@ -15,6 +15,26 @@ namespace {
 
 constexpr int kMidiDrumChannel = 9;
 constexpr int kSf2PercussionBank = 128;
+constexpr uint16_t kGenModLfoToPitch = 5;
+constexpr uint16_t kGenVibLfoToPitch = 6;
+constexpr uint16_t kGenModEnvToPitch = 7;
+constexpr uint16_t kGenInitialFilterFc = 8;
+constexpr uint16_t kGenModLfoToFilterFc = 10;
+constexpr uint16_t kGenModEnvToFilterFc = 11;
+constexpr uint16_t kGenPan = 17;
+constexpr uint16_t kGenInitialAttenuation = 48;
+constexpr uint16_t kModSrcNone = 0x0000;
+constexpr uint16_t kModSrcNoteOnVelocity = 0x0502;
+constexpr uint16_t kModSrcNoteOnVelocityFilter = 0x0102;
+constexpr uint16_t kModSrcChannelPressure = 0x000d;
+constexpr uint16_t kModSrcCc1 = 0x0081;
+constexpr uint16_t kModSrcCc7 = 0x0587;
+constexpr uint16_t kModSrcCc10 = 0x028a;
+constexpr uint16_t kModSrcCc11 = 0x058b;
+constexpr uint16_t kModSrcPitchWheel = 0x020e;
+constexpr uint16_t kModSrcPitchWheelSensitivity = 0x0010;
+constexpr uint16_t kTransformLinear = 0;
+constexpr uint16_t kTransformAbsoluteValue = 2;
 
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
@@ -25,21 +45,76 @@ int event_priority(const NoteEvent& e) {
   return e.on ? 2 : 1;
 }
 
-int curved_attack(int target, int tick, int ticks) {
+int linear_ramp(int start, int target, int tick, int ticks) {
   double x = double(std::max(1, tick)) / double(std::max(1, ticks));
-  return clamp_q15(int(std::round(double(target) * x * x)));
+  return clamp_q15(int(std::round(double(start) + double(target - start) * x)));
 }
 
-int curved_decay(int start, int target, int tick, int ticks) {
+int db_decay(int start, int target, int tick, int ticks) {
+  if (tick >= ticks) return clamp_q15(target);
+  if (start <= 0) return clamp_q15(target);
   double x = double(std::max(1, tick)) / double(std::max(1, ticks));
-  double remain = (1.0 - x) * (1.0 - x);
-  return clamp_q15(int(std::round(double(target) + double(start - target) * remain)));
+  double s = double(std::max(1, start));
+  double t = double(std::max(1, target));
+  return clamp_q15(int(std::round(s * std::pow(t / s, x))));
 }
 
-int curved_release(int start, int tick, int ticks) {
+int db_release(int start, int tick, int ticks) {
+  if (tick >= ticks) return 0;
+  if (start <= 0) return 0;
   double x = double(std::max(1, tick)) / double(std::max(1, ticks));
-  double remain = (1.0 - x) * (1.0 - x);
-  return clamp_q15(int(std::round(double(start) * remain)));
+  return clamp_q15(int(std::round(double(start) * std::pow(1.0 / double(std::max(1, start)), x))));
+}
+
+int linear_release(int start, int tick, int ticks) {
+  return linear_ramp(start, 0, tick, ticks);
+}
+
+const std::vector<Sf2Modulator>& fallback_default_modulators() {
+  static const std::vector<Sf2Modulator> mods = {
+      {kModSrcNoteOnVelocity, kGenInitialAttenuation, 960, kModSrcNone, kTransformLinear},
+      {kModSrcNoteOnVelocityFilter, kGenInitialFilterFc, -2400, kModSrcNone, kTransformLinear},
+      {kModSrcChannelPressure, kGenVibLfoToPitch, 50, kModSrcNone, kTransformLinear},
+      {kModSrcCc1, kGenVibLfoToPitch, 50, kModSrcNone, kTransformLinear},
+      {kModSrcCc7, kGenInitialAttenuation, 960, kModSrcNone, kTransformLinear},
+      {kModSrcCc10, kGenPan, 1000, kModSrcNone, kTransformLinear},
+      {kModSrcCc11, kGenInitialAttenuation, 960, kModSrcNone, kTransformLinear},
+      {kModSrcPitchWheel, 0, 12700, kModSrcPitchWheelSensitivity, kTransformLinear},
+  };
+  return mods;
+}
+
+bool is_note_on_source(uint16_t source) {
+  if (source & 0x0080u) return false;
+  int index = source & 0x007fu;
+  return index == 2 || index == 3;
+}
+
+bool is_realtime_source(uint16_t source) {
+  if (source == kModSrcNone) return false;
+  if (source & 0x0080u) return true;
+  int index = source & 0x007fu;
+  return index == 10 || index == 13 || index == 14 || index == 16;
+}
+
+double source_shape(double x, int type) {
+  x = std::max(0.0, std::min(1.0, x));
+  switch (type) {
+    case 1:
+      return x * x;
+    case 2:
+      return 1.0 - (1.0 - x) * (1.0 - x);
+    case 3:
+      return x >= 0.5 ? 1.0 : 0.0;
+    default:
+      return x;
+  }
+}
+
+int attenuation_to_q15(double attenuation_cb) {
+  if (attenuation_cb <= 0.0) return kQ15Full;
+  int level = int(std::round(double(kQ15Full) * std::pow(10.0, -attenuation_cb / 200.0)));
+  return clamp_q15(level);
 }
 
 }  // namespace
@@ -190,6 +265,7 @@ McuModel::McuModel(VoiceControlSink& sink, const std::vector<Region>& regions)
 void McuModel::handle_event(const NoteEvent& event) {
   if (event.type == NoteEvent::EVENT_CONTROL) control_change(event);
   else if (event.type == NoteEvent::EVENT_PITCH_BEND) pitch_bend(event);
+  else if (event.type == NoteEvent::EVENT_CHANNEL_PRESSURE) channel_pressure(event);
   else if (event.type == NoteEvent::EVENT_NOTE && event.on) note_on(event);
   else if (event.type == NoteEvent::EVENT_NOTE) note_off(event.channel, event.note);
 }
@@ -203,7 +279,7 @@ void McuModel::envelope_tick() {
     } else if (voices_[v].state == ENV_ATTACK) {
       const Region& r = regions_.at(voices_[v].region);
       voices_[v].env_stage_tick += 1;
-      next = curved_attack(voices_[v].target, voices_[v].env_stage_tick, r.attack_ticks);
+      next = linear_ramp(0, voices_[v].target, voices_[v].env_stage_tick, r.attack_ticks);
       if (voices_[v].env_stage_tick >= r.attack_ticks) {
         next = voices_[v].target;
         voices_[v].ticks_remaining = r.hold_ticks;
@@ -216,7 +292,7 @@ void McuModel::envelope_tick() {
     } else if (voices_[v].state == ENV_DECAY) {
       const Region& r = regions_.at(voices_[v].region);
       voices_[v].env_stage_tick += 1;
-      next = curved_decay(voices_[v].target, voices_[v].sustain, voices_[v].env_stage_tick, r.decay_ticks);
+      next = db_decay(voices_[v].target, voices_[v].sustain, voices_[v].env_stage_tick, r.decay_ticks);
       if (voices_[v].env_stage_tick >= r.decay_ticks) {
         next = voices_[v].sustain;
         voices_[v].env_stage_tick = 0;
@@ -225,7 +301,7 @@ void McuModel::envelope_tick() {
     } else if (voices_[v].state == ENV_RELEASE) {
       const Region& r = regions_.at(voices_[v].region);
       voices_[v].env_stage_tick += 1;
-      next = curved_release(voices_[v].release_start, voices_[v].env_stage_tick, r.release_ticks);
+      next = db_release(voices_[v].release_start, voices_[v].env_stage_tick, r.release_ticks);
       if (voices_[v].env_stage_tick >= r.release_ticks) {
         next = 0;
         voices_[v].state = ENV_SILENT;
@@ -246,7 +322,12 @@ void McuModel::envelope_tick() {
 void McuModel::control_change(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   int value = std::max(0, std::min(127, event.value));
+  channels_[channel].cc[event.controller & 0x7f] = value;
   switch (event.controller & 0x7f) {
+    case 1:
+      channels_[channel].modulation = value;
+      update_channel_controls(channel);
+      break;
     case 7:
       channels_[channel].volume = value;
       update_channel_controls(channel);
@@ -258,6 +339,24 @@ void McuModel::control_change(const NoteEvent& event) {
     case 11:
       channels_[channel].expression = value;
       update_channel_controls(channel);
+      break;
+    case 100:
+      channels_[channel].rpn_lsb = value;
+      break;
+    case 101:
+      channels_[channel].rpn_msb = value;
+      break;
+    case 6:
+      if (channels_[channel].rpn_msb == 0 && channels_[channel].rpn_lsb == 0) {
+        channels_[channel].pitch_bend_range_semitones = value;
+        update_channel_controls(channel);
+      }
+      break;
+    case 38:
+      if (channels_[channel].rpn_msb == 0 && channels_[channel].rpn_lsb == 0) {
+        channels_[channel].pitch_bend_range_cents = value;
+        update_channel_controls(channel);
+      }
       break;
     case 64:
       if (value >= 64) {
@@ -294,6 +393,12 @@ void McuModel::control_change(const NoteEvent& event) {
   }
 }
 
+void McuModel::channel_pressure(const NoteEvent& event) {
+  int channel = event.channel & 0x0f;
+  channels_[channel].channel_pressure = std::max(0, std::min(127, event.value));
+  update_channel_controls(channel);
+}
+
 void McuModel::pitch_bend(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   channels_[channel].pitch_bend = std::max(-8192, std::min(8191, event.pitch_bend));
@@ -310,8 +415,8 @@ void McuModel::update_voice_controls(int voice) {
   const VoiceState& state = voices_.at(voice);
   const Region& r = regions_.at(state.region);
   const ChannelState& c = channels_.at(state.channel & 0x0f);
-  sink_.set_gain(voice, scale_gain(r.gain_l, c.volume, c.expression, c.pan, false),
-                 scale_gain(r.gain_r, c.volume, c.expression, c.pan, true));
+  auto gains = runtime_gains(r, state, c);
+  sink_.set_gain(voice, gains.first, gains.second);
   update_voice_modulation(voice);
 }
 
@@ -321,18 +426,13 @@ void McuModel::update_voice_modulation(int voice) {
   const Region& r = regions_.at(state.region);
   const ChannelState& c = channels_.at(state.channel & 0x0f);
 
-  if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
-  else state.mod_lfo_phase += r.mod_lfo_step;
-  if (state.vib_lfo_wait_ticks > 0) --state.vib_lfo_wait_ticks;
-  else state.vib_lfo_phase += r.vib_lfo_step;
-
   int mod_next = state.mod_env_level;
   if (state.mod_env_state == ENV_DELAY) {
     if (state.mod_env_ticks_remaining > 0) --state.mod_env_ticks_remaining;
     if (state.mod_env_ticks_remaining == 0) state.mod_env_state = ENV_ATTACK;
   } else if (state.mod_env_state == ENV_ATTACK) {
     state.mod_env_stage_tick += 1;
-    mod_next = curved_attack(kQ15Full, state.mod_env_stage_tick, r.mod_env_attack_ticks);
+    mod_next = linear_ramp(0, kQ15Full, state.mod_env_stage_tick, r.mod_env_attack_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_attack_ticks) {
       mod_next = kQ15Full;
       state.mod_env_ticks_remaining = r.mod_env_hold_ticks;
@@ -344,7 +444,7 @@ void McuModel::update_voice_modulation(int voice) {
     if (state.mod_env_ticks_remaining == 0) state.mod_env_state = ENV_DECAY;
   } else if (state.mod_env_state == ENV_DECAY) {
     state.mod_env_stage_tick += 1;
-    mod_next = curved_decay(kQ15Full, r.mod_env_sustain_level, state.mod_env_stage_tick, r.mod_env_decay_ticks);
+    mod_next = linear_ramp(kQ15Full, r.mod_env_sustain_level, state.mod_env_stage_tick, r.mod_env_decay_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_decay_ticks) {
       mod_next = r.mod_env_sustain_level;
       state.mod_env_stage_tick = 0;
@@ -352,7 +452,7 @@ void McuModel::update_voice_modulation(int voice) {
     }
   } else if (state.mod_env_state == ENV_RELEASE) {
     state.mod_env_stage_tick += 1;
-    mod_next = curved_release(state.mod_env_release_start, state.mod_env_stage_tick, r.mod_env_release_ticks);
+    mod_next = linear_release(state.mod_env_release_start, state.mod_env_stage_tick, r.mod_env_release_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_release_ticks) {
       mod_next = 0;
       state.mod_env_state = ENV_SILENT;
@@ -361,21 +461,32 @@ void McuModel::update_voice_modulation(int voice) {
   state.mod_env_level = clamp_q15(mod_next);
 
   auto lfo_value = [](uint32_t phase) {
-    return std::sin((double(phase & 0xffffu) / 65536.0) * 2.0 * 3.14159265358979323846);
+    double x = double(phase & 0xffffu) / 65536.0;
+    if (x < 0.25) return x * 4.0;
+    if (x < 0.75) return 2.0 - x * 4.0;
+    return x * 4.0 - 4.0;
   };
   double mod_lfo = state.mod_lfo_wait_ticks > 0 ? 0.0 : lfo_value(state.mod_lfo_phase);
   double vib_lfo = state.vib_lfo_wait_ticks > 0 ? 0.0 : lfo_value(state.vib_lfo_phase);
   double env = double(state.mod_env_level) / double(kQ15Full);
 
-  double pitch_cents = 200.0 * double(std::max(-8192, std::min(8191, c.pitch_bend))) / 8192.0;
-  pitch_cents += mod_lfo * double(r.mod_lfo_to_pitch);
-  pitch_cents += vib_lfo * double(r.vib_lfo_to_pitch);
-  pitch_cents += env * double(r.mod_env_to_pitch);
+  double pitch_cents = modulator_sum(r, state, c, 0);
+  pitch_cents += mod_lfo * (double(r.mod_lfo_to_pitch) + modulator_sum(r, state, c, kGenModLfoToPitch));
+  pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
+  pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
   sink_.set_phase_inc(voice, modulated_phase_inc(r.phase_inc, pitch_cents));
 
-  double filter_cents = double(r.initial_filter_fc) + mod_lfo * double(r.mod_lfo_to_filter_fc) +
-                        env * double(r.mod_env_to_filter_fc);
+  double filter_cents = double(r.initial_filter_fc) + modulator_sum(r, state, c, kGenInitialFilterFc) +
+                        mod_lfo * (double(r.mod_lfo_to_filter_fc) +
+                                   modulator_sum(r, state, c, kGenModLfoToFilterFc)) +
+                        env * (double(r.mod_env_to_filter_fc) +
+                               modulator_sum(r, state, c, kGenModEnvToFilterFc));
   sink_.set_filter(voice, filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate));
+
+  if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
+  else state.mod_lfo_phase += r.mod_lfo_step;
+  if (state.vib_lfo_wait_ticks > 0) --state.vib_lfo_wait_ticks;
+  else state.vib_lfo_phase += r.vib_lfo_step;
 }
 
 void McuModel::release_voice(int voice) {
@@ -412,8 +523,9 @@ void McuModel::note_on(const NoteEvent& event) {
   Region r = regions_.at(event.region);
   if (r.exclusive_class > 0) {
     for (int v = 0; v < kNumVoices; ++v) {
-      if (voices_[v].state != ENV_SILENT && voices_[v].channel == event.channel &&
-          regions_.at(voices_[v].region).exclusive_class == r.exclusive_class) {
+      const Region& active = regions_.at(voices_[v].region);
+      if (voices_[v].state != ENV_SILENT && active.exclusive_class == r.exclusive_class &&
+          active.program == r.program && active.bank == r.bank && active.preset == r.preset) {
         release_voice(v);
       }
     }
@@ -424,8 +536,7 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].state = r.delay_ticks > 0 ? ENV_DELAY : ENV_ATTACK;
   voices_[slot].level = 0;
   r.initial_envelope = voices_[slot].level;
-  voices_[slot].target = velocity_target(r.effective_velocity >= 0 ? r.effective_velocity : event.velocity);
-  voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
+  voices_[slot].velocity = r.effective_velocity >= 0 ? r.effective_velocity : event.velocity;
   voices_[slot].stamp = alloc_stamp_;
   voices_[slot].ticks_remaining = r.delay_ticks;
   voices_[slot].env_stage_tick = 0;
@@ -440,8 +551,13 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].mod_env_ticks_remaining = r.mod_env_delay_ticks;
   voices_[slot].mod_env_stage_tick = 0;
   voices_[slot].mod_env_release_start = 0;
+  double note_attenuation = modulator_sum(r, voices_[slot], channels_[event.channel & 0x0f],
+                                          kGenInitialAttenuation, true, false);
+  voices_[slot].target = attenuation_to_q15(note_attenuation);
+  voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
 
-  uint32_t phase_inc = bend_phase_inc(event.phase_inc, channels_[event.channel & 0x0f].pitch_bend);
+  const ChannelState& channel = channels_[event.channel & 0x0f];
+  uint32_t phase_inc = modulated_phase_inc(event.phase_inc, modulator_sum(r, voices_[slot], channel, 0));
   sink_.commit_voice(slot, 1, phase_inc, r);
   update_voice_controls(slot);
 }
@@ -457,18 +573,73 @@ int McuModel::first_free_or_oldest_slot() const {
   return best;
 }
 
-int McuModel::scale_gain(int gain, int volume, int expression, int pan, bool right) {
-  double level = double(std::max(0, std::min(127, volume))) / 127.0;
-  level *= double(std::max(0, std::min(127, expression))) / 127.0;
-  int p = std::max(0, std::min(127, pan));
-  double pan_scale = right ? (p >= 64 ? 1.0 : double(p) / 64.0)
-                           : (p <= 64 ? 1.0 : double(127 - p) / 63.0);
-  return clamp_q15(int(std::round(double(gain) * level * pan_scale)));
+std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceState& voice,
+                                            const ChannelState& channel) {
+  double attenuation = modulator_sum(region, voice, channel, kGenInitialAttenuation, false, true);
+  double level = std::pow(10.0, -std::max(0.0, attenuation) / 200.0);
+  int total_pan = std::max(-500, std::min(500, int(std::round(
+      double(region.pan) + modulator_sum(region, voice, channel, kGenPan, false, true)))));
+  int left = int(std::round(double(region.base_gain) * level * double(500 - total_pan) / 500.0));
+  int right = int(std::round(double(region.base_gain) * level * double(500 + total_pan) / 500.0));
+  return {clamp_q15(left), clamp_q15(right)};
 }
 
-uint32_t McuModel::bend_phase_inc(uint32_t base_phase_inc, int bend) {
-  double cents = 200.0 * double(std::max(-8192, std::min(8191, bend))) / 8192.0;
-  return modulated_phase_inc(base_phase_inc, cents);
+double McuModel::modulator_sum(const Region& region, const VoiceState& voice,
+                               const ChannelState& channel, uint16_t dest,
+                               bool include_note_sources, bool include_realtime_sources) {
+  auto native_7bit = [&](uint16_t source) -> double {
+    bool cc = (source & 0x0080u) != 0;
+    int index = source & 0x007fu;
+    if (cc) {
+      if (index == 1) return channel.modulation;
+      if (index == 7) return channel.volume;
+      if (index == 10) return channel.pan;
+      if (index == 11) return channel.expression;
+      return channel.cc[index];
+    }
+    switch (index) {
+      case 2:
+        return std::max(1, std::min(127, voice.velocity));
+      case 3:
+        return std::max(0, std::min(127, voice.note));
+      case 13:
+        return std::max(0, std::min(127, channel.channel_pressure));
+      case 16:
+        return std::max(0.0, std::min(127.0, double(channel.pitch_bend_range_semitones) +
+                                                 double(channel.pitch_bend_range_cents) / 100.0));
+      default:
+        return 0.0;
+    }
+  };
+
+  auto map_source = [&](uint16_t source) -> double {
+    if (source == kModSrcNone) return 1.0;
+    int type = (source >> 10) & 0x3f;
+    bool bipolar = (source & 0x0200u) != 0;
+    bool negative = (source & 0x0100u) != 0;
+    bool cc = (source & 0x0080u) != 0;
+    int index = source & 0x007fu;
+    if (!cc && index == 14) {
+      double value = double(std::max(-8192, std::min(8191, channel.pitch_bend))) / 8192.0;
+      return negative ? -value : value;
+    }
+    double native = native_7bit(source);
+    double x = negative ? (127.0 - native) / 128.0 : native / 128.0;
+    double shaped = source_shape(x, type);
+    return bipolar ? shaped * 2.0 - 1.0 : shaped;
+  };
+
+  const auto& mods = region.modulators.empty() ? fallback_default_modulators() : region.modulators;
+  double sum = 0.0;
+  for (const auto& mod : mods) {
+    if (mod.dest != dest) continue;
+    if (!include_note_sources && (is_note_on_source(mod.src) || is_note_on_source(mod.amount_src))) continue;
+    if (!include_realtime_sources && (is_realtime_source(mod.src) || is_realtime_source(mod.amount_src))) continue;
+    double value = double(mod.amount) * map_source(mod.src) * map_source(mod.amount_src);
+    if (mod.transform == kTransformAbsoluteValue) value = std::abs(value);
+    sum += value;
+  }
+  return sum;
 }
 
 uint32_t McuModel::modulated_phase_inc(uint32_t base_phase_inc, double cents) {
