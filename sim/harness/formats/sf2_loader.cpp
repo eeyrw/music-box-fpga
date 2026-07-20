@@ -577,6 +577,7 @@ bool default_generator_amount(int oper, int& amount) {
     case GEN_INITIAL_FILTER_Q:
     case GEN_MOD_LFO_TO_FILTER_FC:
     case GEN_MOD_ENV_TO_FILTER_FC:
+    case GEN_MOD_LFO_TO_VOLUME:
     case GEN_PAN:
     case GEN_FREQ_MOD_LFO:
     case GEN_FREQ_VIB_LFO:
@@ -886,6 +887,7 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
   pitch_modulation_generators(zone, region);
   region.mod_lfo_to_filter_fc = zone.count(GEN_MOD_LFO_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_LFO_TO_FILTER_FC)) : 0;
   region.mod_env_to_filter_fc = zone.count(GEN_MOD_ENV_TO_FILTER_FC) ? signed_amount(zone.at(GEN_MOD_ENV_TO_FILTER_FC)) : 0;
+  region.mod_lfo_to_volume = zone.count(GEN_MOD_LFO_TO_VOLUME) ? signed_amount(zone.at(GEN_MOD_LFO_TO_VOLUME)) : 0;
 
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_MOD_ENV) ? zone.at(GEN_ATTACK_MOD_ENV) : 0,
                                   zone.count(GEN_ATTACK_MOD_ENV), -12000);

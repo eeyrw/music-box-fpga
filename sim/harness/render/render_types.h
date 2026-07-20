@@ -144,6 +144,7 @@ struct Region {
   int mod_env_to_pitch = 0;
   int mod_lfo_to_filter_fc = 0;
   int mod_env_to_filter_fc = 0;
+  int mod_lfo_to_volume = 0;
   int mod_env_delay_ticks = 0;
   int mod_env_hold_ticks = 0;
   int mod_env_sustain_level = kQ15Full;
@@ -210,6 +211,9 @@ struct VoiceState {
   int mod_env_stage_tick = 0;
   int mod_env_release_start = 0;
   int velocity = 127;
+  double tremolo_attenuation_cb = 0.0;
+  bool key_released = false;
+  bool sostenuto_held = false;
 };
 
 enum EnvState {

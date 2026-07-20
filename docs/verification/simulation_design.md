@@ -606,9 +606,12 @@ Current SF2 support:
   unipolar source with a -2400 cent range.
 - Modulation and vibrato LFO generators `delayModLFO`, `freqModLFO`,
   `delayVibLFO`, and `freqVibLFO`, plus routing generators
-  `modLfoToPitch`, `vibLfoToPitch`, and `modLfoToFilterFc`. The C++ MCU model
-  advances them once per ADSR tick and writes runtime phase plus committed filter
-  control updates.
+  `modLfoToPitch`, `vibLfoToPitch`, `modLfoToFilterFc`, and
+  `modLfoToVolume`. The C++ MCU model advances them once per ADSR tick and
+  writes runtime phase, runtime gain, and committed filter-control updates.
+  `modLfoToVolume` is applied as a logarithmic centibel volume delta, so a
+  positive generator value raises volume on the positive modulation-LFO
+  excursion and lowers it on the negative excursion.
 - Modulation-envelope `delayModEnv`, `attackModEnv`, `holdModEnv`,
   `decayModEnv`, `sustainModEnv`, `releaseModEnv`, `keynumToModEnvHold`, and
   `keynumToModEnvDecay`, plus `modEnvToPitch` and `modEnvToFilterFc` routing.
@@ -621,12 +624,16 @@ Current SF2 support:
   calculation.
 - `exclusiveClass` for MCU-side mutual exclusion within the selected preset.
 - MIDI CC1 modulation wheel, CC7 volume, CC10 pan, CC11 expression, CC64 sustain
-  pedal, CC100/101 plus CC6/38 RPN pitch-bend sensitivity, CC120 All Sound Off,
-  CC123 All Notes Off, channel pressure, and pitch bend. CC7 and CC11 use the
-  same concave centibel attenuation approximation as Note On velocity. CC1 and
-  channel pressure add the SF2 default vibrato-LFO pitch-depth modulation. CC10
-  is added to the SF2 `pan` generator at the pan summing node and clamped before
-  left/right gain conversion. These are MCU-side controller policy events that
+  pedal, CC66 soft pedal, CC67 sostenuto as named by the SF2 2.04 controller
+  table, CC98/99 plus CC6/38 SoundFont NRPN generator offsets, CC100/101 plus
+  CC6/38 RPN pitch-bend sensitivity/fine-tune/coarse-tune, CC120 All Sound Off,
+  CC121 Reset All Controllers, CC123 All Notes Off, polyphonic key pressure,
+  channel pressure, and pitch bend. CC7 and CC11 use the same concave centibel
+  attenuation approximation as Note On velocity. CC1 and channel pressure add the
+  SF2 default vibrato-LFO pitch-depth modulation. CC10 and SoundFont NRPN `pan`
+  offsets are added at the SF2 `pan` summing node and clamped before left/right
+  gain conversion. Soft pedal is modeled as a fixed initial-attenuation increase
+  for the current dry path. These are MCU-side controller policy events that
   drive runtime gain, envelope/release, and `PHASE_INC_RUNTIME` writes. Runtime
   left/right gain updates use one packed register write so SPI cannot expose a
   half-updated stereo gain pair.
@@ -727,10 +734,18 @@ MIDI and controller-policy gaps:
 - Channel 10 percussion uses the General MIDI/SF2 convention of bank 128 and then
   relies on normal SF2 key-range selection for drum-note maps. More advanced
   preset-specific percussion policy is not modeled.
-- Sostenuto, soft pedal, polyphonic key pressure, NRPN, and broader RPN behavior
-  beyond pitch-bend sensitivity are not modeled as SF2/MIDI controller behavior.
-  Pitch bend uses the General MIDI default +/-2 semitone range until RPN 0 updates
-  the channel range.
+- The SoundFont NRPN controller path is implemented only for generator
+  destinations that can affect the current dry wavetable path: pitch/fine/coarse
+  tune, initial attenuation, pan, filter cutoff, modulation-LFO/modulation-
+  envelope pitch and filter routing, and `modLfoToVolume`. NRPN destinations
+  requiring unsupported runtime synthesis resources are ignored.
+- Broader GM2 or device-specific controller policy is still intentionally small.
+  CC96/97 Data Increment/Decrement, detailed soft-pedal filter behavior, effects
+  controller conventions without a dry-path effect, and MIDI-mode/system
+  behavior beyond the parsed events are not modeled.
+- Pitch bend uses the General MIDI default +/-2 semitone range until RPN 0
+  updates the channel range. RPN 1 and RPN 2 are modeled as channel fine-tune and
+  coarse-tune generator offsets.
 - Bank-select policy is minimal. CC0 and CC32 are parsed into a 14-bit bank value,
   but SF2-specific bank conventions beyond simple preset lookup are not modeled.
 

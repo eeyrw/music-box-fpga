@@ -30,6 +30,8 @@ class McuModel {
  private:
   struct ChannelState {
     std::array<int, 128> cc{};
+    std::array<int, 128> key_pressure{};
+    std::array<double, 64> generator_offsets{};
     int volume = 127;
     int expression = 127;
     int pan = 64;
@@ -38,17 +40,28 @@ class McuModel {
     int channel_pressure = 0;
     int rpn_msb = 127;
     int rpn_lsb = 127;
+    int nrpn_msb = 127;
+    int nrpn_base = 0;
+    int nrpn_generator = -1;
+    int data_entry_lsb = 0;
     int pitch_bend_range_semitones = 2;
     int pitch_bend_range_cents = 0;
     bool sustain = false;
+    bool soft = false;
+    bool sostenuto = false;
+    bool data_entry_is_nrpn = false;
   };
 
   void control_change(const NoteEvent& event);
   void channel_pressure(const NoteEvent& event);
+  void key_pressure(const NoteEvent& event);
   void pitch_bend(const NoteEvent& event);
   void update_voice_controls(int voice);
   void update_voice_modulation(int voice);
   void update_channel_controls(int channel);
+  void release_deferred_pedal_voices(int channel);
+  void apply_data_entry_msb(int channel, int value);
+  void reset_controllers(int channel);
   void release_voice(int voice);
   void note_off(int channel, int note);
   void note_on(const NoteEvent& event);

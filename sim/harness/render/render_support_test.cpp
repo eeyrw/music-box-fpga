@@ -430,6 +430,116 @@ int main() {
       throw std::runtime_error("custom SF2 modulator did not drive vibrato pitch depth");
     }
 
+    render::Region tremolo_region;
+    tremolo_region.length = 4;
+    tremolo_region.loop_end = 4;
+    tremolo_region.phase_inc = render::kPhaseFracScale;
+    tremolo_region.base_gain = 0x1000;
+    tremolo_region.mod_lfo_step = 0x4000;
+    tremolo_region.mod_lfo_to_volume = 100;
+    std::vector<render::Region> tremolo_regions{tremolo_region};
+    RecordingSink tremolo_sink;
+    render::McuModel tremolo_mcu(tremolo_sink, tremolo_regions);
+    render::NoteEvent tremolo_note;
+    tremolo_note.on = true;
+    tremolo_note.velocity = 127;
+    tremolo_note.phase_inc = render::kPhaseFracScale;
+    tremolo_mcu.handle_event(tremolo_note);
+    tremolo_mcu.envelope_tick();
+    int tremolo_gain = int(std::round(double(0x1000) * std::pow(10.0, 100.0 / 200.0)));
+    if (tremolo_sink.last_gain_l != tremolo_gain || tremolo_sink.last_gain_r != tremolo_gain) {
+      throw std::runtime_error("modLfoToVolume did not boost runtime gain on positive LFO excursion");
+    }
+    tremolo_mcu.envelope_tick();
+    tremolo_mcu.envelope_tick();
+    int tremolo_dip = int(std::round(double(0x1000) * std::pow(10.0, -100.0 / 200.0)));
+    if (tremolo_sink.last_gain_l != tremolo_dip || tremolo_sink.last_gain_r != tremolo_dip) {
+      throw std::runtime_error("modLfoToVolume did not attenuate runtime gain on negative LFO excursion");
+    }
+
+    render::Region pedal_region;
+    pedal_region.length = 4;
+    pedal_region.loop_end = 4;
+    pedal_region.phase_inc = render::kPhaseFracScale;
+    pedal_region.base_gain = 0x4000;
+    std::vector<render::Region> pedal_regions{pedal_region};
+    RecordingSink soft_sink;
+    render::McuModel soft_mcu(soft_sink, pedal_regions);
+    render::NoteEvent soft_on;
+    soft_on.type = render::NoteEvent::EVENT_CONTROL;
+    soft_on.controller = 66;
+    soft_on.value = 127;
+    soft_mcu.handle_event(soft_on);
+    soft_mcu.handle_event(tremolo_note);
+    int soft_gain = int(std::round(double(0x4000) * std::pow(10.0, -30.0 / 200.0)));
+    if (soft_sink.last_gain_l != soft_gain || soft_sink.last_gain_r != soft_gain) {
+      throw std::runtime_error("CC66 soft pedal did not attenuate runtime gain");
+    }
+
+    RecordingSink sostenuto_sink;
+    render::McuModel sostenuto_mcu(sostenuto_sink, pedal_regions);
+    sostenuto_mcu.handle_event(tremolo_note);
+    render::NoteEvent sostenuto_on = soft_on;
+    sostenuto_on.controller = 67;
+    sostenuto_mcu.handle_event(sostenuto_on);
+    render::NoteEvent pedal_note_off = tremolo_note;
+    pedal_note_off.on = false;
+    sostenuto_mcu.handle_event(pedal_note_off);
+    if (sostenuto_sink.release_count != 0) {
+      throw std::runtime_error("CC67 sostenuto released a captured note too early");
+    }
+    render::NoteEvent sostenuto_off = sostenuto_on;
+    sostenuto_off.value = 0;
+    sostenuto_mcu.handle_event(sostenuto_off);
+    if (sostenuto_sink.release_count != 1) {
+      throw std::runtime_error("CC67 sostenuto did not release captured note");
+    }
+
+    render::Region poly_pressure_region;
+    poly_pressure_region.length = 4;
+    poly_pressure_region.loop_end = 4;
+    poly_pressure_region.phase_inc = render::kPhaseFracScale;
+    poly_pressure_region.vib_lfo_step = 0x4000;
+    poly_pressure_region.modulators.push_back({0x000a, 6, 200, 0, 0});
+    std::vector<render::Region> poly_pressure_regions{poly_pressure_region};
+    RecordingSink poly_pressure_sink;
+    render::McuModel poly_pressure_mcu(poly_pressure_sink, poly_pressure_regions);
+    render::NoteEvent poly_note = tremolo_note;
+    poly_note.note = 60;
+    poly_pressure_mcu.handle_event(poly_note);
+    render::NoteEvent poly_pressure;
+    poly_pressure.type = render::NoteEvent::EVENT_KEY_PRESSURE;
+    poly_pressure.note = 60;
+    poly_pressure.value = 127;
+    poly_pressure_mcu.handle_event(poly_pressure);
+    double poly_pressure_cents = 200.0 * (127.0 / 128.0);
+    uint32_t poly_pressure_phase = uint32_t(std::round(double(render::kPhaseFracScale) *
+                                                       std::pow(2.0, poly_pressure_cents / 1200.0)));
+    if (poly_pressure_sink.last_phase_inc != poly_pressure_phase) {
+      throw std::runtime_error("polyphonic key pressure did not feed custom modulator");
+    }
+
+    RecordingSink nrpn_sink;
+    render::McuModel nrpn_mcu(nrpn_sink, pedal_regions);
+    nrpn_mcu.handle_event(tremolo_note);
+    render::NoteEvent nrpn;
+    nrpn.type = render::NoteEvent::EVENT_CONTROL;
+    nrpn.controller = 99;
+    nrpn.value = 120;
+    nrpn_mcu.handle_event(nrpn);
+    nrpn.controller = 98;
+    nrpn.value = 17;
+    nrpn_mcu.handle_event(nrpn);
+    nrpn.controller = 38;
+    nrpn.value = 0;
+    nrpn_mcu.handle_event(nrpn);
+    nrpn.controller = 6;
+    nrpn.value = 96;
+    nrpn_mcu.handle_event(nrpn);
+    if (nrpn_sink.last_gain_l != 0 || nrpn_sink.last_gain_r != render::kQ15Full) {
+      throw std::runtime_error("SF2 NRPN pan offset did not update runtime gain");
+    }
+
     render::Region curve_region;
     curve_region.length = 4;
     curve_region.loop_end = 4;
