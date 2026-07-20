@@ -286,9 +286,8 @@ module tb_spi_register_bridge;
     write_expect(reg_voice_addr(1, REG_OFF_LOOP_END), 32'hff00_0044, 32'h0000_0044);
     write_expect(reg_voice_addr(1, REG_OFF_PHASE_INIT), 32'h7654_3210, 32'h7654_3210);
     write_expect(reg_voice_addr(1, REG_OFF_PHASE_INC), 32'h0102_0304, 32'h0102_0304);
-    write_expect(reg_voice_addr(1, REG_OFF_GAIN_L), 32'h0000_8001, 32'hffff_8001);
-    write_expect(reg_voice_addr(1, REG_OFF_GAIN_R), 32'h0000_7ffe, 32'h0000_7ffe);
-    write_expect(reg_voice_addr(1, REG_OFF_ENVELOPE_LEVEL), 32'h0000_8000, 32'hffff_8000);
+    write_expect(reg_voice_addr(1, REG_OFF_GAIN), 32'h7ffe_8001, 32'h7ffe_8001);
+    write_expect(reg_voice_addr(1, REG_OFF_ENVELOPE), 32'h0000_8000, 32'hffff_8000);
     write_expect(reg_voice_addr(1, REG_OFF_PHASE_INC_RUNTIME), 32'h0100_0200, 32'h0100_0200);
     write_expect(reg_voice_addr(1, REG_OFF_VOICE_CONTROL), 32'hffff_ffff, REG_VOICE_CONTROL_MASK);
     write_expect(reg_voice_addr(1, REG_OFF_FILTER_CONTROL), 32'hffff_ffff, REG_FILTER_CONTROL_ENABLE_MASK);
@@ -314,12 +313,12 @@ module tb_spi_register_bridge;
                        32'h0000_0008, 32'h0000_000c);
 
     spi_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'h0000_0004);
-    spi_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_4000);
+    spi_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_4000);
     spi_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0001);
     spi_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_2000);
     spi_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL), REG_VOICE_CONTROL_ENABLE_MASK);
     expect_read(reg_voice_addr(0, REG_OFF_LENGTH), 32'h0000_0004);
-    expect_read(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_4000);
+    expect_read(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_4000);
     expect_read(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0001);
     expect_read(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_2000);
     spi_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),

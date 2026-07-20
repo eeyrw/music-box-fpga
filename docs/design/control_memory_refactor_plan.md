@@ -49,7 +49,7 @@ The first destructive step keeps the existing register offsets and render
 algorithm but changes the read contract:
 
 - Normal per-voice configuration reads return shadow register state.
-- Runtime reads return live runtime scalar state for `ENVELOPE_LEVEL`,
+- Runtime reads return live runtime scalar state for `ENVELOPE_RUNTIME`,
   `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and `RELEASE_CONTROL`.
 - `STATUS` returns active configuration validity.
 - `VOICE_CONTROL[4]` and `FILTER_A2[16]` are write-only commit strobes and read
@@ -130,16 +130,15 @@ Both commands passed. Existing lint warnings unrelated to this change remain.
 The per-voice descriptor layout is now grouped inside the `0x100` slot instead
 of preserving the historical register order:
 
-- `0x00` to `0x2f`: region descriptor, including left/right bases, lengths,
-  loop points, stereo flag, and loop mode.
-- `0x30` to `0x3f`: playback pitch setup and runtime pitch update.
-- `0x40` to `0x4f`: initial gains, runtime packed gain, and runtime envelope.
-- `0x50` to `0x6f`: filter control, coefficients, and filter commit.
-- `0x70` to `0x7f`: release runtime flag, status, and reserved space.
-- `0x80` to `0xff`: reserved.
+- `0x00` to `0x1c`: region descriptor.
+- `0x20` to `0x2c`: playback setup, packed initial gain, and initial envelope.
+- `0x30` to `0x40`: filter controls, coefficients, filter commit, and voice commit.
+- `0x44` to `0x50`: runtime pitch, gain, envelope, and release flag.
+- `0x54`: status.
+- `0x58` to `0xff`: reserved.
 
-`VOICE_CONTROL` owns stereo, loop policy, shadow enable, and the voice commit
-strobe at `0x20`.
+`VOICE_CONTROL` owns stereo, loop policy, enable, and the voice commit strobe at
+`0x40`.
 
 The renderer-facing state is split out of `voice_register_bank`:
 
@@ -216,12 +215,12 @@ renderer-facing layout to be repacked for timing and resource use.
 
 The current per-voice stride is `0x100`. Current group layout inside each slot:
 
-- `0x00` to `0x2f`: region descriptor.
-- `0x30` to `0x3f`: playback setup and runtime pitch.
-- `0x40` to `0x4f`: initial/runtime gains and runtime envelope.
-- `0x50` to `0x6f`: filter controls and coefficients.
-- `0x70` to `0x7f`: release, status, and reserved space.
-- `0x80` to `0xff`: reserved for future modulation/envelope controls and status registers.
+- `0x00` to `0x1c`: region descriptor.
+- `0x20` to `0x2c`: playback setup, packed initial gain, and initial envelope.
+- `0x30` to `0x40`: filter controls, coefficients, and voice commit.
+- `0x44` to `0x50`: runtime pitch, gain, envelope, and release.
+- `0x54`: status.
+- `0x58` to `0xff`: reserved for future modulation/envelope controls and status registers.
 
 ## BRAM Strategy
 

@@ -175,8 +175,8 @@ module tb_wavetable_render_core_asset;
     bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END_R), `RENDER_LOOP_END_R);
     bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INIT), 32'h0000_0000);
     bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), RENDER_PHASE_INC);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), RENDER_GAIN_L);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), RENDER_GAIN_R);
+    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN), {16'(`RENDER_GAIN_R), 16'(`RENDER_GAIN_L)});
+    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE), 32'h0000_7fff);
     bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
                    ((RENDER_STEREO != 0) ? 32'h0000_0001 : 32'h0000_0000) |
                    REG_VOICE_CONTROL_ENABLE_MASK |

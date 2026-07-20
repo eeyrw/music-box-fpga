@@ -110,7 +110,7 @@ module voice_runtime_store (
     .NUM_WORDS(NUM_VOICES),
     .ADDR_WIDTH(VOICE_ID_WIDTH),
     .DATA_WIDTH(16),
-    .DEFAULT_WORD(16'h7fff)
+    .DEFAULT_WORD(16'h0000)
   ) runtime_envelope_ram (
     .clk(clk),
     .write_en(runtime_envelope_write),
@@ -143,7 +143,7 @@ module voice_runtime_store (
         runtime_filter_enable[i] <= 1'b0;
       end
       render_runtime <= '0;
-      render_runtime.envelope_level <= 16'sh7fff;
+      render_runtime.envelope_level <= '0;
       render_runtime.filter_b0 <= 16'sh4000;
       inspect_release <= 32'd0;
     end else begin

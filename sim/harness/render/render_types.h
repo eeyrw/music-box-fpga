@@ -35,10 +35,10 @@ constexpr int kRegVoiceControl = regs::kOffVoiceControl;
 constexpr int kRegPhaseInit = regs::kOffPhaseInit;
 constexpr int kRegPhaseInc = regs::kOffPhaseInc;
 constexpr int kRegPhaseIncRuntime = regs::kOffPhaseIncRuntime;
-constexpr int kRegGainL = regs::kOffGainL;
-constexpr int kRegGainR = regs::kOffGainR;
+constexpr int kRegGain = regs::kOffGain;
 constexpr int kRegGainRuntime = regs::kOffGainRuntime;
-constexpr int kRegEnvelopeLevel = regs::kOffEnvelopeLevel;
+constexpr int kRegEnvelope = regs::kOffEnvelope;
+constexpr int kRegEnvelopeRuntime = regs::kOffEnvelopeRuntime;
 constexpr int kRegFilterControl = regs::kOffFilterControl;
 constexpr int kRegFilterB0B1 = regs::kOffFilterB0B1;
 constexpr int kRegFilterB2A1 = regs::kOffFilterB2A1;
@@ -104,6 +104,7 @@ struct Region {
   uint32_t phase_inc = 1;
   int gain_l = 0x4000;
   int gain_r = 0x4000;
+  int initial_envelope = 0;
   bool filter_enable = false;
   int filter_b0 = int(regs::kFilterB0UnityQ214);
   int filter_b1 = 0;
@@ -233,7 +234,7 @@ inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
   if (address < kVoiceBase) return;
   int offset = int((address - kVoiceBase) % kVoiceStride);
   switch (offset) {
-    case kRegEnvelopeLevel:
+    case kRegEnvelopeRuntime:
       ++stats.envelope;
       break;
     case kRegGainRuntime:

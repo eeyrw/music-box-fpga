@@ -30,10 +30,10 @@ module voice_register_bank (
   localparam logic [15:0] OFF_PHASE_INIT  = REG_OFF_PHASE_INIT;
   localparam logic [15:0] OFF_PHASE_INC   = REG_OFF_PHASE_INC;
   localparam logic [15:0] OFF_PHASE_RT    = REG_OFF_PHASE_INC_RUNTIME;
-  localparam logic [15:0] OFF_GAIN_L      = REG_OFF_GAIN_L;
-  localparam logic [15:0] OFF_GAIN_R      = REG_OFF_GAIN_R;
+  localparam logic [15:0] OFF_GAIN        = REG_OFF_GAIN;
   localparam logic [15:0] OFF_GAIN_RT     = REG_OFF_GAIN_RUNTIME;
-  localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE_LEVEL;
+  localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE;
+  localparam logic [15:0] OFF_ENVELOPE_RT = REG_OFF_ENVELOPE_RUNTIME;
   localparam logic [15:0] OFF_FILTER_CTL  = REG_OFF_FILTER_CONTROL;
   localparam logic [15:0] OFF_FILTER_B0_B1 = REG_OFF_FILTER_B0_B1;
   localparam logic [15:0] OFF_FILTER_B2_A1 = REG_OFF_FILTER_B2_A1;
@@ -60,8 +60,8 @@ module voice_register_bank (
   function automatic logic known_voice_offset(input logic [15:0] offset);
     unique case (offset)
       OFF_VOICE_CTL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
-      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R,
-      OFF_STATUS, OFF_ENVELOPE, OFF_PHASE_RT, OFF_FILTER_CTL,
+      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN,
+      OFF_STATUS, OFF_ENVELOPE, OFF_ENVELOPE_RT, OFF_PHASE_RT, OFF_FILTER_CTL,
       OFF_FILTER_B0_B1, OFF_FILTER_B2_A1, OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
       OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: known_voice_offset = 1'b1;
       default: known_voice_offset = 1'b0;
@@ -71,7 +71,7 @@ module voice_register_bank (
   function automatic logic shadow_offset(input logic [15:0] offset);
     unique case (offset)
       OFF_VOICE_CTL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
-      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_ENVELOPE,
+      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN, OFF_ENVELOPE,
       OFF_BASE_R, OFF_LENGTH_R,
       OFF_LOOP_START_R, OFF_LOOP_END_R: shadow_offset = 1'b1;
       default: shadow_offset = 1'b0;
@@ -86,7 +86,6 @@ module voice_register_bank (
     BUS_DONE
   } bus_state_t;
 
-  logic [NUM_VOICES-1:0] shadow_envelope_written;
   logic address_valid;
   logic voice_address;
   logic global_address;
@@ -175,7 +174,7 @@ module voice_register_bank (
     .bus_gain_write(bus_req.valid && bus_req.write && voice_address &&
                     (selected_offset == OFF_GAIN_RT) && (bus_state == BUS_IDLE)),
     .bus_envelope_write(bus_req.valid && bus_req.write && voice_address &&
-                        (selected_offset == OFF_ENVELOPE) && (bus_state == BUS_IDLE)),
+                        (selected_offset == OFF_ENVELOPE_RT) && (bus_state == BUS_IDLE)),
     .bus_release_write(bus_req.valid && bus_req.write && voice_address &&
                        (selected_offset == OFF_RELEASE) && (bus_state == BUS_IDLE)),
     .bus_write_voice(selected_voice),
@@ -200,7 +199,6 @@ module voice_register_bank (
     .start(commit_engine_start),
     .start_filter(commit_start_filter),
     .start_voice(selected_voice),
-    .envelope_written(shadow_envelope_written[selected_voice]),
     .shadow_filter_enable(shadow_filter_enable_read_data),
     .shadow_filter_coeff(shadow_filter_read_data),
     .busy(commit_engine_busy),
@@ -325,7 +323,7 @@ module voice_register_bank (
     if (inspect_voice_address) begin
       unique case (inspect_offset)
         OFF_STATUS:   inspect_data = {31'd0, config_valid[inspect_voice]};
-        OFF_ENVELOPE: inspect_data = runtime_envelope_inspect_data;
+        OFF_ENVELOPE_RT: inspect_data = runtime_envelope_inspect_data;
         OFF_PHASE_RT: inspect_data = runtime_phase_inspect_data;
         OFF_GAIN_RT:  inspect_data = runtime_gain_inspect_data;
         OFF_RELEASE:  inspect_data = runtime_release_inspect_data;
@@ -364,7 +362,6 @@ module voice_register_bank (
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      shadow_envelope_written <= '0;
       shadow_filter_read_data <= DEFAULT_FILTER_COEFF;
       shadow_filter_enable_read_data <= 1'b0;
       for (int i = 0; i < NUM_VOICES; i++) begin
@@ -388,10 +385,6 @@ module voice_register_bank (
             bus_state <= BUS_READ_WAIT;
           end else if (commit_start_voice || commit_start_filter) begin
             bus_state <= BUS_COMMIT_WAIT;
-          end else if (bus_req.valid && bus_req.write && voice_address) begin
-            if (selected_offset == OFF_ENVELOPE) begin
-              shadow_envelope_written[selected_voice] <= 1'b1;
-            end
           end
         end
         BUS_READ_WAIT: begin

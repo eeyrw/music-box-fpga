@@ -17,6 +17,7 @@ struct RecordingSink : public render::VoiceControlSink {
   int last_gain_l = -1;
   int last_gain_r = -1;
   uint32_t last_phase_inc = 0;
+  int last_initial_envelope = -1;
   int filter_count = 0;
   std::vector<int> envelopes;
 
@@ -27,10 +28,11 @@ struct RecordingSink : public render::VoiceControlSink {
   }
   void set_phase_inc(int, uint32_t phase_inc) override { last_phase_inc = phase_inc; }
   void set_filter(int, const render::FilterConfig&) override { ++filter_count; }
-  void commit_voice(int, int enable, uint32_t phase_inc, const render::Region&) override {
+  void commit_voice(int, int enable, uint32_t phase_inc, const render::Region& region) override {
     ++commit_count;
     if (!enable) ++disable_count;
     last_phase_inc = phase_inc;
+    last_initial_envelope = region.initial_envelope;
   }
   void release_voice(int, const render::Region&) override { ++release_count; }
 };
@@ -302,7 +304,10 @@ int main() {
     curve_note.phase_inc = render::kPhaseFracScale;
     curve_mcu.handle_event(curve_note);
     curve_mcu.envelope_tick();
-    if (curve_sink.envelopes.size() < 2 || curve_sink.envelopes.back() >= render::kQ15Full / 4) {
+    if (curve_sink.last_initial_envelope != 0) {
+      throw std::runtime_error("volume envelope initial level was not staged in commit");
+    }
+    if (curve_sink.envelopes.empty() || curve_sink.envelopes.back() >= render::kQ15Full / 4) {
       throw std::runtime_error("volume envelope attack did not use a convex curve");
     }
 

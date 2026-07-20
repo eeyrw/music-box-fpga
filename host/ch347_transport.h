@@ -28,7 +28,7 @@ class Ch347RegisterTransport : public render::RegisterWriteSink {
 
   void write_register(uint16_t address, uint32_t data) override;
   uint32_t read_register(uint16_t address);
-  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data);
+  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override;
   std::vector<uint32_t> read_registers(uint16_t start_address, size_t count);
 
  private:

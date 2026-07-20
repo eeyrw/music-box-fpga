@@ -39,7 +39,7 @@ class ReferenceSynth : public VoiceControlSink {
     uint32_t phase_inc = 0;
     int16_t gain_l = 0;
     int16_t gain_r = 0;
-    int16_t envelope = 0x7fff;
+    int16_t envelope = 0;
     bool filter_enable = false;
     int32_t filter_b0 = 0x00004000;
     int32_t filter_b1 = 0;

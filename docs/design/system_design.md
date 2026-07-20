@@ -206,9 +206,9 @@ items.
 The hardware contract is register-level:
 
 - Note On writes wave address or linked-stereo addresses, per-channel length and
-  loop range, phase increment, gains, runtime envelope, and filter settings, then
+  loop range, phase increment, gains, initial envelope, and filter settings, then
   writes `VOICE_CONTROL` with enable and apply set.
-- Envelope updates write only `ENVELOPE_LEVEL`; they do not reload phase.
+- Envelope updates write only `ENVELOPE_RUNTIME`; they do not reload phase.
 - Runtime gain, pitch, release, and committed filter updates do not reload phase
   and update the runtime state sampled by the renderer when it accepts each voice
   snapshot.

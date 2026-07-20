@@ -409,7 +409,7 @@ void McuModel::note_on(const NoteEvent& event) {
   alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
   if (alloc_stamp_ == 0) alloc_stamp_ = 1;
 
-  const Region& r = regions_.at(event.region);
+  Region r = regions_.at(event.region);
   if (r.exclusive_class > 0) {
     for (int v = 0; v < kNumVoices; ++v) {
       if (voices_[v].state != ENV_SILENT && voices_[v].channel == event.channel &&
@@ -423,6 +423,7 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].region = event.region;
   voices_[slot].state = r.delay_ticks > 0 ? ENV_DELAY : ENV_ATTACK;
   voices_[slot].level = 0;
+  r.initial_envelope = voices_[slot].level;
   voices_[slot].target = velocity_target(r.effective_velocity >= 0 ? r.effective_velocity : event.velocity);
   voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
   voices_[slot].stamp = alloc_stamp_;
@@ -440,7 +441,6 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].mod_env_stage_tick = 0;
   voices_[slot].mod_env_release_start = 0;
 
-  sink_.set_envelope(slot, 0);
   uint32_t phase_inc = bend_phase_inc(event.phase_inc, channels_[event.channel & 0x0f].pitch_bend);
   sink_.commit_voice(slot, 1, phase_inc, r);
   update_voice_controls(slot);

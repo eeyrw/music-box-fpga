@@ -94,7 +94,8 @@ build/ch347_control --dry-run \
   --set-envelope 0 0 \
   --commit-voice 0 --enable 1 --stereo 0 --base 0 --length 1024 \
   --loop-start 0 --loop-end 1024 --loop-mode 1 \
-  --phase-inc 0x00000100 --gain-l 0x4000 --gain-r 0x4000
+  --phase-inc 0x00000100 --gain-l 0x4000 --gain-r 0x4000 \
+  --envelope 0x0000
 ```
 
 For stereo regions, pass `--base` for the left sample and `--base-r` for the
@@ -233,7 +234,7 @@ build/smart_artix_bringup --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
   --wait-asset --voice-smoke --voice 0 \
   --base 0 --length 1024 --phase-inc 0x00010000 \
-  --gain-l 0x2000 --gain-r 0x2000
+  --gain-l 0x2000 --gain-r 0x2000 --envelope 0x7fff
 ```
 
 `--ddr-smoke` writes the selected 16-byte-aligned DDR address before reading it

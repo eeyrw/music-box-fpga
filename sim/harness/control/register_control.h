@@ -3,6 +3,7 @@
 #include "render_types.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace render {
 
@@ -10,6 +11,7 @@ class RegisterWriteSink {
  public:
   virtual ~RegisterWriteSink() = default;
   virtual void write_register(uint16_t address, uint32_t data) = 0;
+  virtual void write_registers(uint16_t start_address, const std::vector<uint32_t>& data);
 };
 
 class RegisterVoiceControl : public VoiceControlSink {

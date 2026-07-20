@@ -53,6 +53,7 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.phase_inc = phase_inc;
   v.gain_l = int16_t(r.gain_l);
   v.gain_r = int16_t(r.gain_r);
+  v.envelope = int16_t(clamp_q15(r.initial_envelope));
   v.filter_enable = r.filter_enable;
   v.filter_b0 = int32_t(r.filter_b0);
   v.filter_b1 = int32_t(r.filter_b1);

@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -73,6 +74,7 @@ struct Args {
   uint32_t phase_inc = 0x00010000;
   int gain_l = 0x2000;
   int gain_r = 0x2000;
+  int initial_envelope = 0;
 };
 
 class DryRunTransport : public render::RegisterWriteSink {
@@ -81,6 +83,17 @@ class DryRunTransport : public render::RegisterWriteSink {
     std::cout << "dry-run write 0x" << std::hex << std::setw(4) << std::setfill('0')
               << address << " = 0x" << std::setw(8) << data << std::dec
               << std::setfill(' ') << "\n";
+  }
+
+  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override {
+    if (data.empty()) return;
+    std::cout << "dry-run burst-write 0x" << std::hex << std::setw(4) << std::setfill('0')
+              << start_address << " words=" << std::dec << data.size() << "\n";
+    for (size_t i = 0; i < data.size(); ++i) {
+      std::cout << "  [0x" << std::hex << std::setw(4) << std::setfill('0')
+                << uint16_t(start_address + i * 4) << "] = 0x" << std::setw(8)
+                << data[i] << std::dec << std::setfill(' ') << "\n";
+    }
   }
 
   uint32_t read_register(uint16_t address) {
@@ -152,7 +165,8 @@ void print_usage(const char* argv0) {
       << "  --length-r FRAMES       Right-channel length, default --length\n"
       << "  --phase-inc Q16_16      Playback increment, default 0x00010000\n"
       << "  --gain-l Q1_15          Default 0x2000\n"
-      << "  --gain-r Q1_15          Default 0x2000\n";
+      << "  --gain-r Q1_15          Default 0x2000\n"
+      << "  --envelope Q1_15        Initial envelope copied on commit, default 0\n";
 }
 
 Args parse_args(int argc, char** argv) {
@@ -212,6 +226,8 @@ Args parse_args(int argc, char** argv) {
       args.gain_l = parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
     } else if (a == "--gain-r") {
       args.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
+    } else if (a == "--envelope") {
+      args.initial_envelope = parse_int(need_arg(argc, argv, i, "--envelope"), "envelope");
     } else {
       throw std::runtime_error("unknown argument: " + a);
     }
@@ -250,6 +266,14 @@ class BoardAccess : public render::RegisterWriteSink {
       dry_run_->write_register(address, data);
     } else {
       hardware_->write_register(address, data);
+    }
+  }
+
+  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override {
+    if (dry_run_) {
+      dry_run_->write_registers(start_address, data);
+    } else {
+      hardware_->write_registers(start_address, data);
     }
   }
 
@@ -453,11 +477,11 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   region.loop_mode = 0;
   region.gain_l = args.gain_l;
   region.gain_r = args.gain_r;
+  region.initial_envelope = args.initial_envelope;
   region.filter_enable = false;
   region.filter_b0 = 0x10000000;
 
   render::RegisterVoiceControl voice_control(board);
-  voice_control.set_envelope(args.voice, 0x7fff);
   voice_control.commit_voice(args.voice, 1, args.phase_inc, region);
   print_result("PASS", "Voice configuration writes completed");
 

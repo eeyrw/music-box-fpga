@@ -21,9 +21,29 @@
           {"name": "LOOP_START_R", "addressOffset": "0x0014"},
           {"name": "LOOP_END", "addressOffset": "0x0018"},
           {"name": "LOOP_END_R", "addressOffset": "0x001c"},
+          {"name": "PHASE_INIT", "addressOffset": "0x0020"},
+          {"name": "PHASE_INC", "addressOffset": "0x0024"},
+          {"name": "GAIN", "addressOffset": "0x0028"},
+          {"name": "ENVELOPE", "addressOffset": "0x002c"},
+          {
+            "name": "FILTER_CONTROL",
+            "addressOffset": "0x0030",
+            "fields": [
+              {"name": "ENABLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
+            ]
+          },
+          {"name": "FILTER_B0_B1", "addressOffset": "0x0034"},
+          {"name": "FILTER_B2_A1", "addressOffset": "0x0038"},
+          {
+            "name": "FILTER_A2",
+            "addressOffset": "0x003c",
+            "fields": [
+              {"name": "APPLY", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
+            ]
+          },
           {
             "name": "VOICE_CONTROL",
-            "addressOffset": "0x0020",
+            "addressOffset": "0x0040",
             "fields": [
               {"name": "STEREO", "bitOffset": 0, "bitWidth": 1},
               {"name": "LOOP_MODE", "bitOffset": 1, "bitWidth": 2},
@@ -32,31 +52,11 @@
               {"name": "MASK", "value": "0x0000000f"}
             ]
           },
-          {"name": "PHASE_INIT", "addressOffset": "0x0030"},
-          {"name": "PHASE_INC", "addressOffset": "0x0034"},
-          {"name": "PHASE_INC_RUNTIME", "addressOffset": "0x0038"},
-          {"name": "GAIN_L", "addressOffset": "0x0040"},
-          {"name": "GAIN_R", "addressOffset": "0x0044"},
+          {"name": "PHASE_INC_RUNTIME", "addressOffset": "0x0044"},
           {"name": "GAIN_RUNTIME", "addressOffset": "0x0048"},
-          {"name": "ENVELOPE_LEVEL", "addressOffset": "0x004c"},
-          {
-            "name": "FILTER_CONTROL",
-            "addressOffset": "0x0050",
-            "fields": [
-              {"name": "ENABLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
-            ]
-          },
-          {"name": "FILTER_B0_B1", "addressOffset": "0x0054"},
-          {"name": "FILTER_B2_A1", "addressOffset": "0x0058"},
-          {
-            "name": "FILTER_A2",
-            "addressOffset": "0x005c",
-            "fields": [
-              {"name": "APPLY", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
-            ]
-          },
-          {"name": "RELEASE_CONTROL", "addressOffset": "0x0078"},
-          {"name": "STATUS", "addressOffset": "0x007c"}
+          {"name": "ENVELOPE_RUNTIME", "addressOffset": "0x004c"},
+          {"name": "RELEASE_CONTROL", "addressOffset": "0x0050"},
+          {"name": "STATUS", "addressOffset": "0x0054"}
         ]
       },
       {

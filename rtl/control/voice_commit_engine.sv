@@ -4,7 +4,6 @@ module voice_commit_engine (
   input  logic                                  start,
   input  logic                                  start_filter,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] start_voice,
-  input  logic                                  envelope_written,
   input  logic                                  shadow_filter_enable,
   input  logic [(5*synth_pkg::FILTER_COEFF_WIDTH)-1:0] shadow_filter_coeff,
   output logic                                  busy,
@@ -44,12 +43,11 @@ module voice_commit_engine (
   localparam logic [15:0] OFF_VOICE_CTL   = REG_OFF_VOICE_CONTROL;
   localparam logic [15:0] OFF_PHASE_INIT  = REG_OFF_PHASE_INIT;
   localparam logic [15:0] OFF_PHASE_INC   = REG_OFF_PHASE_INC;
-  localparam logic [15:0] OFF_GAIN_L      = REG_OFF_GAIN_L;
-  localparam logic [15:0] OFF_GAIN_R      = REG_OFF_GAIN_R;
-  localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE_LEVEL;
+  localparam logic [15:0] OFF_GAIN        = REG_OFF_GAIN;
+  localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE;
 
   localparam int FILTER_COEFF_WORD_WIDTH = 5 * FILTER_COEFF_WIDTH;
-  localparam int VOICE_COMMIT_LAST_SEQ = 13;
+  localparam int VOICE_COMMIT_LAST_SEQ = 12;
   localparam int FILTER_UPDATE_LAST_SEQ = 0;
   localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
     16'sh4000,
@@ -76,33 +74,30 @@ module voice_commit_engine (
   mode_t mode;
   logic [VOICE_ID_WIDTH-1:0] commit_voice;
   logic [4:0] commit_seq;
-  logic commit_envelope_written;
   logic [15:0] commit_offset;
   logic commit_last_seq;
   voice_config_t staged_config;
   logic [PHASE_WIDTH-1:0] staged_phase_inc;
-  logic signed [15:0] staged_gain_l;
-  logic signed [15:0] staged_gain_r;
+  logic [31:0] staged_gain;
   logic signed [15:0] staged_envelope_level;
   logic staged_filter_enable;
   logic [FILTER_COEFF_WORD_WIDTH-1:0] staged_filter_coeff;
 
   function automatic logic [15:0] voice_commit_offset(input logic [4:0] seq);
     unique case (seq)
-      5'd0: voice_commit_offset = OFF_VOICE_CTL;
-      5'd1: voice_commit_offset = OFF_BASE;
-      5'd2: voice_commit_offset = OFF_BASE_R;
-      5'd3: voice_commit_offset = OFF_LENGTH;
-      5'd4: voice_commit_offset = OFF_LENGTH_R;
-      5'd5: voice_commit_offset = OFF_LOOP_START;
-      5'd6: voice_commit_offset = OFF_LOOP_START_R;
-      5'd7: voice_commit_offset = OFF_LOOP_END;
-      5'd8: voice_commit_offset = OFF_LOOP_END_R;
-      5'd9: voice_commit_offset = OFF_PHASE_INIT;
-      5'd10: voice_commit_offset = OFF_PHASE_INC;
-      5'd11: voice_commit_offset = OFF_GAIN_L;
-      5'd12: voice_commit_offset = OFF_GAIN_R;
-      5'd13: voice_commit_offset = OFF_ENVELOPE;
+      5'd0: voice_commit_offset = OFF_BASE;
+      5'd1: voice_commit_offset = OFF_BASE_R;
+      5'd2: voice_commit_offset = OFF_LENGTH;
+      5'd3: voice_commit_offset = OFF_LENGTH_R;
+      5'd4: voice_commit_offset = OFF_LOOP_START;
+      5'd5: voice_commit_offset = OFF_LOOP_START_R;
+      5'd6: voice_commit_offset = OFF_LOOP_END;
+      5'd7: voice_commit_offset = OFF_LOOP_END_R;
+      5'd8: voice_commit_offset = OFF_PHASE_INIT;
+      5'd9: voice_commit_offset = OFF_PHASE_INC;
+      5'd10: voice_commit_offset = OFF_GAIN;
+      5'd11: voice_commit_offset = OFF_ENVELOPE;
+      5'd12: voice_commit_offset = OFF_VOICE_CTL;
       default: voice_commit_offset = OFF_VOICE_CTL;
     endcase
   endfunction
@@ -138,7 +133,7 @@ module voice_commit_engine (
     runtime_gain_write = (state == COMMIT_APPLY) && (mode == MODE_VOICE);
     runtime_envelope_write = (state == COMMIT_APPLY) && (mode == MODE_VOICE);
     runtime_phase_write_data = staged_phase_inc;
-    runtime_gain_write_data = {staged_gain_r, staged_gain_l};
+    runtime_gain_write_data = staged_gain;
     runtime_envelope_write_data = staged_envelope_level;
     runtime_release_clear = (state == COMMIT_APPLY) && (mode == MODE_VOICE);
     runtime_filter_write = (state == COMMIT_APPLY);
@@ -153,13 +148,11 @@ module voice_commit_engine (
       mode <= MODE_VOICE;
       commit_voice <= '0;
       commit_seq <= '0;
-      commit_envelope_written <= 1'b0;
       staged_config <= '0;
       staged_config.loop_mode <= LOOP_MODE_NONE;
       staged_phase_inc <= '0;
-      staged_gain_l <= '0;
-      staged_gain_r <= '0;
-      staged_envelope_level <= 16'sh7fff;
+      staged_gain <= '0;
+      staged_envelope_level <= '0;
       staged_filter_enable <= 1'b0;
       staged_filter_coeff <= DEFAULT_FILTER_COEFF;
     end else begin
@@ -170,13 +163,11 @@ module voice_commit_engine (
             mode <= start_filter ? MODE_FILTER : MODE_VOICE;
             commit_voice <= start_voice;
             commit_seq <= '0;
-            commit_envelope_written <= envelope_written;
             staged_config <= '0;
             staged_config.loop_mode <= LOOP_MODE_NONE;
             staged_phase_inc <= '0;
-            staged_gain_l <= '0;
-            staged_gain_r <= '0;
-            staged_envelope_level <= 16'sh7fff;
+            staged_gain <= '0;
+            staged_envelope_level <= '0;
             staged_filter_enable <= 1'b0;
             staged_filter_coeff <= DEFAULT_FILTER_COEFF;
           end
@@ -203,10 +194,8 @@ module voice_commit_engine (
             OFF_LOOP_END_R: staged_config.loop_end_r <= descriptor_read_data[PHASE_FRAME_WIDTH-1:0];
             OFF_PHASE_INIT: staged_config.phase_init <= descriptor_read_data;
             OFF_PHASE_INC:  staged_phase_inc <= descriptor_read_data;
-            OFF_GAIN_L:     staged_gain_l <= $signed(descriptor_read_data[15:0]);
-            OFF_GAIN_R:     staged_gain_r <= $signed(descriptor_read_data[15:0]);
-            OFF_ENVELOPE:   staged_envelope_level <= commit_envelope_written ?
-                                                   $signed(descriptor_read_data[15:0]) : 16'sh7fff;
+            OFF_GAIN:       staged_gain <= descriptor_read_data;
+            OFF_ENVELOPE:   staged_envelope_level <= $signed(descriptor_read_data[15:0]);
             default: begin
             end
           endcase

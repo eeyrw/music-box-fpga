@@ -110,6 +110,27 @@ class DryRunTransport : public render::RegisterWriteSink {
     std::cout << std::dec << std::setfill(' ') << "\n";
   }
 
+  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override {
+    if (data.empty()) return;
+    std::cout << "burst-write addr=0x" << std::hex << std::setw(4) << std::setfill('0')
+              << start_address << " words=" << std::dec << data.size() << " frame=";
+    std::vector<uint8_t> frame;
+    frame.reserve(3 + data.size() * 4);
+    frame.push_back(0xc0);
+    frame.push_back(uint8_t(start_address >> 8));
+    frame.push_back(uint8_t(start_address));
+    for (uint32_t word : data) {
+      frame.push_back(uint8_t(word >> 24));
+      frame.push_back(uint8_t(word >> 16));
+      frame.push_back(uint8_t(word >> 8));
+      frame.push_back(uint8_t(word));
+    }
+    for (uint8_t byte : frame) {
+      std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+    }
+    std::cout << std::dec << std::setfill(' ') << "\n";
+  }
+
   void read_register(uint16_t address) {
     std::cout << "read addr=0x" << std::hex << std::setw(4) << std::setfill('0') << address
               << std::dec << std::setfill(' ') << " frame=";
@@ -192,6 +213,7 @@ void print_usage(const char* argv0) {
       << "  --phase-inc Q16_16      Default 0x00010000\n"
       << "  --gain-l Q1_15          Default 0x4000\n"
       << "  --gain-r Q1_15          Default 0x4000\n"
+      << "  --envelope Q1_15        Initial envelope copied on commit, default 0\n"
       << "\nOther operations:\n"
       << "  --release VOICE         Set RELEASE_CONTROL.released\n"
       << "  --read-load-progress  Read SD asset bytes-loaded progress\n"
@@ -356,6 +378,9 @@ Args parse_args(int argc, char** argv) {
     } else if (a == "--gain-r") {
       have_commit = true;
       current_commit.region.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
+    } else if (a == "--envelope") {
+      have_commit = true;
+      current_commit.region.initial_envelope = parse_int(need_arg(argc, argv, i, "--envelope"), "envelope");
     } else {
       throw std::runtime_error("unknown argument: " + a);
     }

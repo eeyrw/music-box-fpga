@@ -12,8 +12,14 @@ uint32_t pack_pair(int high, int low) {
 RegisterVoiceControl::RegisterVoiceControl(RegisterWriteSink& registers)
     : registers_(registers) {}
 
+void RegisterWriteSink::write_registers(uint16_t start_address, const std::vector<uint32_t>& data) {
+  for (size_t i = 0; i < data.size(); ++i) {
+    write_register(uint16_t(start_address + i * 4), data[i]);
+  }
+}
+
 void RegisterVoiceControl::set_envelope(int voice, int level) {
-  registers_.write_register(voice_addr(voice, kRegEnvelopeLevel), uint32_t(uint16_t(clamp_q15(level))));
+  registers_.write_register(voice_addr(voice, kRegEnvelopeRuntime), uint32_t(uint16_t(clamp_q15(level))));
 }
 
 void RegisterVoiceControl::set_gain(int voice, int gain_l, int gain_r) {
@@ -35,27 +41,28 @@ void RegisterVoiceControl::set_filter(int voice, const FilterConfig& filter) {
 }
 
 void RegisterVoiceControl::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  registers_.write_register(voice_addr(voice, kRegBaseAddr), r.base_addr);
-  registers_.write_register(voice_addr(voice, kRegBaseAddrR), r.base_addr_r);
-  registers_.write_register(voice_addr(voice, kRegLength), r.length);
-  registers_.write_register(voice_addr(voice, kRegLengthR), r.length_r);
-  registers_.write_register(voice_addr(voice, kRegLoopStart), r.loop_start);
-  registers_.write_register(voice_addr(voice, kRegLoopStartR), r.loop_start_r);
-  registers_.write_register(voice_addr(voice, kRegLoopEnd), r.loop_end);
-  registers_.write_register(voice_addr(voice, kRegLoopEndR), r.loop_end_r);
-  registers_.write_register(voice_addr(voice, kRegPhaseInit), 0);
-  registers_.write_register(voice_addr(voice, kRegPhaseInc), phase_inc);
-  registers_.write_register(voice_addr(voice, kRegGainL), uint32_t(uint16_t(r.gain_l)));
-  registers_.write_register(voice_addr(voice, kRegGainR), uint32_t(uint16_t(r.gain_r)));
-  registers_.write_register(voice_addr(voice, kRegFilterControl), uint32_t(r.filter_enable ? 1 : 0));
-  registers_.write_register(voice_addr(voice, kRegFilterB0B1), pack_pair(r.filter_b1, r.filter_b0));
-  registers_.write_register(voice_addr(voice, kRegFilterB2A1), pack_pair(r.filter_a1, r.filter_b2));
-  registers_.write_register(voice_addr(voice, kRegFilterA2), uint32_t(uint16_t(r.filter_a2)));
-  registers_.write_register(
-      voice_addr(voice, kRegVoiceControl),
+  std::vector<uint32_t> config = {
+      r.base_addr,
+      r.base_addr_r,
+      r.length,
+      r.length_r,
+      r.loop_start,
+      r.loop_start_r,
+      r.loop_end,
+      r.loop_end_r,
+      0,
+      phase_inc,
+      pack_pair(r.gain_r, r.gain_l),
+      uint32_t(uint16_t(clamp_q15(r.initial_envelope))),
+      uint32_t(r.filter_enable ? 1 : 0),
+      pack_pair(r.filter_b1, r.filter_b0),
+      pack_pair(r.filter_a1, r.filter_b2),
+      uint32_t(uint16_t(r.filter_a2)),
       uint32_t((r.stereo ? 1 : 0) | ((r.loop_mode & 0x3) << 1)) |
           (enable ? regs::kVoiceControlEnableMask : 0u) |
-          regs::kVoiceControlApplyMask);
+          regs::kVoiceControlApplyMask,
+  };
+  registers_.write_registers(voice_addr(voice, kRegBaseAddr), config);
 }
 
 void RegisterVoiceControl::release_voice(int voice, const Region& r) {

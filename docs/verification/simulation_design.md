@@ -159,7 +159,7 @@ The test checks these behaviors:
 - `loop_end` is exclusive.
 - Two active voice slots render from one `sample_tick` and mix together.
 - Per-voice `envelope_level` scales the current sample before mixing.
-- Runtime `ENVELOPE_LEVEL` writes take effect without commit and without
+- Runtime `ENVELOPE_RUNTIME` writes take effect without commit and without
   reloading voice phase.
 
 The test is self-checking. A mismatch increments `errors`, and the test exits
@@ -172,10 +172,10 @@ outside synthesizable RTL. A testbench or simulation-only MCU model should drive
 the register bus like firmware:
 
 - Note On: allocate a voice slot, write sample/loop/tuning/gain fields and an
-  initial `ENVELOPE_LEVEL`, then write `VOICE_CONTROL` with enable and apply set.
-- Envelope update: write only `ENVELOPE_LEVEL`; this is a runtime register and
+  initial `ENVELOPE`, then write `VOICE_CONTROL` with enable and apply set.
+- Envelope update: write only `ENVELOPE_RUNTIME`; this is a runtime register and
   does not reset phase.
-- Note Off: continue writing release values to `ENVELOPE_LEVEL`.
+- Note Off: continue writing release values to `ENVELOPE_RUNTIME`.
 - Voice release complete: clear the slot's enable bit and commit that slot.
 
 The current regression implements this pattern directly with bus-write tasks.
@@ -526,13 +526,13 @@ The current envelope model converts SF2 volume-envelope generators into linear
 Q1.15 attack, decay, sustain, and release steps. It runs every
 `adsr_tick_ms` milliseconds, defaulting to 5 ms. This is intentionally simpler
 than the full SF2 envelope curve, but it exercises the hardware contract: runtime
-`ENVELOPE_LEVEL` writes update runtime amplitude without commit and without
+`ENVELOPE_RUNTIME` writes update runtime amplitude without commit and without
 reloading phase.
 
 The normal Note On register sequence is:
 
 ```text
-ENVELOPE_LEVEL = 0
+ENVELOPE       = selected initial Q1.15 envelope, normally 0 for ADSR Note On
 BASE_ADDR      = selected left/mono memory word address
 BASE_ADDR_R    = selected right memory word address for stereo
 LENGTH         = left/mono sample frames
@@ -543,7 +543,7 @@ LOOP_END       = left/mono exclusive loop end
 LOOP_END_R     = right exclusive loop end for stereo
 PHASE_INIT     = 0
 PHASE_INC      = generated Q24.8 increment
-GAIN_L/R       = selected Q1.15 channel gains
+GAIN           = packed selected Q1.15 channel gains, {right, left}
 VOICE_CONTROL  = mono/stereo + loop mode + enable + apply
 ```
 
@@ -556,7 +556,7 @@ this FPGA project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
 volume-envelope step values, free-voice-first allocation, and oldest-voice
 stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes
-`ENVELOPE_LEVEL`. On Note Off it matches channel plus note, sets the runtime
+`ENVELOPE_RUNTIME`. On Note Off it matches channel plus note, sets the runtime
 released flag for loop-until-release samples, and when the envelope reaches zero
 it disables and commits the slot. `render-quick` and `render-memory` share this MCU
 model so algorithm comparisons and memory-profile renders use the same control
@@ -741,7 +741,7 @@ RTL integration gaps implied by complete SF2 support:
   and may move into RTL if update rate or zipper noise becomes a problem.
 - Pitch bend, vibrato, tremolo, and modulation-envelope routing initially remain
   host-controlled through runtime register updates, including
-  `PHASE_INC_RUNTIME`, `ENVELOPE_LEVEL`, and filter-control writes. SPI bandwidth
+  `PHASE_INC_RUNTIME`, `ENVELOPE_RUNTIME`, and filter-control writes. SPI bandwidth
   is expected to be sufficient for the first implementation. If update rate,
   jitter, or audible zippering becomes a problem, move the high-rate LFO/envelope
   accumulators into RTL as a later optimization.
