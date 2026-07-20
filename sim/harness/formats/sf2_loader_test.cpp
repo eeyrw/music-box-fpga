@@ -385,6 +385,17 @@ int main() {
     }
     if (!saw_cc1) throw std::runtime_error("pmod CC1 vibrato modulator was not preserved");
 
+    stereo_sf2.samples[0].sample_link = 2;
+    stereo_sf2.samples[1].sample_link = 0;
+    stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480, stereo_memory);
+    expect_equal(int(stereo_regions.size()), 2, "invalid linked stereo pair keeps both mono zones");
+    for (const auto& region : stereo_regions) {
+      if (region.stereo) throw std::runtime_error("invalid linked stereo pair was still marked stereo");
+      if (region.sample_left != "Left" && region.sample_left != "Right") {
+        throw std::runtime_error("invalid linked stereo pair selected an unrelated sample");
+      }
+    }
+
     std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";
     return 0;
   } catch (const std::exception& e) {

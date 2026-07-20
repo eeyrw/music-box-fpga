@@ -18,6 +18,7 @@ struct RecordingSink : public render::VoiceControlSink {
   int last_gain_r = -1;
   uint32_t last_phase_inc = 0;
   int last_initial_envelope = -1;
+  int last_commit_voice = -1;
   int filter_count = 0;
   render::FilterConfig last_filter;
   std::vector<int> envelopes;
@@ -32,9 +33,10 @@ struct RecordingSink : public render::VoiceControlSink {
     ++filter_count;
     last_filter = filter;
   }
-  void commit_voice(int, int enable, uint32_t phase_inc, const render::Region& region) override {
+  void commit_voice(int voice, int enable, uint32_t phase_inc, const render::Region& region) override {
     ++commit_count;
     if (!enable) ++disable_count;
+    last_commit_voice = voice;
     last_phase_inc = phase_inc;
     last_initial_envelope = region.initial_envelope;
   }
@@ -634,6 +636,34 @@ int main() {
     exclusive_mcu.handle_event(second_exclusive);
     if (exclusive_sink.release_count != 1) {
       throw std::runtime_error("exclusiveClass did not terminate same-preset voice on another channel");
+    }
+
+    render::Region steal_region;
+    steal_region.length = 4;
+    steal_region.loop_end = 4;
+    steal_region.phase_inc = render::kPhaseFracScale;
+    steal_region.gain_l = 0x4000;
+    steal_region.gain_r = 0x4000;
+    steal_region.release_ticks = 64;
+    std::vector<render::Region> steal_regions{steal_region};
+    RecordingSink steal_sink;
+    render::McuModel steal_mcu(steal_sink, steal_regions);
+    render::NoteEvent steal_note;
+    steal_note.on = true;
+    steal_note.velocity = 127;
+    steal_note.phase_inc = render::kPhaseFracScale;
+    for (int i = 0; i < render::kNumVoices; ++i) {
+      steal_note.note = 40 + i;
+      steal_mcu.handle_event(steal_note);
+    }
+    render::NoteEvent release_newer = steal_note;
+    release_newer.on = false;
+    release_newer.note = 40 + render::kNumVoices - 1;
+    steal_mcu.handle_event(release_newer);
+    steal_note.note = 100;
+    steal_mcu.handle_event(steal_note);
+    if (steal_sink.last_commit_voice != render::kNumVoices - 1) {
+      throw std::runtime_error("voice steal did not prefer the released slot over the oldest active slot");
     }
 
     std::cout << "PASS: render support maps channel-10 percussion to SF2 bank 128 and silences unmapped notes\n";

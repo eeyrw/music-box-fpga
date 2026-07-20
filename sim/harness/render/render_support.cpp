@@ -752,7 +752,7 @@ void McuModel::note_on(const NoteEvent& event) {
     return;
   }
 
-  int slot = first_free_or_oldest_slot();
+  int slot = first_free_or_steal_slot();
   if (voices_[slot].state != ENV_SILENT && diagnostics_) diagnostics_->voice_steals += 1;
   alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
   if (alloc_stamp_ == 0) alloc_stamp_ = 1;
@@ -807,12 +807,22 @@ void McuModel::note_on(const NoteEvent& event) {
   update_voice_controls(slot);
 }
 
-int McuModel::first_free_or_oldest_slot() const {
+int McuModel::first_free_or_steal_slot() const {
   for (int v = 0; v < kNumVoices; ++v) {
     if (voices_[v].state == ENV_SILENT) return v;
   }
   int best = 0;
   for (int v = 1; v < kNumVoices; ++v) {
+    bool v_released = voices_[v].state == ENV_RELEASE || voices_[v].key_released;
+    bool best_released = voices_[best].state == ENV_RELEASE || voices_[best].key_released;
+    if (v_released != best_released) {
+      if (v_released) best = v;
+      continue;
+    }
+    if (voices_[v].level != voices_[best].level) {
+      if (voices_[v].level < voices_[best].level) best = v;
+      continue;
+    }
     if (((voices_[v].stamp - voices_[best].stamp) & 0xff) >= 128) best = v;
   }
   return best;

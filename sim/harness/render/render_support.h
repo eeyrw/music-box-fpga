@@ -70,7 +70,7 @@ class McuModel {
   void release_voice(int voice);
   void note_off(int channel, int note);
   void note_on(const NoteEvent& event);
-  int first_free_or_oldest_slot() const;
+  int first_free_or_steal_slot() const;
   static std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
                                            const ChannelState& channel);
   static double modulator_sum(const Region& region, const VoiceState& voice,

@@ -787,9 +787,14 @@ RTL integration gaps implied by complete SF2 support:
 - Complex linked-stereo SoundFonts with circular `linkedSample = 8` sample lists
   remain unsupported. Ordinary left/right `sampleLink` pairs use strict right
   sample pitch control in the C++ loader and one shared RTL phase increment.
+  A left/right link is accepted only when the target is the opposite side and
+  links back to the selected header; invalid or stale links render as independent
+  mono regions instead of being paired with unrelated sample data.
 - Higher polyphony for heavily layered SF2 presets remains a pipeline and memory
   bandwidth optimization item. The current harness can trigger overlapping zones,
-  but the RTL still exposes 32 voice slots.
+  but the RTL still exposes 32 voice slots. When all slots are busy, the MCU
+  policy now prefers released or key-released voices, then the quietest remaining
+  voice, before falling back to age.
 
 ## Linked Stereo Samples
 

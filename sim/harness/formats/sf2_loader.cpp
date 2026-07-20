@@ -979,13 +979,21 @@ int loop_mode_from_zone(const Zone& zone) {
 
 std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
   // Stereo SF2 samples are normally stored as two mono sample headers linked to
-  // each other. Return indexes in left,right order so build_wave_words can pack
-  // the RTL memory image deterministically.
+  // each other. Return indexes in left,right order only when the target is the
+  // opposite side and links back to the selected header; stale or non-reciprocal
+  // links are common enough in loose SoundFonts that treating them as mono is
+  // safer than pairing unrelated sample data.
   const auto& s = sf2.samples.at(selected);
   if (s.sample_type & SAMPLE_ROM_FLAG) throw std::runtime_error("selected SF2 sample references ROM data");
   int t = sanitize_sample_type(s.sample_type);
-  if (t == SAMPLE_LEFT && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) return {selected, s.sample_link};
-  if (t == SAMPLE_RIGHT && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) return {s.sample_link, selected};
+  if ((t == SAMPLE_LEFT || t == SAMPLE_RIGHT) && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) {
+    const auto& other = sf2.samples.at(s.sample_link);
+    if (other.sample_type & SAMPLE_ROM_FLAG) throw std::runtime_error("linked SF2 sample references ROM data");
+    int other_type = sanitize_sample_type(other.sample_type);
+    bool reciprocal = other.sample_link == selected;
+    if (t == SAMPLE_LEFT && other_type == SAMPLE_RIGHT && reciprocal) return {selected, s.sample_link};
+    if (t == SAMPLE_RIGHT && other_type == SAMPLE_LEFT && reciprocal) return {s.sample_link, selected};
+  }
   if (t == SAMPLE_LINKED) throw std::runtime_error("SF2 linkedSample type is not directly playable by this renderer");
   return {selected, -1};
 }
@@ -1075,7 +1083,7 @@ bool selected_right_with_matching_left_zone(const Sf2Data& sf2, int sample_id,
   int sample_type = sanitize_sample_type(sf2.samples.at(sample_id).sample_type);
   if (sample_type != SAMPLE_RIGHT) return false;
   auto pair = linked_pair(sf2, sample_id);
-  return pair.first >= 0 && find_zone_for_sample(zones, pair.first) != nullptr;
+  return pair.second >= 0 && pair.first != sample_id && find_zone_for_sample(zones, pair.first) != nullptr;
 }
 
 void linked_stereo_zone_selection(const Sf2Data& sf2, int sample_id,
