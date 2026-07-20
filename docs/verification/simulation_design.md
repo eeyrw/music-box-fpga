@@ -793,8 +793,9 @@ RTL integration gaps implied by complete SF2 support:
 - Higher polyphony for heavily layered SF2 presets remains a pipeline and memory
   bandwidth optimization item. The current harness can trigger overlapping zones,
   but the RTL still exposes 32 voice slots. When all slots are busy, the MCU
-  policy now prefers released or key-released voices, then the quietest remaining
-  voice, before falling back to age.
+  policy now prefers released or key-released voices, then the lowest estimated
+  audible contribution from envelope level and runtime gain, before falling back
+  to age.
 
 ## Linked Stereo Samples
 

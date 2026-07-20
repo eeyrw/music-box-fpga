@@ -666,6 +666,30 @@ int main() {
       throw std::runtime_error("voice steal did not prefer the released slot over the oldest active slot");
     }
 
+    render::Region loud_region = steal_region;
+    loud_region.base_gain = 0x4000;
+    render::Region quiet_region = steal_region;
+    quiet_region.base_gain = 1;
+    std::vector<render::Region> audible_steal_regions{loud_region, quiet_region};
+    RecordingSink audible_steal_sink;
+    render::McuModel audible_steal_mcu(audible_steal_sink, audible_steal_regions);
+    render::NoteEvent audible_note = steal_note;
+    audible_note.on = true;
+    audible_note.velocity = 127;
+    audible_note.phase_inc = render::kPhaseFracScale;
+    for (int i = 0; i < render::kNumVoices; ++i) {
+      audible_note.note = 40 + i;
+      audible_note.region = (i == render::kNumVoices - 1) ? 1 : 0;
+      audible_steal_mcu.handle_event(audible_note);
+    }
+    audible_steal_mcu.envelope_tick();
+    audible_note.note = 100;
+    audible_note.region = 0;
+    audible_steal_mcu.handle_event(audible_note);
+    if (audible_steal_sink.last_commit_voice != render::kNumVoices - 1) {
+      throw std::runtime_error("voice steal did not prefer the quietest audible slot over the oldest slot");
+    }
+
     std::cout << "PASS: render support maps channel-10 percussion to SF2 bank 128 and silences unmapped notes\n";
     return 0;
   } catch (const std::exception& e) {

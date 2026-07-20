@@ -811,6 +811,15 @@ int McuModel::first_free_or_steal_slot() const {
   for (int v = 0; v < kNumVoices; ++v) {
     if (voices_[v].state == ENV_SILENT) return v;
   }
+  auto steal_score = [&](int v) -> uint64_t {
+    const VoiceState& voice = voices_[v];
+    const Region& region = regions_.at(voice.region);
+    const ChannelState& channel = channels_[voice.channel & 0x0f];
+    const auto gains = runtime_gains(region, voice, channel);
+    const uint32_t gain = static_cast<uint32_t>(std::max(gains.first, gains.second));
+    const uint32_t level = static_cast<uint32_t>(std::max(0, voice.level));
+    return static_cast<uint64_t>(level) * gain;
+  };
   int best = 0;
   for (int v = 1; v < kNumVoices; ++v) {
     bool v_released = voices_[v].state == ENV_RELEASE || voices_[v].key_released;
@@ -819,8 +828,10 @@ int McuModel::first_free_or_steal_slot() const {
       if (v_released) best = v;
       continue;
     }
-    if (voices_[v].level != voices_[best].level) {
-      if (voices_[v].level < voices_[best].level) best = v;
+    const uint64_t v_score = steal_score(v);
+    const uint64_t best_score = steal_score(best);
+    if (v_score != best_score) {
+      if (v_score < best_score) best = v;
       continue;
     }
     if (((voices_[v].stamp - voices_[best].stamp) & 0xff) >= 128) best = v;
