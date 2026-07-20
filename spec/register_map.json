@@ -22,12 +22,14 @@
           {"name": "LOOP_END", "addressOffset": "0x0018"},
           {"name": "LOOP_END_R", "addressOffset": "0x001c"},
           {
-            "name": "REGION_MODE",
+            "name": "VOICE_CONTROL",
             "addressOffset": "0x0020",
             "fields": [
               {"name": "STEREO", "bitOffset": 0, "bitWidth": 1},
               {"name": "LOOP_MODE", "bitOffset": 1, "bitWidth": 2},
-              {"name": "MASK", "value": "0x00000007"}
+              {"name": "ENABLE", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
+              {"name": "APPLY", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
+              {"name": "MASK", "value": "0x0000000f"}
             ]
           },
           {"name": "PHASE_INIT", "addressOffset": "0x0030"},
@@ -44,30 +46,13 @@
               {"name": "ENABLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
             ]
           },
-          {"name": "FILTER_B0", "addressOffset": "0x0054"},
-          {"name": "FILTER_B1", "addressOffset": "0x0058"},
-          {"name": "FILTER_B2", "addressOffset": "0x005c"},
-          {"name": "FILTER_A1", "addressOffset": "0x0060"},
-          {"name": "FILTER_A2", "addressOffset": "0x0064"},
+          {"name": "FILTER_B0_B1", "addressOffset": "0x0054"},
+          {"name": "FILTER_B2_A1", "addressOffset": "0x0058"},
           {
-            "name": "FILTER_COMMIT",
-            "addressOffset": "0x0068",
+            "name": "FILTER_A2",
+            "addressOffset": "0x005c",
             "fields": [
-              {"name": "APPLY", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
-            ]
-          },
-          {
-            "name": "CONTROL",
-            "addressOffset": "0x0070",
-            "fields": [
-              {"name": "ENABLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
-            ]
-          },
-          {
-            "name": "COMMIT",
-            "addressOffset": "0x0074",
-            "fields": [
-              {"name": "APPLY", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
+              {"name": "APPLY", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
             ]
           },
           {"name": "RELEASE_CONTROL", "addressOffset": "0x0078"},
@@ -146,6 +131,6 @@
   },
   "constants": [
     {"name": "Q15_FULL", "value": "0x00007fff", "width": 32},
-    {"name": "FILTER_B0_UNITY_Q4_28", "value": "0x10000000", "width": 32}
+    {"name": "FILTER_B0_UNITY_Q2_14", "value": "0x00004000", "width": 32}
   ]
 }

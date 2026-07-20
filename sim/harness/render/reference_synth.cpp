@@ -161,21 +161,23 @@ int16_t ReferenceSynth::saturate(int32_t value) {
   return int16_t(value);
 }
 
-int64_t ReferenceSynth::saturate_i64(__int128 value) {
-  if (value > __int128(9223372036854775807ll)) return 0x7fffffffffffffffll;
-  if (value < -__int128(9223372036854775807ll) - 1) return int64_t(0x8000000000000000ull);
-  return int64_t(value);
+int64_t ReferenceSynth::saturate_filter_state(int64_t value) {
+  constexpr int64_t kMax = (int64_t(1) << 33) - 1;
+  constexpr int64_t kMin = -(int64_t(1) << 33);
+  if (value > kMax) return kMax;
+  if (value < kMin) return kMin;
+  return value;
 }
 
 int16_t ReferenceSynth::biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v) {
-  int64_t y_q28 = int64_t(v.filter_b0) * int64_t(sample) + z1;
-  int64_t y_shift = y_q28 >> 28;
+  int64_t y_q14 = int64_t(v.filter_b0) * int64_t(sample) + z1;
+  int64_t y_shift = y_q14 >> 14;
   int16_t y = y_shift > 32767 ? int16_t(0x7fff) :
               (y_shift < -32768 ? int16_t(0x8000) : int16_t(y_shift));
-  __int128 next_z1 = __int128(v.filter_b1) * sample - __int128(v.filter_a1) * y + z2;
-  __int128 next_z2 = __int128(v.filter_b2) * sample - __int128(v.filter_a2) * y;
-  z1 = saturate_i64(next_z1);
-  z2 = saturate_i64(next_z2);
+  int64_t next_z1 = int64_t(v.filter_b1) * sample - int64_t(v.filter_a1) * y + z2;
+  int64_t next_z2 = int64_t(v.filter_b2) * sample - int64_t(v.filter_a2) * y;
+  z1 = saturate_filter_state(next_z1);
+  z2 = saturate_filter_state(next_z2);
   return y;
 }
 

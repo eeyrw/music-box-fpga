@@ -143,8 +143,8 @@ by the FPGA system clock and has no wire-level ready signal, so gapless
 high-speed burst transfers are not guaranteed. Single reads need an
 address-to-data turnaround gap; burst reads need a gap before each readback word;
 burst writes need a gap after each data word. Long-latency writes such as
-`COMMIT` should be the final word of a burst or sent as separate single-register
-writes.
+`VOICE_CONTROL.apply` should be the final word of a burst or sent as separate
+single-register writes.
 
 The command-line tool also wraps the Smart Artix DDR register-access window:
 

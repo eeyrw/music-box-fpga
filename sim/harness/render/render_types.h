@@ -31,7 +31,7 @@ constexpr int kRegLoopStart = regs::kOffLoopStart;
 constexpr int kRegLoopStartR = regs::kOffLoopStartR;
 constexpr int kRegLoopEnd = regs::kOffLoopEnd;
 constexpr int kRegLoopEndR = regs::kOffLoopEndR;
-constexpr int kRegRegionMode = regs::kOffRegionMode;
+constexpr int kRegVoiceControl = regs::kOffVoiceControl;
 constexpr int kRegPhaseInit = regs::kOffPhaseInit;
 constexpr int kRegPhaseInc = regs::kOffPhaseInc;
 constexpr int kRegPhaseIncRuntime = regs::kOffPhaseIncRuntime;
@@ -40,14 +40,9 @@ constexpr int kRegGainR = regs::kOffGainR;
 constexpr int kRegGainRuntime = regs::kOffGainRuntime;
 constexpr int kRegEnvelopeLevel = regs::kOffEnvelopeLevel;
 constexpr int kRegFilterControl = regs::kOffFilterControl;
-constexpr int kRegFilterB0 = regs::kOffFilterB0;
-constexpr int kRegFilterB1 = regs::kOffFilterB1;
-constexpr int kRegFilterB2 = regs::kOffFilterB2;
-constexpr int kRegFilterA1 = regs::kOffFilterA1;
+constexpr int kRegFilterB0B1 = regs::kOffFilterB0B1;
+constexpr int kRegFilterB2A1 = regs::kOffFilterB2A1;
 constexpr int kRegFilterA2 = regs::kOffFilterA2;
-constexpr int kRegFilterCommit = regs::kOffFilterCommit;
-constexpr int kRegControl = regs::kOffControl;
-constexpr int kRegCommit = regs::kOffCommit;
 constexpr int kRegReleaseControl = regs::kOffReleaseControl;
 constexpr int kRegStatus = regs::kOffStatus;
 
@@ -110,7 +105,7 @@ struct Region {
   int gain_l = 0x4000;
   int gain_r = 0x4000;
   bool filter_enable = false;
-  int filter_b0 = int(regs::kFilterB0UnityQ428);
+  int filter_b0 = int(regs::kFilterB0UnityQ214);
   int filter_b1 = 0;
   int filter_b2 = 0;
   int filter_a1 = 0;
@@ -151,7 +146,7 @@ struct Region {
 
 struct FilterConfig {
   bool enable = false;
-  int b0 = int(regs::kFilterB0UnityQ428);
+  int b0 = int(regs::kFilterB0UnityQ214);
   int b1 = 0;
   int b2 = 0;
   int a1 = 0;
@@ -248,15 +243,12 @@ inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
       ++stats.phase_inc_runtime;
       break;
     case kRegFilterControl:
-    case kRegFilterB0:
-    case kRegFilterB1:
-    case kRegFilterB2:
-    case kRegFilterA1:
+    case kRegFilterB0B1:
+    case kRegFilterB2A1:
     case kRegFilterA2:
-    case kRegFilterCommit:
       ++stats.filter;
       break;
-    case kRegCommit:
+    case kRegVoiceControl:
       ++stats.commit;
       break;
     case kRegReleaseControl:

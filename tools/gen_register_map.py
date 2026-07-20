@@ -25,11 +25,9 @@ def macro_name(prefix, name):
 
 
 FIELD_GROUP_ORDER = [
-    "REGION_MODE",
-    "CONTROL",
-    "COMMIT",
+    "VOICE_CONTROL",
     "FILTER_CONTROL",
-    "FILTER_COMMIT",
+    "FILTER_A2",
     "COMMON_EVENT_FLAGS",
     "PLATFORM_STATUS",
     "DDR_ACCESS_CONTROL",

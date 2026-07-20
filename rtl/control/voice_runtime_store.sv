@@ -24,23 +24,23 @@ module voice_runtime_store (
   input  logic [31:0]                           commit_phase_data,
   input  logic [31:0]                           commit_gain_data,
   input  logic [15:0]                           commit_envelope_data,
-  input  logic [159:0]                          commit_filter_data,
+  input  logic [(5*synth_pkg::FILTER_COEFF_WIDTH)-1:0] commit_filter_data,
   input  logic                                  commit_filter_enable_data
 );
   import synth_pkg::*;
 
-  localparam int FILTER_COEFF_WORD_WIDTH = 160;
-  localparam int FILTER_B0_LSB = 128;
-  localparam int FILTER_B1_LSB = 96;
-  localparam int FILTER_B2_LSB = 64;
-  localparam int FILTER_A1_LSB = 32;
+  localparam int FILTER_COEFF_WORD_WIDTH = 5 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B0_LSB = 4 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B1_LSB = 3 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B2_LSB = 2 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_A1_LSB = 1 * FILTER_COEFF_WIDTH;
   localparam int FILTER_A2_LSB = 0;
   localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
-    32'sh1000_0000,
-    32'sh0000_0000,
-    32'sh0000_0000,
-    32'sh0000_0000,
-    32'sh0000_0000
+    16'sh4000,
+    16'sh0000,
+    16'sh0000,
+    16'sh0000,
+    16'sh0000
   };
 
   (* ram_style = "distributed" *) logic runtime_released [NUM_VOICES];
@@ -144,7 +144,7 @@ module voice_runtime_store (
       end
       render_runtime <= '0;
       render_runtime.envelope_level <= 16'sh7fff;
-      render_runtime.filter_b0 <= 32'sh1000_0000;
+      render_runtime.filter_b0 <= 16'sh4000;
       inspect_release <= 32'd0;
     end else begin
       render_runtime.phase_inc <= runtime_phase_render_data;
@@ -153,11 +153,11 @@ module voice_runtime_store (
       render_runtime.envelope_level <= $signed(runtime_envelope_render_data);
       render_runtime.released <= runtime_released[render_voice_index];
       render_runtime.filter_enable <= runtime_filter_enable[render_voice_index];
-      render_runtime.filter_b0 <= runtime_filter_render_word[FILTER_B0_LSB +: 32];
-      render_runtime.filter_b1 <= runtime_filter_render_word[FILTER_B1_LSB +: 32];
-      render_runtime.filter_b2 <= runtime_filter_render_word[FILTER_B2_LSB +: 32];
-      render_runtime.filter_a1 <= runtime_filter_render_word[FILTER_A1_LSB +: 32];
-      render_runtime.filter_a2 <= runtime_filter_render_word[FILTER_A2_LSB +: 32];
+      render_runtime.filter_b0 <= runtime_filter_render_word[FILTER_B0_LSB +: FILTER_COEFF_WIDTH];
+      render_runtime.filter_b1 <= runtime_filter_render_word[FILTER_B1_LSB +: FILTER_COEFF_WIDTH];
+      render_runtime.filter_b2 <= runtime_filter_render_word[FILTER_B2_LSB +: FILTER_COEFF_WIDTH];
+      render_runtime.filter_a1 <= runtime_filter_render_word[FILTER_A1_LSB +: FILTER_COEFF_WIDTH];
+      render_runtime.filter_a2 <= runtime_filter_render_word[FILTER_A2_LSB +: FILTER_COEFF_WIDTH];
       inspect_release <= {31'd0, runtime_released[inspect_voice]};
 
       if (bus_release_write) begin

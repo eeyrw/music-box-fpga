@@ -20,12 +20,10 @@ module voice_descriptor_store (
   localparam logic [15:0] OFF_LOOP_START_R = REG_OFF_LOOP_START_R;
   localparam logic [15:0] OFF_LOOP_END     = REG_OFF_LOOP_END;
   localparam logic [15:0] OFF_LOOP_END_R   = REG_OFF_LOOP_END_R;
-  localparam logic [15:0] OFF_REGION_MODE  = REG_OFF_REGION_MODE;
+  localparam logic [15:0] OFF_VOICE_CTL    = REG_OFF_VOICE_CONTROL;
   localparam logic [15:0] OFF_GAIN_L       = REG_OFF_GAIN_L;
   localparam logic [15:0] OFF_GAIN_R       = REG_OFF_GAIN_R;
   localparam logic [15:0] OFF_ENVELOPE     = REG_OFF_ENVELOPE_LEVEL;
-  localparam logic [15:0] OFF_FILTER_CTL   = REG_OFF_FILTER_CONTROL;
-  localparam logic [15:0] OFF_CONTROL      = REG_OFF_CONTROL;
 
   logic [DESCRIPTOR_WORD_INDEX_WIDTH-1:0] write_addr;
   logic [DESCRIPTOR_WORD_INDEX_WIDTH-1:0] read_addr;
@@ -47,14 +45,8 @@ module voice_descriptor_store (
       OFF_GAIN_L, OFF_GAIN_R, OFF_ENVELOPE: begin
         normalized_write_data = {{16{write_data[15]}}, write_data[15:0]};
       end
-      OFF_REGION_MODE: begin
-        normalized_write_data = {29'd0, write_data[2:0]};
-      end
-      OFF_FILTER_CTL: begin
-        normalized_write_data = {31'd0, write_data[0]};
-      end
-      OFF_CONTROL: begin
-        normalized_write_data = {31'd0, write_data[0]};
+      OFF_VOICE_CTL: begin
+        normalized_write_data = write_data & REG_VOICE_CONTROL_MASK;
       end
       default: begin
       end

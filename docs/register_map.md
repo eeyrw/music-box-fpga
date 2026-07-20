@@ -21,11 +21,11 @@ RTL module boundaries that consume the generic register bus use
 wrappers may still expose the same fields as separate pins when that keeps
 external integration stable.
 Wave-memory base addresses are 32-bit word addresses. Writes to configuration
-registers update per-voice shadow state. `COMMIT` copies the selected shadow
-configuration into renderer-facing active storage and stages a render-boundary
-commit pulse for phase reload and filter-history clear. Writes to runtime
-registers do not require `COMMIT`, update live runtime state directly, and do not
-reload playback phase.
+registers update per-voice shadow state. Writing `VOICE_CONTROL.apply` copies the
+selected shadow configuration into renderer-facing active storage and stages a
+render-boundary commit pulse for phase reload and filter-history clear. Writes
+to runtime registers do not require a voice commit, update live runtime state
+directly, and do not reload playback phase.
 
 Board-level adapters expose this same register bus through the selected physical
 transport. The current `fpga/common/rtl/spi_register_bridge.sv` adapter supports
@@ -65,8 +65,8 @@ clocks. Burst writes must leave a gap after each 32-bit data beat so the previou
 internal write can complete; otherwise later MOSI bits can be ignored while the
 bridge is in its write-wait state. Burst reads must leave a gap before each
 readback word so the next internal read can complete. Put long-latency writes
-such as `COMMIT` at the end of a burst or issue them as separate single-register
-writes. Supporting gapless high-speed burst traffic requires additional RTL, such
+such as `VOICE_CONTROL.apply` at the end of a burst or issue them as separate
+single-register writes. Supporting gapless high-speed burst traffic requires additional RTL, such
 as a write-side RX FIFO and read-side prefetch/FIFO or a protocol-defined fixed
 dummy-cycle interval.
 
@@ -88,7 +88,7 @@ register_addr    = voice_base(slot) + offset
 | `0x14` | LOOP_START_R | right-channel first loop frame in bits 23:0 |
 | `0x18` | LOOP_END | left/mono exclusive loop end frame in bits 23:0 |
 | `0x1c` | LOOP_END_R | right-channel exclusive loop end frame in bits 23:0 |
-| `0x20` | REGION_MODE | bit 0 stereo, bits 2:1 loop mode |
+| `0x20` | VOICE_CONTROL | bit 0 stereo, bits 2:1 loop mode, bit 3 enable, write bit 4 as one to commit the voice |
 | `0x30` | PHASE_INIT | unsigned Q24.8 initial position |
 | `0x34` | PHASE_INC | unsigned Q24.8 frames per output sample |
 | `0x38` | PHASE_INC_RUNTIME | runtime unsigned Q24.8 phase increment |
@@ -97,14 +97,9 @@ register_addr    = voice_base(slot) + offset
 | `0x48` | GAIN_RUNTIME | bits 15:0 left Q1.15, bits 31:16 right Q1.15 |
 | `0x4c` | ENVELOPE_LEVEL | runtime signed Q1.15 envelope level in bits 15:0 |
 | `0x50` | FILTER_CONTROL | bit 0 shadow enable |
-| `0x54` | FILTER_B0 | signed Q4.28 `b0` |
-| `0x58` | FILTER_B1 | signed Q4.28 `b1` |
-| `0x5c` | FILTER_B2 | signed Q4.28 `b2` |
-| `0x60` | FILTER_A1 | signed Q4.28 `a1` |
-| `0x64` | FILTER_A2 | signed Q4.28 `a2` |
-| `0x68` | FILTER_COMMIT | write bit 0 as one to commit shadow filter settings to runtime |
-| `0x70` | CONTROL | bit 0 enable |
-| `0x74` | COMMIT | write bit 0 as one to activate this voice slot and stage render-boundary reload |
+| `0x54` | FILTER_B0_B1 | bits 15:0 signed Q2.14 `b0`, bits 31:16 signed Q2.14 `b1` |
+| `0x58` | FILTER_B2_A1 | bits 15:0 signed Q2.14 `b2`, bits 31:16 signed Q2.14 `a1` |
+| `0x5c` | FILTER_A2 | bits 15:0 signed Q2.14 `a2`; write bit 16 as one to commit shadow filter settings to runtime; read bits 31:16 as zero |
 | `0x78` | RELEASE_CONTROL | bit 0 released runtime flag |
 | `0x7c` | STATUS | bit 0 configuration valid for this voice slot |
 | `0x3000` | VERSION | design version, currently `0x0006_0000` |
@@ -140,15 +135,17 @@ that channel. Invalid active configurations do not produce memory requests or
 audio samples.
 The maximum represented region length is `0x00ff_ffff` frames.
 
-`REGION_MODE` fields are:
+`VOICE_CONTROL` fields are:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
 | `0` | `stereo` | `0` mono, `1` stereo with independent right-channel region fields. |
-| `2:1` | `loop_mode` | Loop policy copied to active state on `COMMIT`. |
-| `31:3` | reserved | Reads zero. |
+| `2:1` | `loop_mode` | Loop policy copied to active state on `VOICE_CONTROL.apply`. |
+| `3` | `enable` | Shadow voice enable copied to active state on `VOICE_CONTROL.apply`. |
+| `4` | `apply` | Write-only commit strobe; reads zero. |
+| `31:5` | reserved | Reads zero. |
 
-`REGION_MODE.loop_mode` values are:
+`VOICE_CONTROL.loop_mode` values are:
 
 | Value | Name | Behavior |
 | --- | --- | --- |
@@ -156,7 +153,7 @@ The maximum represented region length is `0x00ff_ffff` frames.
 | `1` | continuous loop | wrap from exclusive `loop_end` to `loop_start` |
 | `2` | loop until release | loop while `released == 0`, then play through to `length` |
 
-Configuration registers are `CONTROL`, `REGION_MODE`, `BASE_ADDR`, `BASE_ADDR_R`, `LENGTH`,
+Configuration registers are `VOICE_CONTROL`, `BASE_ADDR`, `BASE_ADDR_R`, `LENGTH`,
 `LENGTH_R`, `LOOP_START`, `LOOP_START_R`, `LOOP_END`, `LOOP_END_R`,
 `PHASE_INIT`, `PHASE_INC`, `GAIN_L`, `GAIN_R`, and the filter
 registers. Reads from these addresses return the current shadow state through the
@@ -166,15 +163,16 @@ request until `bus_ready` is asserted.
 
 Runtime registers are `ENVELOPE_LEVEL`, `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and
 `RELEASE_CONTROL`. Filter coefficient and control writes update shadow filter
-state; writing `FILTER_COMMIT` with bit 0 set commits the complete shadow
-filter group to runtime without a phase reload. Reads from `ENVELOPE_LEVEL`,
+state; writing `FILTER_A2` with bit 16 set commits the complete shadow filter
+group to runtime without a phase reload. Reads from `ENVELOPE_LEVEL`,
 `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and `RELEASE_CONTROL` return the live
-runtime scalar state. `COMMIT` and `FILTER_COMMIT` read as zero. Unsupported
-addresses report a bus error.
+runtime scalar state. `VOICE_CONTROL[4]` and `FILTER_A2[31:16]` read as zero.
+Unsupported addresses report a bus error.
 
 The per-voice register bank keeps three classes of state. Shadow state is the
 software-editable configuration staged for the next commit. Active state is the
-stable renderer-facing region configuration copied from shadow by `COMMIT`.
+stable renderer-facing region configuration copied from shadow by
+`VOICE_CONTROL.apply`.
 Runtime state holds controls that may change while a voice is playing.
 
 | Register or field | Shadow | Active | Runtime | Notes |
@@ -182,18 +180,16 @@ Runtime state holds controls that may change while a voice is playing.
 | `BASE_ADDR`, `BASE_ADDR_R` | yes | yes | no | Sample-region word base addresses. |
 | `LENGTH`, `LENGTH_R` | yes | yes | no | Sample-frame counts. |
 | `LOOP_START`, `LOOP_START_R`, `LOOP_END`, `LOOP_END_R` | yes | yes | no | Loop-window frame counts. |
-| `REGION_MODE` | yes | yes | no | Stereo and loop-mode configuration. |
-| `CONTROL.enable` | yes | yes | no | Voice enable copied on `COMMIT`. |
+| `VOICE_CONTROL.stereo`, `VOICE_CONTROL.loop_mode`, `VOICE_CONTROL.enable` | yes | yes | no | Voice mode and enable copied on `VOICE_CONTROL.apply`. |
 | `PHASE_INIT` | yes | yes | no | Initial phase used when a commit reloads the voice. |
-| `PHASE_INC` | yes | no | yes | Initial phase increment copied into runtime on voice `COMMIT`. |
+| `PHASE_INC` | yes | no | yes | Initial phase increment copied into runtime on voice commit. |
 | `PHASE_INC_RUNTIME` | no | no | yes | Immediate runtime pitch update; does not change shadow. |
-| `GAIN_L`, `GAIN_R` | yes | no | yes | Initial channel gains copied into runtime on voice `COMMIT`. |
+| `GAIN_L`, `GAIN_R` | yes | no | yes | Initial channel gains copied into runtime on voice commit. |
 | `GAIN_RUNTIME` | no | no | yes | Immediate packed runtime gain update; does not change shadow. |
 | `ENVELOPE_LEVEL` | yes | no | yes | Runtime envelope write also stages the committed envelope value. If never written for a slot, commit initializes runtime envelope to full scale. |
-| `RELEASE_CONTROL` | no | no | yes | Runtime release flag; voice `COMMIT` clears it. |
-| `FILTER_CONTROL`, `FILTER_B0` through `FILTER_A2` | yes | no | yes | Shadow filter group is copied to runtime by voice `COMMIT` or `FILTER_COMMIT`. |
+| `RELEASE_CONTROL` | no | no | yes | Runtime release flag; voice commit clears it. |
+| `FILTER_CONTROL`, `FILTER_B0_B1`, `FILTER_B2_A1`, `FILTER_A2` | yes | no | yes | Shadow filter group is copied to runtime by voice commit or `FILTER_A2[16]`. |
 | `STATUS` | no | no | no | Read-only view of the committed configuration-valid bit. |
-| `COMMIT`, `FILTER_COMMIT` | no | no | no | Write-only action registers; reads return zero. |
 
 The common status registers are implemented by
 `fpga/common/rtl/wavetable_common_status_regs.sv` and are composed into the
@@ -396,19 +392,19 @@ reports `error` and does not access DDR. For reads, load `DDR_ACCESS_ADDR`, writ
 `DDR_ACCESS_DATA0` through `DDR_ACCESS_DATA3`.
 
 `RELEASE_CONTROL.released` is runtime state. Writes update the runtime released
-flag without reloading phase. A commit clears the runtime released flag so a
-reused voice starts in the held state. `REGION_MODE.loop_mode` is a shadow
-configuration field and becomes active on commit.
+flag without reloading phase. A voice commit clears the runtime released flag so
+a reused voice starts in the held state. `VOICE_CONTROL.loop_mode` is a shadow
+configuration field and becomes active on voice commit.
 
 `ENVELOPE_LEVEL` is runtime state supplied by the MCU/control model. Writes update
-the runtime value without requiring `COMMIT` and without reloading playback phase.
-A commit preserves the current runtime envelope value while it loads the rest of
+the runtime value without requiring a voice commit and without reloading playback phase.
+A voice commit preserves the current runtime envelope value while it loads the rest of
 the voice configuration. This lets MCU firmware or a testbench model advance
 attack, decay, sustain, and release curves while the FPGA pipeline keeps rendering
 the same note.
 
 `GAIN_L` and `GAIN_R` are shadow configuration fields copied into runtime gain by
-`COMMIT`. `GAIN_RUNTIME` updates both runtime channel gains in one bus write
+voice commit. `GAIN_RUNTIME` updates both runtime channel gains in one bus write
 without copying shadow registers and without reloading playback phase. Use this
 path for MIDI volume, expression, pan, or similar low-rate controller changes
 where a two-write left/right gain update could otherwise be visible over SPI.
@@ -418,18 +414,20 @@ shadow registers and without reloading runtime phase. Use this path for
 pitch bend or low-rate vibrato control.
 
 The filter registers configure a per-voice biquad IIR filter placed after
-interpolation and before channel gain. `FILTER_CONTROL[0]` and `FILTER_B0` through
-`FILTER_A2` form one shadow filter group. A voice `COMMIT` copies that group into
-runtime filter state for a new note. During active playback, write the desired
-shadow filter group first, then write `FILTER_COMMIT` with bit 0 set; that copies
-the shadow enable plus all five coefficients to runtime together without
-reloading phase. Filter history is per voice and per
-channel and is cleared on voice `COMMIT`. `FILTER_CONTROL.enable = 0` bypasses the
+interpolation and before channel gain. `FILTER_CONTROL[0]`, `FILTER_B0_B1`,
+`FILTER_B2_A1`, and `FILTER_A2` form one shadow filter group. A voice commit
+copies that group into runtime filter state for a new note. During active
+playback, write the desired shadow filter group first, then write `FILTER_A2`
+with bit 16 set; that writes `a2` and copies the shadow enable plus all five
+coefficients to runtime together without reloading phase. Filter history is per voice and per
+channel and is cleared on voice commit. `FILTER_CONTROL.enable = 0` bypasses the
 filter. The denominator convention is `1 + a1*z^-1 + a2*z^-2`; the RTL computes
 `b0*x + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]` using a transposed form.
 
 The RTL does not implement SF2 preset selection, velocity mapping, modulators, or
-coefficient calculation; software writes already-quantized filter coefficients.
+coefficient calculation; software writes already-quantized signed Q2.14 filter
+coefficients. `FILTER_A2[16]` is a write-only commit strobe; `FILTER_A2[31:17]`
+is unused. Reads return all `FILTER_A2` upper bits as zero.
 A value of `0x7fff` is treated as full envelope level and bypasses the extra
 envelope multiply so existing full-scale voice gains are not attenuated by one
 least-significant bit.
@@ -443,7 +441,7 @@ smallest useful actions are below.
 ### Note On
 
 For a new note, write the runtime envelope first, then write the shadow
-configuration, then commit. `COMMIT` updates the active renderer configuration,
+configuration, then commit. Writing `VOICE_CONTROL.apply` updates the active renderer configuration,
 stages `PHASE_INC` and `GAIN_L/R` into runtime pitch/gain, clears the staged
 `RELEASE_CONTROL.released`, and requests phase reload from `PHASE_INIT` plus
 filter-history clear at the next accepted output-frame boundary. Software should
@@ -463,26 +461,22 @@ Minimal mono no-loop Note On for `slot`:
 | 7 | `voice_base(slot) + 0x14` `LOOP_START_R` | ignored for mono; commonly mirror `LOOP_START` |
 | 8 | `voice_base(slot) + 0x18` `LOOP_END` | `0` for no-loop voices |
 | 9 | `voice_base(slot) + 0x1c` `LOOP_END_R` | ignored for mono; commonly mirror `LOOP_END` |
-| 10 | `voice_base(slot) + 0x20` `REGION_MODE` | bit 0 `stereo = 0`, bits 2:1 `loop_mode = 0` |
-| 11 | `voice_base(slot) + 0x30` `PHASE_INIT` | usually `0x0000_0000` |
-| 12 | `voice_base(slot) + 0x34` `PHASE_INC` | Q24.8 playback increment |
-| 13 | `voice_base(slot) + 0x40` `GAIN_L` | signed Q1.15 initial left gain |
-| 14 | `voice_base(slot) + 0x44` `GAIN_R` | signed Q1.15 initial right gain |
-| 15 | `voice_base(slot) + 0x50` `FILTER_CONTROL` | `0` to bypass filter |
-| 16 | `voice_base(slot) + 0x54` `FILTER_B0` | `0x1000_0000` unity, harmless when bypassed |
-| 17 | `voice_base(slot) + 0x58` `FILTER_B1` | `0` |
-| 18 | `voice_base(slot) + 0x5c` `FILTER_B2` | `0` |
-| 19 | `voice_base(slot) + 0x60` `FILTER_A1` | `0` |
-| 20 | `voice_base(slot) + 0x64` `FILTER_A2` | `0` |
-| 21 | `voice_base(slot) + 0x70` `CONTROL` | bit 0 `enable = 1` |
-| 22 | `voice_base(slot) + 0x74` `COMMIT` | `1` |
+| 10 | `voice_base(slot) + 0x30` `PHASE_INIT` | usually `0x0000_0000` |
+| 11 | `voice_base(slot) + 0x34` `PHASE_INC` | Q24.8 playback increment |
+| 12 | `voice_base(slot) + 0x40` `GAIN_L` | signed Q1.15 initial left gain |
+| 13 | `voice_base(slot) + 0x44` `GAIN_R` | signed Q1.15 initial right gain |
+| 14 | `voice_base(slot) + 0x50` `FILTER_CONTROL` | `0` to bypass filter |
+| 15 | `voice_base(slot) + 0x54` `FILTER_B0_B1` | `0x0000_4000` packs `b1=0`, `b0=unity`; harmless when bypassed |
+| 16 | `voice_base(slot) + 0x58` `FILTER_B2_A1` | `0` |
+| 17 | `voice_base(slot) + 0x5c` `FILTER_A2` | `0` |
+| 18 | `voice_base(slot) + 0x20` `VOICE_CONTROL` | `enable=1`, `apply=1`, and desired stereo/loop bits; mono no-loop is `0x18` |
 
-For stereo playback, write `REGION_MODE.stereo = 1`; `BASE_ADDR` names the first
+For stereo playback, write `VOICE_CONTROL.stereo = 1`; `BASE_ADDR` names the first
 left sample word and `BASE_ADDR_R` names the first right sample word. Write the
 right channel window through `LENGTH_R`, `LOOP_START_R`, and `LOOP_END_R`. Phase
 and phase increment are still measured in sample frames. For continuous loop or
 loop-until-release, write valid per-channel loop starts, exclusive loop ends, and
-`REGION_MODE.loop_mode = 1` or `2` before `COMMIT`.
+`VOICE_CONTROL.loop_mode = 1` or `2` when applying the voice.
 
 ### Envelope Update
 
@@ -492,14 +486,14 @@ To update amplitude during attack, decay, sustain, or release, write only:
 voice_base(slot) + 0x4c ENVELOPE_LEVEL = current Q1.15 envelope level
 ```
 
-This does not require `COMMIT` and does not reload phase. The renderer samples
+This does not require a voice commit and does not reload phase. The renderer samples
 the live runtime value when it accepts each voice for rendering.
 
 ### Note Off
 
 There are two common Note Off policies.
 
-For `REGION_MODE.loop_mode = 2` loop-until-release samples:
+For `VOICE_CONTROL.loop_mode = 2` loop-until-release samples:
 
 | Write order | Address | Data |
 | ---: | --- | --- |
@@ -510,8 +504,7 @@ When the release envelope reaches zero, free the slot:
 
 | Write order | Address | Data |
 | ---: | --- | --- |
-| 1 | `voice_base(slot) + 0x70` `CONTROL` | bit 0 `enable = 0` |
-| 2 | `voice_base(slot) + 0x74` `COMMIT` | `1` |
+| 1 | `voice_base(slot) + 0x20` `VOICE_CONTROL` | current stereo/loop bits, `enable = 0`, `apply = 1` |
 
 For one-shot no-loop voices, software may either let playback naturally stop at
 `LENGTH` or immediately start reducing `ENVELOPE_LEVEL` and then disable/commit
@@ -531,15 +524,15 @@ Runtime gain, volume, expression, or pan writes both channels atomically:
 voice_base(slot) + 0x48 GAIN_RUNTIME = {right_gain[15:0], left_gain[15:0]}
 ```
 
-Neither write reloads phase or changes shadow configuration. A later `COMMIT`
+Neither write reloads phase or changes shadow configuration. A later voice commit
 will overwrite runtime pitch and gain with the shadow `PHASE_INC` and `GAIN_L/R`
 values staged for the next note setup.
 
 ### Reusing A Slot
 
 Before reusing a slot, software should explicitly write the new note's
-`ENVELOPE_LEVEL`, gains, pitch, `REGION_MODE`, filter settings, and
-`CONTROL.enable`, then `COMMIT`. Do not rely on runtime state left by the
+`ENVELOPE_LEVEL`, gains, pitch, `VOICE_CONTROL`, filter settings, and then apply
+the voice. Do not rely on runtime state left by the
 previous note except for the documented commit behavior: commit clears
 `RELEASE_CONTROL.released` and reloads phase/filter history at the next accepted
 output-frame boundary, but preserves the live runtime envelope level.

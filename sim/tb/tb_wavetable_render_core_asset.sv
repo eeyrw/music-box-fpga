@@ -164,10 +164,7 @@ module tb_wavetable_render_core_asset;
     rst = 1'b0;
 
     // Configure the core exactly as software would: write all shadow registers,
-    // then commit atomically with ADDR_COMMIT.
-    bus_write_word(reg_voice_addr(0, REG_OFF_CONTROL), REG_CONTROL_ENABLE_MASK);
-    bus_write_word(reg_voice_addr(0, REG_OFF_REGION_MODE),
-                   (RENDER_STEREO != 0) ? 32'h0000_0001 : 32'h0000_0000);
+    // then commit atomically with VOICE_CONTROL.apply.
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), RENDER_BASE_ADDR);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR_R), `RENDER_BASE_ADDR_R);
     bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), RENDER_LENGTH);
@@ -180,7 +177,10 @@ module tb_wavetable_render_core_asset;
     bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), RENDER_PHASE_INC);
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), RENDER_GAIN_L);
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), RENDER_GAIN_R);
-    bus_write_word(reg_voice_addr(0, REG_OFF_COMMIT), REG_COMMIT_APPLY_MASK);
+    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
+                   ((RENDER_STEREO != 0) ? 32'h0000_0001 : 32'h0000_0000) |
+                   REG_VOICE_CONTROL_ENABLE_MASK |
+                   REG_VOICE_CONTROL_APPLY_MASK);
     repeat (2) @(negedge clk);
 
     // The output file is always stereo: mono instruments have already been

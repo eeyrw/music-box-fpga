@@ -6,7 +6,12 @@ package synth_pkg;
   localparam int PHASE_FRAC_WIDTH = 8;
   localparam int PHASE_WIDTH = PHASE_FRAME_WIDTH + PHASE_FRAC_WIDTH;
   localparam int ADDR_WIDTH = 32;
-  localparam int FILTER_STATE_WIDTH = 48;
+  /* verilator lint_off UNUSEDPARAM */
+  localparam int FILTER_COEFF_WIDTH = 16;
+  localparam int FILTER_COEFF_FRAC_WIDTH = 14;
+  localparam int FILTER_STATE_WIDTH = 34;
+  localparam int FILTER_RAW_WIDTH = 36;
+  /* verilator lint_on UNUSEDPARAM */
 `ifdef SYNTH_NUM_VOICES
   localparam int NUM_VOICES = `SYNTH_NUM_VOICES;
 `else
@@ -58,11 +63,11 @@ package synth_pkg;
   } stereo_gain_t;
 
   typedef struct packed {
-    logic signed [31:0] b0;
-    logic signed [31:0] b1;
-    logic signed [31:0] b2;
-    logic signed [31:0] a1;
-    logic signed [31:0] a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] a2;
   } biquad_coeff_t;
 
   typedef struct packed {
@@ -73,7 +78,7 @@ package synth_pkg;
   } stereo_biquad_state_t;
 
   // One committed voice configuration. These fields describe the sample region
-  // and static playback mode that must become visible atomically on COMMIT.
+  // and static playback mode that must become visible atomically on voice commit.
   typedef struct packed {
     logic                      enable;
     logic                      stereo;
@@ -90,7 +95,7 @@ package synth_pkg;
   } voice_config_t;
 
   // Software-visible shadow state. Runtime-owned fields are copied from here on
-  // COMMIT, but the renderer reads them through voice_runtime_t.
+  // voice commit, but the renderer reads them through voice_runtime_t.
   typedef struct packed {
     logic                      enable;
     logic                      stereo;
@@ -108,11 +113,11 @@ package synth_pkg;
     logic signed [15:0]        gain_r;
     logic [1:0]                loop_mode;
     logic                      filter_enable;
-    logic signed [31:0]        filter_b0;
-    logic signed [31:0]        filter_b1;
-    logic signed [31:0]        filter_b2;
-    logic signed [31:0]        filter_a1;
-    logic signed [31:0]        filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
   } voice_shadow_t;
 
   // Runtime control state. These fields may be updated while a voice is playing
@@ -124,11 +129,11 @@ package synth_pkg;
     logic signed [15:0]        envelope_level;
     logic                      released;
     logic                      filter_enable;
-    logic signed [31:0]        filter_b0;
-    logic signed [31:0]        filter_b1;
-    logic signed [31:0]        filter_b2;
-    logic signed [31:0]        filter_a1;
-    logic signed [31:0]        filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
   } voice_runtime_t;
 
   typedef struct packed {
@@ -137,11 +142,11 @@ package synth_pkg;
     logic signed [15:0]          gain_l;
     logic signed [15:0]          gain_r;
     logic signed [15:0]          envelope_level;
-    logic signed [31:0]          filter_b0;
-    logic signed [31:0]          filter_b1;
-    logic signed [31:0]          filter_b2;
-    logic signed [31:0]          filter_a1;
-    logic signed [31:0]          filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r;

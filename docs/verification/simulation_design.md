@@ -172,7 +172,7 @@ outside synthesizable RTL. A testbench or simulation-only MCU model should drive
 the register bus like firmware:
 
 - Note On: allocate a voice slot, write sample/loop/tuning/gain fields and an
-  initial `ENVELOPE_LEVEL`, then write `COMMIT`.
+  initial `ENVELOPE_LEVEL`, then write `VOICE_CONTROL` with enable and apply set.
 - Envelope update: write only `ENVELOPE_LEVEL`; this is a runtime register and
   does not reset phase.
 - Note Off: continue writing release values to `ENVELOPE_LEVEL`.
@@ -541,12 +541,10 @@ LOOP_START     = left/mono first loop frame
 LOOP_START_R   = right first loop frame for stereo
 LOOP_END       = left/mono exclusive loop end
 LOOP_END_R     = right exclusive loop end for stereo
-REGION_MODE    = mono/stereo + no loop / continuous / loop-until-release
 PHASE_INIT     = 0
 PHASE_INC      = generated Q24.8 increment
 GAIN_L/R       = selected Q1.15 channel gains
-CONTROL        = enable
-COMMIT         = 1
+VOICE_CONTROL  = mono/stereo + loop mode + enable + apply
 ```
 
 At Note Off, loop-until-release samples receive `RELEASE_CONTROL.released = 1`.

@@ -52,7 +52,8 @@ algorithm but changes the read contract:
 - Runtime reads return live runtime scalar state for `ENVELOPE_LEVEL`,
   `PHASE_INC_RUNTIME`, `GAIN_RUNTIME`, and `RELEASE_CONTROL`.
 - `STATUS` returns active configuration validity.
-- `COMMIT` and `FILTER_COMMIT` read as zero.
+- `VOICE_CONTROL[4]` and `FILTER_A2[16]` are write-only commit strobes and read
+  as zero with their reserved bits.
 - Unsupported addresses return a bus error.
 - The SPI register-bridge test now checks direct per-voice readback and verifies
   that the old `0x3004` and `0x3008` addresses are rejected.
@@ -134,12 +135,11 @@ of preserving the historical register order:
 - `0x30` to `0x3f`: playback pitch setup and runtime pitch update.
 - `0x40` to `0x4f`: initial gains, runtime packed gain, and runtime envelope.
 - `0x50` to `0x6f`: filter control, coefficients, and filter commit.
-- `0x70` to `0x7f`: voice enable, voice commit, release runtime flag, and
-  status.
+- `0x70` to `0x7f`: release runtime flag, status, and reserved space.
 - `0x80` to `0xff`: reserved.
 
-`CONTROL` now owns only the shadow enable bit. Stereo and loop policy moved to
-`REGION_MODE`, with bit 0 as `stereo` and bits 2:1 as `loop_mode`.
+`VOICE_CONTROL` owns stereo, loop policy, shadow enable, and the voice commit
+strobe at `0x20`.
 
 The renderer-facing state is split out of `voice_register_bank`:
 
@@ -180,7 +180,7 @@ Recommended modules:
   - Normal reads return what software wrote after field masking/sign extension.
 
 - `voice_commit_engine`
-  - Owns `COMMIT` and `FILTER_COMMIT` sequencing.
+  - Owns `VOICE_CONTROL[4]` and `FILTER_A2[16]` sequencing.
   - Reads a complete descriptor from `voice_descriptor_store`.
   - Validates length, stereo length, and loop boundaries.
   - Writes coherent active/runtime/filter snapshots.
@@ -220,7 +220,7 @@ The current per-voice stride is `0x100`. Current group layout inside each slot:
 - `0x30` to `0x3f`: playback setup and runtime pitch.
 - `0x40` to `0x4f`: initial/runtime gains and runtime envelope.
 - `0x50` to `0x6f`: filter controls and coefficients.
-- `0x70` to `0x7f`: enable, commit, release, and status.
+- `0x70` to `0x7f`: release, status, and reserved space.
 - `0x80` to `0xff`: reserved for future modulation/envelope controls and status registers.
 
 ## BRAM Strategy
@@ -340,8 +340,8 @@ Control-plane tests:
 - Commit isolation: shadow writes do not affect active playback before commit.
 - Commit atomicity: active snapshot never observes a partial descriptor.
 - Runtime updates do not reload phase.
-- Filter coefficient writes do not affect runtime filtering before
-  `FILTER_COMMIT`.
+- Filter coefficient writes do not affect runtime filtering before a
+  `FILTER_A2[16]` commit strobe.
 - Reset returns status, runtime defaults, and descriptor defaults to documented
   values.
 

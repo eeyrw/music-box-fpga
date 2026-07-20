@@ -19,7 +19,7 @@ constexpr uint16_t kOffLoopStart = 0x0010u;
 constexpr uint16_t kOffLoopStartR = 0x0014u;
 constexpr uint16_t kOffLoopEnd = 0x0018u;
 constexpr uint16_t kOffLoopEndR = 0x001cu;
-constexpr uint16_t kOffRegionMode = 0x0020u;
+constexpr uint16_t kOffVoiceControl = 0x0020u;
 constexpr uint16_t kOffPhaseInit = 0x0030u;
 constexpr uint16_t kOffPhaseInc = 0x0034u;
 constexpr uint16_t kOffPhaseIncRuntime = 0x0038u;
@@ -28,14 +28,9 @@ constexpr uint16_t kOffGainR = 0x0044u;
 constexpr uint16_t kOffGainRuntime = 0x0048u;
 constexpr uint16_t kOffEnvelopeLevel = 0x004cu;
 constexpr uint16_t kOffFilterControl = 0x0050u;
-constexpr uint16_t kOffFilterB0 = 0x0054u;
-constexpr uint16_t kOffFilterB1 = 0x0058u;
-constexpr uint16_t kOffFilterB2 = 0x005cu;
-constexpr uint16_t kOffFilterA1 = 0x0060u;
-constexpr uint16_t kOffFilterA2 = 0x0064u;
-constexpr uint16_t kOffFilterCommit = 0x0068u;
-constexpr uint16_t kOffControl = 0x0070u;
-constexpr uint16_t kOffCommit = 0x0074u;
+constexpr uint16_t kOffFilterB0B1 = 0x0054u;
+constexpr uint16_t kOffFilterB2A1 = 0x0058u;
+constexpr uint16_t kOffFilterA2 = 0x005cu;
 constexpr uint16_t kOffReleaseControl = 0x0078u;
 constexpr uint16_t kOffStatus = 0x007cu;
 
@@ -64,14 +59,14 @@ constexpr uint16_t kDdrAccessData1 = 0x3074u;
 constexpr uint16_t kDdrAccessData2 = 0x3078u;
 constexpr uint16_t kDdrAccessData3 = 0x307cu;
 
-constexpr int kRegionModeStereoBit = 0;
-constexpr int kRegionModeLoopModeLsb = 1;
-constexpr int kRegionModeLoopModeWidth = 2;
-constexpr uint32_t kRegionModeMask = 0x00000007u;
-constexpr uint32_t kControlEnableMask = 0x00000001u;
-constexpr uint32_t kCommitApplyMask = 0x00000001u;
+constexpr int kVoiceControlStereoBit = 0;
+constexpr int kVoiceControlLoopModeLsb = 1;
+constexpr int kVoiceControlLoopModeWidth = 2;
+constexpr uint32_t kVoiceControlEnableMask = 0x00000008u;
+constexpr uint32_t kVoiceControlApplyMask = 0x00000010u;
+constexpr uint32_t kVoiceControlMask = 0x0000000fu;
 constexpr uint32_t kFilterControlEnableMask = 0x00000001u;
-constexpr uint32_t kFilterCommitApplyMask = 0x00000001u;
+constexpr uint32_t kFilterA2ApplyMask = 0x00010000u;
 constexpr uint32_t kCommonEventFlagsUnderrunMask = 0x00000001u;
 constexpr uint32_t kCommonEventFlagsSampleDropMask = 0x00000002u;
 constexpr uint32_t kCommonEventFlagsRenderDeadlineMissMask = 0x00000004u;
@@ -91,7 +86,7 @@ constexpr uint32_t kDdrAccessStatusDoneMask = 0x00000008u;
 constexpr uint32_t kDdrAccessStatusErrorMask = 0x00000010u;
 
 constexpr uint32_t kQ15Full = 0x00007fffu;
-constexpr uint32_t kFilterB0UnityQ428 = 0x10000000u;
+constexpr uint32_t kFilterB0UnityQ214 = 0x00004000u;
 
 constexpr uint16_t voice_addr(int voice, uint16_t offset) {
   return uint16_t(kVoiceBase + voice * kVoiceStride + offset);

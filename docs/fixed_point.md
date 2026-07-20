@@ -48,21 +48,76 @@ samples from the gain stage.
 ## Biquad IIR Filter
 
 Each voice can enable a second-order IIR filter after interpolation and before
-channel gain. Coefficients are signed Q4.28 values. `0x1000_0000` is unity,
-`0x0800_0000` is 0.5, and negative feedback coefficients use two's-complement signed values.
+channel gain. Coefficients are signed 16-bit Q2.14 values packed into
+`FILTER_B0_B1`, `FILTER_B2_A1`, and `FILTER_A2`. `0x4000` is unity, `0x2000` is
+0.5, and negative feedback coefficients use two's-complement signed values.
+`FILTER_A2[16]` is a write-only runtime commit strobe and is not part of the
+coefficient value.
 The implemented transposed direct-form II equation is:
 
 ```text
-y_q28 = b0 * x + z1
-y     = saturate(y_q28 >>> 28)
-z1    = saturate_i48(b1 * x - a1 * y + z2)
-z2    = saturate_i48(b2 * x - a2 * y)
+y_q14 = b0 * x + z1
+y     = saturate(y_q14 >>> 14)
+z1    = saturate_i34(b1 * x - a1 * y + z2)
+z2    = saturate_i34(b2 * x - a2 * y)
 ```
 
 Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
 the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
-stage. Filter state is signed 48-bit per voice and per channel, and is cleared
-on commit.
+stage. Filter state is signed 34-bit Q14 per voice and per channel, and is
+cleared on commit.
+
+### Biquad Range Analysis
+
+The filter format was narrowed from the earlier Q4.28 coefficient and 48-bit
+state implementation using the range analysis below.
+
+The SoundFont 2.04 specification defines `initialFilterFc` over the useful range
+`1500..13500` cents and `initialFilterQ` over `0..960` centibels. It also states
+that practical SoundFont renderers may approximate filter behavior according to
+perceptual criteria. The current C++ loader and MCU model convert those values to
+a normalized digital low-pass biquad before writing RTL coefficients.
+
+Using the existing `filter_for()` coefficient formula at 48 kHz and sweeping the
+useful SoundFont ranges gives these approximate coefficient maxima:
+
+```text
+abs(b0) <= 0.930
+abs(b1) <= 1.861
+abs(b2) <= 0.930
+abs(a1) <= 2.000
+abs(a2) <= 1.000
+```
+
+The implemented RTL recurrence also bounds the feedback input because `y` is
+saturated to PCM16 before it is used in the `a1*y` and `a2*y` products:
+
+```text
+y_q14 = b0 * x + z1
+y     = saturate_pcm(y_q14 >>> 14)
+z1    = saturate_i34(b1 * x - a1 * y + z2)
+z2    = saturate_i34(b2 * x - a2 * y)
+```
+
+With `x` and `y` both constrained to signed PCM16, a conservative one-step bound
+for the current coefficient generator is about:
+
+```text
+abs(b*x) <= 1.861 * 32768 * 2^14
+abs(a*y) <= 2.000 * 32768 * 2^14
+abs(z2)  <= (0.930 + 1.000) * 32768 * 2^14
+abs(z1)  <= (1.861 + 2.000 + 1.930) * 32768 * 2^14
+```
+
+So the Q14 state needs roughly six full-scale PCM units of headroom for that
+formula, not an arbitrarily large range. Representative fixed-input
+simulations of the current recurrence stayed lower: high resonance cases such as
+`fc=12000, q=960` reached about `2.5` full-scale units in `y_q14` and `2.2` in
+state, while `fc=13500, q=960` stayed below about `1.9` in state for the tested
+step, alternating, impulse, and square-wave patterns.
+
+The implementation therefore uses signed 16-bit Q2.14 coefficients, a signed
+34-bit Q14 filter state, and signed 36-bit raw state expressions.
 
 ## Mixing
 

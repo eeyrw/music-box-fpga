@@ -18,11 +18,11 @@ module voice_dsp_pipeline (
 
   typedef struct packed {
     dsp_base_context_t base;
-    logic signed [31:0] filter_b0;
-    logic signed [31:0] filter_b1;
-    logic signed [31:0] filter_b2;
-    logic signed [31:0] filter_a1;
-    logic signed [31:0] filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r;
@@ -33,46 +33,46 @@ module voice_dsp_pipeline (
 
   typedef struct packed {
     dsp_base_context_t base;
-    logic signed [31:0] filter_a1;
-    logic signed [31:0] filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     pcm_t x_l;
     pcm_t x_r;
-    logic signed [63:0] b0_x_l;
-    logic signed [63:0] b1_x_l;
-    logic signed [63:0] b2_x_l;
-    logic signed [63:0] z1_ext_l;
-    logic signed [63:0] z2_ext_l;
-    logic signed [63:0] b0_x_r;
-    logic signed [63:0] b1_x_r;
-    logic signed [63:0] b2_x_r;
-    logic signed [63:0] z1_ext_r;
-    logic signed [63:0] z2_ext_r;
+    logic signed [31:0] b0_x_l;
+    logic signed [31:0] b1_x_l;
+    logic signed [31:0] b2_x_l;
+    logic signed [FILTER_RAW_WIDTH-1:0] z1_ext_l;
+    logic signed [FILTER_RAW_WIDTH-1:0] z2_ext_l;
+    logic signed [31:0] b0_x_r;
+    logic signed [31:0] b1_x_r;
+    logic signed [31:0] b2_x_r;
+    logic signed [FILTER_RAW_WIDTH-1:0] z1_ext_r;
+    logic signed [FILTER_RAW_WIDTH-1:0] z2_ext_r;
   } filter_x_stage_t;
 
   typedef struct packed {
     dsp_base_context_t base;
-    logic signed [31:0] filter_a1;
-    logic signed [31:0] filter_a2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     pcm_t x_l;
     pcm_t x_r;
     pcm_t y_l;
     pcm_t y_r;
-    logic signed [63:0] b1_x_l;
-    logic signed [63:0] b2_x_l;
-    logic signed [63:0] z2_ext_l;
-    logic signed [63:0] b1_x_r;
-    logic signed [63:0] b2_x_r;
-    logic signed [63:0] z2_ext_r;
+    logic signed [31:0] b1_x_l;
+    logic signed [31:0] b2_x_l;
+    logic signed [FILTER_RAW_WIDTH-1:0] z2_ext_l;
+    logic signed [31:0] b1_x_r;
+    logic signed [31:0] b2_x_r;
+    logic signed [FILTER_RAW_WIDTH-1:0] z2_ext_r;
   } filter_y_stage_t;
 
   typedef struct packed {
     dsp_base_context_t base;
     pcm_t selected_l;
     pcm_t selected_r;
-    logic signed [95:0] next_z1_raw_l;
-    logic signed [95:0] next_z2_raw_l;
-    logic signed [95:0] next_z1_raw_r;
-    logic signed [95:0] next_z2_raw_r;
+    logic signed [FILTER_RAW_WIDTH-1:0] next_z1_raw_l;
+    logic signed [FILTER_RAW_WIDTH-1:0] next_z2_raw_l;
+    logic signed [FILTER_RAW_WIDTH-1:0] next_z1_raw_r;
+    logic signed [FILTER_RAW_WIDTH-1:0] next_z2_raw_r;
   } filter_state_stage_t;
 
   typedef struct packed {
@@ -95,10 +95,11 @@ module voice_dsp_pipeline (
   pcm_t gained_l_out, gained_r_out;
   gain_stage_t s4_gain;
   pcm_t envelope_l_out, envelope_r_out;
-  logic signed [63:0] y_q28_l, y_q28_r;
+  logic signed [FILTER_RAW_WIDTH-1:0] y_q_l, y_q_r;
+  logic signed [63:0] y_q_l_ext, y_q_r_ext;
   logic signed [31:0] y_pcm_ext_l, y_pcm_ext_r;
-  logic signed [63:0] a1_y_l, a2_y_l, a1_y_r, a2_y_r;
-  logic signed [95:0] next_z1_raw_l, next_z2_raw_l, next_z1_raw_r, next_z2_raw_r;
+  logic signed [31:0] a1_y_l, a2_y_l, a1_y_r, a2_y_r;
+  logic signed [FILTER_RAW_WIDTH-1:0] next_z1_raw_l, next_z2_raw_l, next_z1_raw_r, next_z2_raw_r;
 
   function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
     if (value > 64'sd32767)
@@ -109,12 +110,12 @@ module voice_dsp_pipeline (
       saturate_pcm = value[15:0];
   endfunction
 
-  function automatic logic signed [FILTER_STATE_WIDTH-1:0] saturate_filter_state(input logic signed [95:0] value);
-    logic signed [95:0] max_value;
-    logic signed [95:0] min_value;
+  function automatic logic signed [FILTER_STATE_WIDTH-1:0] saturate_filter_state(input logic signed [FILTER_RAW_WIDTH-1:0] value);
+    logic signed [FILTER_RAW_WIDTH-1:0] max_value;
+    logic signed [FILTER_RAW_WIDTH-1:0] min_value;
     begin
-      max_value = (96'sd1 <<< (FILTER_STATE_WIDTH - 1)) - 96'sd1;
-      min_value = -(96'sd1 <<< (FILTER_STATE_WIDTH - 1));
+      max_value = (FILTER_RAW_WIDTH'(1) <<< (FILTER_STATE_WIDTH - 1)) - FILTER_RAW_WIDTH'(1);
+      min_value = -(FILTER_RAW_WIDTH'(1) <<< (FILTER_STATE_WIDTH - 1));
       if (value > max_value)
         saturate_filter_state = {1'b0, {(FILTER_STATE_WIDTH-1){1'b1}}};
       else if (value < min_value)
@@ -167,24 +168,26 @@ module voice_dsp_pipeline (
   );
 
   always_comb begin
-    y_q28_l = s1_filter_x.b0_x_l + s1_filter_x.z1_ext_l;
-    y_q28_r = s1_filter_x.b0_x_r + s1_filter_x.z1_ext_r;
+    y_q_l = $signed({{(FILTER_RAW_WIDTH-32){s1_filter_x.b0_x_l[31]}}, s1_filter_x.b0_x_l}) + s1_filter_x.z1_ext_l;
+    y_q_r = $signed({{(FILTER_RAW_WIDTH-32){s1_filter_x.b0_x_r[31]}}, s1_filter_x.b0_x_r}) + s1_filter_x.z1_ext_r;
+    y_q_l_ext = {{(64-FILTER_RAW_WIDTH){y_q_l[FILTER_RAW_WIDTH-1]}}, y_q_l};
+    y_q_r_ext = {{(64-FILTER_RAW_WIDTH){y_q_r[FILTER_RAW_WIDTH-1]}}, y_q_r};
     y_pcm_ext_l = {{16{s2_filter_y.y_l[15]}}, s2_filter_y.y_l};
     y_pcm_ext_r = {{16{s2_filter_y.y_r[15]}}, s2_filter_y.y_r};
     a1_y_l = $signed(y_pcm_ext_l) * $signed(s2_filter_y.filter_a1);
     a2_y_l = $signed(y_pcm_ext_l) * $signed(s2_filter_y.filter_a2);
     a1_y_r = $signed(y_pcm_ext_r) * $signed(s2_filter_y.filter_a1);
     a2_y_r = $signed(y_pcm_ext_r) * $signed(s2_filter_y.filter_a2);
-    next_z1_raw_l = $signed({{32{s2_filter_y.b1_x_l[63]}}, s2_filter_y.b1_x_l}) -
-                    $signed({{32{a1_y_l[63]}}, a1_y_l}) +
-                    $signed({{32{s2_filter_y.z2_ext_l[63]}}, s2_filter_y.z2_ext_l});
-    next_z2_raw_l = $signed({{32{s2_filter_y.b2_x_l[63]}}, s2_filter_y.b2_x_l}) -
-                    $signed({{32{a2_y_l[63]}}, a2_y_l});
-    next_z1_raw_r = $signed({{32{s2_filter_y.b1_x_r[63]}}, s2_filter_y.b1_x_r}) -
-                    $signed({{32{a1_y_r[63]}}, a1_y_r}) +
-                    $signed({{32{s2_filter_y.z2_ext_r[63]}}, s2_filter_y.z2_ext_r});
-    next_z2_raw_r = $signed({{32{s2_filter_y.b2_x_r[63]}}, s2_filter_y.b2_x_r}) -
-                    $signed({{32{a2_y_r[63]}}, a2_y_r});
+    next_z1_raw_l = $signed({{(FILTER_RAW_WIDTH-32){s2_filter_y.b1_x_l[31]}}, s2_filter_y.b1_x_l}) -
+                    $signed({{(FILTER_RAW_WIDTH-32){a1_y_l[31]}}, a1_y_l}) +
+                    s2_filter_y.z2_ext_l;
+    next_z2_raw_l = $signed({{(FILTER_RAW_WIDTH-32){s2_filter_y.b2_x_l[31]}}, s2_filter_y.b2_x_l}) -
+                    $signed({{(FILTER_RAW_WIDTH-32){a2_y_l[31]}}, a2_y_l});
+    next_z1_raw_r = $signed({{(FILTER_RAW_WIDTH-32){s2_filter_y.b1_x_r[31]}}, s2_filter_y.b1_x_r}) -
+                    $signed({{(FILTER_RAW_WIDTH-32){a1_y_r[31]}}, a1_y_r}) +
+                    s2_filter_y.z2_ext_r;
+    next_z2_raw_r = $signed({{(FILTER_RAW_WIDTH-32){s2_filter_y.b2_x_r[31]}}, s2_filter_y.b2_x_r}) -
+                    $signed({{(FILTER_RAW_WIDTH-32){a2_y_r[31]}}, a2_y_r});
   end
 
   assign valid_o = valid_pipe[6];
@@ -238,16 +241,16 @@ module voice_dsp_pipeline (
         s1_filter_x.filter_a2 <= s0_interp.filter_a2;
         s1_filter_x.x_l <= s0_interp.x_l;
         s1_filter_x.x_r <= s0_interp.x_r;
-        s1_filter_x.b0_x_l <= $signed({{16{s0_interp.x_l[15]}}, s0_interp.x_l}) * $signed(s0_interp.filter_b0);
-        s1_filter_x.b1_x_l <= $signed({{16{s0_interp.x_l[15]}}, s0_interp.x_l}) * $signed(s0_interp.filter_b1);
-        s1_filter_x.b2_x_l <= $signed({{16{s0_interp.x_l[15]}}, s0_interp.x_l}) * $signed(s0_interp.filter_b2);
-        s1_filter_x.z1_ext_l <= {{(64-FILTER_STATE_WIDTH){s0_interp.filter_z1_l[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z1_l};
-        s1_filter_x.z2_ext_l <= {{(64-FILTER_STATE_WIDTH){s0_interp.filter_z2_l[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z2_l};
-        s1_filter_x.b0_x_r <= $signed({{16{s0_interp.x_r[15]}}, s0_interp.x_r}) * $signed(s0_interp.filter_b0);
-        s1_filter_x.b1_x_r <= $signed({{16{s0_interp.x_r[15]}}, s0_interp.x_r}) * $signed(s0_interp.filter_b1);
-        s1_filter_x.b2_x_r <= $signed({{16{s0_interp.x_r[15]}}, s0_interp.x_r}) * $signed(s0_interp.filter_b2);
-        s1_filter_x.z1_ext_r <= {{(64-FILTER_STATE_WIDTH){s0_interp.filter_z1_r[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z1_r};
-        s1_filter_x.z2_ext_r <= {{(64-FILTER_STATE_WIDTH){s0_interp.filter_z2_r[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z2_r};
+        s1_filter_x.b0_x_l <= $signed(s0_interp.x_l) * $signed(s0_interp.filter_b0);
+        s1_filter_x.b1_x_l <= $signed(s0_interp.x_l) * $signed(s0_interp.filter_b1);
+        s1_filter_x.b2_x_l <= $signed(s0_interp.x_l) * $signed(s0_interp.filter_b2);
+        s1_filter_x.z1_ext_l <= {{(FILTER_RAW_WIDTH-FILTER_STATE_WIDTH){s0_interp.filter_z1_l[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z1_l};
+        s1_filter_x.z2_ext_l <= {{(FILTER_RAW_WIDTH-FILTER_STATE_WIDTH){s0_interp.filter_z2_l[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z2_l};
+        s1_filter_x.b0_x_r <= $signed(s0_interp.x_r) * $signed(s0_interp.filter_b0);
+        s1_filter_x.b1_x_r <= $signed(s0_interp.x_r) * $signed(s0_interp.filter_b1);
+        s1_filter_x.b2_x_r <= $signed(s0_interp.x_r) * $signed(s0_interp.filter_b2);
+        s1_filter_x.z1_ext_r <= {{(FILTER_RAW_WIDTH-FILTER_STATE_WIDTH){s0_interp.filter_z1_r[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z1_r};
+        s1_filter_x.z2_ext_r <= {{(FILTER_RAW_WIDTH-FILTER_STATE_WIDTH){s0_interp.filter_z2_r[FILTER_STATE_WIDTH-1]}}, s0_interp.filter_z2_r};
       end
 
       if (valid_pipe[3]) begin
@@ -256,8 +259,8 @@ module voice_dsp_pipeline (
         s2_filter_y.filter_a2 <= s1_filter_x.filter_a2;
         s2_filter_y.x_l <= s1_filter_x.x_l;
         s2_filter_y.x_r <= s1_filter_x.x_r;
-        s2_filter_y.y_l <= saturate_pcm(y_q28_l >>> 28);
-        s2_filter_y.y_r <= saturate_pcm(y_q28_r >>> 28);
+        s2_filter_y.y_l <= saturate_pcm(y_q_l_ext >>> FILTER_COEFF_FRAC_WIDTH);
+        s2_filter_y.y_r <= saturate_pcm(y_q_r_ext >>> FILTER_COEFF_FRAC_WIDTH);
         s2_filter_y.b1_x_l <= s1_filter_x.b1_x_l;
         s2_filter_y.b2_x_l <= s1_filter_x.b2_x_l;
         s2_filter_y.z2_ext_l <= s1_filter_x.z2_ext_l;

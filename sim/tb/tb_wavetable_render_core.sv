@@ -186,10 +186,18 @@ module tb_wavetable_render_core;
     end
   endtask
 
+  function automatic logic [31:0] voice_control_word(
+    input logic stereo,
+    input logic [1:0] loop_mode,
+    input logic enable,
+    input logic apply
+  );
+    voice_control_word = {27'd0, apply, enable, loop_mode, stereo};
+  endfunction
+
   task automatic configure_mono;
     // Four mono frames: 0, 1000, 2000, 3000. phase_init=0.5 frame and gain=0.5,
     // so the first sample is interpolate(0,1000,0.5)*0.5 = 250.
-    bus_write_word(reg_voice_addr(0, REG_OFF_CONTROL), 32'h0000_0001);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd0);
     bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
     bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), 32'd0);
@@ -199,14 +207,12 @@ module tb_wavetable_render_core;
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), 32'h0000_4000);
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), 32'h0000_4000);
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_REGION_MODE), 32'h0000_0002);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0), 32'h1000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A1), 32'h0000_0000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_COMMIT), 32'd1);
+    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
+                   voice_control_word(1'b0, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
     repeat (2) @(negedge clk);
   endtask
 
@@ -214,7 +220,6 @@ module tb_wavetable_render_core;
     // Stereo memory uses independent absolute left/right bases and loops over
     // frames [1,3). phase_init=2.5 uses frame2 and wraps frame3's interpolation
     // endpoint back to frame1.
-    bus_write_word(reg_voice_addr(0, REG_OFF_CONTROL), 32'h0000_0001);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR_R), 32'd24);
     bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
@@ -228,19 +233,16 @@ module tb_wavetable_render_core;
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), 32'h0000_4000);
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), 32'h0000_4000);
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_REGION_MODE), 32'h0000_0003);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0), 32'h1000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A1), 32'h0000_0000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_COMMIT), 32'd1);
+    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
+                   voice_control_word(1'b1, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
     repeat (2) @(negedge clk);
   endtask
 
   task automatic configure_stereo_independent_right_loop;
-    bus_write_word(reg_voice_addr(0, REG_OFF_CONTROL), 32'h0000_0001);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
     bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR_R), 32'd24);
     bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
@@ -254,14 +256,12 @@ module tb_wavetable_render_core;
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), 32'h0000_7fff);
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), 32'h0000_7fff);
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_REGION_MODE), 32'h0000_0003);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0), 32'h1000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A1), 32'h0000_0000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_COMMIT), 32'd1);
+    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
+                   voice_control_word(1'b1, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
     repeat (2) @(negedge clk);
   endtask
 
@@ -273,7 +273,6 @@ module tb_wavetable_render_core;
     input logic signed [15:0] envelope_level
   );
     begin
-      bus_write_word(reg_voice_addr(voice, REG_OFF_CONTROL), 32'h0000_0001);
       bus_write_word(reg_voice_addr(voice, REG_OFF_BASE_ADDR), base_addr[31:0]);
       bus_write_word(reg_voice_addr(voice, REG_OFF_LENGTH), 32'd4);
       bus_write_word(reg_voice_addr(voice, REG_OFF_LOOP_START), 32'd0);
@@ -283,14 +282,12 @@ module tb_wavetable_render_core;
       bus_write_word(reg_voice_addr(voice, REG_OFF_GAIN_L), {{16{gain[15]}}, gain});
       bus_write_word(reg_voice_addr(voice, REG_OFF_GAIN_R), {{16{gain[15]}}, gain});
       bus_write_word(reg_voice_addr(voice, REG_OFF_ENVELOPE_LEVEL), {{16{envelope_level[15]}}, envelope_level});
-      bus_write_word(reg_voice_addr(voice, REG_OFF_REGION_MODE), 32'h0000_0002);
       bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B0), REG_FILTER_B0_UNITY_Q4_28);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B1), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B2), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_A1), 32'h0000_0000);
+      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B0_B1), REG_FILTER_B0_UNITY_Q2_14);
+      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
       bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_A2), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_COMMIT), REG_COMMIT_APPLY_MASK);
+      bus_write_word(reg_voice_addr(voice, REG_OFF_VOICE_CONTROL),
+                     voice_control_word(1'b0, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
       repeat (2) @(negedge clk);
     end
   endtask
@@ -304,14 +301,13 @@ module tb_wavetable_render_core;
     input logic [31:0] phase_inc,
     input logic [1:0] loop_mode,
     input logic filter_enable,
-    input logic signed [31:0] filter_b0,
-    input logic signed [31:0] filter_b1,
-    input logic signed [31:0] filter_b2,
-    input logic signed [31:0] filter_a1,
-    input logic signed [31:0] filter_a2
+    input logic signed [15:0] filter_b0,
+    input logic signed [15:0] filter_b1,
+    input logic signed [15:0] filter_b2,
+    input logic signed [15:0] filter_a1,
+    input logic signed [15:0] filter_a2
   );
     begin
-      bus_write_word(reg_voice_addr(0, REG_OFF_CONTROL), 32'h0000_0001);
       bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), base_addr[31:0]);
       bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), length[31:0]);
       bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), loop_start[31:0]);
@@ -321,14 +317,12 @@ module tb_wavetable_render_core;
       bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_L), 32'h0000_7fff);
       bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_R), 32'h0000_7fff);
       bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_LEVEL), 32'h0000_7fff);
-      bus_write_word(reg_voice_addr(0, REG_OFF_REGION_MODE), {29'd0, loop_mode, 1'b0});
       bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), {31'd0, filter_enable});
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0), filter_b0);
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B1), filter_b1);
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2), filter_b2);
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A1), filter_a1);
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), filter_a2);
-      bus_write_word(reg_voice_addr(0, REG_OFF_COMMIT), 32'd1);
+      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), {filter_b1, filter_b0});
+      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), {filter_a1, filter_b2});
+      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), {16'd0, filter_a2});
+      bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
+                     voice_control_word(1'b0, loop_mode, 1'b1, 1'b1));
       repeat (2) @(negedge clk);
     end
   endtask
@@ -411,7 +405,7 @@ module tb_wavetable_render_core;
     // Runtime PHASE_INC writes retune playback without reloading phase.
     begin_case("runtime phase increment update");
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
+                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(0, 0);
     bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC_RUNTIME), 32'h0000_0200);
     request_and_check(999, 999);
@@ -420,7 +414,7 @@ module tb_wavetable_render_core;
     // No-loop voices stop contributing once phase reaches the sample length.
     begin_case("no-loop voice completion");
     configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_NONE,
-                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
+                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(0, 0);
     request_and_check(999, 999);
     request_and_check(0, 0);
@@ -428,7 +422,7 @@ module tb_wavetable_render_core;
     // Loop-until-release wraps while held, then plays through to sample end.
     begin_case("loop until release");
     configure_voice0_basic(0, 4, 1, 3, 32'h0000_0200, 32'h0000_0100, LOOP_MODE_UNTIL_RELEASE,
-                           1'b0, 32'sh1000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
+                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(1999, 1999);
     request_and_check(999, 999);
     bus_write_word(reg_voice_addr(0, REG_OFF_RELEASE_CONTROL), 32'h0000_0001);
@@ -440,21 +434,21 @@ module tb_wavetable_render_core;
     // coefficient set is a two-tap FIR case: y[n] = 0.5*x[n] + 0.5*x[n-1].
     begin_case("filter datapath");
     configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b1, 32'sh0800_0000, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
+                           1'b1, 16'sh2000, 16'sh2000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(999, 999);
     request_and_check(1999, 1999);
 
     // Runtime filter coefficients update as one committed group. Coefficient
-    // writes alone update shadow state only; FILTER_COMMIT commits the packed
+    // writes alone update shadow state only; FILTER_A2[16] commits the packed
     // coefficient word and enable bit to the renderer-facing RAM.
     begin_case("runtime filter commit");
     configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b1, 32'sh0800_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000, 32'sh0000_0000);
+                           1'b1, 16'sh2000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(0, 0);
     request_and_check(499, 499);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0), 32'sh1000_0000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'sh0000_4000);
     request_and_check(999, 999);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_COMMIT), 32'h0000_0001);
+    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), REG_FILTER_A2_APPLY_MASK);
     request_and_check(2999, 2999);
 
     // Register decode must reach the expanded 32nd voice slot in the default

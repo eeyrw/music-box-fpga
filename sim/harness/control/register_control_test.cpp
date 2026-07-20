@@ -41,11 +41,11 @@ void test_voice_register_sequence() {
   r.gain_l = -1;
   r.gain_r = 0x4000;
   r.filter_enable = true;
-  r.filter_b0 = 0x08000000;
-  r.filter_b1 = 0x04000000;
-  r.filter_b2 = -0x02000000;
-  r.filter_a1 = -0x01000000;
-  r.filter_a2 = 0x00800000;
+  r.filter_b0 = 0x00002000;
+  r.filter_b1 = 0x00001000;
+  r.filter_b2 = -0x00000800;
+  r.filter_a1 = -0x00000400;
+  r.filter_a2 = 0x00000200;
   r.loop_mode = 2;
 
   control.set_envelope(3, 40000);
@@ -63,7 +63,7 @@ void test_voice_register_sequence() {
   control.release_voice(3, r);
 
   uint16_t base = voice_addr(3, 0);
-  if (sink.writes.size() != 32) throw std::runtime_error("wrong register write count");
+  if (sink.writes.size() != 25) throw std::runtime_error("wrong register write count");
   expect_write(sink, 0, uint16_t(base + kRegEnvelopeLevel), 0x7fff);
   expect_write(sink, 1, uint16_t(base + kRegGainRuntime), 0x10002000);
   expect_write(sink, 2, uint16_t(base + kRegPhaseIncRuntime), 0x0001a000);
@@ -79,23 +79,16 @@ void test_voice_register_sequence() {
   expect_write(sink, 12, uint16_t(base + kRegPhaseInc), 0x00018000);
   expect_write(sink, 13, uint16_t(base + kRegGainL), 0x0000ffff);
   expect_write(sink, 14, uint16_t(base + kRegGainR), 0x00004000);
-  expect_write(sink, 15, uint16_t(base + kRegRegionMode), 0x00000005);
-  expect_write(sink, 16, uint16_t(base + kRegFilterControl), 0x00000001);
-  expect_write(sink, 17, uint16_t(base + kRegFilterB0), 0x08000000);
-  expect_write(sink, 18, uint16_t(base + kRegFilterB1), 0x04000000);
-  expect_write(sink, 19, uint16_t(base + kRegFilterB2), 0xfe000000);
-  expect_write(sink, 20, uint16_t(base + kRegFilterA1), 0xff000000);
-  expect_write(sink, 21, uint16_t(base + kRegFilterA2), 0x00800000);
-  expect_write(sink, 22, uint16_t(base + kRegControl), 0x00000001);
-  expect_write(sink, 23, uint16_t(base + kRegCommit), 0x00000001);
-  expect_write(sink, 24, uint16_t(base + kRegFilterControl), 0x00000001);
-  expect_write(sink, 25, uint16_t(base + kRegFilterB0), 0x08000000);
-  expect_write(sink, 26, uint16_t(base + kRegFilterB1), 0x04000000);
-  expect_write(sink, 27, uint16_t(base + kRegFilterB2), 0xfe000000);
-  expect_write(sink, 28, uint16_t(base + kRegFilterA1), 0xff000000);
-  expect_write(sink, 29, uint16_t(base + kRegFilterA2), 0x00800000);
-  expect_write(sink, 30, uint16_t(base + kRegFilterCommit), 0x00000001);
-  expect_write(sink, 31, uint16_t(base + kRegReleaseControl), 0x00000001);
+  expect_write(sink, 15, uint16_t(base + kRegFilterControl), 0x00000001);
+  expect_write(sink, 16, uint16_t(base + kRegFilterB0B1), 0x10002000);
+  expect_write(sink, 17, uint16_t(base + kRegFilterB2A1), 0xfc00f800);
+  expect_write(sink, 18, uint16_t(base + kRegFilterA2), 0x00000200);
+  expect_write(sink, 19, uint16_t(base + kRegVoiceControl), 0x0000001d);
+  expect_write(sink, 20, uint16_t(base + kRegFilterControl), 0x00000001);
+  expect_write(sink, 21, uint16_t(base + kRegFilterB0B1), 0x10002000);
+  expect_write(sink, 22, uint16_t(base + kRegFilterB2A1), 0xfc00f800);
+  expect_write(sink, 23, uint16_t(base + kRegFilterA2), 0x00010200);
+  expect_write(sink, 24, uint16_t(base + kRegReleaseControl), 0x00000001);
 }
 
 }  // namespace

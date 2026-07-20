@@ -478,10 +478,10 @@ uint32_t McuModel::modulated_phase_inc(uint32_t base_phase_inc, double cents) {
   return uint32_t(std::round(raw));
 }
 
-int q4_28(double value) {
-  double raw = std::round(value * 268435456.0);
-  if (raw > double(std::numeric_limits<int32_t>::max())) return std::numeric_limits<int32_t>::max();
-  if (raw < double(std::numeric_limits<int32_t>::min())) return std::numeric_limits<int32_t>::min();
+int q2_14(double value) {
+  double raw = std::round(value * 16384.0);
+  if (raw > double(std::numeric_limits<int16_t>::max())) return std::numeric_limits<int16_t>::max();
+  if (raw < double(std::numeric_limits<int16_t>::min())) return std::numeric_limits<int16_t>::min();
   return int(raw);
 }
 
@@ -499,11 +499,11 @@ FilterConfig McuModel::filter_for(int cutoff_cents, int resonance_cb, int sample
   double alpha = sin_w / (2.0 * q);
   double a0 = 1.0 + alpha;
   filter.enable = true;
-  filter.b0 = q4_28(((1.0 - cos_w) * 0.5) / a0);
-  filter.b1 = q4_28((1.0 - cos_w) / a0);
-  filter.b2 = q4_28(((1.0 - cos_w) * 0.5) / a0);
-  filter.a1 = q4_28((-2.0 * cos_w) / a0);
-  filter.a2 = q4_28((1.0 - alpha) / a0);
+  filter.b0 = q2_14(((1.0 - cos_w) * 0.5) / a0);
+  filter.b1 = q2_14((1.0 - cos_w) / a0);
+  filter.b2 = q2_14(((1.0 - cos_w) * 0.5) / a0);
+  filter.a1 = q2_14((-2.0 * cos_w) / a0);
+  filter.a2 = q2_14((1.0 - alpha) / a0);
   return filter;
 }
 

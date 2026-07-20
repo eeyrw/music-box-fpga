@@ -26,7 +26,7 @@ module voice_register_bank (
   localparam logic [15:0] OFF_LOOP_START_R = REG_OFF_LOOP_START_R;
   localparam logic [15:0] OFF_LOOP_END    = REG_OFF_LOOP_END;
   localparam logic [15:0] OFF_LOOP_END_R  = REG_OFF_LOOP_END_R;
-  localparam logic [15:0] OFF_REGION_MODE = REG_OFF_REGION_MODE;
+  localparam logic [15:0] OFF_VOICE_CTL   = REG_OFF_VOICE_CONTROL;
   localparam logic [15:0] OFF_PHASE_INIT  = REG_OFF_PHASE_INIT;
   localparam logic [15:0] OFF_PHASE_INC   = REG_OFF_PHASE_INC;
   localparam logic [15:0] OFF_PHASE_RT    = REG_OFF_PHASE_INC_RUNTIME;
@@ -35,38 +35,44 @@ module voice_register_bank (
   localparam logic [15:0] OFF_GAIN_RT     = REG_OFF_GAIN_RUNTIME;
   localparam logic [15:0] OFF_ENVELOPE    = REG_OFF_ENVELOPE_LEVEL;
   localparam logic [15:0] OFF_FILTER_CTL  = REG_OFF_FILTER_CONTROL;
-  localparam logic [15:0] OFF_FILTER_B0   = REG_OFF_FILTER_B0;
-  localparam logic [15:0] OFF_FILTER_B1   = REG_OFF_FILTER_B1;
-  localparam logic [15:0] OFF_FILTER_B2   = REG_OFF_FILTER_B2;
-  localparam logic [15:0] OFF_FILTER_A1   = REG_OFF_FILTER_A1;
+  localparam logic [15:0] OFF_FILTER_B0_B1 = REG_OFF_FILTER_B0_B1;
+  localparam logic [15:0] OFF_FILTER_B2_A1 = REG_OFF_FILTER_B2_A1;
   localparam logic [15:0] OFF_FILTER_A2   = REG_OFF_FILTER_A2;
-  localparam logic [15:0] OFF_FILTER_COMMIT = REG_OFF_FILTER_COMMIT;
-  localparam logic [15:0] OFF_CONTROL     = REG_OFF_CONTROL;
-  localparam logic [15:0] OFF_COMMIT      = REG_OFF_COMMIT;
   localparam logic [15:0] OFF_RELEASE     = REG_OFF_RELEASE_CONTROL;
   localparam logic [15:0] OFF_STATUS      = REG_OFF_STATUS;
   localparam logic [15:0] ADDR_VERSION    = REG_VERSION;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
+  localparam int FILTER_COEFF_WORD_WIDTH = 5 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B0_LSB = 4 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B1_LSB = 3 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_B2_LSB = 2 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_A1_LSB = 1 * FILTER_COEFF_WIDTH;
+  localparam int FILTER_A2_LSB = 0;
+  localparam logic [FILTER_COEFF_WORD_WIDTH-1:0] DEFAULT_FILTER_COEFF = {
+    16'sh4000,
+    16'sh0000,
+    16'sh0000,
+    16'sh0000,
+    16'sh0000
+  };
 
   function automatic logic known_voice_offset(input logic [15:0] offset);
     unique case (offset)
-      OFF_CONTROL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
-      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_COMMIT,
-      OFF_STATUS, OFF_ENVELOPE, OFF_PHASE_RT, OFF_REGION_MODE, OFF_FILTER_CTL,
-      OFF_FILTER_B0, OFF_FILTER_B1, OFF_FILTER_B2, OFF_FILTER_A1,
-      OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
-      OFF_FILTER_COMMIT, OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: known_voice_offset = 1'b1;
+      OFF_VOICE_CTL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
+      OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R,
+      OFF_STATUS, OFF_ENVELOPE, OFF_PHASE_RT, OFF_FILTER_CTL,
+      OFF_FILTER_B0_B1, OFF_FILTER_B2_A1, OFF_FILTER_A2, OFF_GAIN_RT, OFF_RELEASE, OFF_BASE_R,
+      OFF_LENGTH_R, OFF_LOOP_START_R, OFF_LOOP_END_R: known_voice_offset = 1'b1;
       default: known_voice_offset = 1'b0;
     endcase
   endfunction
 
   function automatic logic shadow_offset(input logic [15:0] offset);
     unique case (offset)
-      OFF_CONTROL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
+      OFF_VOICE_CTL, OFF_BASE, OFF_LENGTH, OFF_LOOP_START, OFF_LOOP_END,
       OFF_PHASE_INIT, OFF_PHASE_INC, OFF_GAIN_L, OFF_GAIN_R, OFF_ENVELOPE,
-      OFF_REGION_MODE, OFF_FILTER_CTL, OFF_FILTER_B0, OFF_FILTER_B1,
-      OFF_FILTER_B2, OFF_FILTER_A1, OFF_FILTER_A2, OFF_BASE_R, OFF_LENGTH_R,
+      OFF_BASE_R, OFF_LENGTH_R,
       OFF_LOOP_START_R, OFF_LOOP_END_R: shadow_offset = 1'b1;
       default: shadow_offset = 1'b0;
     endcase
@@ -109,10 +115,18 @@ module voice_register_bank (
   logic [31:0] runtime_envelope_inspect_data;
   logic [31:0] runtime_release_inspect_data;
   logic runtime_filter_write;
-  logic [159:0] runtime_filter_write_word;
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] runtime_filter_write_word;
   logic runtime_release_clear;
   logic runtime_filter_enable_write;
   logic runtime_filter_enable_data;
+  (* ram_style = "distributed" *) logic [FILTER_COEFF_WORD_WIDTH-1:0] shadow_filter_coeff [NUM_VOICES];
+  (* ram_style = "distributed" *) logic shadow_filter_enable [NUM_VOICES];
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] shadow_filter_read_data;
+  logic shadow_filter_enable_read_data;
+  logic [31:0] shadow_filter_inspect_data;
+  logic shadow_filter_write;
+  logic shadow_filter_enable_write;
+  logic [FILTER_COEFF_WORD_WIDTH-1:0] shadow_filter_write_data;
   bus_state_t bus_state;
   logic commit_start_voice;
   logic commit_start_filter;
@@ -187,6 +201,8 @@ module voice_register_bank (
     .start_filter(commit_start_filter),
     .start_voice(selected_voice),
     .envelope_written(shadow_envelope_written[selected_voice]),
+    .shadow_filter_enable(shadow_filter_enable_read_data),
+    .shadow_filter_coeff(shadow_filter_read_data),
     .busy(commit_engine_busy),
     .done(commit_engine_done),
     .descriptor_read_voice(commit_descriptor_read_voice),
@@ -238,16 +254,43 @@ module voice_register_bank (
                             (inspect_relative < VOICE_LIMIT);
 
     commit_start_voice = bus_req.valid && bus_req.write && voice_address &&
-                         (selected_offset == OFF_COMMIT) && bus_req.wdata[0] &&
+                         (selected_offset == OFF_VOICE_CTL) &&
+                         (| (bus_req.wdata & REG_VOICE_CONTROL_APPLY_MASK)) &&
                          (bus_state == BUS_IDLE);
     commit_start_filter = bus_req.valid && bus_req.write && voice_address &&
-                          (selected_offset == OFF_FILTER_COMMIT) && bus_req.wdata[0] &&
+                          (selected_offset == OFF_FILTER_A2) &&
+                          (| (bus_req.wdata & REG_FILTER_A2_APPLY_MASK)) &&
                           (bus_state == BUS_IDLE);
     bus_read_start = bus_req.valid && !bus_req.write && voice_address &&
                      known_voice_offset(selected_offset) && (bus_state == BUS_IDLE);
 
     descriptor_write = bus_req.valid && bus_req.write && voice_address &&
                        shadow_offset(selected_offset) && (bus_state == BUS_IDLE);
+
+    shadow_filter_write = bus_req.valid && bus_req.write && voice_address &&
+                          (bus_state == BUS_IDLE) &&
+                          ((selected_offset == OFF_FILTER_B0_B1) ||
+                           (selected_offset == OFF_FILTER_B2_A1) ||
+                           (selected_offset == OFF_FILTER_A2));
+    shadow_filter_enable_write = bus_req.valid && bus_req.write && voice_address &&
+                                 (selected_offset == OFF_FILTER_CTL) &&
+                                 (bus_state == BUS_IDLE);
+    shadow_filter_write_data = shadow_filter_coeff[selected_voice];
+    unique case (selected_offset)
+      OFF_FILTER_B0_B1: begin
+        shadow_filter_write_data[FILTER_B0_LSB +: FILTER_COEFF_WIDTH] = bus_req.wdata[15:0];
+        shadow_filter_write_data[FILTER_B1_LSB +: FILTER_COEFF_WIDTH] = bus_req.wdata[31:16];
+      end
+      OFF_FILTER_B2_A1: begin
+        shadow_filter_write_data[FILTER_B2_LSB +: FILTER_COEFF_WIDTH] = bus_req.wdata[15:0];
+        shadow_filter_write_data[FILTER_A1_LSB +: FILTER_COEFF_WIDTH] = bus_req.wdata[31:16];
+      end
+      OFF_FILTER_A2: begin
+        shadow_filter_write_data[FILTER_A2_LSB +: FILTER_COEFF_WIDTH] = bus_req.wdata[15:0];
+      end
+      default: begin
+      end
+    endcase
 
     descriptor_read_voice = '0;
     descriptor_read_offset = '0;
@@ -259,6 +302,25 @@ module voice_register_bank (
       descriptor_read_offset = inspect_offset;
     end
 
+    shadow_filter_inspect_data = 32'd0;
+    unique case (inspect_offset)
+      OFF_FILTER_CTL: shadow_filter_inspect_data = {31'd0, shadow_filter_enable_read_data};
+      OFF_FILTER_B0_B1: shadow_filter_inspect_data = {
+        shadow_filter_read_data[FILTER_B1_LSB +: FILTER_COEFF_WIDTH],
+        shadow_filter_read_data[FILTER_B0_LSB +: FILTER_COEFF_WIDTH]
+      };
+      OFF_FILTER_B2_A1: shadow_filter_inspect_data = {
+        shadow_filter_read_data[FILTER_A1_LSB +: FILTER_COEFF_WIDTH],
+        shadow_filter_read_data[FILTER_B2_LSB +: FILTER_COEFF_WIDTH]
+      };
+      OFF_FILTER_A2: shadow_filter_inspect_data = {
+        16'd0,
+        shadow_filter_read_data[FILTER_A2_LSB +: FILTER_COEFF_WIDTH]
+      };
+      default: begin
+      end
+    endcase
+
     inspect_data = 32'd0;
     if (inspect_voice_address) begin
       unique case (inspect_offset)
@@ -267,8 +329,10 @@ module voice_register_bank (
         OFF_PHASE_RT: inspect_data = runtime_phase_inspect_data;
         OFF_GAIN_RT:  inspect_data = runtime_gain_inspect_data;
         OFF_RELEASE:  inspect_data = runtime_release_inspect_data;
-        OFF_COMMIT,
-        OFF_FILTER_COMMIT: inspect_data = 32'd0;
+        OFF_FILTER_CTL,
+        OFF_FILTER_B0_B1,
+        OFF_FILTER_B2_A1,
+        OFF_FILTER_A2: inspect_data = shadow_filter_inspect_data;
         default:      inspect_data = descriptor_read_data;
       endcase
     end else if (inspect_address == ADDR_VERSION) begin
@@ -301,9 +365,22 @@ module voice_register_bank (
   always_ff @(posedge clk) begin
     if (rst) begin
       shadow_envelope_written <= '0;
+      shadow_filter_read_data <= DEFAULT_FILTER_COEFF;
+      shadow_filter_enable_read_data <= 1'b0;
+      for (int i = 0; i < NUM_VOICES; i++) begin
+        shadow_filter_coeff[i] <= DEFAULT_FILTER_COEFF;
+        shadow_filter_enable[i] <= 1'b0;
+      end
       bus_read_address <= 16'd0;
       bus_state <= BUS_IDLE;
     end else begin
+      shadow_filter_read_data <= shadow_filter_coeff[descriptor_read_voice];
+      shadow_filter_enable_read_data <= shadow_filter_enable[descriptor_read_voice];
+      if (shadow_filter_write)
+        shadow_filter_coeff[selected_voice] <= shadow_filter_write_data;
+      if (shadow_filter_enable_write)
+        shadow_filter_enable[selected_voice] <= bus_req.wdata[0];
+
       unique case (bus_state)
         BUS_IDLE: begin
           if (bus_read_start) begin

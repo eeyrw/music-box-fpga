@@ -181,12 +181,15 @@ and earlier DSP work, but bubbles are expected when memory cannot return complet
 contexts fast enough.
 
 The biquad state update is split across the last two DSP stages for timing. Stage
-3 registers the raw 96-bit `z1` and `z2` expressions after the coefficient
-multiply/add chain. Stage 4 saturates those raw values back to the signed 48-bit
+3 registers the raw 36-bit `z1` and `z2` expressions after the coefficient
+multiply/add chain. Stage 4 saturates those raw values back to the signed 34-bit
 per-voice filter-state format while the already-registered gain result advances to
 the envelope step. This preserves the external `valid_i` to `valid_o` latency and
 sample results while avoiding a single-cycle path from DSP48 cascade outputs
 through the wide saturation compare/carry chain into the filter-state registers.
+The range analysis in `../fixed_point.md` shows that the existing SoundFont
+low-pass coefficient generator does not produce unusually large intermediate
+values because both the input `x` and feedback output `y` are PCM16.
 
 The current control flow for one output frame is:
 
@@ -373,7 +376,7 @@ next filter state for retire-time writeback.
 | `S1_FILTER_X` | Multiply `x` by `b0`, `b1`, and `b2`; sign-extend `z1/z2`. | Filter coefficients, filter state products, raw/bypass sample. |
 | `S2_FILTER_Y` | Compute `y = b0*x + z1`, saturate to PCM, and preserve feed-forward products for feedback state. | Saturated `y`, bypass sample, feedback inputs. |
 | `S3_FILTER_STATE` | Compute raw next `z1/z2`; select filtered or bypass sample for gain. | Raw next filter state, selected post-filter sample, gain/envelope context. |
-| `S4_GAIN` | Apply left/right channel gain and saturate raw `z1/z2` into the 48-bit filter-state format. | Gained samples and next filter state. |
+| `S4_GAIN` | Apply left/right channel gain and saturate raw `z1/z2` into the 34-bit filter-state format. | Gained samples and next filter state. |
 | Output | Apply envelope or full-level bypass and emit `voice_dsp_result_t` when `valid_pipe[5]` is set. | Voice index, filter enable, next filter state, final contribution. |
 
 The DSP pipe can accept a new complete context every cycle when the front end can
@@ -459,8 +462,8 @@ subtraction under the documented phase-increment limit. The renderer still owns
 the per-voice phase RAMs and performs the writeback only for voices that are not
 complete.
 
-Configuration writes still update shadow state. `COMMIT` writes the selected
-shadow entry into active configuration storage immediately and stages a
+Configuration writes still update shadow state. `VOICE_CONTROL.apply` writes the
+selected shadow entry into active configuration storage immediately and stages a
 frame-boundary reload/clear pulse for the renderer. Runtime writes such as
 envelope, gain, pitch, release, and runtime filter updates do not reload phase.
 The `START_VOICE` capture defines the per-voice render context for the in-flight
@@ -468,7 +471,7 @@ output sample.
 
 ## Filter State Handling
 
-Biquad state is stored as signed 48-bit values per voice and per channel:
+Biquad state is stored as signed 34-bit values per voice and per channel:
 
 ```text
 filter_z1_l[voice]
@@ -764,7 +767,7 @@ flight.
 The first Artix-7 resource pass removed the full per-frame `voice_config` and
 `voice_runtime` array copies from this module. A later pass changed playback to
 Q24.8 phase, widened sample-region length and loop points to 24 bits, narrowed
-per-voice biquad `z1/z2` state to signed 48 bits, split shadow and active
+per-voice biquad `z1/z2` state to signed 34 bits, split shadow and active
 configuration structs, and removed the duplicate pending runtime-state array.
 With the Smart Artix MIG synthesis wrapper, that reduced post-synthesis register
 use to about `39013 / 65200` registers, but LUT use rose to about
@@ -800,12 +803,13 @@ modules:
   renderer and bus-inspection read ports.
 - `runtime_envelope_ram`: `32 x 16` runtime envelope levels with independent
   renderer and bus-inspection read ports.
-- `runtime_filter_ram`: `32 x 160` runtime filter coefficients.
+- `runtime_filter_ram`: `32 x 80` runtime filter coefficients.
 
-`COMMIT` now writes the selected active-config BRAM entry directly and also copies
-the shadow filter coefficient group into runtime filter BRAM for new-note setup.
-For active voices, `FILTER_COMMIT[0]` commits the complete shadow filter group
-to runtime filter BRAM as one packed `160` bit word, avoiding mixed old/new IIR
+`VOICE_CONTROL.apply` now writes the selected active-config BRAM entry directly
+and also copies the shadow filter coefficient group into runtime filter BRAM for
+new-note setup.
+For active voices, `FILTER_A2[16]` commits the complete shadow filter group
+to runtime filter BRAM as one packed `80` bit word, avoiding mixed old/new IIR
 coefficients. The frame-boundary pulse is still used by the renderer to reload
 phase and clear filter history on voice commit, but the active config storage
 itself no longer needs a multi-voice frame-boundary copy. Per-voice
@@ -825,7 +829,7 @@ runtime store split should be re-measured in the next Smart Artix synthesis pass
 
 The area-oriented renderer pass replaces the combinational next-valid-voice
 search with sequential slot scanning, moves per-voice phase into a `32 x 32`
-distributed RAM, and moves per-voice biquad history into four `32 x 48`
+distributed RAM, and moves per-voice biquad history into four `32 x 34`
 distributed RAMs plus valid bitmaps. This trades extra clocks for invalid voice
 slots and RAM-read staging for a much smaller voice renderer. The Smart Artix
 Vivado 2025.2 post-synthesis run reports `8272 / 32600` slice LUTs, `7882 /
