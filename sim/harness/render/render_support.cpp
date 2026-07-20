@@ -122,6 +122,11 @@ int attenuation_to_q15(double attenuation_cb) {
   return clamp_q15(level);
 }
 
+bool same_filter_config(const FilterConfig& a, const FilterConfig& b) {
+  return a.enable == b.enable && a.b0 == b.b0 && a.b1 == b.b1 &&
+         a.b2 == b.b2 && a.a1 == b.a1 && a.a2 == b.a2;
+}
+
 }  // namespace
 
 Args parse_args(int argc, char** argv) {
@@ -705,8 +710,10 @@ void McuModel::update_voice_modulation(int voice) {
                                c.generator_offsets[kGenModEnvToFilterFc] +
                                modulator_sum(r, state, c, kGenModEnvToFilterFc));
   FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate);
-  record_runtime_filter_update(voice, filter);
-  sink_.set_filter(voice, filter);
+  if (!runtime_filter_valid_[voice] || !same_filter_config(filter, last_runtime_filter_[voice])) {
+    record_runtime_filter_update(voice, filter);
+    sink_.set_filter(voice, filter);
+  }
   state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
                                             c.generator_offsets[kGenModLfoToVolume] +
                                             modulator_sum(r, state, c, kGenModLfoToVolume));

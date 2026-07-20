@@ -345,6 +345,33 @@ int main() {
       throw std::runtime_error("default velocity-to-filter-cutoff did not change filter coefficients");
     }
 
+    render::Region steady_filter_region;
+    steady_filter_region.length = 4;
+    steady_filter_region.loop_end = 4;
+    steady_filter_region.phase_inc = render::kPhaseFracScale;
+    steady_filter_region.gain_l = 0x4000;
+    steady_filter_region.gain_r = 0x4000;
+    steady_filter_region.initial_filter_fc = 6900;
+    steady_filter_region.output_sample_rate = 48000;
+    std::vector<render::Region> steady_filter_regions{steady_filter_region};
+    RecordingSink steady_filter_sink;
+    render::RenderDiagnostics steady_filter_diag;
+    render::McuModel steady_filter_mcu(steady_filter_sink, steady_filter_regions, &steady_filter_diag);
+    render::NoteEvent steady_filter_note;
+    steady_filter_note.on = true;
+    steady_filter_note.velocity = 100;
+    steady_filter_note.phase_inc = steady_filter_region.phase_inc;
+    steady_filter_mcu.handle_event(steady_filter_note);
+    int steady_filter_writes = steady_filter_sink.filter_count;
+    steady_filter_mcu.envelope_tick();
+    steady_filter_mcu.envelope_tick();
+    if (steady_filter_sink.filter_count != steady_filter_writes) {
+      throw std::runtime_error("unchanged runtime filter coefficients were written again");
+    }
+    if (steady_filter_diag.runtime_filter_updates != uint64_t(steady_filter_writes)) {
+      throw std::runtime_error("filter diagnostics counted skipped runtime filter writes");
+    }
+
     render::Region bend_range_region;
     bend_range_region.length = 4;
     bend_range_region.loop_end = 4;

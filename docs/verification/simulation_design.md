@@ -778,9 +778,11 @@ RTL integration gaps implied by complete SF2 support:
 - Pitch bend, vibrato, tremolo, and modulation-envelope routing initially remain
   host-controlled through runtime register updates, including
   `PHASE_INC_RUNTIME`, `ENVELOPE_RUNTIME`, and filter-control writes. SPI bandwidth
-  is expected to be sufficient for the first implementation. If update rate,
-  jitter, or audible zippering becomes a problem, move the high-rate LFO/envelope
-  accumulators into RTL as a later optimization.
+  is expected to be sufficient for the first implementation. The harness skips
+  runtime filter-control writes when the calculated enable bit and biquad
+  coefficients are unchanged, so filter diagnostics count only effective filter
+  writes. If update rate, jitter, or audible zippering becomes a problem, move
+  the high-rate LFO/envelope accumulators into RTL as a later optimization.
 - Reverb and chorus sends remain unsupported for now. They require a separate DSP
   effects path, wet/dry mixing, and delay memory that are outside the current dry
   stereo wavetable core.
