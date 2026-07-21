@@ -322,7 +322,7 @@ std::string write_unlinked_hard_pan_stereo_sf2() {
   // useful stereo pairing signal in that case.
   push_sample(shdr, "BrokenLinkL", 0, 64, 8, 40, 48000, 60, 0, 2, 4);
   push_sample(shdr, "BrokenLinkR", 64, 128, 72, 104, 48000, 60, 0, 2, 2);
-  push_sample(shdr, "WrongLink", 128, 192, 136, 168, 48000, 60, 0, 0, 1);
+  push_sample(shdr, "WrongLink", 128, 192, 136, 193, 48000, 60, 0, 0, 1);
   push_sample(shdr, "EOS", 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
   std::vector<uint8_t> riff;

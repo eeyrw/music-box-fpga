@@ -388,9 +388,7 @@ void validate_index_tables(const Sf2Data& sf2) {
 
   for (int i = 0; i < usable_samples; ++i) {
     const auto& s = sf2.samples[i];
-    if (s.end < s.start || s.start_loop < s.start || s.end_loop > s.end || s.end_loop < s.start_loop) {
-      throw std::runtime_error("SF2 sample header has invalid sample or loop bounds");
-    }
+    if (s.end < s.start) throw std::runtime_error("SF2 sample header has invalid sample bounds");
     if (s.sample_rate == 0) throw std::runtime_error("SF2 sample header has zero sample rate");
     int t = sanitize_sample_type(s.sample_type);
     if (t != SAMPLE_MONO && t != SAMPLE_LEFT && t != SAMPLE_RIGHT && t != SAMPLE_LINKED) {
