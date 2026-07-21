@@ -277,6 +277,80 @@ std::string write_stereo_sf2() {
   return path;
 }
 
+std::string write_unlinked_hard_pan_stereo_sf2() {
+  std::vector<uint8_t> smpl;
+  for (int i = 0; i < 192; ++i) push_u16(smpl, uint16_t(int16_t(i * 32 - 2048)));
+  for (int i = 0; i < 46; ++i) push_u16(smpl, 0);
+
+  std::vector<uint8_t> phdr;
+  push_phdr(phdr, "UnlinkedPreset", 0, 0, 0);
+  push_phdr(phdr, "EOP", 0, 0, 1);
+
+  std::vector<uint8_t> pbag;
+  push_bag(pbag, 0, 0);
+  push_bag(pbag, 1, 0);
+
+  std::vector<uint8_t> pgen;
+  push_gen(pgen, 41, 0);
+  push_gen(pgen, 0, 0);
+
+  std::vector<uint8_t> inst;
+  push_inst(inst, "UnlinkedStereoInst", 0);
+  push_inst(inst, "EOI", 2);
+
+  std::vector<uint8_t> ibag;
+  push_bag(ibag, 0, 0);
+  push_bag(ibag, 5, 0);
+  push_bag(ibag, 10, 0);
+
+  std::vector<uint8_t> igen;
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 17, bits(-500));
+  push_gen(igen, 54, 1);
+  push_gen(igen, 52, 0);
+  push_gen(igen, 53, 0);
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 17, bits(500));
+  push_gen(igen, 54, 1);
+  push_gen(igen, 52, 1200);
+  push_gen(igen, 53, 1);
+  push_gen(igen, 0, 0);
+
+  std::vector<uint8_t> shdr;
+  // Some real-world SF2s mark these as stereo halves but leave sampleLink
+  // pointing at an unrelated sample. The instrument zones' hard pan is the
+  // useful stereo pairing signal in that case.
+  push_sample(shdr, "BrokenLinkL", 0, 64, 8, 40, 48000, 60, 0, 2, 4);
+  push_sample(shdr, "BrokenLinkR", 64, 128, 72, 104, 48000, 60, 0, 2, 2);
+  push_sample(shdr, "WrongLink", 128, 192, 136, 168, 48000, 60, 0, 0, 1);
+  push_sample(shdr, "EOS", 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+  std::vector<uint8_t> riff;
+  riff.insert(riff.end(), {'R', 'I', 'F', 'F'});
+  push_u32(riff, 0);
+  riff.insert(riff.end(), {'s', 'f', 'b', 'k'});
+  auto info = make_list("INFO", {{"ifil", make_version(2, 4)}, {"isng", make_text("EMU8000")},
+                                  {"INAM", make_text("Unlinked Stereo SF2")}});
+  auto sdta = make_list("sdta", {{"smpl", smpl}});
+  auto pdta = make_list("pdta", {{"phdr", phdr}, {"pbag", pbag}, {"pmod", std::vector<uint8_t>(10, 0)},
+                                  {"pgen", pgen}, {"inst", inst}, {"ibag", ibag},
+                                  {"imod", std::vector<uint8_t>(10, 0)}, {"igen", igen}, {"shdr", shdr}});
+  riff.insert(riff.end(), info.begin(), info.end());
+  riff.insert(riff.end(), sdta.begin(), sdta.end());
+  riff.insert(riff.end(), pdta.begin(), pdta.end());
+  uint32_t riff_size = uint32_t(riff.size() - 8);
+  riff[4] = uint8_t(riff_size);
+  riff[5] = uint8_t(riff_size >> 8);
+  riff[6] = uint8_t(riff_size >> 16);
+  riff[7] = uint8_t(riff_size >> 24);
+
+  const std::string path = "build/sf2_loader_unlinked_hard_pan_stereo_test.sf2";
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to create " + path);
+  out.write(reinterpret_cast<const char*>(riff.data()), riff.size());
+  return path;
+}
+
 void expect_equal(int actual, int expected, const char* label) {
   if (actual != expected) {
     throw std::runtime_error(std::string(label) + " expected " + std::to_string(expected) +
@@ -394,6 +468,33 @@ int main() {
       if (region.sample_left != "Left" && region.sample_left != "Right") {
         throw std::runtime_error("invalid linked stereo pair selected an unrelated sample");
       }
+    }
+
+    render::Sf2Data unlinked_sf2 = render::load_sf2(write_unlinked_hard_pan_stereo_sf2());
+    std::vector<int16_t> unlinked_memory = unlinked_sf2.file_words;
+    auto unlinked_regions = render::make_regions_for_preset(unlinked_sf2, 0, 0, 60, 100, 48000, 480,
+                                                            unlinked_memory);
+    expect_equal(int(unlinked_regions.size()), 1, "hard-panned unlinked stereo creates one preset region");
+    const auto& unlinked = unlinked_regions.at(0);
+    if (!unlinked.stereo) throw std::runtime_error("hard-panned unlinked pair was not marked stereo");
+    expect_equal(unlinked.sample_left == "BrokenLinkL" ? 1 : 0, 1, "hard-panned left sample name");
+    expect_equal(unlinked.sample_right == "BrokenLinkR" ? 1 : 0, 1, "hard-panned right sample name");
+    expect_equal(int(unlinked.base_addr), int(unlinked_sf2.smpl_word_offset), "hard-panned left base");
+    expect_equal(int(unlinked.base_addr_r), int(unlinked_sf2.smpl_word_offset + 64), "hard-panned right base");
+    expect_equal(int(unlinked.length), 64, "hard-panned left length");
+    expect_equal(int(unlinked.length_r), 64, "hard-panned right length");
+    expect_equal(int(unlinked.phase_inc), render::kPhaseFracScale * 2,
+                 "hard-panned unlinked stereo uses right zone pitch generators");
+    expect_equal(unlinked.pan, 0, "hard-panned unlinked stereo centers region pan");
+    expect_equal(unlinked.gain_l, 0x4000, "hard-panned unlinked stereo left gain");
+    expect_equal(unlinked.gain_r, 0x4000, "hard-panned unlinked stereo right gain");
+
+    auto unlinked_inst_regions = render::make_regions_for_instrument(unlinked_sf2, 0, 60, 100, 48000, 480,
+                                                                     unlinked_memory);
+    expect_equal(int(unlinked_inst_regions.size()), 1,
+                 "hard-panned unlinked stereo creates one forced-instrument region");
+    if (!unlinked_inst_regions.at(0).stereo) {
+      throw std::runtime_error("forced-instrument hard-panned pair was not marked stereo");
     }
 
     std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";

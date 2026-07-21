@@ -12,7 +12,9 @@ The simulation harness already contains reusable control-side code under
 - `formats/midi_parser.*`: parses MIDI events and converts them to timed note
   events.
 - `formats/sf2_loader.*`: extracts SoundFont regions and builds the wave-memory
-  image.
+  image. It preserves normal SF2 `sampleLink` stereo pairs and also collapses
+  common hard-panned left/right instrument-zone pairs with stale or missing
+  links into one stereo region when their sample windows are compatible.
 - `render/render_support.*`: contains `McuModel`, which owns voice allocation,
   note on, note off, ADSR stepping, and region selection for the current render
   path.

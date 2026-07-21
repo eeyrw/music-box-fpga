@@ -1032,12 +1032,45 @@ SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone
   return w;
 }
 
-void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& left_zone,
-                           const Zone& right_zone, Region& region) {
+uint32_t relative_sample_pos(uint32_t value, uint32_t base) {
+  return value > base ? value - base : 0;
+}
+
+void fill_region_addresses_for_sample_pair(const Sf2Data& sf2, int left_sample_id, int right_sample_id,
+                                           const Zone& left_zone, const Zone& right_zone, Region& region) {
   // The external wave memory is a word-addressed image of the complete SF2 file.
   // SampleHeader positions are word indexes into smpl, so add the smpl payload's
   // file word offset and keep loop points relative to the selected playback window.
-  auto rel = [](uint32_t value, uint32_t base) -> uint32_t { return value > base ? value - base : 0; };
+  const auto& left = sf2.samples.at(left_sample_id);
+  const auto& right = sf2.samples.at(right_sample_id);
+  if ((left.sample_type & SAMPLE_ROM_FLAG) || (right.sample_type & SAMPLE_ROM_FLAG)) {
+    throw std::runtime_error("selected SF2 sample references ROM data");
+  }
+  SampleWindow left_window = sample_window(sf2, left, left_zone);
+  SampleWindow right_window = sample_window(sf2, right, right_zone);
+  uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
+  uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
+  region.stereo = true;
+  region.sample_left = left.name;
+  region.sample_right = right.name;
+  region.base_addr = sf2.smpl_word_offset + left_window.start;
+  region.base_addr_r = sf2.smpl_word_offset + right_window.start;
+  region.length = frames_l;
+  region.length_r = frames_r;
+  region.loop_start = std::min<uint32_t>(relative_sample_pos(left_window.start_loop, left_window.start),
+                                         frames_l ? frames_l - 1 : 0);
+  region.loop_start_r = std::min<uint32_t>(relative_sample_pos(right_window.start_loop, right_window.start),
+                                           frames_r ? frames_r - 1 : 0);
+  region.loop_end = std::max<uint32_t>(region.loop_start + 1,
+                                       std::min<uint32_t>(relative_sample_pos(left_window.end_loop, left_window.start),
+                                                          frames_l));
+  region.loop_end_r = std::max<uint32_t>(region.loop_start_r + 1,
+                                         std::min<uint32_t>(relative_sample_pos(right_window.end_loop, right_window.start),
+                                                            frames_r));
+}
+
+void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& left_zone,
+                           const Zone& right_zone, Region& region) {
   auto pair = linked_pair(sf2, selected_sample);
   const auto& left = sf2.samples.at(pair.first);
   SampleWindow left_window = sample_window(sf2, left, left_zone);
@@ -1045,19 +1078,7 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   region.base_addr = sf2.smpl_word_offset + left_window.start;
 
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
-    const auto& right = sf2.samples.at(pair.second);
-    SampleWindow right_window = sample_window(sf2, right, right_zone);
-    uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
-    uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
-    region.stereo = true;
-    region.sample_right = right.name;
-    region.base_addr_r = sf2.smpl_word_offset + right_window.start;
-    region.length = frames_l;
-    region.length_r = frames_r;
-    region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames_l ? frames_l - 1 : 0);
-    region.loop_start_r = std::min<uint32_t>(rel(right_window.start_loop, right_window.start), frames_r ? frames_r - 1 : 0);
-    region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames_l));
-    region.loop_end_r = std::max<uint32_t>(region.loop_start_r + 1, std::min<uint32_t>(rel(right_window.end_loop, right_window.start), frames_r));
+    fill_region_addresses_for_sample_pair(sf2, pair.first, pair.second, left_zone, right_zone, region);
     return;
   }
 
@@ -1066,9 +1087,11 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   region.base_addr_r = region.base_addr;
   region.length = frames;
   region.length_r = frames;
-  region.loop_start = std::min<uint32_t>(rel(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
+  region.loop_start = std::min<uint32_t>(relative_sample_pos(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
   region.loop_start_r = region.loop_start;
-  region.loop_end = std::max<uint32_t>(region.loop_start + 1, std::min<uint32_t>(rel(left_window.end_loop, left_window.start), frames));
+  region.loop_end = std::max<uint32_t>(region.loop_start + 1,
+                                       std::min<uint32_t>(relative_sample_pos(left_window.end_loop, left_window.start),
+                                                          frames));
   region.loop_end_r = region.loop_end;
   if (region.loop_start >= region.loop_end || region.loop_end > frames) {
     region.loop_start = 0;
@@ -1076,6 +1099,69 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
     region.loop_start_r = 0;
     region.loop_end_r = frames;
   }
+}
+
+int zone_sample_id(const ArticulationZone& zone) {
+  return zone.generators.at(GEN_SAMPLE_ID);
+}
+
+int zone_pan(const ArticulationZone& zone) {
+  return signed_amount(zone.generators.count(GEN_PAN) ? zone.generators.at(GEN_PAN) : 0);
+}
+
+bool same_range_generators(const Zone& a, const Zone& b) {
+  return key_range(a) == key_range(b) && vel_range(a) == vel_range(b);
+}
+
+bool compatible_unlinked_stereo_pair(const Sf2Data& sf2, const ArticulationZone& left_zone,
+                                     const ArticulationZone& right_zone) {
+  int left_id = zone_sample_id(left_zone);
+  int right_id = zone_sample_id(right_zone);
+  if (left_id == right_id) return false;
+  const auto& left = sf2.samples.at(left_id);
+  const auto& right = sf2.samples.at(right_id);
+  if ((left.sample_type & SAMPLE_ROM_FLAG) || (right.sample_type & SAMPLE_ROM_FLAG)) {
+    throw std::runtime_error("selected SF2 sample references ROM data");
+  }
+  if (left.sample_rate != right.sample_rate || left.original_pitch != right.original_pitch ||
+      left.pitch_correction != right.pitch_correction) {
+    return false;
+  }
+  if (!same_range_generators(left_zone.generators, right_zone.generators)) return false;
+
+  SampleWindow left_window = sample_window(sf2, left, left_zone.generators);
+  SampleWindow right_window = sample_window(sf2, right, right_zone.generators);
+  uint32_t frames_l = left_window.end - left_window.start;
+  uint32_t frames_r = right_window.end - right_window.start;
+  if (frames_l == 0 || frames_l != frames_r) return false;
+  if (relative_sample_pos(left_window.start_loop, left_window.start) !=
+      relative_sample_pos(right_window.start_loop, right_window.start)) {
+    return false;
+  }
+  return relative_sample_pos(left_window.end_loop, left_window.start) ==
+         relative_sample_pos(right_window.end_loop, right_window.start);
+}
+
+int unlinked_stereo_partner_index(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,
+                                  size_t selected) {
+  int selected_pan = zone_pan(zones.at(selected));
+  if (selected_pan > -450) return -1;
+  for (size_t i = selected + 1; i < zones.size(); ++i) {
+    if (zone_pan(zones.at(i)) < 450) continue;
+    if (compatible_unlinked_stereo_pair(sf2, zones.at(selected), zones.at(i))) return int(i);
+  }
+  return -1;
+}
+
+bool selected_unlinked_right_with_matching_left(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,
+                                                size_t selected) {
+  int selected_pan = zone_pan(zones.at(selected));
+  if (selected_pan < 450) return false;
+  for (size_t i = 0; i < selected; ++i) {
+    if (zone_pan(zones.at(i)) > -450) continue;
+    if (compatible_unlinked_stereo_pair(sf2, zones.at(i), zones.at(selected))) return true;
+  }
+  return false;
 }
 
 bool selected_right_with_matching_left_zone(const Sf2Data& sf2, int sample_id,
@@ -1126,6 +1212,12 @@ std::vector<Sf2Modulator> stereo_runtime_modulators(const ArticulationZone& sele
     if (pitch_destination(mod.dest)) mods[mod_key(mod)] = mod;
   }
   return modulators_from_map(mods);
+}
+
+void center_hard_panned_stereo_gain(Region& region) {
+  region.pan = 0;
+  region.gain_l = region.base_gain;
+  region.gain_r = region.base_gain;
 }
 
 }  // namespace
@@ -1216,16 +1308,27 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
           combine_preset_and_instrument_zones(pzone.generators, peer.generators),
           combine_preset_and_instrument_modulators(pzone.modulators, peer.modulators)});
     }
-    for (const ArticulationZone& articulation : combined_zones) {
+    for (size_t zone_index = 0; zone_index < combined_zones.size(); ++zone_index) {
+      const ArticulationZone& articulation = combined_zones.at(zone_index);
       const Zone& zone = articulation.generators;
       int sample_id = zone.at(GEN_SAMPLE_ID);
       if (selected_right_with_matching_left_zone(sf2, sample_id, combined_zones)) continue;
+      if (selected_unlinked_right_with_matching_left(sf2, combined_zones, zone_index)) continue;
       const ArticulationZone* left_zone = &articulation;
       const ArticulationZone* right_zone = &articulation;
       const ArticulationZone* pitch_zone = &articulation;
       int pitch_sample_id = sample_id;
       linked_stereo_zone_selection(sf2, sample_id, articulation, combined_zones, left_zone, right_zone,
                                    pitch_zone, pitch_sample_id);
+      int unlinked_right_index = -1;
+      if (linked_pair(sf2, sample_id).second < 0) {
+        unlinked_right_index = unlinked_stereo_partner_index(sf2, combined_zones, zone_index);
+        if (unlinked_right_index >= 0) {
+          right_zone = &combined_zones.at(size_t(unlinked_right_index));
+          pitch_zone = right_zone;
+          pitch_sample_id = zone_sample_id(*right_zone);
+        }
+      }
       Region r;
       r.key = key;
       r.output_sample_rate = sample_rate;
@@ -1233,9 +1336,15 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       r.bank = bank;
       r.preset = sf2.presets.at(preset_idx).name;
       r.instrument = sf2.instruments.at(inst_idx).name;
-      fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+      if (unlinked_right_index >= 0) {
+        fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
+                                              left_zone->generators, right_zone->generators, r);
+      } else {
+        fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+      }
       r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
       gain_config(zone, r);
+      if (unlinked_right_index >= 0) center_hard_panned_stereo_gain(r);
       r.loop_mode = loop_mode_from_zone(zone);
       r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
       r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
@@ -1266,24 +1375,41 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
   // the selected sample set.
   std::vector<Region> regions;
   std::vector<ArticulationZone> matching = matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
-  for (const ArticulationZone& articulation : matching) {
+  for (size_t zone_index = 0; zone_index < matching.size(); ++zone_index) {
+    const ArticulationZone& articulation = matching.at(zone_index);
     const Zone& zone = articulation.generators;
     int sample_id = zone.at(GEN_SAMPLE_ID);
     if (selected_right_with_matching_left_zone(sf2, sample_id, matching)) continue;
+    if (selected_unlinked_right_with_matching_left(sf2, matching, zone_index)) continue;
     const ArticulationZone* left_zone = &articulation;
     const ArticulationZone* right_zone = &articulation;
     const ArticulationZone* pitch_zone = &articulation;
     int pitch_sample_id = sample_id;
     linked_stereo_zone_selection(sf2, sample_id, articulation, matching, left_zone, right_zone,
                                  pitch_zone, pitch_sample_id);
+    int unlinked_right_index = -1;
+    if (linked_pair(sf2, sample_id).second < 0) {
+      unlinked_right_index = unlinked_stereo_partner_index(sf2, matching, zone_index);
+      if (unlinked_right_index >= 0) {
+        right_zone = &matching.at(size_t(unlinked_right_index));
+        pitch_zone = right_zone;
+        pitch_sample_id = zone_sample_id(*right_zone);
+      }
+    }
     Region r;
     r.key = key;
     r.output_sample_rate = sample_rate;
     r.instrument = sf2.instruments.at(inst_idx).name;
     r.preset = r.instrument;
-    fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+    if (unlinked_right_index >= 0) {
+      fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
+                                            left_zone->generators, right_zone->generators, r);
+    } else {
+      fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
+    }
     r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
     gain_config(zone, r);
+    if (unlinked_right_index >= 0) center_hard_panned_stereo_gain(r);
     r.loop_mode = loop_mode_from_zone(zone);
     r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
     r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;

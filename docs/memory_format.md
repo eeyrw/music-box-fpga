@@ -32,7 +32,12 @@ right(n) = base_addr_r + n_r, where n_r is wrapped or clamped by LENGTH_R/LOOP_*
 ```
 
 This matches normal SF2 linked-stereo storage, where left and right samples are
-separate sample headers linked by `sampleLink`. Interpolation operates
+separate sample headers linked by `sampleLink`. The C++ SF2 loader also accepts
+a common non-spec SoundFont practice where one instrument contains adjacent
+hard-panned matching zones, normally pan `-500` and `+500`, for left and right
+sample headers whose `sampleLink` fields are missing or stale. Those zones are
+collapsed into one stereo region when their key/velocity ranges, sample pitch
+metadata, clipped lengths, and loop windows match. Interpolation operates
 independently on each channel, while both channels use the same phase increment
 so the pair is triggered and pitched as one stereo voice.
 
