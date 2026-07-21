@@ -19,7 +19,10 @@ The simulation harness already contains reusable control-side code under
   names, sample type flags, lengths, and loop windows may differ. Sample loop
   endpoints are validated when a region is built and are clamped to the selected
   sample window, which keeps otherwise playable SoundFonts with stale unused
-  sample-loop metadata loadable.
+  sample-loop metadata loadable. For any stereo region the loader centers the
+  per-zone pan and takes each channel's base gain from its own side's
+  `initialAttenuation`, because the left/right sample routing already provides
+  the stereo image.
 - `render/render_support.*`: contains `McuModel`, which owns voice allocation,
   note on, note off, ADSR stepping, and region selection for the current render
   path.

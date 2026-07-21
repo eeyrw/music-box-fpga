@@ -41,7 +41,78 @@ metadata, and sample windows are usable. Their sample names, sample type flags,
 sample lengths, and loop windows may differ; lengths and loops are preserved as
 independent left and right playback controls. Interpolation operates
 independently on each channel, while both channels use the same phase increment
-so the pair is triggered and pitched as one stereo voice.
+so the pair is triggered and pitched as one stereo voice. Because a stereo
+region already routes the left sample to the left channel and the right sample
+to the right channel, the loader neutralizes each region's per-zone SF2 pan
+generator for both linked-stereo and unlinked hard-panned pairs: the per-zone
+pan (commonly `-500` and `+500`) is centered so it does not additionally
+attenuate either channel to silence. Following the SF2 rule that the remaining
+non-pitch generators still apply as normal, each channel's base gain is taken
+from its own side's `initialAttenuation`: the left zone drives the left base
+gain and the right zone drives the right, so an asymmetric stereo pair keeps
+independent left/right attenuation rather than collapsing to a single gain.
+
+## SF2 Stereo Conformance And Trade-offs
+
+This section records the deliberate design choices for stereo playback relative
+to the SoundFont 2.01 specification (`docs/sfspec24.pdf`, section 7.10 SHDR,
+`sfSampleType`/`wSampleLink`). Keep it in sync when stereo behavior changes.
+
+Normative spec model: a left/right pair references each other through
+`wSampleLink`. Both samples "should be played entirely synchronously, with their
+pitch controlled by the right sample's generators. All non-pitch generators
+should apply as normal; in particular the panning of the individual samples to
+left and right should be accomplished via the pan generator." In other words the
+reference model is two independent voices, each panned by its own pan generator
+(conventionally `-500` for the left sample and `+500` for the right).
+
+Implementation model: this core plays a linked pair as a single stereo voice
+that hard-routes the left sample to the left channel and the right sample to the
+right channel, with one shared phase increment. This is a deliberate departure
+from the two-voice reference model chosen to spend one voice instead of two per
+stereo note, which conserves polyphony in the fixed voice array.
+
+Conformed spec points:
+
+- Pitch and pitch-routing generators come from the right sample's zone. The
+  shared Q24.8 phase increment is derived only from the right sample's
+  `sampleRate`, `originalPitch`, and `pitchCorrection` plus the right zone's
+  tuning generators (`keynum`, `overridingRootKey`, `scaleTuning`, `fineTune`,
+  `coarseTune`).
+- Left/right pairs are resolved only within the same instrument, and only when
+  the link is reciprocal.
+- Per-channel sample windows, lengths, and loop points come from each side's own
+  zone, so the "non-pitch generators apply as normal" rule holds for addressing.
+- Per-channel base gain comes from each side's own `initialAttenuation`, so an
+  asymmetric stereo pair keeps independent left/right attenuation.
+
+Deliberate deviations and known limitations:
+
+- The single phase increment derived from the right sample is applied to the
+  left channel as well. The left sample's own `sampleRate`, `originalPitch`, and
+  `pitchCorrection` are ignored, so a pair whose two headers disagree on pitch
+  metadata would mistune the left channel. This is harmless in practice because
+  the two channels of a stereo recording share identical pitch metadata, and it
+  is what keeps the pair sample-synchronous.
+- Panning is realized by the fixed left-to-left / right-to-right routing, not by
+  applying the pan generator as a gain crossfade. The per-zone pan is therefore
+  centered. Only the hard-pan convention (`-500` / `+500`) is reproduced
+  exactly; a stereo pair authored with non-hard or asymmetric pan (for example
+  `-300` / `+300`) cannot be represented and is played as full separation.
+- If a linked pair carries no pan generators (both centered), a strict two-voice
+  renderer would sum both samples into both channels (a near-mono image). This
+  core instead always gives full left/right separation for a stereo region.
+- The single stereo voice has one volume envelope, one filter, and one set of
+  non-pitch LFOs; these are taken from the left zone only. If the right zone
+  specifies a different envelope, filter cutoff, or non-pitch modulation, that
+  difference is dropped. Real SoundFonts almost always keep these symmetric
+  between the two sides except for pan.
+- Beyond the spec, the loader also pairs adjacent hard-panned mono zones whose
+  `sampleLink` is missing or stale into one stereo region (`stereo_source` =
+  `hard_pan_unlinked`). This is a pragmatic accommodation for real-world
+  SoundFonts and is not part of the standard.
+- The `linkedSample` type (8), which the spec leaves as a not-yet-defined
+  circularly linked list, is not supported and is rejected at load time.
 
 ## Abstract Memory Handshake
 

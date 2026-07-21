@@ -758,14 +758,20 @@ void pitch_modulation_generators(const Zone& zone, Region& region) {
   region.mod_env_to_pitch = zone.count(GEN_MOD_ENV_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_ENV_TO_PITCH)) : 0;
 }
 
-void gain_config(const Zone& zone, Region& region) {
-  int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
-  region.pan = std::max(-500, std::min(500, pan));
+int zone_attenuation_gain(const Zone& zone) {
   int atten = zone.count(GEN_INITIAL_ATTENUATION) ? signed_amount(zone.at(GEN_INITIAL_ATTENUATION)) : 0;
   atten = std::max(0, std::min(1440, atten));
   int gain = 0x4000;
   if (atten) gain = int(std::round(double(gain) * std::pow(10.0, -double(atten) / 200.0)));
-  region.base_gain = std::max(0, std::min(0x7fff, gain));
+  return std::max(0, std::min(0x7fff, gain));
+}
+
+void gain_config(const Zone& zone, Region& region) {
+  int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
+  region.pan = std::max(-500, std::min(500, pan));
+  region.base_gain = zone_attenuation_gain(zone);
+  region.base_gain_l = region.base_gain;
+  region.base_gain_r = region.base_gain;
   int left = int(std::round(double(region.base_gain) * double(500 - region.pan) / 500.0));
   int right = int(std::round(double(region.base_gain) * double(500 + region.pan) / 500.0));
   region.gain_l = std::max(0, std::min(0x7fff, left));
@@ -1210,10 +1216,18 @@ std::vector<Sf2Modulator> stereo_runtime_modulators(const ArticulationZone& sele
   return modulators_from_map(mods);
 }
 
-void center_hard_panned_stereo_gain(Region& region) {
+void neutralize_stereo_region_pan(const Zone& left_zone, const Zone& right_zone, Region& region) {
+  // A stereo region already routes the left sample to the left channel and the
+  // right sample to the right channel with no cross-mixing, so the stereo image
+  // comes from that routing rather than from a pan generator. Applying the
+  // per-zone pan (commonly -500 / +500) would attenuate one channel to silence,
+  // so center the pan. Per the SF2 spec the remaining non-pitch generators still
+  // apply as normal, so honor each side's own initialAttenuation independently.
   region.pan = 0;
-  region.gain_l = region.base_gain;
-  region.gain_r = region.base_gain;
+  region.base_gain_l = zone_attenuation_gain(left_zone);
+  region.base_gain_r = zone_attenuation_gain(right_zone);
+  region.gain_l = region.base_gain_l;
+  region.gain_r = region.base_gain_r;
 }
 
 }  // namespace
@@ -1341,7 +1355,7 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       }
       r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
       gain_config(zone, r);
-      if (unlinked_right_index >= 0) center_hard_panned_stereo_gain(r);
+      if (r.stereo) neutralize_stereo_region_pan(left_zone->generators, right_zone->generators, r);
       r.loop_mode = loop_mode_from_zone(zone);
       r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
       r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
@@ -1407,7 +1421,7 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     }
     r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
     gain_config(zone, r);
-    if (unlinked_right_index >= 0) center_hard_panned_stereo_gain(r);
+    if (r.stereo) neutralize_stereo_region_pan(left_zone->generators, right_zone->generators, r);
     r.loop_mode = loop_mode_from_zone(zone);
     r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
     r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;

@@ -790,6 +790,27 @@ int main() {
       throw std::runtime_error("CC10 pan did not add to SF2 pan before clamping");
     }
 
+    render::Region stereo_gain_region;
+    stereo_gain_region.length = 4;
+    stereo_gain_region.loop_end = 4;
+    stereo_gain_region.phase_inc = render::kPhaseFracScale;
+    stereo_gain_region.stereo = true;
+    stereo_gain_region.base_gain = 0x4000;
+    stereo_gain_region.base_gain_l = 0x4000;
+    stereo_gain_region.base_gain_r = 0x2000;
+    stereo_gain_region.pan = 0;
+    std::vector<render::Region> stereo_gain_regions{stereo_gain_region};
+    RecordingSink stereo_gain_sink;
+    render::McuModel stereo_gain_mcu(stereo_gain_sink, stereo_gain_regions);
+    render::NoteEvent stereo_gain_note;
+    stereo_gain_note.on = true;
+    stereo_gain_note.velocity = 127;
+    stereo_gain_note.phase_inc = render::kPhaseFracScale;
+    stereo_gain_mcu.handle_event(stereo_gain_note);
+    if (stereo_gain_sink.last_gain_l != 0x4000 || stereo_gain_sink.last_gain_r != 0x2000) {
+      throw std::runtime_error("stereo region did not use independent per-side base gains");
+    }
+
     render::Region exclusive_region;
     exclusive_region.length = 4;
     exclusive_region.loop_end = 4;

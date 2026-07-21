@@ -777,7 +777,12 @@ Current SF2 support:
 - Mono samples and common linked-stereo samples. Linked stereo keeps separate
   left/right absolute sample addresses, lengths, and loop points; when both
   linked zones match, pitch and pitch-routing generators come from the right
-  sample zone while non-pitch addressing and gain setup follow the selected zone.
+  sample zone while per-channel addressing and loops come from each side's own
+  zone. Because the region routes the left sample to the left channel and the
+  right sample to the right channel, the per-zone pan generator is neutralized
+  (centered) and each channel's base gain is taken from its own side's
+  `initialAttenuation`: the left zone drives the left base gain and the right
+  zone drives the right.
 - Sample header `start`, `end`, `startLoop`, `endLoop`, `sampleRate`,
   `originalPitch`, and `pitchCorrection` fields.
 - Sample-address offset generators `startAddrsOffset`, `endAddrsOffset`,
@@ -785,6 +790,9 @@ Current SF2 support:
 - `overridingRootKey`, `fineTune`, `coarseTune`, `scaleTuning`, and `keynum`
   generators for Q24.8 `phase_inc` calculation.
 - `pan` and `initialAttenuation` generators for left/right Q1.15 gain setup.
+  Mono regions crossfade a single base gain by pan; stereo regions center the
+  pan and keep independent left/right base gains, one per side's
+  `initialAttenuation`.
 - Default MIDI velocity-to-initial-attenuation is approximated with a concave
   centibel curve before the software envelope target is quantized to Q1.15.
   Default MIDI velocity-to-filter-cutoff is also modeled as a linear negative
@@ -1029,7 +1037,9 @@ and memory values in `tb_wavetable_render_core.sv`.
 For `make render-instrument`, inspect `build/render/render_config.json` first. It
 shows which instrument, stereo source, per-channel sample window, loop points,
 gain, filter, modulation, sample rate, and phase increment the extractor
-selected. Render summary files group per-channel fields under `left` and
+selected. The gain block reports `base_gain` plus the per-side `base_gain_l` and
+`base_gain_r` used for stereo regions, alongside the resolved left/right gains.
+Render summary files group per-channel fields under `left` and
 `right`, report `stereo_source` as `mono`, `linked_sample`, or
 `hard_pan_unlinked`, include an `sf2_loader` region-count summary, and report
 modulation in two forms: effective generator-derived LFO/envelope parameters and

@@ -353,6 +353,76 @@ std::string write_unlinked_hard_pan_stereo_sf2() {
   return path;
 }
 
+std::string write_hard_panned_linked_stereo_sf2() {
+  // A correctly linked LEFT/RIGHT stereo pair whose instrument zones still carry
+  // per-zone hard pan. The left/right sample routing already provides the stereo
+  // image, so the loader must neutralize the pan rather than mute a channel.
+  std::vector<uint8_t> smpl;
+  for (int i = 0; i < 128; ++i) push_u16(smpl, uint16_t(int16_t(i * 64 - 4096)));
+  for (int i = 0; i < 46; ++i) push_u16(smpl, 0);
+
+  std::vector<uint8_t> phdr;
+  push_phdr(phdr, "HardPanLinkedPreset", 0, 0, 0);
+  push_phdr(phdr, "EOP", 0, 0, 1);
+
+  std::vector<uint8_t> pbag;
+  push_bag(pbag, 0, 0);
+  push_bag(pbag, 1, 0);
+
+  std::vector<uint8_t> pgen;
+  push_gen(pgen, 41, 0);
+  push_gen(pgen, 0, 0);
+
+  std::vector<uint8_t> inst;
+  push_inst(inst, "HardPanLinkedInst", 0);
+  push_inst(inst, "EOI", 2);
+
+  std::vector<uint8_t> ibag;
+  push_bag(ibag, 0, 0);
+  push_bag(ibag, 3, 0);
+  push_bag(ibag, 7, 0);
+
+  std::vector<uint8_t> igen;
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 17, bits(-500));
+  push_gen(igen, 53, 0);
+  push_gen(igen, 43, 0x7f00);
+  push_gen(igen, 17, bits(500));
+  push_gen(igen, 48, 100);
+  push_gen(igen, 53, 1);
+  push_gen(igen, 0, 0);
+
+  std::vector<uint8_t> shdr;
+  push_sample(shdr, "HPLeft", 0, 64, 8, 40, 48000, 60, 0, 1, 4);
+  push_sample(shdr, "HPRight", 64, 128, 72, 104, 48000, 60, 0, 0, 2);
+  push_sample(shdr, "EOS", 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+  std::vector<uint8_t> riff;
+  riff.insert(riff.end(), {'R', 'I', 'F', 'F'});
+  push_u32(riff, 0);
+  riff.insert(riff.end(), {'s', 'f', 'b', 'k'});
+  auto info = make_list("INFO", {{"ifil", make_version(2, 4)}, {"isng", make_text("EMU8000")},
+                                  {"INAM", make_text("Hard-Panned Linked Stereo SF2")}});
+  auto sdta = make_list("sdta", {{"smpl", smpl}});
+  auto pdta = make_list("pdta", {{"phdr", phdr}, {"pbag", pbag}, {"pmod", std::vector<uint8_t>(10, 0)},
+                                  {"pgen", pgen}, {"inst", inst}, {"ibag", ibag},
+                                  {"imod", std::vector<uint8_t>(10, 0)}, {"igen", igen}, {"shdr", shdr}});
+  riff.insert(riff.end(), info.begin(), info.end());
+  riff.insert(riff.end(), sdta.begin(), sdta.end());
+  riff.insert(riff.end(), pdta.begin(), pdta.end());
+  uint32_t riff_size = uint32_t(riff.size() - 8);
+  riff[4] = uint8_t(riff_size);
+  riff[5] = uint8_t(riff_size >> 8);
+  riff[6] = uint8_t(riff_size >> 16);
+  riff[7] = uint8_t(riff_size >> 24);
+
+  const std::string path = "build/sf2_loader_hard_panned_linked_stereo_test.sf2";
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to create " + path);
+  out.write(reinterpret_cast<const char*>(riff.data()), riff.size());
+  return path;
+}
+
 void expect_equal(int actual, int expected, const char* label) {
   if (actual != expected) {
     throw std::runtime_error(std::string(label) + " expected " + std::to_string(expected) +
@@ -502,6 +572,24 @@ int main() {
     if (!unlinked_inst_regions.at(0).stereo) {
       throw std::runtime_error("forced-instrument hard-panned pair was not marked stereo");
     }
+
+    render::Sf2Data hp_linked_sf2 = render::load_sf2(write_hard_panned_linked_stereo_sf2());
+    std::vector<int16_t> hp_linked_memory = hp_linked_sf2.file_words;
+    auto hp_linked_regions = render::make_regions_for_preset(hp_linked_sf2, 0, 0, 60, 100, 48000, 480,
+                                                             hp_linked_memory);
+    expect_equal(int(hp_linked_regions.size()), 1,
+                 "hard-panned linked stereo pair creates one region");
+    const auto& hp_linked = hp_linked_regions.at(0);
+    if (!hp_linked.stereo) throw std::runtime_error("hard-panned linked pair was not marked stereo");
+    expect_equal(hp_linked.sample_left == "HPLeft" ? 1 : 0, 1, "hard-panned linked left sample name");
+    expect_equal(hp_linked.sample_right == "HPRight" ? 1 : 0, 1, "hard-panned linked right sample name");
+    int expected_right_base = int(std::round(double(0x4000) * std::pow(10.0, -100.0 / 200.0)));
+    expect_equal(hp_linked.pan, 0, "hard-panned linked stereo neutralizes per-zone pan");
+    expect_equal(hp_linked.base_gain_l, 0x4000, "linked stereo left base gain from left zone attenuation");
+    expect_equal(hp_linked.base_gain_r, expected_right_base,
+                 "linked stereo right base gain from right zone attenuation");
+    expect_equal(hp_linked.gain_l, 0x4000, "linked stereo left gain honors left side, not pan");
+    expect_equal(hp_linked.gain_r, expected_right_base, "linked stereo right gain honors right side, not pan");
 
     std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";
     return 0;

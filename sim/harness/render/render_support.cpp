@@ -370,6 +370,8 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << "}, \"pitch\": {\"phase_inc\": " << r.phase_inc
       << "}, \"gain\": {\"pan\": " << r.pan
       << ", \"base_gain\": " << r.base_gain
+      << ", \"base_gain_l\": " << r.base_gain_l
+      << ", \"base_gain_r\": " << r.base_gain_r
       << ", \"left\": " << r.gain_l
       << ", \"right\": " << r.gain_r
       << ", \"initial_envelope\": " << r.initial_envelope
@@ -1115,8 +1117,10 @@ std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceSta
   int total_pan = std::max(-500, std::min(500, int(std::round(
       double(region.pan) + channel.generator_offsets[kGenPan] +
       modulator_sum(region, voice, channel, kGenPan, false, true)))));
-  int left = int(std::round(double(region.base_gain) * level * double(500 - total_pan) / 500.0));
-  int right = int(std::round(double(region.base_gain) * level * double(500 + total_pan) / 500.0));
+  int base_left = region.stereo ? region.base_gain_l : region.base_gain;
+  int base_right = region.stereo ? region.base_gain_r : region.base_gain;
+  int left = int(std::round(double(base_left) * level * double(500 - total_pan) / 500.0));
+  int right = int(std::round(double(base_right) * level * double(500 + total_pan) / 500.0));
   return {clamp_q15(left), clamp_q15(right)};
 }
 

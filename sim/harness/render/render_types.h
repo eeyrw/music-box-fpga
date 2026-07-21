@@ -114,6 +114,8 @@ struct Region {
   int gain_l = 0x4000;
   int gain_r = 0x4000;
   int base_gain = 0x4000;
+  int base_gain_l = 0x4000;
+  int base_gain_r = 0x4000;
   int pan = 0;
   int initial_envelope = 0;
   bool filter_enable = false;
