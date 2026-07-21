@@ -31,14 +31,62 @@ value = sample_0 + ((delta * fraction) >>> 8)
 
 The mathematical result remains in the signed 16-bit sample range.
 
+### Datapath Widths
+
+The implemented per-voice sample datapath uses these integer widths:
+
+```text
+wave memory endpoints
+  sample_0/sample_1: signed16 PCM
+
+linear interpolation
+  delta = sample_1 - sample_0: signed17
+  fraction: unsigned8
+  delta * fraction: signed25
+  scaled delta after >>> 8: signed17
+  interpolated sum: signed18 internal
+  interpolation output: signed16 PCM
+
+biquad input
+  x: signed16
+  b0/b1/b2/a1/a2: signed16 Q2.14
+
+biquad feed-forward products
+  b0*x, b1*x, b2*x: signed32
+  z1/z2 state: signed34 Q14
+  y_q14 = sign_extend_38(b0*x) + sign_extend_38(z1): signed38
+  y = saturate_i20(y_q14 >>> 14): signed20
+
+biquad feedback products
+  a1*y, a2*y: signed36
+  next_z raw: signed38
+  next_z stored: saturate_i34(next_z raw)
+
+post-filter sample
+  filter enabled: signed20 y
+  filter disabled: signed16 interpolation result sign-extended to signed20
+
+output scaling
+  post-filter sample: signed20
+  gain: signed16 Q1.15
+  envelope: signed16 Q1.15
+  product arithmetic: signed64 internal
+  voice contribution: saturate_pcm(product >>> 15 or >>> 30)
+
+mixing
+  voice contribution: signed16 PCM
+  stereo accumulator: signed32
+  final sample: saturate_pcm(accumulator)
+```
+
 ## Gain
 
 Left and right gains are signed Q1.15 values. `0x0000` is silence and `0x7fff`
-is just below unity. For output scaling, the post-filter PCM sample is multiplied
-by the channel gain and envelope level in one wide signed product, then
+is just below unity. For output scaling, the signed post-filter sample is
+multiplied by the channel gain and envelope level in one wide signed product, then
 arithmetically shifted and saturated once to signed 16-bit PCM. If
 `envelope_level == 0x7fff`, the envelope multiply is bypassed and the sample is
-scaled by channel gain only with a signed 32-bit product shifted right by 15.
+scaled by channel gain only with a wide signed product shifted right by 15.
 
 ## Envelope Level
 
@@ -60,7 +108,7 @@ The implemented transposed direct-form II equation is:
 
 ```text
 y_q14 = b0 * x + z1
-y     = saturate(y_q14 >>> 14)
+y     = saturate_i20(y_q14 >>> 14)
 z1    = saturate_i34(b1 * x - a1 * y + z2)
 z2    = saturate_i34(b2 * x - a2 * y)
 ```
@@ -92,35 +140,30 @@ abs(a1) <= 2.000
 abs(a2) <= 1.000
 ```
 
-The implemented RTL recurrence also bounds the feedback input because `y` is
-saturated to PCM16 before it is used in the `a1*y` and `a2*y` products:
+The implemented RTL recurrence keeps `y` as a signed 20-bit value before it is
+used in the `a1*y` and `a2*y` products:
 
 ```text
 y_q14 = b0 * x + z1
-y     = saturate_pcm(y_q14 >>> 14)
+y     = saturate_i20(y_q14 >>> 14)
 z1    = saturate_i34(b1 * x - a1 * y + z2)
 z2    = saturate_i34(b2 * x - a2 * y)
 ```
 
-With `x` and `y` both constrained to signed PCM16, a conservative one-step bound
-for the current coefficient generator is about:
+With `x` constrained to signed PCM16 and `y` constrained to signed 20-bit, a
+conservative one-step bound for the current coefficient generator is about:
 
 ```text
 abs(b*x) <= 1.861 * 32768 * 2^14
-abs(a*y) <= 2.000 * 32768 * 2^14
-abs(z2)  <= (0.930 + 1.000) * 32768 * 2^14
-abs(z1)  <= (1.861 + 2.000 + 1.930) * 32768 * 2^14
+abs(a*y) <= 2.000 * 524288 * 2^14
+abs(z2)  <= (0.930 * 32768 + 1.000 * 524288) * 2^14
+abs(z1)  <= (1.861 * 32768 + 2.000 * 524288 +
+              0.930 * 32768 + 1.000 * 524288) * 2^14
 ```
 
-So the Q14 state needs roughly six full-scale PCM units of headroom for that
-formula, not an arbitrarily large range. Representative fixed-input
-simulations of the current recurrence stayed lower: high resonance cases such as
-`fc=12000, q=960` reached about `2.5` full-scale units in `y_q14` and `2.2` in
-state, while `fc=13500, q=960` stayed below about `1.9` in state for the tested
-step, alternating, impulse, and square-wave patterns.
-
 The implementation therefore uses signed 16-bit Q2.14 coefficients, a signed
-34-bit Q14 filter state, and signed 36-bit raw state expressions.
+20-bit post-filter sample, a signed 34-bit Q14 filter state, and signed 38-bit
+raw state expressions before the state is saturated back to 34 bits.
 
 ## Mixing
 
@@ -208,7 +251,7 @@ interp_r = r0 + (((r1 - r0) * fraction) >>> 8)
 
 If the runtime filter is enabled, each channel then runs through the per-voice
 biquad using that channel's filter history. If disabled, the interpolated sample
-passes through unchanged:
+is sign-extended into the post-filter 20-bit sample path:
 
 ```text
 filter_in_l = interp_l

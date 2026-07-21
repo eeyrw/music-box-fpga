@@ -332,9 +332,9 @@ A real SGM-derived SoundFont such as
 `SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2` does use filters heavily. A probe run
 against that file reported hundreds of raw filter generators and thousands of
 merged playable regions with filter settings. Some regions use very low cutoff
-values after SF2 range clamping, so the RTL filter coefficients are signed Q4.28;
-the earlier Q2.14 coefficient format did not preserve enough low-frequency
-precision for those regions.
+values after SF2 range clamping. The current RTL filter coefficients are signed
+Q2.14; lower-cutoff precision remains a known item to revisit with real-SF2
+render comparisons before widening the generic filter interface.
 
 ## C++ Full-System I2S Render Flow
 

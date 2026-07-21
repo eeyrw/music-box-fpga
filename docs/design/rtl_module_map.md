@@ -208,7 +208,7 @@ Internal DSP primitives are:
 
 | Module | Role |
 | --- | --- |
-| `linear_interpolator` | Interpolates between two signed PCM16 endpoints using the phase fraction and saturates back to PCM16. |
+| `linear_interpolator` | Interpolates between two signed PCM16 endpoints using the phase fraction. The result remains PCM16 for valid endpoints. |
 
 `multi_voice_pipeline` does not duplicate the per-voice DSP arithmetic. It
 delegates interpolation, filter arithmetic, combined output gain/envelope scaling,

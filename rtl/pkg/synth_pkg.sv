@@ -9,8 +9,9 @@ package synth_pkg;
   /* verilator lint_off UNUSEDPARAM */
   localparam int FILTER_COEFF_WIDTH = 16;
   localparam int FILTER_COEFF_FRAC_WIDTH = 14;
+  localparam int FILTER_SAMPLE_WIDTH = 20;
   localparam int FILTER_STATE_WIDTH = 34;
-  localparam int FILTER_RAW_WIDTH = 36;
+  localparam int FILTER_RAW_WIDTH = 38;
   /* verilator lint_on UNUSEDPARAM */
 `ifdef SYNTH_NUM_VOICES
   localparam int NUM_VOICES = `SYNTH_NUM_VOICES;
@@ -28,6 +29,7 @@ package synth_pkg;
   // Signed 16-bit PCM is the external sample format used by wave memory and by
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
+  typedef logic signed [FILTER_SAMPLE_WIDTH-1:0] filter_sample_t;
 
   typedef struct packed {
     pcm_t l;

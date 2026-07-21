@@ -159,8 +159,9 @@ frame_0      = phase[31:8]
 frame_1      = next frame, clamped or loop-wrapped as needed
 fraction     = phase[7:0]
 interpolated = sample_0 + ((sample_1 - sample_0) * fraction >>> 8)
-voice_sample = saturate(interpolated * gain >>> 15) when envelope_level == 0x7fff
-voice_sample = saturate(interpolated * gain * envelope_level >>> 30) otherwise
+post_filter  = filter_enable ? biquad(interpolated) : sign_extend_20(interpolated)
+voice_sample = saturate(post_filter * gain >>> 15) when envelope_level == 0x7fff
+voice_sample = saturate(post_filter * gain * envelope_level >>> 30) otherwise
 mix_accum   += voice_sample
 ```
 
@@ -233,9 +234,9 @@ edge placement jitter.
 
 The optional biquad filter arithmetic is implemented inside
 `voice_dsp_pipeline`, which is the single RTL owner for interpolation, filter
-coefficient multiplies, PCM saturation, gain, envelope scaling, and next filter
-state calculation. The voice scheduler still owns per-voice filter state arrays
-and state writeback.
+coefficient multiplies, signed 20-bit post-filter sample limiting, final PCM
+saturation, gain, envelope scaling, and next filter state calculation. The voice
+scheduler still owns per-voice filter state arrays and state writeback.
 
 The practical board question is whether all active voices can render before the
 I2S transmitter needs the next frame. If not, the next architecture work is an

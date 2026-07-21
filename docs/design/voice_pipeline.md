@@ -180,7 +180,7 @@ and earlier DSP work, but bubbles are expected when memory cannot return complet
 contexts fast enough.
 
 The biquad state update is split across the last two DSP stages for timing. Stage
-3 registers the raw 36-bit `z1` and `z2` expressions after the coefficient
+3 registers the raw 38-bit `z1` and `z2` expressions after the coefficient
 multiply/add chain. Stage 4 saturates those raw values back to the signed 34-bit
 per-voice filter-state format while the already-registered gain result advances to
 the envelope step. This preserves the external `valid_i` to `valid_o` latency and
@@ -188,7 +188,8 @@ sample results while avoiding a single-cycle path from DSP48 cascade outputs
 through the wide saturation compare/carry chain into the filter-state registers.
 The range analysis in `../fixed_point.md` shows that the existing SoundFont
 low-pass coefficient generator does not produce unusually large intermediate
-values because both the input `x` and feedback output `y` are PCM16.
+values while allowing the feedback output `y` to exceed PCM16 and remain within
+the signed 20-bit post-filter sample path.
 
 The current control flow for one output frame is:
 
@@ -373,7 +374,7 @@ next filter state for retire-time writeback.
 | --- | --- | --- |
 | `S0_INTERP` | Interpolate left and right raw endpoints using the captured fraction. | Voice index, gains, envelope, filter enable, coefficients, filter state. |
 | `S1_FILTER_X` | Multiply `x` by `b0`, `b1`, and `b2`; sign-extend `z1/z2`. | Filter coefficients, filter state products, raw/bypass sample. |
-| `S2_FILTER_Y` | Compute `y = b0*x + z1`, saturate to PCM, and preserve feed-forward products for feedback state. | Saturated `y`, bypass sample, feedback inputs. |
+| `S2_FILTER_Y` | Compute `y = b0*x + z1`, saturate to signed 20-bit, and preserve feed-forward products for feedback state. | Saturated `y`, bypass sample, feedback inputs. |
 | `S3_FILTER_STATE` | Compute raw next `z1/z2`; select filtered or bypass sample for output scaling. | Raw next filter state, selected post-filter sample, gain/envelope context. |
 | `S4_GAIN` | Register the selected post-filter samples and saturate raw `z1/z2` into the 34-bit filter-state format. | Selected samples and next filter state. |
 | Output | Apply combined channel gain plus envelope or full-level bypass and emit `voice_dsp_result_t` when `valid_pipe[5]` is set. | Voice index, filter enable, next filter state, final contribution. |
@@ -531,7 +532,7 @@ For filtered voices, the long DSP calculation is now split across
 `voice_dsp_pipeline` stages:
 
 - interpolation is separated from filter coefficient multiplication,
-- feed-forward multiplication, output saturation, feedback multiplication, and
+- feed-forward multiplication, signed 20-bit filter output limiting, feedback multiplication, and
   next-state saturation occupy separate pipeline stages,
 - selected post-filter samples are registered before output scaling,
 - channel gain, envelope scaling, and final contribution generation happen at the DSP output,
@@ -554,8 +555,9 @@ The change preserves these contracts:
   non-full envelope values are folded into one wide output product with one final
   PCM16 saturation.
 - `0x7fff` envelope level still bypasses envelope multiplication.
-- Filter coefficients remain signed Q4.28 and use the same transposed direct-form
+- Filter coefficients remain signed Q2.14 and use the same transposed direct-form
   II equation.
+- Filter output `y` is limited to signed 20-bit before feedback and output gain.
 - Filter state is cleared on voice commit and is not updated for disabled filter
   voices.
 - Mono samples are still duplicated before independent left/right gain.

@@ -21,6 +21,7 @@ module linear_interpolator (
   logic signed [16:0] scaled_difference;
   synth_pkg::pcm_t sample_0_reg;
   logic signed [17:0] interpolated;
+  logic unused_interpolated_range;
 
   always_comb begin
     // One extra sign bit is kept for the difference because subtracting two
@@ -41,19 +42,13 @@ module linear_interpolator (
 
   assign product_fraction_unused = product[PHASE_FRAC_WIDTH-1:0];
   assign unused_product_fraction = ^product_fraction_unused;
+  assign unused_interpolated_range = ^interpolated[17:16];
 
   always_comb begin
     scaled_difference = product[PHASE_FRAC_WIDTH +: 17];
     interpolated = $signed({{2{sample_0_reg[15]}}, sample_0_reg}) +
                    $signed({scaled_difference[16], scaled_difference});
 
-    // The mathematical interpolation should remain in range for valid PCM
-    // endpoints, but saturation keeps the primitive robust at the boundary.
-    if (interpolated > 18'sd32767)
-      sample_out = 16'sh7fff;
-    else if (interpolated < -18'sd32768)
-      sample_out = 16'sh8000;
-    else
-      sample_out = interpolated[15:0];
+    sample_out = interpolated[15:0];
   end
 endmodule

@@ -363,6 +363,11 @@ module tb_wavetable_render_core;
     for (int a = 68; a < 72; a++)
       memory_model.memory[a] = 16'sd10000;
 
+    // Filter output width regression: b0=1.5 makes a 30000 input produce a
+    // 45000 post-filter sample, which is then scaled back down by output gain.
+    for (int a = 72; a < 76; a++)
+      memory_model.memory[a] = 16'sd30000;
+
     repeat (3) @(negedge clk);
     rst = 1'b0;
 
@@ -444,6 +449,13 @@ module tb_wavetable_render_core;
                            1'b1, 16'sh2000, 16'sh2000, 16'sh0000, 16'sh0000, 16'sh0000);
     request_and_check(999, 999);
     request_and_check(1999, 1999);
+
+    // Filter y is wider than PCM16. It must not clip before channel gain.
+    begin_case("filter output feeds gain above 16-bit");
+    configure_voice0_basic(72, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
+                           1'b1, 16'sh6000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
+    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h4000_4000);
+    request_and_check(22500, 22500);
 
     // Runtime filter coefficients update as one committed group. Coefficient
     // writes alone update shadow state only; FILTER_A2[16] commits the packed

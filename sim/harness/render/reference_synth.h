@@ -54,12 +54,13 @@ class ReferenceSynth : public VoiceControlSink {
   };
 
   static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction);
-  static int16_t apply_gain(int16_t sample, int16_t gain, bool* saturated = nullptr);
-  static int16_t apply_output_gain(int16_t sample, int16_t gain, int16_t envelope,
+  static int16_t apply_gain(int32_t sample, int16_t gain, bool* saturated = nullptr);
+  static int16_t apply_output_gain(int32_t sample, int16_t gain, int16_t envelope,
                                    bool* saturated = nullptr);
   static int16_t saturate(int32_t value, bool* saturated = nullptr);
+  static int32_t saturate_i20(int64_t value, bool* saturated = nullptr);
   static int64_t saturate_filter_state(int64_t value, bool* saturated = nullptr);
-  static int16_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v,
+  static int32_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v,
                         bool* y_saturated = nullptr, bool* state_saturated = nullptr);
   int16_t read_word(uint32_t address) const;
 
