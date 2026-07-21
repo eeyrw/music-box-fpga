@@ -181,6 +181,7 @@ test-cpp-unit:
 	$(BUILD_DIR)/sf2_loader_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/render_support.cpp sim/harness/formats/sf2_loader.cpp \
+		sim/harness/render/reference_synth.cpp \
 		sim/harness/formats/midi_parser.cpp sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test

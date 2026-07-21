@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
         ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
         ",\n" + render::diagnostics_json_fields(diagnostics) +
-        ",\n  \"wav_path\": \"" + wav_path + "\"";
+        ",\n  \"wav_path\": " + render::json_string(wav_path);
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,
                           args.sample_rate, sample_count, int(events.size()), extra);
 

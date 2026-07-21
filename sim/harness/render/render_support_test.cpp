@@ -1,9 +1,11 @@
 #include "render_support.h"
+#include "reference_synth.h"
 
 #include <cstdint>
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -253,6 +255,65 @@ int main() {
     }
     if (regions[1].bank != 128 || regions[1].preset != "Drums" || regions[1].sample_left != "Kick") {
       throw std::runtime_error("channel-10 note did not select the SF2 percussion bank region");
+    }
+    regions[0].preset = "Melodic \"Preset\"";
+    regions[0].sample_right = "PianoC\\R";
+    regions[0].modulators.push_back({0x00db, 16, 300, 0, 0});
+    regions[0].modulators.push_back({0x00dd, 15, 800, 0, 0});
+    regions[0].modulators.push_back({0x0102, 8, -1100, 0x0d02, 0});
+    render::write_summary("build/render_support_summary_test.json", regions, 48000, 16, int(events.size()), "");
+    std::ifstream summary("build/render_support_summary_test.json");
+    std::string summary_text((std::istreambuf_iterator<char>(summary)), std::istreambuf_iterator<char>());
+    if (summary_text.find("\"preset\": \"Melodic \\\"Preset\\\"\"") == std::string::npos ||
+        summary_text.find("\"right\": {\"sample\": \"PianoC\\\\R\"") == std::string::npos) {
+      throw std::runtime_error("summary JSON did not escape nested sample metadata");
+    }
+    if (summary_text.find("\"sf2_loader\": {\"mono_regions\": 2") == std::string::npos ||
+        summary_text.find("\"stereo_source\": \"mono\"") == std::string::npos ||
+        summary_text.find("\"gain\": {\"pan\":") == std::string::npos ||
+        summary_text.find("\"filter\": {\"enable\":") == std::string::npos ||
+        summary_text.find("\"modulation\": {\"generators\":") == std::string::npos ||
+        summary_text.find("\"modulators\": [") == std::string::npos ||
+        summary_text.find("\"name\": \"cc7Volume\"") == std::string::npos ||
+        summary_text.find("\"direction\": \"negative\"") == std::string::npos ||
+        summary_text.find("\"polarity\": \"unipolar\"") == std::string::npos ||
+        summary_text.find("\"dest\": {\"raw\": 48, \"name\": \"initialAttenuation\"}") == std::string::npos ||
+        summary_text.find("\"name\": \"cc91ReverbSend\"") == std::string::npos ||
+        summary_text.find("\"dest\": {\"raw\": 16, \"name\": \"reverbEffectsSend\"}") == std::string::npos ||
+        summary_text.find("\"name\": \"cc93ChorusSend\"") == std::string::npos ||
+        summary_text.find("\"dest\": {\"raw\": 15, \"name\": \"chorusEffectsSend\"}") == std::string::npos ||
+        summary_text.find("\"hex\": \"0x0d02\", \"name\": \"noteOnVelocity\"") == std::string::npos) {
+      throw std::runtime_error("summary JSON did not include loader stats and grouped controls");
+    }
+    std::vector<int16_t> hot_memory{32767, 32767, 32767, 32767};
+    render::RenderDiagnostics hot_diag;
+    render::ReferenceSynth hot_synth(hot_memory, &hot_diag);
+    render::Region hot_region;
+    hot_region.length = 4;
+    hot_region.loop_end = 4;
+    hot_region.phase_inc = render::kPhaseFracScale;
+    hot_region.gain_l = render::kQ15Full;
+    hot_region.gain_r = render::kQ15Full;
+    hot_region.initial_envelope = render::kQ15Full;
+    hot_region.filter_enable = true;
+    hot_region.filter_b0 = 1 << 30;
+    hot_region.filter_a1 = -32768;
+    hot_synth.commit_voice(0, 1, hot_region.phase_inc, hot_region);
+    hot_synth.commit_voice(1, 1, hot_region.phase_inc, hot_region);
+    hot_synth.render_sample();
+    if (hot_diag.max_abs_filter_y_input <= ((uint64_t(1) << 19) - 1) ||
+        hot_diag.max_abs_filter_state_input <= ((uint64_t(1) << 33) - 1) ||
+        hot_diag.max_abs_voice_contribution_input_l <= 32767 ||
+        hot_diag.max_abs_voice_contribution_input_r <= 32767 ||
+        hot_diag.max_abs_mix_input_l <= 32767 ||
+        hot_diag.max_abs_mix_input_r <= 32767) {
+      throw std::runtime_error("saturation diagnostics did not record pre-saturation maxima");
+    }
+    std::string diagnostics_text = render::diagnostics_json_fields(hot_diag);
+    if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
+        diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
+        diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos) {
+      throw std::runtime_error("diagnostics JSON did not include pre-saturation maxima");
     }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");

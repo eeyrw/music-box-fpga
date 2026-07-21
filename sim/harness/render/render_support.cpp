@@ -24,6 +24,8 @@ constexpr uint16_t kGenInitialFilterFc = 8;
 constexpr uint16_t kGenModLfoToFilterFc = 10;
 constexpr uint16_t kGenModEnvToFilterFc = 11;
 constexpr uint16_t kGenModLfoToVolume = 13;
+constexpr uint16_t kGenChorusEffectsSend = 15;
+constexpr uint16_t kGenReverbEffectsSend = 16;
 constexpr uint16_t kGenPan = 17;
 constexpr uint16_t kGenCoarseTune = 51;
 constexpr uint16_t kGenFineTune = 52;
@@ -36,11 +38,152 @@ constexpr uint16_t kModSrcCc1 = 0x0081;
 constexpr uint16_t kModSrcCc7 = 0x0587;
 constexpr uint16_t kModSrcCc10 = 0x028a;
 constexpr uint16_t kModSrcCc11 = 0x058b;
+constexpr uint16_t kModSrcCc91 = 0x00db;
+constexpr uint16_t kModSrcCc93 = 0x00dd;
 constexpr uint16_t kModSrcPitchWheel = 0x020e;
 constexpr uint16_t kModSrcPitchWheelSensitivity = 0x0010;
 constexpr uint16_t kTransformLinear = 0;
 constexpr uint16_t kTransformAbsoluteValue = 2;
 
+std::string json_string_impl(const std::string& value) {
+  std::ostringstream out;
+  out << '"';
+  for (unsigned char c : value) {
+    switch (c) {
+      case '"': out << "\\\""; break;
+      case '\\': out << "\\\\"; break;
+      case '\b': out << "\\b"; break;
+      case '\f': out << "\\f"; break;
+      case '\n': out << "\\n"; break;
+      case '\r': out << "\\r"; break;
+      case '\t': out << "\\t"; break;
+      default:
+        if (c < 0x20) {
+          constexpr char hex[] = "0123456789abcdef";
+          out << "\\u00" << hex[c >> 4] << hex[c & 0x0f];
+        } else {
+          out << char(c);
+        }
+        break;
+    }
+  }
+  out << '"';
+  return out.str();
+}
+
+std::string hex16(uint16_t value) {
+  constexpr char hex[] = "0123456789abcdef";
+  std::string out = "0x0000";
+  for (int i = 0; i < 4; ++i) {
+    out[5 - i] = hex[value & 0x0f];
+    value >>= 4;
+  }
+  return out;
+}
+
+const char* generator_name(uint16_t dest) {
+  switch (dest) {
+    case 0: return "pitch";
+    case kGenModLfoToPitch: return "modLfoToPitch";
+    case kGenVibLfoToPitch: return "vibLfoToPitch";
+    case kGenModEnvToPitch: return "modEnvToPitch";
+    case kGenInitialFilterFc: return "initialFilterFc";
+    case kGenModLfoToFilterFc: return "modLfoToFilterFc";
+    case kGenModEnvToFilterFc: return "modEnvToFilterFc";
+    case kGenModLfoToVolume: return "modLfoToVolume";
+    case kGenChorusEffectsSend: return "chorusEffectsSend";
+    case kGenReverbEffectsSend: return "reverbEffectsSend";
+    case kGenPan: return "pan";
+    case kGenInitialAttenuation: return "initialAttenuation";
+    case kGenCoarseTune: return "coarseTune";
+    case kGenFineTune: return "fineTune";
+    default: return "unknown";
+  }
+}
+
+const char* modulator_source_name(uint16_t source) {
+  switch (source) {
+    case kModSrcNone: return "none";
+    case kModSrcNoteOnVelocity: return "noteOnVelocity";
+    case kModSrcNoteOnVelocityFilter: return "noteOnVelocityFilter";
+    case kModSrcChannelPressure: return "channelPressure";
+    case kModSrcCc1: return "cc1ModWheel";
+    case kModSrcCc7: return "cc7Volume";
+    case kModSrcCc10: return "cc10Pan";
+    case kModSrcCc11: return "cc11Expression";
+    case kModSrcCc91: return "cc91ReverbSend";
+    case kModSrcCc93: return "cc93ChorusSend";
+    case kModSrcPitchWheel: return "pitchWheel";
+    case kModSrcPitchWheelSensitivity: return "pitchWheelSensitivity";
+    case 0x000a: return "keyPressure";
+    default:
+      if ((source & 0x0080u) == 0u) {
+        int index = source & 0x007fu;
+        if (index == 2) return "noteOnVelocity";
+        if (index == 3) return "noteOnKey";
+      }
+      return "unknown";
+  }
+}
+
+const char* modulator_transform_name(uint16_t transform) {
+  switch (transform) {
+    case kTransformLinear: return "linear";
+    case kTransformAbsoluteValue: return "absoluteValue";
+    default: return "unknown";
+  }
+}
+
+void write_modulator_source_json(std::ostream& out, uint16_t source) {
+  out << "{\"raw\": " << source
+      << ", \"hex\": " << json_string_impl(hex16(source))
+      << ", \"name\": " << json_string_impl(modulator_source_name(source))
+      << ", \"cc\": " << ((source & 0x0080u) ? "true" : "false")
+      << ", \"index\": " << (source & 0x007fu)
+      << ", \"direction\": " << json_string_impl(((source >> 8) & 1u) ? "negative" : "positive")
+      << ", \"polarity\": " << json_string_impl(((source >> 9) & 1u) ? "bipolar" : "unipolar")
+      << ", \"type\": " << ((source >> 10) & 0x3fu)
+      << "}";
+}
+
+void write_modulation_json(std::ostream& out, const Region& r) {
+  out << "{\"generators\": {"
+      << "\"mod_lfo\": {\"delay_ticks\": " << r.mod_lfo_delay_ticks
+      << ", \"step\": " << r.mod_lfo_step
+      << ", \"to_pitch\": " << r.mod_lfo_to_pitch
+      << ", \"to_filter_fc\": " << r.mod_lfo_to_filter_fc
+      << ", \"to_volume\": " << r.mod_lfo_to_volume
+      << "}, \"vib_lfo\": {\"delay_ticks\": " << r.vib_lfo_delay_ticks
+      << ", \"step\": " << r.vib_lfo_step
+      << ", \"to_pitch\": " << r.vib_lfo_to_pitch
+      << "}, \"mod_env\": {\"delay_ticks\": " << r.mod_env_delay_ticks
+      << ", \"hold_ticks\": " << r.mod_env_hold_ticks
+      << ", \"sustain_level\": " << r.mod_env_sustain_level
+      << ", \"attack_ticks\": " << r.mod_env_attack_ticks
+      << ", \"decay_ticks\": " << r.mod_env_decay_ticks
+      << ", \"release_ticks\": " << r.mod_env_release_ticks
+      << ", \"attack_step\": " << r.mod_env_attack_step
+      << ", \"decay_step\": " << r.mod_env_decay_step
+      << ", \"release_step\": " << r.mod_env_release_step
+      << ", \"to_pitch\": " << r.mod_env_to_pitch
+      << ", \"to_filter_fc\": " << r.mod_env_to_filter_fc
+      << "}}, \"modulators\": [";
+  for (size_t i = 0; i < r.modulators.size(); ++i) {
+    const auto& mod = r.modulators[i];
+    out << "{\"src\": ";
+    write_modulator_source_json(out, mod.src);
+    out << ", \"dest\": {\"raw\": " << mod.dest
+        << ", \"name\": " << json_string_impl(generator_name(mod.dest))
+        << "}, \"amount\": " << mod.amount
+        << ", \"amount_src\": ";
+    write_modulator_source_json(out, mod.amount_src);
+    out << ", \"transform\": {\"raw\": " << mod.transform
+        << ", \"name\": " << json_string_impl(modulator_transform_name(mod.transform))
+        << "}}";
+    if (i + 1 < r.modulators.size()) out << ", ";
+  }
+  out << "]}";
+}
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
 }
@@ -133,6 +276,10 @@ bool same_runtime_gain(int gain_l, int gain_r, int last_gain_l, int last_gain_r)
 
 }  // namespace
 
+std::string json_string(const std::string& value) {
+  return json_string_impl(value);
+}
+
 Args parse_args(int argc, char** argv) {
   Args args;
   for (int i = 1; i < argc; ++i) {
@@ -160,29 +307,58 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
                    const std::string& extra_fields) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
+  int mono_regions = 0;
+  int linked_stereo_regions = 0;
+  int hard_pan_stereo_regions = 0;
+  for (const auto& r : regions) {
+    if (r.stereo_source == "linked_sample") ++linked_stereo_regions;
+    else if (r.stereo_source == "hard_pan_unlinked") ++hard_pan_stereo_regions;
+    else ++mono_regions;
+  }
   f << "{\n  \"output_sample_rate\": " << sample_rate
     << ",\n  \"output_samples\": " << samples
     << ",\n  \"event_count\": " << events;
   if (!extra_fields.empty()) f << ",\n" << extra_fields;
+  f << ",\n  \"sf2_loader\": {"
+    << "\"mono_regions\": " << mono_regions
+    << ", \"linked_stereo_regions\": " << linked_stereo_regions
+    << ", \"hard_pan_stereo_regions\": " << hard_pan_stereo_regions
+    << "}";
   f << ",\n  \"regions\": [\n";
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& r = regions[i];
-    f << "    {\"key\": " << r.key << ", \"program\": " << r.program
-      << ", \"bank\": " << r.bank << ", \"preset\": \"" << r.preset
-      << "\", \"instrument\": \"" << r.instrument << "\", \"sample_left\": \""
-      << r.sample_left << "\", \"stereo\": " << (r.stereo ? "true" : "false")
+    f << "    {\"key\": " << r.key
+      << ", \"program\": " << r.program
+      << ", \"bank\": " << r.bank
+      << ", \"preset\": " << json_string(r.preset)
+      << ", \"instrument\": " << json_string(r.instrument)
+      << ", \"stereo\": " << (r.stereo ? "true" : "false")
+      << ", \"stereo_source\": " << json_string(r.stereo_source)
+      << ", \"left\": {\"sample\": " << json_string(r.sample_left)
       << ", \"base_addr\": " << r.base_addr
-      << ", \"base_addr_r\": " << r.base_addr_r << ", \"length\": " << r.length
-      << ", \"length_r\": " << r.length_r
-      << ", \"loop_start\": " << r.loop_start << ", \"loop_start_r\": " << r.loop_start_r
-      << ", \"loop_end\": " << r.loop_end << ", \"loop_end_r\": " << r.loop_end_r
-      << ", \"phase_inc\": " << r.phase_inc
-      << ", \"filter_enable\": " << (r.filter_enable ? "true" : "false")
-      << ", \"filter_b0\": " << r.filter_b0
-      << ", \"filter_b1\": " << r.filter_b1
-      << ", \"filter_b2\": " << r.filter_b2
-      << ", \"filter_a1\": " << r.filter_a1
-      << ", \"filter_a2\": " << r.filter_a2 << "}"
+      << ", \"length\": " << r.length
+      << ", \"loop_start\": " << r.loop_start
+      << ", \"loop_end\": " << r.loop_end
+      << "}, \"right\": {\"sample\": " << json_string(r.sample_right)
+      << ", \"base_addr\": " << r.base_addr_r
+      << ", \"length\": " << r.length_r
+      << ", \"loop_start\": " << r.loop_start_r
+      << ", \"loop_end\": " << r.loop_end_r
+      << "}, \"pitch\": {\"phase_inc\": " << r.phase_inc
+      << "}, \"gain\": {\"pan\": " << r.pan
+      << ", \"base_gain\": " << r.base_gain
+      << ", \"left\": " << r.gain_l
+      << ", \"right\": " << r.gain_r
+      << ", \"initial_envelope\": " << r.initial_envelope
+      << "}, \"filter\": {\"enable\": " << (r.filter_enable ? "true" : "false")
+      << ", \"b0\": " << r.filter_b0
+      << ", \"b1\": " << r.filter_b1
+      << ", \"b2\": " << r.filter_b2
+      << ", \"a1\": " << r.filter_a1
+      << ", \"a2\": " << r.filter_a2
+      << "}, \"modulation\": ";
+    write_modulation_json(f, r);
+    f << "}"
       << (i + 1 < regions.size() ? "," : "") << "\n";
   }
   f << "  ]\n}\n";
@@ -199,6 +375,12 @@ std::string diagnostics_json_fields(const RenderDiagnostics& d) {
     << ",\n  \"diagnostics_contribution_saturations\": " << d.contribution_saturations
     << ",\n  \"diagnostics_mix_saturated_frames\": " << d.mix_saturated_frames
     << ",\n  \"diagnostics_mix_saturations\": " << d.mix_saturations
+    << ",\n  \"diagnostics_max_abs_filter_y_input\": " << d.max_abs_filter_y_input
+    << ",\n  \"diagnostics_max_abs_filter_state_input\": " << d.max_abs_filter_state_input
+    << ",\n  \"diagnostics_max_abs_voice_contribution_input_l\": " << d.max_abs_voice_contribution_input_l
+    << ",\n  \"diagnostics_max_abs_voice_contribution_input_r\": " << d.max_abs_voice_contribution_input_r
+    << ",\n  \"diagnostics_max_abs_mix_input_l\": " << d.max_abs_mix_input_l
+    << ",\n  \"diagnostics_max_abs_mix_input_r\": " << d.max_abs_mix_input_r
     << ",\n  \"diagnostics_voice_steals\": " << d.voice_steals
     << ",\n  \"diagnostics_runtime_gain_updates\": " << d.runtime_gain_updates
     << ",\n  \"diagnostics_runtime_phase_updates\": " << d.runtime_phase_updates

@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
           << ",\n  \"register_writes_commit\": " << reg.commit
           << ",\n  \"register_writes_release\": " << reg.release
           << ",\n  \"register_writes_config\": " << reg.config
-          << ",\n  \"wav_path\": \"" << wav_path << "\"";
+          << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/quick_render_config.json", regions, args.sample_rate,
                           sample_count, int(events.size()), stats.str());
 

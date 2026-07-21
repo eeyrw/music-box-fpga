@@ -300,12 +300,76 @@ The summary includes aggregate RTL render counters and MCU-control traffic:
 It also includes `diagnostics_*` fields for auditioning artifacts that are not
 visible from final WAV peak level alone. `ReferenceSynth` records how many frames
 and channel/voice occurrences hit filter output saturation, filter-state
-saturation, per-voice contribution saturation, and final mix saturation. The MCU
-policy records `diagnostics_voice_steals` plus the largest runtime gain,
+saturation, per-voice contribution saturation, and final mix saturation. The
+same group records the largest absolute pre-saturation input observed at the
+filter output, filter state, per-voice contribution, and final mix saturation
+points, so a render can show both how often clipping happened and how far the
+raw calculation exceeded its target range. The MCU policy records
+`diagnostics_voice_steals` plus the largest runtime gain,
 `PHASE_INC_RUNTIME`, and filter-coefficient jumps. `render-memory` and
 `render-full-system` write the same MCU-side diagnostics into their stats JSON
 files; they do not currently expose RTL-internal filter/contribution saturation
 because those paths do not run `ReferenceSynth` in parallel.
+
+### Render Diagnostics Fields
+
+`diagnostics_frames` is the number of output sample frames rendered by the
+diagnostic source. In `render-quick` this is the C++ reference synthesizer frame
+count. The count is useful for normalizing frame-based saturation rates.
+
+The `*_saturated_frames` fields count output frames where at least one channel
+or voice hit a saturation point. The matching `*_saturations` fields count the
+individual channel or voice occurrences, so a single frame can contribute more
+than one occurrence:
+
+- `diagnostics_filter_y_saturated_frames` and
+  `diagnostics_filter_y_saturations`: the biquad filter output exceeded the
+  signed i20 internal sample range before being clamped.
+- `diagnostics_filter_state_saturated_frames` and
+  `diagnostics_filter_state_saturations`: one of the biquad state registers
+  exceeded the signed i34 state range before being clamped.
+- `diagnostics_contribution_saturated_frames` and
+  `diagnostics_contribution_saturations`: a single voice exceeded the signed
+  16-bit PCM contribution range after filter, gain, and envelope.
+- `diagnostics_mix_saturated_frames` and `diagnostics_mix_saturations`: the
+  summed output mix exceeded the signed 16-bit PCM output range.
+
+The `diagnostics_max_abs_*_input` fields record the largest absolute raw value
+seen immediately before each saturation point. These values are not clipped
+outputs; they are headroom measurements:
+
+- `diagnostics_max_abs_filter_y_input`: maximum absolute filter-output input to
+  the i20 clamp, after the filter accumulator is shifted back from Q2.14.
+- `diagnostics_max_abs_filter_state_input`: maximum absolute next-state value
+  presented to the i34 filter-state clamp.
+- `diagnostics_max_abs_voice_contribution_input_l` and
+  `diagnostics_max_abs_voice_contribution_input_r`: maximum absolute left/right
+  per-voice PCM value before the contribution i16 clamp.
+- `diagnostics_max_abs_mix_input_l` and `diagnostics_max_abs_mix_input_r`:
+  maximum absolute left/right accumulated mix value before the final i16 clamp.
+
+For these maximum fields, values at or below the target limit mean that path did
+not need saturation during the render. The relevant limits are 524287 for
+filter output i20, 8589934591 for filter state i34, and 32767/32768 for signed
+16-bit PCM paths. A large maximum with a small saturation count indicates a
+short transient; a large maximum with many saturated frames points to sustained
+clipping or unstable filter coefficients.
+
+The remaining diagnostics describe MCU policy and runtime control churn:
+
+- `diagnostics_voice_steals`: active voices forcibly reused because no free
+  voice slot was available.
+- `diagnostics_runtime_gain_updates`,
+  `diagnostics_runtime_phase_updates`, and
+  `diagnostics_runtime_filter_updates`: runtime register writes that changed
+  gain, phase increment, or filter coefficients after voice commit.
+- `diagnostics_max_runtime_gain_jump_l` and
+  `diagnostics_max_runtime_gain_jump_r`: largest absolute one-update change in
+  runtime Q1.15 left/right gain.
+- `diagnostics_max_runtime_phase_inc_jump`: largest absolute one-update change
+  in the runtime Q24.8 phase increment.
+- `diagnostics_max_runtime_filter_coeff_jump`: largest absolute one-update
+  change among the runtime filter coefficients.
 
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
@@ -722,7 +786,10 @@ Generator gaps:
   is still not a sample-rate implementation of every SF2 envelope transform
   detail.
 - Effects sends are ignored. `chorusEffectsSend` and `reverbEffectsSend` do not
-  affect the rendered output because the RTL path has no effects processor.
+  affect the rendered output because the RTL path has no effects processor. The
+  render summary still decodes these generator names and common CC91/CC93 send
+  modulators so SF2 metadata can be inspected even when the dry render ignores
+  them.
 - Generator precedence is implemented only for the subset consumed by the current
   harness. Unsupported value generators may be carried in the merged zone but do
   not affect audio. Unsupported preset-level sample/substitution generators are
@@ -850,8 +917,14 @@ actual and expected sample value. Then inspect the programmed phase, gain, loop,
 and memory values in `tb_wavetable_render_core.sv`.
 
 For `make render-instrument`, inspect `build/render/render_config.json` first. It
-shows which instrument, sample, loop points, sample rate, and phase increment the
-extractor selected. For `make render-memory`, inspect
+shows which instrument, stereo source, per-channel sample window, loop points,
+gain, filter, modulation, sample rate, and phase increment the extractor
+selected. Render summary files group per-channel fields under `left` and
+`right`, report `stereo_source` as `mono`, `linked_sample`, or
+`hard_pan_unlinked`, include an `sf2_loader` region-count summary, and report
+modulation in two forms: effective generator-derived LFO/envelope parameters and
+the merged SF2 modulator table with raw source/destination fields plus common
+decoded names. For `make render-memory`, inspect
 `build/render_memory/midi_render_config.json`; it also shows the decoded note
 events. If the WAV is silent or unexpected, the issue is often in the selected
 instrument zone, event timing, note range, or envelope parameters rather than in

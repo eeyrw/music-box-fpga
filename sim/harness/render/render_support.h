@@ -12,6 +12,7 @@
 namespace render {
 
 Args parse_args(int argc, char** argv);
+std::string json_string(const std::string& value);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events,
                    const std::string& extra_fields = "");

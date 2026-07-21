@@ -100,6 +100,7 @@ struct Region {
   std::string instrument;
   std::string sample_left;
   std::string sample_right;
+  std::string stereo_source = "mono";
   bool stereo = false;
   uint32_t base_addr = 0;
   uint32_t base_addr_r = 0;
@@ -187,6 +188,12 @@ struct RenderDiagnostics {
   uint64_t contribution_saturations = 0;
   uint64_t mix_saturated_frames = 0;
   uint64_t mix_saturations = 0;
+  uint64_t max_abs_filter_y_input = 0;
+  uint64_t max_abs_filter_state_input = 0;
+  uint64_t max_abs_voice_contribution_input_l = 0;
+  uint64_t max_abs_voice_contribution_input_r = 0;
+  uint64_t max_abs_mix_input_l = 0;
+  uint64_t max_abs_mix_input_r = 0;
   uint64_t voice_steals = 0;
   uint64_t runtime_gain_updates = 0;
   uint64_t runtime_phase_updates = 0;

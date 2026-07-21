@@ -1035,7 +1035,8 @@ uint32_t relative_sample_pos(uint32_t value, uint32_t base) {
 }
 
 void fill_region_addresses_for_sample_pair(const Sf2Data& sf2, int left_sample_id, int right_sample_id,
-                                           const Zone& left_zone, const Zone& right_zone, Region& region) {
+                                           const Zone& left_zone, const Zone& right_zone,
+                                           const std::string& stereo_source, Region& region) {
   // The external wave memory is a word-addressed image of the complete SF2 file.
   // SampleHeader positions are word indexes into smpl, so add the smpl payload's
   // file word offset and keep loop points relative to the selected playback window.
@@ -1049,6 +1050,7 @@ void fill_region_addresses_for_sample_pair(const Sf2Data& sf2, int left_sample_i
   uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
   uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
   region.stereo = true;
+  region.stereo_source = stereo_source;
   region.sample_left = left.name;
   region.sample_right = right.name;
   region.base_addr = sf2.smpl_word_offset + left_window.start;
@@ -1076,12 +1078,14 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   region.base_addr = sf2.smpl_word_offset + left_window.start;
 
   if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
-    fill_region_addresses_for_sample_pair(sf2, pair.first, pair.second, left_zone, right_zone, region);
+    fill_region_addresses_for_sample_pair(sf2, pair.first, pair.second, left_zone, right_zone, "linked_sample", region);
     return;
   }
 
   uint32_t frames = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
   region.stereo = false;
+  region.stereo_source = "mono";
+  region.sample_right = left.name;
   region.base_addr_r = region.base_addr;
   region.length = frames;
   region.length_r = frames;
@@ -1330,7 +1334,8 @@ std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int
       r.instrument = sf2.instruments.at(inst_idx).name;
       if (unlinked_right_index >= 0) {
         fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
-                                              left_zone->generators, right_zone->generators, r);
+                                              left_zone->generators, right_zone->generators,
+                                              "hard_pan_unlinked", r);
       } else {
         fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
       }
@@ -1395,7 +1400,8 @@ std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx
     r.preset = r.instrument;
     if (unlinked_right_index >= 0) {
       fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
-                                            left_zone->generators, right_zone->generators, r);
+                                            left_zone->generators, right_zone->generators,
+                                            "hard_pan_unlinked", r);
     } else {
       fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
     }
