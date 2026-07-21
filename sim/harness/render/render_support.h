@@ -13,6 +13,7 @@ namespace render {
 
 Args parse_args(int argc, char** argv);
 std::string json_string(const std::string& value);
+std::string render_input_json_fields(const Args& args, int adsr_tick_samples);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events,
                    const std::string& extra_fields = "");
@@ -65,6 +66,8 @@ class McuModel {
   void release_deferred_pedal_voices(int channel);
   void apply_data_entry_msb(int channel, int value);
   void reset_controllers(int channel);
+  void prime_runtime_envelope_level(int voice, int level);
+  void record_runtime_envelope_update(int voice, int level);
   void record_runtime_gain_update(int voice, int gain_l, int gain_r);
   void record_runtime_phase_update(int voice, uint32_t phase_inc);
   void record_runtime_filter_update(int voice, const FilterConfig& filter);
@@ -86,6 +89,8 @@ class McuModel {
   int sample_rate_ = 48000;
   std::array<ChannelState, 16> channels_{};
   std::array<VoiceState, kNumVoices> voices_{};
+  std::array<bool, kNumVoices> runtime_envelope_valid_{};
+  std::array<int, kNumVoices> last_runtime_envelope_level_{};
   std::array<bool, kNumVoices> runtime_gain_valid_{};
   std::array<int, kNumVoices> last_runtime_gain_l_{};
   std::array<int, kNumVoices> last_runtime_gain_r_{};
@@ -95,6 +100,7 @@ class McuModel {
   std::array<FilterConfig, kNumVoices> last_runtime_filter_{};
   RenderDiagnostics* diagnostics_ = nullptr;
   int alloc_stamp_ = 0;
+  uint64_t envelope_tick_index_ = 0;
 };
 
 }  // namespace render

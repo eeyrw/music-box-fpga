@@ -99,7 +99,10 @@ int main(int argc, char** argv) {
 
     std::ostringstream stats;
     const auto& reg = rtl.register_write_stats();
-    stats << "  \"rtl_total_cycles\": " << rtl.total_cycles()
+    stats << "  \"render_target\": \"render-quick\""
+          << ",\n  \"rtl_top\": \"wavetable_render_core\""
+          << ",\n" << render::render_input_json_fields(args, adsr_tick_samples)
+          << ",\n  \"rtl_total_cycles\": " << rtl.total_cycles()
           << ",\n  \"rtl_total_memory_reads\": " << rtl.total_memory_reads()
           << ",\n  \"rtl_render_cycles_sum\": " << rtl.render_cycles_sum()
           << ",\n  \"rtl_avg_render_cycles\": " << avg_render_cycles

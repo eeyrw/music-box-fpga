@@ -195,9 +195,13 @@ struct RenderDiagnostics {
   uint64_t max_abs_mix_input_l = 0;
   uint64_t max_abs_mix_input_r = 0;
   uint64_t voice_steals = 0;
+  uint64_t runtime_envelope_updates = 0;
   uint64_t runtime_gain_updates = 0;
   uint64_t runtime_phase_updates = 0;
   uint64_t runtime_filter_updates = 0;
+  uint32_t max_runtime_envelope_jump = 0;
+  int max_runtime_envelope_jump_voice = -1;
+  uint64_t max_runtime_envelope_jump_tick = 0;
   uint32_t max_runtime_gain_jump_l = 0;
   uint32_t max_runtime_gain_jump_r = 0;
   uint32_t max_runtime_phase_inc_jump = 0;

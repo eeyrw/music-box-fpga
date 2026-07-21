@@ -61,7 +61,10 @@ int main(int argc, char** argv) {
     std::vector<render::Region> regions;
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
     render::write_summary(args.out_dir + "/full_system_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()));
+                          sample_count, int(events.size()),
+                          "  \"render_target\": \"render-full-system\""
+                          ",\n  \"rtl_top\": \"wavetable_demo_system\""
+                          ",\n" + render::render_input_json_fields(args, adsr_tick_samples));
 
     std::string wav_path = args.out_dir + "/out.wav";
     render::FullSystemHarness full_system(wave_memory, wav_path, args.sample_rate);

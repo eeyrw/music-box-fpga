@@ -61,7 +61,10 @@ int main(int argc, char** argv) {
 
     std::string wav_path = args.out_dir + "/out.wav";
     render::write_summary(args.out_dir + "/midi_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()));
+                          sample_count, int(events.size()),
+                          "  \"render_target\": \"render-memory\""
+                          ",\n  \"rtl_top\": \"wavetable_cached_render_core\""
+                          ",\n" + render::render_input_json_fields(args, adsr_tick_samples));
 
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
     render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);

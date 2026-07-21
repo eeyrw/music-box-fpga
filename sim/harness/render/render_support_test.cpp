@@ -271,7 +271,9 @@ int main() {
     if (summary_text.find("\"sf2_loader\": {\"mono_regions\": 2") == std::string::npos ||
         summary_text.find("\"stereo_source\": \"mono\"") == std::string::npos ||
         summary_text.find("\"gain\": {\"pan\":") == std::string::npos ||
+        summary_text.find("\"volume_envelope\": {\"delay_ticks\":") == std::string::npos ||
         summary_text.find("\"filter\": {\"enable\":") == std::string::npos ||
+        summary_text.find("\"loop_mode\":") == std::string::npos ||
         summary_text.find("\"modulation\": {\"generators\":") == std::string::npos ||
         summary_text.find("\"modulators\": [") == std::string::npos ||
         summary_text.find("\"name\": \"cc7Volume\"") == std::string::npos ||
@@ -312,8 +314,34 @@ int main() {
     std::string diagnostics_text = render::diagnostics_json_fields(hot_diag);
     if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
-        diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos) {
+        diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos ||
+        diagnostics_text.find("diagnostics_runtime_envelope_updates") == std::string::npos ||
+        diagnostics_text.find("diagnostics_max_runtime_envelope_jump_tick") == std::string::npos) {
       throw std::runtime_error("diagnostics JSON did not include pre-saturation maxima");
+    }
+    render::Args input_args;
+    input_args.sf2 = "/tmp/example.sf2";
+    input_args.midi = "/tmp/example.mid";
+    input_args.instrument = "Piano";
+    input_args.key = 64;
+    input_args.seconds = 12.5;
+    input_args.adsr_tick_ms = 1.0;
+    std::string input_json = render::render_input_json_fields(input_args, 48);
+    if (input_json.find("\"sf2_path\": \"/tmp/example.sf2\"") == std::string::npos ||
+        input_json.find("\"midi_path\": \"/tmp/example.mid\"") == std::string::npos ||
+        input_json.find("\"uses_default_melody\": false") == std::string::npos ||
+        input_json.find("\"instrument_override\": \"Piano\"") == std::string::npos ||
+        input_json.find("\"adsr_tick_samples\": 48") == std::string::npos ||
+        input_json.find("\"render_num_voices\": ") == std::string::npos) {
+      throw std::runtime_error("input JSON fields did not include render provenance");
+    }
+    input_args.midi.clear();
+    input_args.instrument.clear();
+    input_json = render::render_input_json_fields(input_args, 240);
+    if (input_json.find("\"midi_path\": null") == std::string::npos ||
+        input_json.find("\"uses_default_melody\": true") == std::string::npos ||
+        input_json.find("\"instrument_override\": null") == std::string::npos) {
+      throw std::runtime_error("input JSON fields did not mark default inputs");
     }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");
@@ -469,6 +497,32 @@ int main() {
         steady_runtime_diag.runtime_phase_updates != uint64_t(steady_phase_writes) ||
         steady_runtime_diag.runtime_filter_updates != uint64_t(steady_filter_runtime_writes)) {
       throw std::runtime_error("runtime diagnostics counted skipped control writes");
+    }
+
+    render::Region envelope_jump_region;
+    envelope_jump_region.length = 4;
+    envelope_jump_region.loop_end = 4;
+    envelope_jump_region.phase_inc = render::kPhaseFracScale;
+    envelope_jump_region.gain_l = 0x4000;
+    envelope_jump_region.gain_r = 0x4000;
+    envelope_jump_region.attack_ticks = 2;
+    envelope_jump_region.output_sample_rate = 48000;
+    std::vector<render::Region> envelope_jump_regions{envelope_jump_region};
+    RecordingSink envelope_jump_sink;
+    render::RenderDiagnostics envelope_jump_diag;
+    render::McuModel envelope_jump_mcu(envelope_jump_sink, envelope_jump_regions, &envelope_jump_diag);
+    render::NoteEvent envelope_jump_note;
+    envelope_jump_note.on = true;
+    envelope_jump_note.velocity = 127;
+    envelope_jump_note.phase_inc = envelope_jump_region.phase_inc;
+    envelope_jump_mcu.handle_event(envelope_jump_note);
+    envelope_jump_mcu.envelope_tick();
+    envelope_jump_mcu.envelope_tick();
+    if (envelope_jump_diag.runtime_envelope_updates != uint64_t(envelope_jump_sink.envelopes.size()) ||
+        envelope_jump_diag.max_runtime_envelope_jump == 0 ||
+        envelope_jump_diag.max_runtime_envelope_jump_voice != 0 ||
+        envelope_jump_diag.max_runtime_envelope_jump_tick != 0) {
+      throw std::runtime_error("envelope diagnostics did not record runtime jumps");
     }
 
     render::Region bend_range_region;

@@ -88,7 +88,10 @@ int main(int argc, char** argv) {
     }
 
     const auto& reg = board.register_write_stats();
-    std::string extra = "  \"loader_cycles\": " + std::to_string(board.loader_cycles()) +
+    std::string extra = "  \"render_target\": \"render-board-loader\""
+        ",\n  \"rtl_top\": \"board_loader_render_tops\""
+        ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
+        ",\n  \"loader_cycles\": " + std::to_string(board.loader_cycles()) +
         ",\n  \"sd_image_bytes\": " + std::to_string(sd_image.size()) +
         ",\n  \"sf2_size_bytes\": " + std::to_string(sf2_bytes.size()) +
         ",\n  \"loaded_words\": " + std::to_string(wave_memory.size()) +

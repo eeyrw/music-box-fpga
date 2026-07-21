@@ -24,6 +24,7 @@ INSTRUMENT ?=
 KEY ?= 60
 SECONDS ?= 2
 SAMPLE_RATE ?= 48000
+ADSR_TICK_MS ?= 5
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -293,6 +294,7 @@ render-quick:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--adsr-tick-ms $(ADSR_TICK_MS) \
 		--out-dir $(RENDER_QUICK_OUT_DIR)
 
 render-memory:
@@ -315,6 +317,7 @@ render-memory:
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--adsr-tick-ms $(ADSR_TICK_MS) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
 
 render-full-system:
@@ -334,6 +337,7 @@ render-full-system:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--adsr-tick-ms $(ADSR_TICK_MS) \
 		--out-dir $(RENDER_FULL_SYSTEM_OUT_DIR)
 
 render-board-loader:
@@ -357,6 +361,7 @@ render-board-loader:
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--adsr-tick-ms $(ADSR_TICK_MS) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 vivado-summary:

@@ -280,6 +280,29 @@ std::string json_string(const std::string& value) {
   return json_string_impl(value);
 }
 
+std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
+  std::ostringstream s;
+  s << "  \"sf2_path\": " << json_string_impl(args.sf2)
+    << ",\n  \"midi_path\": ";
+  if (args.midi.empty())
+    s << "null";
+  else
+    s << json_string_impl(args.midi);
+  s << ",\n  \"uses_default_melody\": " << (args.midi.empty() ? "true" : "false")
+    << ",\n  \"instrument_override\": ";
+  if (args.instrument.empty())
+    s << "null";
+  else
+    s << json_string_impl(args.instrument);
+  s << ",\n  \"key\": " << args.key
+    << ",\n  \"requested_seconds\": " << args.seconds
+    << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
+    << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
+    << ",\n  \"render_num_voices\": " << kNumVoices
+    << ",\n  \"memory_profile\": " << json_string_impl(args.memory_profile);
+  return s.str();
+}
+
 Args parse_args(int argc, char** argv) {
   Args args;
   for (int i = 1; i < argc; ++i) {
@@ -350,13 +373,23 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << ", \"left\": " << r.gain_l
       << ", \"right\": " << r.gain_r
       << ", \"initial_envelope\": " << r.initial_envelope
+      << "}, \"volume_envelope\": {\"delay_ticks\": " << r.delay_ticks
+      << ", \"hold_ticks\": " << r.hold_ticks
+      << ", \"sustain_level\": " << r.sustain_level
+      << ", \"attack_ticks\": " << r.attack_ticks
+      << ", \"decay_ticks\": " << r.decay_ticks
+      << ", \"release_ticks\": " << r.release_ticks
+      << ", \"attack_step\": " << r.attack_step
+      << ", \"decay_step\": " << r.decay_step
+      << ", \"release_step\": " << r.release_step
       << "}, \"filter\": {\"enable\": " << (r.filter_enable ? "true" : "false")
       << ", \"b0\": " << r.filter_b0
       << ", \"b1\": " << r.filter_b1
       << ", \"b2\": " << r.filter_b2
       << ", \"a1\": " << r.filter_a1
       << ", \"a2\": " << r.filter_a2
-      << "}, \"modulation\": ";
+      << "}, \"loop_mode\": " << r.loop_mode
+      << ", \"modulation\": ";
     write_modulation_json(f, r);
     f << "}"
       << (i + 1 < regions.size() ? "," : "") << "\n";
@@ -382,9 +415,13 @@ std::string diagnostics_json_fields(const RenderDiagnostics& d) {
     << ",\n  \"diagnostics_max_abs_mix_input_l\": " << d.max_abs_mix_input_l
     << ",\n  \"diagnostics_max_abs_mix_input_r\": " << d.max_abs_mix_input_r
     << ",\n  \"diagnostics_voice_steals\": " << d.voice_steals
+    << ",\n  \"diagnostics_runtime_envelope_updates\": " << d.runtime_envelope_updates
     << ",\n  \"diagnostics_runtime_gain_updates\": " << d.runtime_gain_updates
     << ",\n  \"diagnostics_runtime_phase_updates\": " << d.runtime_phase_updates
     << ",\n  \"diagnostics_runtime_filter_updates\": " << d.runtime_filter_updates
+    << ",\n  \"diagnostics_max_runtime_envelope_jump\": " << d.max_runtime_envelope_jump
+    << ",\n  \"diagnostics_max_runtime_envelope_jump_voice\": " << d.max_runtime_envelope_jump_voice
+    << ",\n  \"diagnostics_max_runtime_envelope_jump_tick\": " << d.max_runtime_envelope_jump_tick
     << ",\n  \"diagnostics_max_runtime_gain_jump_l\": " << d.max_runtime_gain_jump_l
     << ",\n  \"diagnostics_max_runtime_gain_jump_r\": " << d.max_runtime_gain_jump_r
     << ",\n  \"diagnostics_max_runtime_phase_inc_jump\": " << d.max_runtime_phase_inc_jump
@@ -533,10 +570,12 @@ void McuModel::envelope_tick() {
 
     if (voices_[v].state != ENV_SILENT || voices_[v].level != 0) {
       voices_[v].level = clamp_q15(next);
+      record_runtime_envelope_update(v, voices_[v].level);
       sink_.set_envelope(v, voices_[v].level);
       update_voice_modulation(v);
     }
   }
+  envelope_tick_index_ += 1;
 }
 
 void McuModel::control_change(const NoteEvent& event) {
@@ -623,6 +662,7 @@ void McuModel::control_change(const NoteEvent& event) {
           voices_[v].sustain_held = false;
           voices_[v].sostenuto_held = false;
           voices_[v].mod_env_state = ENV_SILENT;
+          record_runtime_envelope_update(v, 0);
           sink_.set_envelope(v, 0);
           sink_.commit_voice(v, 0, 0, regions_.front());
         }
@@ -921,6 +961,30 @@ void McuModel::update_voice_modulation(int voice) {
   else state.vib_lfo_phase += r.vib_lfo_step;
 }
 
+void McuModel::prime_runtime_envelope_level(int voice, int level) {
+  runtime_envelope_valid_[voice] = true;
+  last_runtime_envelope_level_[voice] = clamp_q15(level);
+}
+
+void McuModel::record_runtime_envelope_update(int voice, int level) {
+  level = clamp_q15(level);
+  if (diagnostics_) {
+    diagnostics_->runtime_envelope_updates += 1;
+    if (runtime_envelope_valid_[voice]) {
+      uint32_t jump = level >= last_runtime_envelope_level_[voice]
+                          ? uint32_t(level - last_runtime_envelope_level_[voice])
+                          : uint32_t(last_runtime_envelope_level_[voice] - level);
+      if (jump > diagnostics_->max_runtime_envelope_jump) {
+        diagnostics_->max_runtime_envelope_jump = jump;
+        diagnostics_->max_runtime_envelope_jump_voice = voice;
+        diagnostics_->max_runtime_envelope_jump_tick = envelope_tick_index_;
+      }
+    }
+  }
+  runtime_envelope_valid_[voice] = true;
+  last_runtime_envelope_level_[voice] = level;
+}
+
 void McuModel::release_voice(int voice) {
   voices_[voice].state = ENV_RELEASE;
   voices_[voice].env_stage_tick = 0;
@@ -969,6 +1033,7 @@ void McuModel::note_on(const NoteEvent& event) {
     }
   }
   voices_[slot].note = event.note & 0x7f;
+  runtime_envelope_valid_[slot] = false;
   runtime_gain_valid_[slot] = false;
   runtime_phase_valid_[slot] = false;
   runtime_filter_valid_[slot] = false;
@@ -999,6 +1064,7 @@ void McuModel::note_on(const NoteEvent& event) {
                                           kGenInitialAttenuation, true, false);
   voices_[slot].target = attenuation_to_q15(note_attenuation);
   voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
+  prime_runtime_envelope_level(slot, r.initial_envelope);
 
   const ChannelState& channel = channels_[event.channel & 0x0f];
   uint32_t phase_inc = modulated_phase_inc(event.phase_inc,

@@ -371,8 +371,60 @@ The remaining diagnostics describe MCU policy and runtime control churn:
 - `diagnostics_max_runtime_filter_coeff_jump`: largest absolute one-update
   change among the runtime filter coefficients.
 
+`diagnostics_runtime_envelope_updates` counts runtime envelope writes emitted by
+the MCU model. `diagnostics_max_runtime_envelope_jump`,
+`diagnostics_max_runtime_envelope_jump_voice`, and
+`diagnostics_max_runtime_envelope_jump_tick` identify the largest one-update
+Q1.15 envelope-level step, the voice slot where it occurred, and the zero-based
+ADSR/control tick index. The comparison baseline is primed from the Note On
+commit envelope level, normally zero, so the first runtime attack step is
+included.
+
+The summary JSON also records render provenance fields that are useful when
+comparing audition runs: `render_target`, `rtl_top`, `sf2_path`, `midi_path`,
+`uses_default_melody`, `instrument_override`, `key`, `requested_seconds`,
+`adsr_tick_ms`, `adsr_tick_samples`, `render_num_voices`, and
+`memory_profile`. Each region records `volume_envelope` and `loop_mode` in
+addition to addressing, gain, filter, and modulation data.
+
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
+
+### Render Artifact Analysis
+
+Use `tools/analyze_render_artifacts.py` after a render has completed. It does
+not run Verilator or regenerate audio. It reads a render directory's summary
+JSON plus `out.wav`, then reports:
+
+- first-difference peaks, useful for sample-to-sample jumps;
+- second-difference peaks, useful for isolated click-like discontinuities;
+- threshold counts for large first differences;
+- how many threshold crossings land near the configured ADSR/control tick grid;
+- MIDI events near the strongest transient windows, when `midi_path` is known.
+
+Example comparison between the default 5 ms control tick and a 1 ms control
+tick:
+
+```bash
+python3 tools/analyze_render_artifacts.py \
+  build/render_quick_hedwig_ms_basic_100s_adsr5ms \
+  build/render_quick_hedwig_ms_basic_100s_adsr1ms
+```
+
+The main interpretation rule is whether large discontinuities are isolated and
+aligned to the control grid. A large first difference and matching large
+second-difference pair at `frame % adsr_tick_samples == 0` or one sample later
+usually indicates zipper/click noise from envelope, gain, pitch, or filter
+runtime updates. If reducing `ADSR_TICK_MS` moves or reduces those spikes, the
+problem is in control-rate stepping rather than clipping or memory timing.
+
+Large first differences that are not isolated in second difference and are not
+near the control grid are more likely normal instrument transients or high
+frequency waveform slope. If they repeat at a period derived from
+`loop_length * 256 / phase_inc`, inspect region loop points and source sample
+continuity. If they line up with nearby Note On or Note Off events but not the
+control grid, inspect voice commit/release policy and the selected sample's
+attack or release behavior.
 
 Two helper scripts are useful when exercising the SF2 filter path:
 
