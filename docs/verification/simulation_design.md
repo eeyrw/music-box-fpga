@@ -426,6 +426,64 @@ continuity. If they line up with nearby Note On or Note Off events but not the
 control grid, inspect voice commit/release policy and the selected sample's
 attack or release behavior.
 
+### Hedwig Quick-Render ADSR Tick Experiment
+
+On 2026-07-21, the following long MIDI/SF2 quick-render audition was used to
+investigate very low-level distortion in the second half of the render:
+
+```bash
+make render-quick \
+  SF2="/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2" \
+  MIDI="/media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid" \
+  SECONDS=100 \
+  ADSR_TICK_MS=<tick-ms> \
+  RENDER_QUICK_OUT_DIR="build/render_quick_hedwig_ms_basic_100s_adsr<tick>"
+```
+
+Three runs were compared:
+
+| `ADSR_TICK_MS` | `adsr_tick_samples` | Max first diff L/R | Max second diff L/R | Notes |
+| --- | ---: | ---: | ---: | --- |
+| 5.0 | 240 | 1566 / 1554 | 1587 / 1573 | Strong isolated clicks aligned to the 5 ms control grid, with no mix clipping. |
+| 1.0 | 48 | 1065 / 1001 | 600 / 600 | The largest 5 ms-grid clicks were removed; smaller 1 ms-grid attack clicks remained. |
+| 0.5 | 24 | 1066 / 1002 | 407 / 406 | Control-grid click energy dropped again, but the largest first-difference events stayed near 89.88 s. |
+
+The key manual check was that the old 5 ms spike at frame `3981360`
+(`82.945000 s`) changed from about `-1566/-1554` L/R to about `-62/-44`
+in the 1 ms render. That confirms the original audible artifact was dominated
+by control-rate envelope stepping, not final mix clipping, SPI, I2S, or memory
+timing. The render summaries reported zero mix saturations and peak mix values
+around 6739, well below PCM full scale.
+
+The 0.5 ms run still reported `diagnostics_max_runtime_envelope_jump = 8568`.
+Because that run used the corrected envelope diagnostic baseline, the value
+includes the first attack step after a Note On commit. Several regions active in
+the remaining transient windows have `volume_envelope.attack_ticks = 2`, so at
+0.5 ms each attack still reaches full scale in roughly 1 ms and changes by about
+half-scale per control tick.
+
+The strongest remaining first-difference events in the 1 ms and 0.5 ms renders
+clustered around `89.8805 s`. They did not behave like the original isolated
+control-grid clicks. The nearby MIDI window contains program 40/41 string
+Note Off and Note On events:
+
+```text
+89.880710s note_off program 40 note 70
+89.880710s note_off program 41 note 70
+89.882181s note_on  program 40 note 74
+89.882181s note_on  program 41 note 74
+```
+
+Treat this cluster as a separate case from the 5 ms zipper noise. If it remains
+audible, inspect the selected string samples, note commit/release behavior, and
+loop/attack continuity around those regions rather than increasing control write
+rate further.
+
+The practical conclusion is that reducing `ADSR_TICK_MS` from 5 ms to 1 ms or
+0.5 ms mitigates the current click, but it is not the architectural fix. A
+sample-rate envelope/gain ramp or an RTL-side slew limiter is the expected next
+step if runtime amplitude changes need to be artifact-free.
+
 Two helper scripts are useful when exercising the SF2 filter path:
 
 ```bash
