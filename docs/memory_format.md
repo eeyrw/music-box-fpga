@@ -37,7 +37,9 @@ a common non-spec SoundFont practice where one instrument contains adjacent
 hard-panned matching zones, normally pan `-500` and `+500`, for left and right
 sample headers whose `sampleLink` fields are missing or stale. Those zones are
 collapsed into one stereo region when their key/velocity ranges, sample pitch
-metadata, clipped lengths, and loop windows match. Interpolation operates
+metadata, and sample windows are usable. Their sample names, sample type flags,
+sample lengths, and loop windows may differ; lengths and loops are preserved as
+independent left and right playback controls. Interpolation operates
 independently on each channel, while both channels use the same phase increment
 so the pair is triggered and pitched as one stereo voice.
 

@@ -1131,13 +1131,7 @@ bool compatible_unlinked_stereo_pair(const Sf2Data& sf2, const ArticulationZone&
   SampleWindow right_window = sample_window(sf2, right, right_zone.generators);
   uint32_t frames_l = left_window.end - left_window.start;
   uint32_t frames_r = right_window.end - right_window.start;
-  if (frames_l == 0 || frames_l != frames_r) return false;
-  if (relative_sample_pos(left_window.start_loop, left_window.start) !=
-      relative_sample_pos(right_window.start_loop, right_window.start)) {
-    return false;
-  }
-  return relative_sample_pos(left_window.end_loop, left_window.start) ==
-         relative_sample_pos(right_window.end_loop, right_window.start);
+  return frames_l != 0 && frames_r != 0;
 }
 
 int unlinked_stereo_partner_index(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,

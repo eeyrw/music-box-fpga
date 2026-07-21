@@ -14,10 +14,12 @@ The simulation harness already contains reusable control-side code under
 - `formats/sf2_loader.*`: extracts SoundFont regions and builds the wave-memory
   image. It preserves normal SF2 `sampleLink` stereo pairs and also collapses
   common hard-panned left/right instrument-zone pairs with stale or missing
-  links into one stereo region when their sample windows are compatible. Sample
-  loop endpoints are validated when a region is built and are clamped to the
-  selected sample window, which keeps otherwise playable SoundFonts with stale
-  unused sample-loop metadata loadable.
+  links into one stereo region when their ranges and sample pitch metadata are
+  compatible and both selected sample windows are usable. Per-channel sample
+  names, sample type flags, lengths, and loop windows may differ. Sample loop
+  endpoints are validated when a region is built and are clamped to the selected
+  sample window, which keeps otherwise playable SoundFonts with stale unused
+  sample-loop metadata loadable.
 - `render/render_support.*`: contains `McuModel`, which owns voice allocation,
   note on, note off, ADSR stepping, and region selection for the current render
   path.

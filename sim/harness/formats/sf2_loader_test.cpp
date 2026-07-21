@@ -301,7 +301,7 @@ std::string write_unlinked_hard_pan_stereo_sf2() {
   std::vector<uint8_t> ibag;
   push_bag(ibag, 0, 0);
   push_bag(ibag, 5, 0);
-  push_bag(ibag, 10, 0);
+  push_bag(ibag, 12, 0);
 
   std::vector<uint8_t> igen;
   push_gen(igen, 43, 0x7f00);
@@ -312,17 +312,19 @@ std::string write_unlinked_hard_pan_stereo_sf2() {
   push_gen(igen, 43, 0x7f00);
   push_gen(igen, 17, bits(500));
   push_gen(igen, 54, 1);
+  push_gen(igen, 2, 2);
+  push_gen(igen, 3, bits(-2));
   push_gen(igen, 52, 1200);
   push_gen(igen, 53, 1);
   push_gen(igen, 0, 0);
 
   std::vector<uint8_t> shdr;
-  // Some real-world SF2s mark these as stereo halves but leave sampleLink
-  // pointing at an unrelated sample. The instrument zones' hard pan is the
-  // useful stereo pairing signal in that case.
-  push_sample(shdr, "BrokenLinkL", 0, 64, 8, 40, 48000, 60, 0, 2, 4);
-  push_sample(shdr, "BrokenLinkR", 64, 128, 72, 104, 48000, 60, 0, 2, 2);
-  push_sample(shdr, "WrongLink", 128, 192, 136, 193, 48000, 60, 0, 0, 1);
+  // Some real-world SF2s leave sampleLink stale and do not reliably encode
+  // left/right sample headers. The instrument zones' hard pan is the useful
+  // stereo pairing signal in that case.
+  push_sample(shdr, "BrokenLinkA", 0, 64, 8, 40, 48000, 60, 0, 2, 1);
+  push_sample(shdr, "BrokenLinkB", 64, 132, 72, 104, 48000, 60, 0, 2, 1);
+  push_sample(shdr, "WrongLink", 132, 192, 136, 193, 48000, 60, 0, 0, 1);
   push_sample(shdr, "EOS", 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
   std::vector<uint8_t> riff;
@@ -477,12 +479,16 @@ int main() {
     expect_equal(int(unlinked_regions.size()), 1, "hard-panned unlinked stereo creates one preset region");
     const auto& unlinked = unlinked_regions.at(0);
     if (!unlinked.stereo) throw std::runtime_error("hard-panned unlinked pair was not marked stereo");
-    expect_equal(unlinked.sample_left == "BrokenLinkL" ? 1 : 0, 1, "hard-panned left sample name");
-    expect_equal(unlinked.sample_right == "BrokenLinkR" ? 1 : 0, 1, "hard-panned right sample name");
+    expect_equal(unlinked.sample_left == "BrokenLinkA" ? 1 : 0, 1, "hard-panned left sample name");
+    expect_equal(unlinked.sample_right == "BrokenLinkB" ? 1 : 0, 1, "hard-panned right sample name");
     expect_equal(int(unlinked.base_addr), int(unlinked_sf2.smpl_word_offset), "hard-panned left base");
     expect_equal(int(unlinked.base_addr_r), int(unlinked_sf2.smpl_word_offset + 64), "hard-panned right base");
     expect_equal(int(unlinked.length), 64, "hard-panned left length");
-    expect_equal(int(unlinked.length_r), 64, "hard-panned right length");
+    expect_equal(int(unlinked.length_r), 68, "hard-panned right length");
+    expect_equal(int(unlinked.loop_start), 8, "hard-panned left loop start");
+    expect_equal(int(unlinked.loop_start_r), 10, "hard-panned right loop start");
+    expect_equal(int(unlinked.loop_end), 40, "hard-panned left loop end");
+    expect_equal(int(unlinked.loop_end_r), 38, "hard-panned right loop end");
     expect_equal(int(unlinked.phase_inc), render::kPhaseFracScale * 2,
                  "hard-panned unlinked stereo uses right zone pitch generators");
     expect_equal(unlinked.pan, 0, "hard-panned unlinked stereo centers region pan");
