@@ -70,11 +70,11 @@ single-register writes. Supporting gapless high-speed burst traffic requires add
 as a write-side RX FIFO and read-side prefetch/FIFO or a protocol-defined fixed
 dummy-cycle interval.
 
-The core exposes 32 voice slots. Slot 0 keeps the original base address. Slot N
-uses `0x0100 + N * 0x100` plus the offsets below.
+The default build exposes 256 voice slots. Slot 0 keeps the original base
+address. Slot N uses `0x0100 + N * 0x80` plus the offsets below.
 
 ```text
-voice_base(slot) = 0x0100 + slot * 0x100
+voice_base(slot) = 0x0100 + slot * 0x80
 register_addr    = voice_base(slot) + offset
 ```
 
@@ -102,30 +102,30 @@ register_addr    = voice_base(slot) + offset
 | `0x4c` | ENVELOPE_RUNTIME | runtime signed Q1.15 envelope level in bits 15:0 |
 | `0x50` | RELEASE_CONTROL | bit 0 released runtime flag |
 | `0x54` | STATUS | bit 0 configuration valid for this voice slot |
-| `0x3000` | VERSION | design version, currently `0x0006_0000` |
-| `0x3010` | SYSTEM_STATUS | system wrapper status bits |
-| `0x3014` | COMMON_EVENT_FLAGS | sticky event flags, write one to clear |
-| `0x3018` | AUDIO_STATUS | output FIFO and audio flags |
-| `0x301c` | RENDER_STATUS | render pending, deadline flag, and last latency |
-| `0x3020` | MEMORY_STATUS | external line-memory request/response status and last response latency |
-| `0x3024` | UNDERRUN_COUNT | saturating I2S underrun counter |
-| `0x3028` | SAMPLE_DROP_COUNT | saturating output FIFO overflow/drop counter |
-| `0x302c` | RENDER_DEADLINE_MISS_COUNT | saturating render deadline miss counter |
-| `0x3038` | MEM_RESPONSE_COUNT | saturating external memory response counter |
-| `0x3040` | PLATFORM_STATUS | Smart Artix SD/DDR/asset-loader status bits |
-| `0x3044` | PLATFORM_ERRORS | SD error, loader error, and loader state |
-| `0x3048` | PLATFORM_BYTES_LOADED | SD asset bytes loaded |
-| `0x3050` | PLATFORM_SF2_SIZE | SF2 byte size from the SD image header |
-| `0x3058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
-| `0x305c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
-| `0x3060` | DDR_ACCESS_CONTROL | single-beat DDR register-access command control |
-| `0x3064` | DDR_ACCESS_STATUS | single-beat DDR register-access command status |
-| `0x3068` | DDR_ACCESS_ADDR | 128-bit-beat-aligned DDR byte address |
-| `0x306c` | DDR_ACCESS_BYTE_ENABLE | write byte-enable bits, bit 0 controls byte 0 |
-| `0x3070` | DDR_ACCESS_DATA0 | write data/readback bits 31:0 |
-| `0x3074` | DDR_ACCESS_DATA1 | write data/readback bits 63:32 |
-| `0x3078` | DDR_ACCESS_DATA2 | write data/readback bits 95:64 |
-| `0x307c` | DDR_ACCESS_DATA3 | write data/readback bits 127:96 |
+| `0x9000` | VERSION | design version, currently `0x0006_0000` |
+| `0x9010` | SYSTEM_STATUS | system wrapper status bits |
+| `0x9014` | COMMON_EVENT_FLAGS | sticky event flags, write one to clear |
+| `0x9018` | AUDIO_STATUS | output FIFO and audio flags |
+| `0x901c` | RENDER_STATUS | render pending, deadline flag, and last latency |
+| `0x9020` | MEMORY_STATUS | external line-memory request/response status and last response latency |
+| `0x9024` | UNDERRUN_COUNT | saturating I2S underrun counter |
+| `0x9028` | SAMPLE_DROP_COUNT | saturating output FIFO overflow/drop counter |
+| `0x902c` | RENDER_DEADLINE_MISS_COUNT | saturating render deadline miss counter |
+| `0x9038` | MEM_RESPONSE_COUNT | saturating external memory response counter |
+| `0x9040` | PLATFORM_STATUS | Smart Artix SD/DDR/asset-loader status bits |
+| `0x9044` | PLATFORM_ERRORS | SD error, loader error, and loader state |
+| `0x9048` | PLATFORM_BYTES_LOADED | SD asset bytes loaded |
+| `0x9050` | PLATFORM_SF2_SIZE | SF2 byte size from the SD image header |
+| `0x9058` | PLATFORM_CURRENT_LBA | current SD LBA being loaded |
+| `0x905c` | PLATFORM_DDR_STATUS | Smart Artix MIG status and temperature |
+| `0x9060` | DDR_ACCESS_CONTROL | single-beat DDR register-access command control |
+| `0x9064` | DDR_ACCESS_STATUS | single-beat DDR register-access command status |
+| `0x9068` | DDR_ACCESS_ADDR | 128-bit-beat-aligned DDR byte address |
+| `0x906c` | DDR_ACCESS_BYTE_ENABLE | write byte-enable bits, bit 0 controls byte 0 |
+| `0x9070` | DDR_ACCESS_DATA0 | write data/readback bits 31:0 |
+| `0x9074` | DDR_ACCESS_DATA1 | write data/readback bits 63:32 |
+| `0x9078` | DDR_ACCESS_DATA2 | write data/readback bits 95:64 |
+| `0x907c` | DDR_ACCESS_DATA3 | write data/readback bits 127:96 |
 
 A mono configuration is valid when `length != 0`. A stereo configuration is valid
 when both `length != 0` and `length_r != 0`. `length`, `length_r`, loop starts,
@@ -206,7 +206,7 @@ return a bus error instead of stalling the transport bridge.
 All unspecified or reserved bits in the common status registers read as zero. The
 status bits below are live snapshots unless explicitly marked sticky or counted.
 
-`SYSTEM_STATUS` (`0x3010`) is the main live activity snapshot:
+`SYSTEM_STATUS` (`0x9010`) is the main live activity snapshot:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -220,7 +220,7 @@ status bits below are live snapshots unless explicitly marked sticky or counted.
 | `7` | `ext_rsp_valid` | A packed external memory-line response is valid in this cycle. |
 | `31:8` | reserved | Reads zero. |
 
-`COMMON_EVENT_FLAGS` (`0x3014`) contains sticky event flags. Write ones to clear
+`COMMON_EVENT_FLAGS` (`0x9014`) contains sticky event flags. Write ones to clear
 selected bits. Events that occur in the same cycle as a clear remain set.
 
 | Bits | Field | Meaning |
@@ -231,11 +231,11 @@ selected bits. Events that occur in the same cycle as a clear remain set.
 | `3` | `mem_response` | The wrapper observed an external memory-line response. |
 | `31:4` | reserved | Reads zero. |
 
-The matching counters at `0x3024` through `0x3038` increment on the same events
+The matching counters at `0x9024` through `0x9038` increment on the same events
 and saturate at `0xffff_ffff`. They are reset only by system reset and are not
 cleared by writes to `COMMON_EVENT_FLAGS`.
 
-`AUDIO_STATUS` (`0x3018`) summarizes the output FIFO and audio sticky flags:
+`AUDIO_STATUS` (`0x9018`) summarizes the output FIFO and audio sticky flags:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -244,7 +244,7 @@ cleared by writes to `COMMON_EVENT_FLAGS`.
 | `17` | `sample_drop` | Mirror of sticky `COMMON_EVENT_FLAGS[1]`. |
 | `31:18` | reserved | Reads zero. |
 
-`RENDER_STATUS` (`0x301c`) reports render scheduling state:
+`RENDER_STATUS` (`0x901c`) reports render scheduling state:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -253,7 +253,7 @@ cleared by writes to `COMMON_EVENT_FLAGS`.
 | `17` | `render_deadline_miss` | Mirror of sticky `COMMON_EVENT_FLAGS[2]`. |
 | `31:18` | reserved | Reads zero. |
 
-`MEMORY_STATUS` (`0x3020`) reports line-memory activity:
+`MEMORY_STATUS` (`0x9020`) reports line-memory activity:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -268,12 +268,12 @@ The event counters are direct 32-bit saturating reads:
 
 | Address | Name | Event counted |
 | --- | --- | --- |
-| `0x3024` | `UNDERRUN_COUNT` | I2S underrun pulses. |
-| `0x3028` | `SAMPLE_DROP_COUNT` | Output FIFO sample-drop pulses. |
-| `0x302c` | `RENDER_DEADLINE_MISS_COUNT` | New sample ticks that arrive while a previous render is pending. |
-| `0x3038` | `MEM_RESPONSE_COUNT` | External memory-line response pulses. |
+| `0x9024` | `UNDERRUN_COUNT` | I2S underrun pulses. |
+| `0x9028` | `SAMPLE_DROP_COUNT` | Output FIFO sample-drop pulses. |
+| `0x902c` | `RENDER_DEADLINE_MISS_COUNT` | New sample ticks that arrive while a previous render is pending. |
+| `0x9038` | `MEM_RESPONSE_COUNT` | External memory-line response pulses. |
 
-`PLATFORM_STATUS` (`0x3040`) is the Smart Artix board-status word. Generic
+`PLATFORM_STATUS` (`0x9040`) is the Smart Artix board-status word. Generic
 wrappers may leave this address unimplemented unless they attach a board-specific
 platform-register extension.
 
@@ -293,7 +293,7 @@ platform-register extension.
 | `14:11` | `asset_loader_state` | Board loader state code, useful for locating SD/header/write progress or failure. |
 | `31:15` | reserved | Reads zero. |
 
-`PLATFORM_ERRORS` (`0x3044`) captures board loader error detail:
+`PLATFORM_ERRORS` (`0x9044`) captures board loader error detail:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -333,17 +333,17 @@ block reader:
 | `5` | `ERROR_LBA_RANGE` | Header SF2 start LBA could not fit the configured SD LBA width. |
 | `6` | `ERROR_SIZE_RANGE` | Header reserved size word was nonzero, so the SF2 size exceeded the current 32-bit loader limit. |
 
-`PLATFORM_BYTES_LOADED` (`0x3048`) reports the 32-bit count of SF2 asset bytes
-written to DDR3. `PLATFORM_SF2_SIZE` (`0x3050`) reports the 32-bit SF2 byte size
+`PLATFORM_BYTES_LOADED` (`0x9048`) reports the 32-bit count of SF2 asset bytes
+written to DDR3. `PLATFORM_SF2_SIZE` (`0x9050`) reports the 32-bit SF2 byte size
 read from the raw SD image header. For the current board-loading flow, assets are
 expected to fit below 4 GiB. A successful load should end with
 `PLATFORM_BYTES_LOADED == PLATFORM_SF2_SIZE` and `PLATFORM_STATUS[5] = 1`.
 
-`PLATFORM_CURRENT_LBA` (`0x3058`) reports the current SD logical block address the
+`PLATFORM_CURRENT_LBA` (`0x9058`) reports the current SD logical block address the
 loader is reading or most recently requested. During bring-up it helps distinguish
 SD initialization, sector-0 header parsing, and later SF2 data-copy progress.
 
-`PLATFORM_DDR_STATUS` (`0x305c`) gives a DDR/MIG-focused view:
+`PLATFORM_DDR_STATUS` (`0x905c`) gives a DDR/MIG-focused view:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -357,13 +357,13 @@ SD initialization, sector-0 header parsing, and later SF2 data-copy progress.
 | `27:16` | `ddr_device_temp` | MIG `device_temp` field, passed through from the generated DDR3 controller. |
 | `31:28` | reserved | Reads zero. |
 
-The DDR register-access window at `0x3060` through `0x307c` is a Smart Artix
+The DDR register-access window at `0x9060` through `0x907c` is a Smart Artix
 bring-up path for single 128-bit DDR beat reads and writes through the same SPI
 register transport. It is not part of the generic playback memory interface. The
 address is a MIG byte address and must be 16-byte aligned for the current 128-bit
 board configuration. Unaligned commands report `error` and do not access DDR.
 
-`DDR_ACCESS_CONTROL` (`0x3060`) starts and clears a command:
+`DDR_ACCESS_CONTROL` (`0x9060`) starts and clears a command:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -372,7 +372,7 @@ board configuration. Unaligned commands report `error` and do not access DDR.
 | `2` | `clear` | Write one to clear latched `done` and `error` status bits. |
 | `31:3` | reserved | Reads zero. |
 
-`DDR_ACCESS_STATUS` (`0x3064`) reports command state:
+`DDR_ACCESS_STATUS` (`0x9064`) reports command state:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |

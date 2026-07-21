@@ -63,6 +63,7 @@ def normalize_spec(spec):
             normalized["voice_window"] = {
                 "base": peripheral["baseAddress"],
                 "stride": peripheral["dimIncrement"],
+                "count": peripheral.get("dim", 1),
             }
             for reg in peripheral["registers"]:
                 normalized["voice_registers"].append({
@@ -131,6 +132,14 @@ def render_sv(spec):
     version_value = parse_int(spec["version"]["value"])
     voice_base = parse_int(spec["voice_window"]["base"])
     voice_stride = parse_int(spec["voice_window"]["stride"])
+    voice_count = parse_int(spec["voice_window"]["count"])
+    first_global = min(parse_int(reg["address"]) for reg in spec["global_registers"])
+    max_addressable_voices = (first_global - voice_base) // voice_stride
+    voice_stride_shift = (voice_stride.bit_length() - 1)
+    if voice_stride <= 0 or (voice_stride & (voice_stride - 1)) != 0:
+        raise ValueError("VOICE dimIncrement must be a positive power of two")
+    if voice_count > max_addressable_voices:
+        raise ValueError("VOICE dim exceeds the address space before the first global register")
 
     lines = [
         "// Generated from spec/register_map.json by tools/gen_register_map.py.",
@@ -143,6 +152,8 @@ def render_sv(spec):
         f"  localparam logic [31:0] REG_VERSION_VALUE = {sv_hex(version_value, 32)};",
         f"  localparam logic [15:0] REG_VOICE_BASE = {sv_hex(voice_base, 16)};",
         f"  localparam logic [15:0] REG_VOICE_STRIDE = {sv_hex(voice_stride, 16)};",
+        f"  localparam int REG_VOICE_STRIDE_SHIFT = {voice_stride_shift};",
+        f"  localparam int REG_MAX_ADDRESSABLE_VOICES = {max_addressable_voices};",
         "",
     ]
 
@@ -190,6 +201,14 @@ def render_cpp(spec):
     version_value = parse_int(spec["version"]["value"])
     voice_base = parse_int(spec["voice_window"]["base"])
     voice_stride = parse_int(spec["voice_window"]["stride"])
+    voice_count = parse_int(spec["voice_window"]["count"])
+    first_global = min(parse_int(reg["address"]) for reg in spec["global_registers"])
+    max_addressable_voices = (first_global - voice_base) // voice_stride
+    voice_stride_shift = (voice_stride.bit_length() - 1)
+    if voice_stride <= 0 or (voice_stride & (voice_stride - 1)) != 0:
+        raise ValueError("VOICE dimIncrement must be a positive power of two")
+    if voice_count > max_addressable_voices:
+        raise ValueError("VOICE dim exceeds the address space before the first global register")
 
     lines = [
         "// Generated from spec/register_map.json by tools/gen_register_map.py.",
@@ -204,6 +223,8 @@ def render_cpp(spec):
         f"constexpr uint32_t kVersionValue = {cpp_hex(version_value, 32)}u;",
         f"constexpr uint16_t kVoiceBase = {cpp_hex(voice_base, 16)}u;",
         f"constexpr uint16_t kVoiceStride = {cpp_hex(voice_stride, 16)}u;",
+        f"constexpr int kVoiceStrideShift = {voice_stride_shift};",
+        f"constexpr int kMaxAddressableVoices = {max_addressable_voices};",
         "",
     ]
 

@@ -10,8 +10,8 @@
         "name": "VOICE",
         "description": "Repeated per-voice control window.",
         "baseAddress": "0x0100",
-        "dim": 32,
-        "dimIncrement": "0x0100",
+        "dim": 256,
+        "dimIncrement": "0x0080",
         "registers": [
           {"name": "BASE_ADDR", "addressOffset": "0x0000"},
           {"name": "BASE_ADDR_R", "addressOffset": "0x0004"},
@@ -62,7 +62,7 @@
       {
         "name": "SYSTEM",
         "description": "Common and board platform register window.",
-        "baseAddress": "0x3000",
+        "baseAddress": "0x9000",
         "registers": [
           {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00060000"},
           {"name": "SYSTEM_STATUS", "addressOffset": "0x0010"},

@@ -1,7 +1,7 @@
 VERILATOR ?= verilator
 BUILD_DIR := build
 TOP := tb_wavetable_render_core
-NUM_VOICES ?= 32
+NUM_VOICES ?= 256
 VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES)

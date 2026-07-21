@@ -23,13 +23,14 @@ The external module interface did not change:
 
 ## Voice Count Configuration
 
-The default build uses 32 voices. Simulation builds can override the voice count
+The default build uses 256 voices. Simulation builds can override the voice count
 from `make`:
 
 ```bash
 make render-quick NUM_VOICES=8 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
 make render-quick NUM_VOICES=16 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
 make render-quick NUM_VOICES=32 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
+make render-quick NUM_VOICES=256 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
 ```
 
 `NUM_VOICES` drives both sides of the simulation build:
@@ -517,10 +518,10 @@ request overlap. Adding the complete-context queue changed that same workload to
 `167.389` average and `225` maximum cycles. Adding the word-request FIFO and
 in-order endpoint assembly queue reduced it further to `149.209` average and
 `195` maximum cycles while preserving the same `46.9586` average and `88` maximum
-memory word reads per sample. All runs kept the same `32` maximum enabled and
-filtered voices and exact C++ reference audio match.
+memory word reads per sample. All runs kept the same maximum enabled and
+filtered voices for that workload and exact C++ reference audio match.
 
-The regression latency guard for the 32-voice mono render case remains
+The regression latency guard for the all-voice mono render case remains
 `600 + NUM_VOICES` cycles. This is a structural regression limit, not a
 board-level real-time deadline. It allows the fixed DSP pipeline, synchronous
 register-bank reads, and memory handshakes while still catching accidental large
@@ -577,7 +578,7 @@ make test
 
 The regression suite covers the unchanged exact-output behavior, including mono
 and stereo fetches, interpolation, looping, envelope scaling, filtered voice
-output, multi-voice mixing, and the 32-voice latency bound.
+output, multi-voice mixing, and the all-voice latency bound.
 
 The lint run still reports existing non-fatal warnings such as unused parameters,
 unused low product bits in interpolation, and testbench blocking-clock assignment
@@ -612,6 +613,19 @@ The per-sample render counters measure RTL scheduler and memory-service cost for
 the current abstract one-cycle memory response model used by `render-quick`. They
 are cycle counts, not absolute time. Converting them into real-time margin still
 requires a target system clock and the final memory profile.
+
+`render-quick` waits for `sample_valid` using a timeout derived from the
+configured voice count, not a fixed smoke-test limit:
+
+```text
+timeout_cycles = 64 + NUM_VOICES * 4 * 8
+```
+
+The factor of four covers the maximum word reads for one stereo interpolated
+voice in the quick one-cycle memory model, and the final factor leaves pipeline
+and scheduler slack around each read. A timeout is therefore still treated as a
+possible RTL progress bug, but high-polyphony renders are not constrained by the
+old 32-voice-era fixed limit.
 
 These counters make it possible to separate the main costs:
 
@@ -796,16 +810,16 @@ The next passes introduced reusable synchronous RAM templates and moved the
 host-visible and renderer-facing voice-bank groups behind explicit store
 modules:
 
-- `descriptor_ram`: `32 voices x 32 words x 32-bit` host-visible descriptor
+- `descriptor_ram`: `NUM_VOICES x 32 words x 32-bit` host-visible descriptor
   mirror.
-- `active_config_ram`: `32 x 244` committed active voice configuration.
-- `runtime_phase_ram`: `32 x 32` runtime phase increments with independent
+- `active_config_ram`: `NUM_VOICES x 244` committed active voice configuration.
+- `runtime_phase_ram`: `NUM_VOICES x 32` runtime phase increments with independent
   renderer and bus-inspection read ports.
-- `runtime_gain_ram`: `32 x 32` packed runtime left/right gains with independent
+- `runtime_gain_ram`: `NUM_VOICES x 32` packed runtime left/right gains with independent
   renderer and bus-inspection read ports.
-- `runtime_envelope_ram`: `32 x 16` runtime envelope levels with independent
+- `runtime_envelope_ram`: `NUM_VOICES x 16` runtime envelope levels with independent
   renderer and bus-inspection read ports.
-- `runtime_filter_ram`: `32 x 80` runtime filter coefficients.
+- `runtime_filter_ram`: `NUM_VOICES x 80` runtime filter coefficients.
 
 `VOICE_CONTROL.apply` now writes the selected active-config BRAM entry directly
 and also copies the shadow filter coefficient group into runtime filter BRAM for
@@ -831,7 +845,8 @@ runtime store split should be re-measured in the next Smart Artix synthesis pass
 
 The area-oriented renderer pass replaces the combinational next-valid-voice
 search with sequential slot scanning, moves per-voice phase into a `32 x 32`
-distributed RAM, and moves per-voice biquad history into four `32 x 34`
+distributed RAM for a 32-voice build, and moves per-voice biquad history into
+four `32 x 34`
 distributed RAMs plus valid bitmaps. This trades extra clocks for invalid voice
 slots and RAM-read staging for a much smaller voice renderer. The Smart Artix
 Vivado 2025.2 post-synthesis run reports `8272 / 32600` slice LUTs, `7882 /

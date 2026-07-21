@@ -628,7 +628,7 @@ The MCU model then continues release envelope writes and eventually disables and
 commits the slot when the envelope reaches zero.
 
 `sim/harness/render/render_support.cpp` models the MCU at the precision used by
-this FPGA project: 32 voice slots and Q1.15 runtime envelope levels. It uses SF2
+this FPGA project: `NUM_VOICES` voice slots and Q1.15 runtime envelope levels. It uses SF2
 volume-envelope step values, free-voice-first allocation, and oldest-voice
 stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes
@@ -831,7 +831,7 @@ Stereo and region-selection gaps:
 
 - If multiple preset or instrument zones overlap the same key and velocity, the
   harness triggers each matching region as a separate RTL voice. This exercises
-  layered playback, subject to the current 32-voice allocation policy.
+  layered playback, subject to the configured `NUM_VOICES` allocation policy.
 - Direct region extraction still treats lack of a key/velocity match as an error
   for the selected preset or instrument. Standard MIDI render preparation instead
   silences only the unmapped Note On and continues playback.
@@ -861,7 +861,7 @@ RTL integration gaps implied by complete SF2 support:
   mono regions instead of being paired with unrelated sample data.
 - Higher polyphony for heavily layered SF2 presets remains a pipeline and memory
   bandwidth optimization item. The current harness can trigger overlapping zones,
-  but the RTL still exposes 32 voice slots. When all slots are busy, the MCU
+  and the RTL voice count follows `NUM_VOICES`. When all slots are busy, the MCU
   policy now prefers released or key-released voices, then the lowest estimated
   audible contribution from envelope level and runtime gain, before falling back
   to age.
@@ -941,5 +941,5 @@ The current simulation still does not cover:
 - Exhaustive SF2 source-curve edge cases, linked modulator chains, broader MIDI
   controller policy, envelope edge cases, and dynamic filter modulation stress.
 
-Those are good future test areas as the 32-voice core moves toward board-level
+Those are good future test areas as the multi-voice core moves toward board-level
 integration.

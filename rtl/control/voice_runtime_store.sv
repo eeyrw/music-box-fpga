@@ -59,7 +59,6 @@ module voice_runtime_store (
   logic [31:0] runtime_gain_inspect_data;
   logic [15:0] runtime_envelope_inspect_data;
   logic [FILTER_COEFF_WORD_WIDTH-1:0] runtime_filter_render_word;
-  int i;
 
   assign runtime_write_voice = (commit_phase_write || commit_gain_write ||
                                 commit_envelope_write || commit_filter_write) ?
@@ -138,10 +137,8 @@ module voice_runtime_store (
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      for (i = 0; i < NUM_VOICES; i++) begin
-        runtime_released[i] <= 1'b0;
-        runtime_filter_enable[i] <= 1'b0;
-      end
+      runtime_released <= '{default: 1'b0};
+      runtime_filter_enable <= '{default: 1'b0};
       render_runtime <= '0;
       render_runtime.envelope_level <= '0;
       render_runtime.filter_b0 <= 16'sh4000;

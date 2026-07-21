@@ -186,8 +186,8 @@ make host-smart-artix-bringup
 First test without hardware access:
 
 ```bash
-build/ch347_control --dry-run --write 0x3000 0
-build/ch347_control --dry-run --read 0x3000
+build/ch347_control --dry-run --write 0x9000 0
+build/ch347_control --dry-run --read 0x9000
 build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
 ```
 
@@ -204,7 +204,7 @@ build/smart_artix_bringup --device 0 \
 
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --read 0x3000
+  --read 0x9000
 ```
 
 The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
@@ -221,18 +221,18 @@ The useful first reads are:
 
 | Address | Register | Expected use |
 | --- | --- | --- |
-| `0x3000` | `VERSION` | Proves SPI can reach the register map. |
-| `0x3010` | `SYSTEM_STATUS` | Shows core, FIFO, I2S, and external-memory handshake state. |
-| `0x3014` | `COMMON_EVENT_FLAGS` | Shows sticky underrun/drop/deadline/memory events. |
-| `0x3018` | `AUDIO_STATUS` | Shows FIFO level and sticky audio errors. |
-| `0x3020` | `MEMORY_STATUS` | Shows cache/memory request status and response latency. |
-| `0x3040` | `PLATFORM_STATUS` | Main DDR/SD/asset-loader status word. |
-| `0x3044` | `PLATFORM_ERRORS` | SD error, loader error, and loader state. |
-| `0x3048` | `PLATFORM_BYTES_LOADED` | Loaded byte count. |
-| `0x3050` | `PLATFORM_SF2_SIZE` | SF2 byte count from the raw header. |
-| `0x3058` | `PLATFORM_CURRENT_LBA` | Current sector being loaded. |
-| `0x305c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
-| `0x3060`..`0x307c` | `DDR_ACCESS_*` | Single-beat DDR read/write platform register window. |
+| `0x9000` | `VERSION` | Proves SPI can reach the register map. |
+| `0x9010` | `SYSTEM_STATUS` | Shows core, FIFO, I2S, and external-memory handshake state. |
+| `0x9014` | `COMMON_EVENT_FLAGS` | Shows sticky underrun/drop/deadline/memory events. |
+| `0x9018` | `AUDIO_STATUS` | Shows FIFO level and sticky audio errors. |
+| `0x9020` | `MEMORY_STATUS` | Shows cache/memory request status and response latency. |
+| `0x9040` | `PLATFORM_STATUS` | Main DDR/SD/asset-loader status word. |
+| `0x9044` | `PLATFORM_ERRORS` | SD error, loader error, and loader state. |
+| `0x9048` | `PLATFORM_BYTES_LOADED` | Loaded byte count. |
+| `0x9050` | `PLATFORM_SF2_SIZE` | SF2 byte count from the raw header. |
+| `0x9058` | `PLATFORM_CURRENT_LBA` | Current sector being loaded. |
+| `0x905c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
+| `0x9060`..`0x907c` | `DDR_ACCESS_*` | Single-beat DDR read/write platform register window. |
 
 `PLATFORM_STATUS` bit meanings:
 

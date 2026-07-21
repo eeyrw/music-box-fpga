@@ -16,6 +16,16 @@ std::string hex16(uint16_t v) {
   return b;
 }
 
+int sample_timeout_cycles() {
+  // The quick core uses an ideal word memory, but the renderer still walks
+  // configured voices serially and a stereo voice can consume four word reads.
+  // Keep this tied to kNumVoices so high-polyphony MIDI/SF2 renders do not trip
+  // a smoke-test bound from smaller configurations.
+  constexpr int kReadsPerStereoVoice = 4;
+  constexpr int kPipelineSlackPerRead = 8;
+  return 64 + kNumVoices * kReadsPerStereoVoice * kPipelineSlackPerRead;
+}
+
 }  // namespace
 
 QuickRtlHarness::QuickRtlHarness(const std::vector<int16_t>& memory)
@@ -82,14 +92,21 @@ std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
   top_->sample_tick = 0;
 
   int timeout = 0;
+  const int timeout_limit = sample_timeout_cycles();
   uint32_t render_cycles = 1;
-  while (!top_->sample_valid && timeout < 500) {
+  while (!top_->sample_valid && timeout < timeout_limit) {
     tick();
     ++timeout;
     ++render_cycles;
   }
   if (!top_->sample_valid) {
-    throw std::runtime_error("quick RTL sample response timed out at output sample " + std::to_string(produced));
+    throw std::runtime_error("quick RTL sample response timed out at output sample " +
+                             std::to_string(produced) + " after " +
+                             std::to_string(timeout_limit) + " cycles" +
+                             " busy=" + std::to_string(int(top_->busy)) +
+                             " mem_req_valid=" + std::to_string(int(top_->mem_req_valid)) +
+                             " mem_req_ready=" + std::to_string(int(top_->mem_req_ready)) +
+                             " mem_rsp_valid=" + std::to_string(int(top_->mem_rsp_valid)));
   }
   render_cycles_sum_ += render_cycles;
   max_render_cycles_ = std::max(max_render_cycles_, render_cycles);

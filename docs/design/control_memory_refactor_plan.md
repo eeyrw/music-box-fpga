@@ -12,9 +12,9 @@ not need a host-side mirror or a staged register-access readback window to recov
 inspect voice state.
 
 The `READBACK_ADDR` and `READBACK_DATA` registers were removed from the core
-register contract. Addresses `0x3004` and `0x3008` are now unsupported core
-addresses and must report a bus error when routed to `voice_register_bank`.
-System common status registers still begin at `0x3010`.
+register contract. Their former addresses are now unsupported core addresses and
+must report a bus error when routed to `voice_register_bank`. System common
+status registers begin at `0x9010`.
 
 Per-voice reads use synchronous RAM read paths and therefore may complete after
 multiple `clk` cycles. Register-bus and SPI masters must hold the request until
@@ -84,12 +84,12 @@ make test
 
 Both commands passed. Existing lint warnings unrelated to this change remain.
 
-## Completed Voice Stride Expansion
+## Completed Voice Stride Repacking
 
-The per-voice register stride was expanded from `0x80` to `0x100`. Slot 0 still
-starts at `0x0100`; slot N now starts at `0x0100 + N * 0x100`. This keeps the
-current offsets stable while reserving space in each slot for status and
-future modulation or envelope controls.
+The per-voice register stride is `0x80`. Slot 0 still starts at `0x0100`; slot N
+starts at `0x0100 + N * 0x80`. This keeps all current offsets, through
+`STATUS = 0x54`, inside each slot while allowing the default 256-voice build to
+fit in the 16-bit register address space.
 
 The RTL address decode, C++ harness constants, SystemVerilog tests, and
 `docs/register_map.md` were updated together.
@@ -127,7 +127,7 @@ Both commands passed. Existing lint warnings unrelated to this change remain.
 
 ## Completed Descriptor Grouping And Store Split
 
-The per-voice descriptor layout is now grouped inside the `0x100` slot instead
+The per-voice descriptor layout is grouped inside the `0x80` slot instead
 of preserving the historical register order:
 
 - `0x00` to `0x1c`: region descriptor.
@@ -213,7 +213,7 @@ renderer-facing layout to be repacked for timing and resource use.
 
 ## Register Map Direction
 
-The current per-voice stride is `0x100`. Current group layout inside each slot:
+The current per-voice stride is `0x80`. Current group layout inside each slot:
 
 - `0x00` to `0x1c`: region descriptor.
 - `0x20` to `0x2c`: playback setup, packed initial gain, and initial envelope.

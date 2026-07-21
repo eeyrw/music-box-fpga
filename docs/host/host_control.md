@@ -63,23 +63,23 @@ Examples:
 
 ```bash
 # Print SPI frames without opening hardware.
-build/ch347_control --dry-run --write 0x3000 0
-build/ch347_control --dry-run --read 0x3000
+build/ch347_control --dry-run --write 0x9000 0
+build/ch347_control --dry-run --read 0x9000
 
 # Read VERSION through CH347 device 0.
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --read 0x3000
+  --read 0x9000
 
 # The Linux SDK also accepts explicit device paths.
 build/ch347_control --device /dev/ch34x_pis0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --read 0x3000
+  --read 0x9000
 
 # Write one register through CH347 device 0.
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --write 0x3014 0x3f
+  --write 0x9014 0x3f
 
 # Read the SD asset-load byte progress from the platform SPI registers.
 build/ch347_control --device 0 \

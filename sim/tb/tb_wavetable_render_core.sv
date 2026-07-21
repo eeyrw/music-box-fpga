@@ -36,6 +36,8 @@ module tb_wavetable_render_core;
   int errors = 0;
   int last_latency_cycles = 0;
   string current_case = "startup";
+  localparam int SAMPLE_TIMEOUT_CYCLES = 512 + (NUM_VOICES * 16);
+  localparam int ALL_VOICE_LATENCY_LIMIT = 512 + (NUM_VOICES * 16);
 
   // Testbench clock only; production RTL still uses one rising-edge system
   // clock and synchronous reset.
@@ -129,7 +131,7 @@ module tb_wavetable_render_core;
     @(negedge clk);
     sample_tick = 1'b0;
     timeout = 0;
-    while (!sample_valid && timeout < 1000) begin
+    while (!sample_valid && timeout < SAMPLE_TIMEOUT_CYCLES) begin
       @(negedge clk);
       timeout++;
     end
@@ -164,7 +166,7 @@ module tb_wavetable_render_core;
     repeat (2) @(negedge clk);
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), envelope);
     timeout = 0;
-    while (!sample_valid && timeout < 1000) begin
+    while (!sample_valid && timeout < SAMPLE_TIMEOUT_CYCLES) begin
       @(negedge clk);
       timeout++;
     end
@@ -470,12 +472,10 @@ module tb_wavetable_render_core;
     bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), REG_FILTER_A2_APPLY_MASK);
     request_and_check(2999, 2999);
 
-    // Register decode must reach the expanded 32nd voice slot in the default
-    // 32-voice build. Smaller NUM_VOICES configurations intentionally omit it.
+    // Register decode must reach the highest configured voice slot. This catches
+    // address-window and stride assumptions when NUM_VOICES changes.
     begin_case("highest voice register decode");
-    if (NUM_VOICES >= 32) begin
-      bus_write_word(reg_voice_addr(31, REG_OFF_BASE_ADDR_R), 32'h0000_0020);
-    end
+    bus_write_word(reg_voice_addr(16'(NUM_VOICES - 1), REG_OFF_BASE_ADDR_R), 32'h0000_0020);
 
     // Check that two active voice slots render in one output request and the
     // mixer adds their current output-scaled samples with saturation at the end.
@@ -491,11 +491,11 @@ module tb_wavetable_render_core;
       configure_mono_slot(16'(v), 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
     request_and_check(NUM_VOICES * 15, NUM_VOICES * 15);
     // The pipelined biquad and filter input stage spread filter math across
-    // several states, so a full 32-voice active mono frame is expected to take
-    // a little over 540 cycles.
-    if (last_latency_cycles > (600 + NUM_VOICES)) begin
+    // several states, so a full active mono frame has a structural latency
+    // guard that scales with the configured voice count.
+    if (last_latency_cycles > ALL_VOICE_LATENCY_LIMIT) begin
       $error("%0d-voice mono render latency got %0d cycles expected <= %0d",
-             NUM_VOICES, last_latency_cycles, 600 + NUM_VOICES);
+             NUM_VOICES, last_latency_cycles, ALL_VOICE_LATENCY_LIMIT);
       errors++;
     end
 

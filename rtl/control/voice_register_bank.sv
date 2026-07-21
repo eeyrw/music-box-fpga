@@ -17,7 +17,6 @@ module voice_register_bank (
   // from the generated register-map package.
   localparam logic [15:0] VOICE_BASE      = REG_VOICE_BASE;
   localparam logic [15:0] VOICE_STRIDE    = REG_VOICE_STRIDE;
-  localparam logic [15:0] VOICE_LIMIT     = 16'(NUM_VOICES * VOICE_STRIDE);
   localparam logic [15:0] OFF_BASE        = REG_OFF_BASE_ADDR;
   localparam logic [15:0] OFF_BASE_R      = REG_OFF_BASE_ADDR_R;
   localparam logic [15:0] OFF_LENGTH      = REG_OFF_LENGTH;
@@ -43,6 +42,12 @@ module voice_register_bank (
   localparam logic [15:0] ADDR_VERSION    = REG_VERSION;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
+  localparam int VOICE_OFFSET_WIDTH = REG_VOICE_STRIDE_SHIFT;
+  localparam int VOICE_COUNT_ADDRESS_FITS =
+      1 / ((NUM_VOICES <= REG_MAX_ADDRESSABLE_VOICES) ? 1 : 0);
+  localparam int unsigned VOICE_LIMIT_INT =
+      NUM_VOICES * int'(VOICE_STRIDE) * VOICE_COUNT_ADDRESS_FITS;
+  localparam logic [15:0] VOICE_LIMIT = 16'(VOICE_LIMIT_INT);
   localparam int FILTER_COEFF_WORD_WIDTH = 5 * FILTER_COEFF_WIDTH;
   localparam int FILTER_B0_LSB = 4 * FILTER_COEFF_WIDTH;
   localparam int FILTER_B1_LSB = 3 * FILTER_COEFF_WIDTH;
@@ -238,16 +243,16 @@ module voice_register_bank (
 
   always_comb begin
     voice_relative = bus_req.address - VOICE_BASE;
-    selected_voice = voice_relative[8 +: VOICE_INDEX_WIDTH];
-    selected_offset = {8'd0, voice_relative[7:0]};
+    selected_voice = voice_relative[VOICE_OFFSET_WIDTH +: VOICE_INDEX_WIDTH];
+    selected_offset = 16'(voice_relative[VOICE_OFFSET_WIDTH-1:0]);
     voice_address = (bus_req.address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
     global_address = (bus_req.address == ADDR_VERSION);
 
     inspect_address = bus_read_address;
     inspect_relative = inspect_address - VOICE_BASE;
-    inspect_voice = inspect_relative[8 +: VOICE_INDEX_WIDTH];
-    inspect_offset = {8'd0, inspect_relative[7:0]};
+    inspect_voice = inspect_relative[VOICE_OFFSET_WIDTH +: VOICE_INDEX_WIDTH];
+    inspect_offset = 16'(inspect_relative[VOICE_OFFSET_WIDTH-1:0]);
     inspect_voice_address = (inspect_address >= VOICE_BASE) &&
                             (inspect_relative < VOICE_LIMIT);
 
@@ -364,10 +369,8 @@ module voice_register_bank (
     if (rst) begin
       shadow_filter_read_data <= DEFAULT_FILTER_COEFF;
       shadow_filter_enable_read_data <= 1'b0;
-      for (int i = 0; i < NUM_VOICES; i++) begin
-        shadow_filter_coeff[i] <= DEFAULT_FILTER_COEFF;
-        shadow_filter_enable[i] <= 1'b0;
-      end
+      shadow_filter_coeff <= '{default: DEFAULT_FILTER_COEFF};
+      shadow_filter_enable <= '{default: 1'b0};
       bus_read_address <= 16'd0;
       bus_state <= BUS_IDLE;
     end else begin
