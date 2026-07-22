@@ -247,31 +247,48 @@ the access pattern of a polyphonic wavetable synthesizer, where each active voic
 walks through one sample region with a predictable Q24.8 phase stride while the
 renderer interleaves requests from many voices.
 
-A later memory subsystem should evaluate these improvements:
+A later memory subsystem should evaluate these improvements in order:
 
-- Per-voice two-line or small set-associative caches so one voice's locality is
-  not immediately evicted by another voice's region.
-- Stride-aware prefetch using `phase_inc` to fetch the line containing the next
-  interpolated frame, including loop-wrap cases.
-- Demand-priority scheduling so real sample reads always outrank speculative
-  prefetches.
-- Larger burst lines, such as 16 or 32 words, when the selected board memory
-  controller benefits from longer aligned reads.
-- Optional multi-request tracking so cache fills and prefetches can overlap with
-  sequential voice rendering.
+1. Add counters for demand hits/misses, same-line endpoint reuse, cross-line
+   endpoint pairs, prefetch issued/used/drop counts, external line requests,
+   response latency, render latency, deadline misses, output underruns, and
+   endpoint/DSP queue occupancy.
+2. Carry `voice_id` and channel/stream locality into the endpoint/cache path, or
+   place the optimized cache inside/near `voice_endpoint_fetch` where that
+   context is already available.
+3. Add per-voice two-line or small set-associative caches so one voice's locality
+   is not immediately evicted by another voice's region. Stereo voices need
+   independent left/right stream tags because linked stereo samples usually live
+   in separate regions.
+4. Detect same-line interpolation endpoints and satisfy both samples from one
+   line fill where possible.
+5. Add stride-aware prefetch using `phase_inc` to fetch the line containing the
+   next interpolated frame, including loop-wrap cases. Demand reads must outrank
+   speculative prefetches, and redundant or no-longer-useful prefetches should be
+   suppressed.
+6. Evaluate larger burst lines, such as 16 or 32 words, after per-voice cache and
+   prefetch counters exist.
+7. Add multi-request tracking so cache fills and prefetches can overlap with
+   sequential voice rendering when the single-fill path is measured as the
+   remaining limiter.
+8. Add tagged or reordered endpoint assembly only if in-order responses still
+   block useful DDR/cache overlap.
 
 The generic core-side memory port should still remain a one-word in-order read
-interface. Throughput work in the renderer should first use a word-request FIFO
-and in-order endpoint assembly queue so voice scanning, register snapshots, and
-memory response waits can overlap without assuming line-oriented storage. If an
-adapter can internally return both interpolation endpoints from one line fill, it
-may do so while still presenting ordered 16-bit word responses to the core.
+interface for the first optimized pass where practical. Throughput work in the
+renderer should first use a word-request FIFO, in-order endpoint assembly queue,
+and voice-aware cache/prefetch policy so voice scanning, register snapshots, and
+memory response waits can overlap without assuming line-oriented storage at the
+outer contract. If an adapter can internally return both interpolation endpoints
+from one line fill, it may do so while still presenting ordered 16-bit word
+responses to the core.
 
 The likely interface change is to carry `voice_id` with each core memory request,
 or to move the optimized cache into/near `multi_voice_pipeline` where the current
 voice index, phase, loop range, and stereo mode are already visible. Any such
 change must update the RTL interface documentation and add focused tests for hit,
-miss, prefetch, loop-boundary, mono/stereo, and backpressure behavior.
+miss, same-line endpoint extraction, cross-line endpoints, prefetch, loop
+boundary, mono/stereo, per-voice eviction isolation, and backpressure behavior.
 
 Use `render-memory` counters as the comparison baseline: external line requests,
 sequential line requests, average and maximum response latency, full render

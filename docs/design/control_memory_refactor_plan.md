@@ -252,18 +252,53 @@ The next memory subsystem should exploit the access pattern:
 - Stereo needs two endpoints from each of two independent streams.
 - Loop wrapping can make `frame_1` jump to `loop_start`.
 
-Recommended first optimized design:
+Recommended optimized-memory sequence:
 
-- Add `voice_id` to the core memory-request context, or move the cache into
-  `voice_endpoint_fetch` where the current voice index and frame context are
-  already known.
-- Give each voice at least two small cached lines per channel stream: current
-  line and next/prefetch line.
-- Treat demand reads as higher priority than prefetches.
-- Detect `L0`/`L1` same-line cases and satisfy both endpoints from one line fill.
-- Track line tags separately for left and right linked-stereo streams.
-- Preserve ordered word responses at the renderer boundary for the first pass,
-  unless the endpoint-fetch interface is deliberately changed at the same time.
+1. Add measurements before changing policy.
+   Required counters include demand hits/misses, same-line endpoint reuse,
+   cross-line endpoint pairs, prefetch issued/used/drop counts, line fills,
+   external requests, response latency, render latency, deadline misses,
+   underruns, word-request queue depth, fetch-slot occupancy, and DSP context
+   queue occupancy.
+
+2. Carry voice/channel locality into the endpoint/cache path.
+   Prefer adding `voice_id` plus left/right channel metadata to internal
+   endpoint/cache requests while preserving ordered word responses at the
+   renderer boundary for the first pass. If that interface cost is too high,
+   place the first optimized cache inside or immediately beside
+   `voice_endpoint_fetch`, where voice index, stereo mode, endpoint frames, phase
+   increment, and loop context are already available.
+
+3. Replace the global one-line cache with per-voice line state.
+   Give each voice at least two cached lines for the left/mono stream so `L0`
+   and `L1` can straddle a line boundary without evicting the current line.
+   Stereo voices need separate left and right stream tags because linked SF2
+   samples usually live in independent regions. A small set-associative cache is
+   also acceptable if it preserves per-voice locality and has deterministic
+   replacement behavior.
+
+4. Add demand-priority stride prefetch.
+   Use `phase_inc` and the loop/clamp decision from the voice phase path to
+   prefetch the line containing the next output frame's interpolation endpoint or
+   the loop-wrapped endpoint. Demand reads always outrank prefetch. Suppress
+   prefetches that hit in the cache, duplicate a queued fill, or target a
+   completed no-loop/released voice.
+
+5. Sweep larger DDR line sizes after the first cache/prefetch counters exist.
+   Evaluate 16- and 32-word lines against representative mono, linked-stereo, and
+   layered SoundFont renders. Larger lines should be kept only if they reduce
+   render latency or external request pressure without excessive wasted bandwidth.
+
+6. Add multiple outstanding line fills only after measured stalls justify it.
+   Track each fill with request metadata: fill id, voice id, stream/channel,
+   line address, demand/prefetch class, and any waiting endpoint slot. Returning
+   lines update the correct cache entry and wake blocked endpoint assembly.
+
+7. Add tagged or reordered endpoint assembly last.
+   If in-order responses still block useful DDR/cache overlap, let responses
+   identify the fetch slot and endpoint kind directly. The mixer must still
+   accumulate voice contributions deterministically in the documented render
+   order or through an explicitly documented equivalent order.
 
 A more aggressive later interface can return endpoint pairs instead of single
 words:
@@ -274,7 +309,7 @@ voice_id, channel, base_addr, frame_0, frame_1, loop context -> sample_0, sample
 
 That interface would simplify endpoint fetch and give the memory subsystem full
 visibility into locality, but it is a larger contract change and should come
-after the control-plane split is stable.
+after the measured per-voice cache/prefetch path proves insufficient.
 
 ## Next Implementation Steps
 
@@ -319,12 +354,21 @@ after the control-plane split is stable.
    Record LUT, register, BRAM, DSP, and timing deltas against the previous
    voice-bank resource pass before making further area/timing claims.
 
-9. Design the first per-voice wave cache.
-   Add metrics before changing policy: demand hit/miss, prefetch hit, line fill
-   count, external request count, response latency, render latency, deadline
-   misses, and underruns.
+9. Add render and memory-pressure counters.
+   Implement the counters listed in the optimized-memory sequence before
+   replacing the one-line cache. Expose enough of them through simulation summary
+   JSON and, where useful, common status registers to compare workloads.
 
-10. Compare against the current memory baseline.
+10. Design the first per-voice wave cache.
+   Preserve ordered word responses for the first pass if practical, carry
+   voice/channel locality internally, and cover mono same-line, mono cross-line,
+   stereo independent streams, loop-wrap, reset, and backpressure behavior.
+
+11. Add stride-aware prefetch after the demand cache is stable.
+   Prefetch the next-frame line from `phase_inc` and loop context, keep demand
+   reads higher priority, and record whether each prefetch was later used.
+
+12. Compare against the current memory baseline.
    Use `make render-memory` with the existing DDR, SDRAM, and parallel-NOR
    profiles. Require identical PCM output and better or clearly explained memory
    statistics before replacing the baseline.
@@ -351,7 +395,16 @@ Memory tests:
 - Stereo independent left/right cache lines.
 - Loop-wrap endpoint fetch where `frame_1 == loop_start`.
 - Backpressure from external line memory.
+- Cache miss with a waiting endpoint slot.
+- Cache hit after a prior line fill.
+- Per-voice locality is not evicted by another voice's unrelated line.
 - Demand priority over prefetch.
+- Prefetch hit, prefetch miss/fill, prefetch dropped as redundant, and prefetch
+  suppressed for completed no-loop/released voices.
+- Larger-line configurations, at least `LINE_WORDS = 16` and `LINE_WORDS = 32`,
+  when those options are evaluated.
+- Multiple outstanding fills and tagged endpoint response routing, if those
+  features are implemented.
 - Flush/reset invalidates cache state.
 - Full render output remains exact against existing reference tests.
 
@@ -362,4 +415,10 @@ Memory tests:
 - Whether runtime filter enable should stay as a bit vector or be packed with
   scalar runtime state.
 - Whether the first optimized memory cache should preserve the untagged ordered
-  word-response contract or change the endpoint-fetch contract directly.
+  word-response contract or move to an endpoint-pair contract directly.
+- Whether per-voice cache storage should be exactly two direct-mapped lines per
+  stream or a small set-associative structure shared across a voice group.
+- Whether linked-stereo streams should use separate per-channel cache entries or
+  a unified voice cache with channel bits in the tag.
+- How many outstanding line fills the DDR wrapper can use before request tags and
+  reorder buffers cost more area than they save in render latency.

@@ -288,31 +288,40 @@ the generic RTL to one vendor flow.
    and filter-enable state should be handled only if post-implementation resource
    or timing data justifies the added control complexity.
 
-3. Design a wavetable-optimized memory subsystem.
-   The current `wave_memory_subsystem` is a minimal single-line cache. A later
-   revision should exploit the predictable per-voice Q24.8 phase stride with
-   per-voice small line caches, demand-priority fills, and low-priority prefetch
-   for the next interpolated frame or loop-wrapped frame. This likely requires
-   adding a voice identifier to the core memory-request interface, or extending
-   `voice_endpoint_fetch` with locality policy while keeping phase and DSP
-   algorithms out of the memory adapter. Use `render-memory` external-request,
-   response-latency, render-latency, and deadline-miss counters to compare any
-   new policy against the current one-line baseline.
+3. Add throughput and memory-pressure observability before changing policy.
+   The next render counters should separate voice-scheduler cost from
+   memory-service cost: context issue/retire counts, DSP bubbles, invalid-slot
+   scan cycles, word-request FIFO depth, fetch-slot pressure, DSP context queue
+   occupancy, demand hit/miss counts, prefetch hit/use/drop counts, external line
+   requests, response latency, render latency, deadline misses, and output FIFO
+   underruns. These counters define the baseline for any 256-voice work.
 
-4. Replace the C++ storage model with concrete DDR3 controller models.
+4. Design a wavetable-optimized memory subsystem in incremental stages.
+   The current `wave_memory_subsystem` is a minimal single-line cache. The first
+   optimized pass should preserve deterministic output and avoid unnecessary
+   interface churn: carry or infer `voice_id`/channel locality, add per-voice
+   two-line or small set-associative caches, satisfy same-line interpolation
+   endpoints from one fill, and give demand reads strict priority over
+   speculative prefetch. The next pass should use `phase_inc` to prefetch the
+   next output frame's left/right endpoint lines, including loop-wrap cases.
+   Larger DDR burst lines, multiple outstanding line fills, and tagged endpoint
+   assembly are later steps once counters show that the simpler cache/prefetch
+   design cannot meet the 256-stereo target.
+
+5. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a
    Xilinx MIG wrapper. Model burst alignment, calibration delay, cache fills,
    prefetch, and request backpressure before relying on hardware timing.
 
-5. Split board clocks and reset sequencing.
+6. Split board clocks and reset sequencing.
    Separate system/control, memory, and audio clocks where the board requires it,
    then add CDC or asynchronous FIFOs at each boundary.
 
-6. Harden SPI timing assumptions.
+7. Harden SPI timing assumptions.
    Define the supported SPI mode, SCLK-to-system-clock timing limits, CS
    setup/hold, read turnaround timing, and any board wrapper synchronizers.
 
-7. Keep vendor build flows incremental where the tool benefits from it.
+8. Keep vendor build flows incremental where the tool benefits from it.
    The Smart Artix Vivado synthesis flow now preserves the generated project,
    IP output products, and completed `synth_smart_artix_top` run under `build/` and reuses an
    up-to-date run. Source changes still reset and rerun stale completed synthesis
@@ -320,11 +329,11 @@ the generic RTL to one vendor flow.
    implementation where it provides a larger runtime benefit than synthesis
    project reuse.
 
-8. Extend the audio interface.
+9. Extend the audio interface.
    Add codec-facing behavior as needed: MCLK, 24-bit or 32-bit slots, mute,
    startup sequencing, reset/config policy, and BCLK/LRCLK ratio assertions.
 
-9. Harden the SD-to-DDR3 asset-loading path on hardware.
+10. Harden the SD-to-DDR3 asset-loading path on hardware.
    The Smart Artix RTL now connects native 4-bit SD loading to the DDR3 write
    side before playback starts, and `make render-board-loader` verifies raw SD
    image loading into a DDR byte model followed by exact RTL/reference rendering.

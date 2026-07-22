@@ -863,16 +863,43 @@ system, the token and reorder policy must make output accumulation deterministic
 Potential next steps, in increasing complexity:
 
 1. Add focused throughput counters for issued contexts, retired contexts,
-   DSP-stage occupancy, invalid-slot scan cycles, and memory stalls.
-2. Add counters for word-request queue depth, fetch-slot occupancy, and DSP
-   context queue occupancy.
-3. Add endpoint-fetch observability inside `voice_endpoint_fetch` for
-   word-request queue depth, response metadata occupancy, fetch-slot pressure,
-   and context queue occupancy.
-4. Consider paired-read or cache-line extraction inside `voice_endpoint_fetch`
-   after the counters show which queue or slot pressure matters.
-5. Consider tagged request/response support only if DDR/cache profiling shows that
-   ordered responses are blocking useful endpoint overlap.
+   DSP-stage occupancy, invalid-slot scan cycles, memory stalls, and per-frame
+   render latency.
+2. Add endpoint-fetch observability inside `voice_endpoint_fetch`: word-request
+   queue depth, response-metadata occupancy, fetch-slot pressure, DSP context
+   queue occupancy, context push/pop counts, and cycles where DSP is ready but no
+   complete context is available.
+3. Add cache-policy counters before changing the cache: demand hit/miss counts,
+   same-line endpoint reuse, cross-line endpoint pairs, prefetch issued/used/drop
+   counts, line-fill count, external request count, response latency, deadline
+   misses, and output FIFO underruns.
+4. Carry explicit locality into the memory path. The first version can add
+   `voice_id` and channel metadata to internal endpoint/cache requests while
+   keeping the external core-side word-response behavior ordered. If that creates
+   too much interface churn, place the optimized cache inside or adjacent to
+   `voice_endpoint_fetch`, where `voice_index`, stereo mode, endpoint frames,
+   phase increment, and loop context are already visible.
+5. Replace the global one-line cache with a per-voice cache. Each active voice
+   should have at least two cached lines for the left/mono stream so `L0` and
+   `L1` can cross a line boundary without evicting the current line. Stereo
+   voices need independent left/right stream tags because linked SF2 samples are
+   usually stored in separate regions.
+6. Add demand-priority stride prefetch. After the current endpoint frames and
+   next phase are known, prefetch the line or lines for the next output frame.
+   Suppress redundant prefetches, handle loop-wrap targets, and stop prefetching
+   no-loop or released voices as they approach completion. Demand reads must
+   always outrank speculative prefetches.
+7. Sweep larger DDR line sizes, such as 16 or 32 words, only after the per-voice
+   cache and prefetch counters exist. Larger lines can amortize DDR command
+   overhead but waste bandwidth when many voices read unrelated regions.
+8. Add multiple outstanding line fills when cache misses or prefetches still
+   leave the DSP context queue empty. Track each fill with request metadata so
+   returning lines update the correct voice/channel cache entry and wake any
+   waiting endpoint slot.
+9. Add tagged or reordered endpoint assembly only if in-order responses remain
+   the measured limiter. A tagged response should identify the fetch slot and
+   endpoint kind directly so out-of-order DDR returns can fill endpoint RAMs
+   without changing deterministic mix order.
 
 ## Throughput Plan Status
 
@@ -901,12 +928,19 @@ current RTL has already completed the low-risk pipeline phases:
 
 Remaining throughput work should be measurement-driven:
 
-1. Add observability for context issue/retire counts, DSP occupancy, memory stalls,
-   invalid-slot scan cycles, queue depth, and frame latency.
-2. Improve adapter-internal memory bandwidth with paired endpoint extraction,
-   cache-line reuse, bursts, or prefetch behind the existing core memory interface.
-3. Consider request tags and multiple outstanding reads only after measured
-   endpoint stalls justify the broader memory-model and test impact.
+1. Establish the render, queue, cache, memory-stall, deadline, and underrun
+   counters listed above.
+2. Preserve the current ordered word-response contract for the first optimized
+   cache pass where practical, but carry `voice_id` and channel locality inside
+   the endpoint/cache path.
+3. Implement per-voice two-line cache state before adding speculative behavior.
+4. Add stride-aware prefetch with demand priority once cache hit/miss behavior is
+   visible.
+5. Sweep `LINE_WORDS = 16` and `LINE_WORDS = 32` against representative
+   mono/stereo MIDI/SF2 renders.
+6. Add multiple outstanding line fills and tagged endpoint assembly only after
+   measured queue occupancy shows that the ordered single-fill path is the
+   remaining blocker for the 256-stereo target.
 
 Focused tests should still compare exact integer output and cover consecutive
 active voices, disabled-voice bubbles, interleaved mono/stereo voices,
