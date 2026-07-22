@@ -649,6 +649,32 @@ The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
+The parser is validated against the local Standard MIDI File reference in
+`docs/Standard MIDI file format, updated.html`.
+
+Current MIDI parser behavior:
+
+- Supports Standard MIDI File format 0 and format 1 with PPQ timing. Format 2 is
+  rejected because its tracks are independent patterns rather than simultaneous
+  tracks. SMPTE/time-code division is also rejected because the render pipeline
+  expects musical ticks converted through a tempo map.
+- Reads all MTrk chunks declared by the header and strictly bounds every delta
+  time, meta payload, sysex payload, and channel-event data byte to the current
+  track chunk. Malformed files with truncated chunks, oversized variable-length
+  quantities, invalid data bytes, zero PPQ division, impossible format-0 track
+  counts, or unknown format IDs fail before rendering.
+- Implements running status only for channel messages. Meta events and sysex
+  events cancel the previous running status, matching the SMF syntax rules.
+- Merges format-1 channel events by absolute tick and original file order. Events
+  at the same tick therefore retain deterministic controller/program/bank state
+  ordering before Note On allocation.
+- Treats tempo events as global for format 0 and format 1. The implicit 120 BPM
+  tempo is used until a Set Tempo meta event takes effect; multiple tempo events
+  at the same tick are applied in file order.
+- Preserves Note On/Off, Control Change, Polyphonic Key Pressure, Channel
+  Pressure, and Pitch Bend as render events. Program Change and bank-select
+  controls update per-channel state; resulting program and 14-bit bank values
+  are copied into later note/control events for SF2 preset lookup and MCU policy.
 
 `sim/harness/render/render_support_test.cpp` is the focused regression for the
 shared render-preparation policy. It builds a small synthetic SF2 with a melodic
