@@ -289,6 +289,41 @@ leave a playable partial WAV for the samples already produced. Interrupted runs
 record `interrupted: true` in the JSON summary when that target writes one and
 return status 130, so they do not count as passing regressions.
 
+### Reference Synth Parallelism
+
+`ReferenceSynth::render_sample()` currently renders one output frame at a time
+and scans the configured voice slots serially. This keeps the C++ reference path
+simple and deterministic: MIDI events, MCU envelope ticks, runtime register
+updates, phase advances, loop handling, and biquad state updates all occur in the
+same sample order used by the RTL comparison harness.
+
+The independent work inside one output frame could be parallelized by splitting
+the voice range across worker threads. Each worker would compute sample fetch,
+interpolation, per-voice filter state, gain/envelope multiplication, and local
+left/right contribution sums for its own voice block. The final mix and
+diagnostic counters would then need a deterministic reduction step. Shared
+updates to `accum_l`, `accum_r`, saturation counters, max-value diagnostics, or
+voice phase/filter state must not be performed directly from multiple threads.
+
+Parallelizing across output frames is not a valid shortcut for the current model
+because each voice's phase and biquad state depend on the previous frame, and
+the MCU policy can change runtime envelope, gain, pitch, filter, release, and
+commit state at sample boundaries. Those state transitions must remain ordered
+for exact integer comparison against RTL.
+
+Expected benefit is workload-dependent. Long pure C++ `render-reference` runs
+with many active or filtered voices may benefit from a fixed worker pool and
+per-frame voice-block reduction, especially when `NUM_VOICES` is large. A naive
+per-sample `parallel_for` can be slower than the serial loop because dispatch
+overhead is paid for every audio frame. The `render-rtl-core` path is less likely
+to gain much because Verilated RTL evaluation and request/response stepping can
+dominate wall time.
+
+Any future parallel implementation should be opt-in, for example behind a build
+flag, while the default reference remains serial. Exact PCM matching must remain
+unchanged. Diagnostics should also be merged in a fixed order so regression
+summaries stay reproducible.
+
 ## C++ RTL Core/Reference Flow
 
 `make render-rtl-core` is the fast SF2/MIDI algorithm-verification path. It parses
