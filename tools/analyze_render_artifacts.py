@@ -17,9 +17,9 @@ import wave
 
 
 SUMMARY_NAMES = (
-    "quick_render_config.json",
+    "reference_render_config.json",
+    "rtl_core_render_config.json",
     "midi_render_config.json",
-    "full_system_render_config.json",
     "board_loader_render_config.json",
 )
 

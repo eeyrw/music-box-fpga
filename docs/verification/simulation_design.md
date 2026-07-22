@@ -8,10 +8,10 @@ For stable fixed-point arithmetic rules, see `../fixed_point.md`.
 There are six simulation intents:
 
 - A self-checking regression using tiny synthetic sample data.
+- A pure C++ SoundFont/MIDI reference render path.
 - A fast C++ reference-vs-RTL SoundFont/MIDI comparison path.
 - A C++ SoundFont/MIDI memory-profile render harness that produces a playable WAV
   file.
-- A pin-level full-system render harness whose WAV output is decoded from I2S.
 - A board-loader render harness that first copies a raw SD SoundFont image into a
   DDR byte model through the Smart Artix native-SD loader RTL, then renders from
   the loaded DDR contents with exact RTL/reference comparison.
@@ -20,11 +20,12 @@ There are six simulation intents:
 
 All RTL paths use Verilator and the same synthesizable RTL sources.
 
-The C++ render harnesses (`render-quick`, `render-memory`, `render-full-system`,
-and `render-board-loader`) build their Verilated fast paths with project-level
+The C++ render harnesses (`render-rtl-core`, `render-memory`, and
+`render-board-loader`) build their Verilated fast paths with project-level
 `RENDER_OPT_FAST=-O3` and `RENDER_OPT_GLOBAL=-O3` by default. These variables are
-Makefile overrides, not global Verilator configuration; use `make render-quick
+Makefile overrides, not global Verilator configuration; use `make render-rtl-core
 RENDER_OPT_FAST=-Os` to compare against Verilator's size-optimized default.
+The pure C++ `render-reference` target is compiled directly with `$(CXX)`.
 
 ## Source Groups
 
@@ -84,8 +85,8 @@ sim/tb/tb_wavetable_render_core_asset.sv
 The C++ harness code under `sim/harness/` is organized by role:
 
 ```text
-apps/          Executable entry points for render-quick, render-memory,
-               render-full-system, and render-board-loader.
+apps/          Executable entry points for render-reference, render-rtl-core,
+               render-memory, and render-board-loader.
 formats/       SF2 and MIDI parsers plus shared byte-reader utilities.
 render/        Shared render data types, `McuModel`, render preparation, and
                the exact fixed-point reference synthesizer.
@@ -255,40 +256,66 @@ build/render/out.wav
 
 The WAV file contains the exact sample stream produced by the RTL simulation.
 
-## C++ Quick RTL/Reference Flow
+## C++ Reference Render Flow
 
-`make render-quick` is the fast SF2/MIDI algorithm-verification path. It parses
+`make render-reference` is the pure C++ SF2/MIDI algorithm-verification path. It
+parses the same SF2 and MIDI inputs as the RTL harnesses, runs the shared MCU
+policy model, renders through `ReferenceSynth`, and writes a WAV plus the region
+and diagnostics summary.
+
+Run the built-in smoke melody:
+
+```bash
+make render-reference SECONDS=1
+```
+
+Render a standard MIDI file:
+
+```bash
+make render-reference MIDI=song.mid SECONDS=20
+```
+
+The run writes:
+
+```text
+build/render_reference/reference_render_config.json
+build/render_reference/out.wav
+```
+
+## C++ RTL Core/Reference Flow
+
+`make render-rtl-core` is the fast SF2/MIDI algorithm-verification path. It parses
 the same SF2 and MIDI inputs as the render harness, runs the shared MCU policy
 model, and drives two backends from the same control writes:
 
 - `ReferenceSynth`: a C++ fixed-point model of the current wavetable playback,
   interpolation, Q1.15 gain/envelope, loop, and saturation rules.
-- `QuickRtlHarness`: a Verilated `wavetable_render_core` instance with a direct one-word
+- `CoreRtlHarness`: a Verilated `wavetable_render_core` instance with a direct one-word
   memory response model.
 
 This path intentionally skips SPI, I2S, `wave_memory_subsystem`, and external
 storage profiles. Its primary job is to answer one question quickly: does the RTL
 core produce the same integer PCM stream as the project reference algorithm? It
 also writes the matched RTL PCM stream as a WAV so real MIDI renders can be
-auditioned without using the slower memory or full-system harnesses.
+auditioned without using the slower memory harness.
 
 Run the built-in smoke melody:
 
 ```bash
-make render-quick SECONDS=1
+make render-rtl-core SECONDS=1
 ```
 
 Render a standard MIDI file through the same quick comparison:
 
 ```bash
-make render-quick MIDI=song.mid SECONDS=20
+make render-rtl-core MIDI=song.mid SECONDS=20
 ```
 
 The run writes the selected region summary and RTL WAV output to:
 
 ```text
-build/render_quick/quick_render_config.json
-build/render_quick/out.wav
+build/render_rtl_core/rtl_core_render_config.json
+build/render_rtl_core/out.wav
 ```
 
 The summary includes aggregate RTL render counters and MCU-control traffic:
@@ -306,15 +333,15 @@ filter output, filter state, per-voice contribution, and final mix saturation
 points, so a render can show both how often clipping happened and how far the
 raw calculation exceeded its target range. The MCU policy records
 `diagnostics_voice_steals` plus the largest runtime gain,
-`PHASE_INC_RUNTIME`, and filter-coefficient jumps. `render-memory` and
-`render-full-system` write the same MCU-side diagnostics into their stats JSON
-files; they do not currently expose RTL-internal filter/contribution saturation
-because those paths do not run `ReferenceSynth` in parallel.
+`PHASE_INC_RUNTIME`, and filter-coefficient jumps. `render-memory` writes the
+same MCU-side diagnostics into its stats JSON file; it does not currently expose
+RTL-internal filter/contribution saturation because it does not run
+`ReferenceSynth` in parallel.
 
 ### Render Diagnostics Fields
 
 `diagnostics_frames` is the number of output sample frames rendered by the
-diagnostic source. In `render-quick` this is the C++ reference synthesizer frame
+diagnostic source. In `render-rtl-core` this is the C++ reference synthesizer frame
 count. The count is useful for normalizing frame-based saturation rates.
 
 The `*_saturated_frames` fields count output frames where at least one channel
@@ -407,8 +434,8 @@ tick:
 
 ```bash
 python3 tools/analyze_render_artifacts.py \
-  build/render_quick_hedwig_ms_basic_100s_adsr5ms \
-  build/render_quick_hedwig_ms_basic_100s_adsr1ms
+  build/render_rtl_core_hedwig_ms_basic_100s_adsr5ms \
+  build/render_rtl_core_hedwig_ms_basic_100s_adsr1ms
 ```
 
 The main interpretation rule is whether large discontinuities are isolated and
@@ -432,12 +459,12 @@ On 2026-07-21, the following long MIDI/SF2 quick-render audition was used to
 investigate very low-level distortion in the second half of the render:
 
 ```bash
-make render-quick \
+make render-rtl-core \
   SF2="/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2" \
   MIDI="/media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid" \
   SECONDS=100 \
   ADSR_TICK_MS=<tick-ms> \
-  RENDER_QUICK_OUT_DIR="build/render_quick_hedwig_ms_basic_100s_adsr<tick>"
+  RENDER_RTL_CORE_OUT_DIR="build/render_rtl_core_hedwig_ms_basic_100s_adsr<tick>"
 ```
 
 Three runs were compared:
@@ -491,9 +518,9 @@ python3 tools/sf2_filter_report.py --sf2 assets/soundfonts/MT6276.sf2
 python3 tools/make_filter_probe_assets.py --out-dir build/filter_probe
 python3 tools/sf2_filter_report.py --sf2 build/filter_probe/filter_probe.sf2 \
   --write-midi build/filter_probe/generated_probe.mid
-make render-quick SF2=build/filter_probe/filter_probe.sf2 \
+make render-rtl-core SF2=build/filter_probe/filter_probe.sf2 \
   MIDI=build/filter_probe/generated_probe.mid SECONDS=2 \
-  RENDER_QUICK_OUT_DIR=build/render_quick_filter_probe
+  RENDER_RTL_CORE_OUT_DIR=build/render_rtl_core_filter_probe
 ```
 
 `sf2_filter_report.py` scans raw `pgen`/`igen` records and merged playable
@@ -509,66 +536,6 @@ merged playable regions with filter settings. Some regions use very low cutoff
 values after SF2 range clamping. The current RTL filter coefficients are signed
 Q2.14; lower-cutoff precision remains a known item to revisit with real-SF2
 render comparisons before widening the generic filter interface.
-
-## C++ Full-System I2S Render Flow
-
-`make render-full-system` renders through `wavetable_demo_system`, a pin-level RTL
-wrapper that combines:
-
-- `spi_register_bridge` for control writes.
-- `wavetable_system_core`, composing the render core and line-memory adapter for
-  the audio core and line-memory interface.
-- `wavetable_i2s_output` for the output FIFO and I2S adapter.
-- A `100 MHz` system clock with `fractional_tick_gen` instances for sample ticks
-  and I2S BCLK edges.
-
-The C++ harness does not read internal PCM signals. It interacts only with the
-top-level pins:
-
-- A C++ SPI master bit-bangs `spi_sclk`, `spi_cs_n`, and `spi_mosi` to program
-  voice registers.
-- A C++ storage model responds to `ext_req_valid`, `ext_req_addr`, and
-  `ext_rsp_data` on the external line-memory interface.
-- A C++ I2S receiver decodes `i2s_bclk`, `i2s_lrclk`, and `i2s_sdata`; the output
-  WAV is written from this decoded stream.
-
-Run a short full-system smoke render:
-
-```bash
-make render-full-system SECONDS=0.1
-```
-
-The run writes:
-
-```text
-build/render_full_system/out.wav
-build/render_full_system/full_system_render_config.json
-build/render_full_system/full_system_stats.json
-```
-
-`full_system_stats.json` records I2S/audio integration counters, memory hit/miss
-counters, and the same register-write breakdown used by `render-quick`. The
-register counters are useful for separating pin-level SPI control overhead from
-audio rendering and memory traffic.
-
-This path currently supports only `SAMPLE_RATE=48000`, using the default
-`100 MHz` system clock and fractional audio timing. A small startup underrun can
-be reported before the first programmed sample is available; sample drops
-indicate the core produced a frame when the I2S transmitter could not accept it
-and should be treated as an integration bug.
-
-Current full-system limitations are intentional:
-
-- The SPI master is a C++ test harness model, not RTL intended for synthesis.
-- The storage side is still a C++ line-memory model, not a parallel NOR, SPI
-  Flash, SDRAM, or DDR controller.
-- The wrapper has one fixed `100 MHz` clock and does not yet model board PLLs,
-  clock-domain crossings, codec MCLK, or reset sequencing.
-- I2S RX exists only in the C++ harness and focused testbench; the synthesizable
-  audio path is transmit-only.
-- Full-system runs are smoke/integration tests today. Longer high-polyphony
-  stress tests and exact I2S-decoded PCM comparisons against `render-quick` are
-  tracked in `../design/system_design.md`.
 
 ## C++ Board-Loader Render Flow
 
@@ -610,7 +577,7 @@ build/render_board_loader/board_loader_render_config.json
 
 The JSON summary records the loaded SF2 byte count, raw SD image size, loader
 cycle count, register-write count, memory hit/miss counters, render workload
-summary, and the same `diagnostics_*` fields used by `render-quick`. The render
+summary, and the same `diagnostics_*` fields used by `render-rtl-core`. The render
 samples are compared exactly against `ReferenceSynth`; any mismatch fails the
 run.
 
@@ -659,7 +626,7 @@ The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 `sequential_latency_cycles`, `ready_gap_cycles`, `external_line_requests`,
 `sequential_line_requests`, `responses`, `avg_response_latency_cycles`,
 `max_response_latency_cycles`, and the same register-write breakdown used by
-`render-quick`. The supported read-only timing profiles are `ddr`, `sdram`, and
+`render-rtl-core`. The supported read-only timing profiles are `ddr`, `sdram`, and
 `parallel-nor`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
@@ -744,7 +711,7 @@ stealing when all slots are busy. On Note On it writes the selected slot's
 wave/loop/phase/gain registers and commits. On each ADSR tick it writes
 `ENVELOPE_RUNTIME`. On Note Off it matches channel plus note, sets the runtime
 released flag for loop-until-release samples, and when the envelope reaches zero
-it disables and commits the slot. `render-quick` and `render-memory` share this MCU
+it disables and commits the slot. `render-rtl-core` and `render-memory` share this MCU
 model so algorithm comparisons and memory-profile renders use the same control
 policy.
 
@@ -1020,13 +987,13 @@ build/render/render_config.svh
 build/render/render_config.json
 build/render/out.pcm
 build/render/out.wav
-build/render_quick/quick_render_config.json
+build/render_reference/reference_render_config.json
+build/render_reference/out.wav
+build/render_rtl_core/rtl_core_render_config.json
+build/render_rtl_core/out.wav
 build/render_memory/midi_render_config.json
 build/render_memory/out.wav
 build/render_memory/memory_stats.json
-build/render_full_system/full_system_render_config.json
-build/render_full_system/full_system_stats.json
-build/render_full_system/out.wav
 ```
 
 The checked-in SF2 is small and intentionally stored under:
@@ -1062,7 +1029,7 @@ the RTL.
 The current simulation still does not cover:
 
 - A concrete board-memory controller or physical Flash command protocol.
-- Long full-system MIDI runs at high polyphony.
+- Long board-loader and board-wrapper MIDI runs at high polyphony.
 - Output FIFO sizing and sustained underrun policy beyond startup behavior.
 - More exhaustive mixer saturation boundaries.
 - Exhaustive SF2 source-curve edge cases, linked modulator chains, broader MIDI

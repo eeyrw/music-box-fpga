@@ -28,8 +28,8 @@ ADSR_TICK_MS ?= 5
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
-RENDER_QUICK_OUT_DIR ?= $(BUILD_DIR)/render_quick
-RENDER_FULL_SYSTEM_OUT_DIR ?= $(BUILD_DIR)/render_full_system
+RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
+RENDER_RTL_CORE_OUT_DIR ?= $(BUILD_DIR)/render_rtl_core
 RENDER_BOARD_LOADER_OUT_DIR ?= $(BUILD_DIR)/render_board_loader
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
@@ -143,7 +143,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map check-register-map lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-quick render-memory render-full-system render-board-loader vivado-summary clean
+.PHONY: all generate-register-map check-register-map lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
 
 all: test
 
@@ -276,26 +276,42 @@ render-instrument:
 	python3 tools/pcm_to_wav.py --pcm $(BUILD_DIR)/render/out.pcm \
 		--wav $(BUILD_DIR)/render/out.wav --sample-rate $(SAMPLE_RATE)
 
-render-quick:
-	# Build and run the fast C++ reference-vs-RTL harness against wavetable_render_core.
-	mkdir -p $(RENDER_QUICK_OUT_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_quick_cpp_obj_dir --top-module wavetable_render_core \
-		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/apps/render_quick_main.cpp) \
+render-reference:
+	# Build and run the pure C++ SF2/MIDI reference synthesizer.
+	mkdir -p $(RENDER_REFERENCE_OUT_DIR)
+	$(CXX) $(CXX_STD_FLAGS) \
+		$(abspath sim/harness/apps/render_reference_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_WAV_SRC) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
-		$(abspath sim/harness/dut/quick_rtl_harness.cpp) \
-		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_quick_cpp_obj_dir -f Vwavetable_render_core.mk \
-		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_quick_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
+		-o $(BUILD_DIR)/render_reference_cpp
+	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
-		--out-dir $(RENDER_QUICK_OUT_DIR)
+		--out-dir $(RENDER_REFERENCE_OUT_DIR)
+
+render-rtl-core:
+	# Build and run the C++ reference-vs-RTL harness against wavetable_render_core.
+	mkdir -p $(RENDER_RTL_CORE_OUT_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_rtl_core_cpp_obj_dir --top-module wavetable_render_core \
+		$(RTL_SOURCES) --exe \
+		$(abspath sim/harness/apps/render_rtl_core_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_WAV_SRC) \
+		$(abspath sim/harness/render/reference_synth.cpp) \
+		$(abspath sim/harness/dut/core_rtl_harness.cpp) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)"
+	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_rtl_core_cpp_obj_dir -f Vwavetable_render_core.mk \
+		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
+	$(BUILD_DIR)/render_rtl_core_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
+		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
+		$(if $(MIDI),--midi "$(MIDI)",) \
+		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--adsr-tick-ms $(ADSR_TICK_MS) \
+		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
 
 render-memory:
 	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_cached_render_core.
@@ -319,26 +335,6 @@ render-memory:
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
-
-render-full-system:
-	# Build and run the pin-level full-system harness. WAV output is captured from I2S RX.
-	mkdir -p $(RENDER_FULL_SYSTEM_OUT_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_full_system_cpp_obj_dir --top-module wavetable_demo_system \
-		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) --exe \
-		$(abspath sim/harness/apps/render_full_system_main.cpp) \
-		$(HARNESS_RENDER_COMMON_SRCS) \
-		$(HARNESS_WAV_SRC) \
-		$(abspath sim/harness/dut/full_system_harness.cpp) \
-		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_full_system_cpp_obj_dir -f Vwavetable_demo_system.mk \
-		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_full_system_cpp_obj_dir/Vwavetable_demo_system --sf2 "$(SF2)" \
-		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
-		$(if $(MIDI),--midi "$(MIDI)",) \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--adsr-tick-ms $(ADSR_TICK_MS) \
-		--out-dir $(RENDER_FULL_SYSTEM_OUT_DIR)
 
 render-board-loader:
 	# Build and run SD-native-loader-to-DDR plus RTL/reference wavetable render.

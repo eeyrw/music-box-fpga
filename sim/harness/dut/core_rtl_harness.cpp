@@ -1,4 +1,4 @@
-#include "quick_rtl_harness.h"
+#include "core_rtl_harness.h"
 
 #include "Vwavetable_render_core.h"
 
@@ -17,7 +17,7 @@ std::string hex16(uint16_t v) {
 }
 
 int sample_timeout_cycles() {
-  // The quick core uses an ideal word memory, but the renderer still walks
+  // The core render path uses an ideal word memory, but the renderer still walks
   // configured voices serially and a stereo voice can consume four word reads.
   // Keep this tied to kNumVoices so high-polyphony MIDI/SF2 renders do not trip
   // a smoke-test bound from smaller configurations.
@@ -28,7 +28,7 @@ int sample_timeout_cycles() {
 
 }  // namespace
 
-QuickRtlHarness::QuickRtlHarness(const std::vector<int16_t>& memory)
+CoreRtlHarness::CoreRtlHarness(const std::vector<int16_t>& memory)
     : top_(new Vwavetable_render_core), voice_control_(*this), memory_(memory) {
   top_->clk = 0;
   top_->rst = 1;
@@ -42,46 +42,46 @@ QuickRtlHarness::QuickRtlHarness(const std::vector<int16_t>& memory)
   top_->mem_rsp_data = 0;
 }
 
-QuickRtlHarness::~QuickRtlHarness() {
+CoreRtlHarness::~CoreRtlHarness() {
   delete top_;
 }
 
-void QuickRtlHarness::reset() {
+void CoreRtlHarness::reset() {
   for (int i = 0; i < 3; ++i) tick();
   top_->rst = 0;
   tick();
 }
 
-void QuickRtlHarness::set_envelope(int voice, int level) {
+void CoreRtlHarness::set_envelope(int voice, int level) {
   voices_.at(voice).envelope_level = level;
   voice_control_.set_envelope(voice, level);
 }
 
-void QuickRtlHarness::set_gain(int voice, int gain_l, int gain_r) {
+void CoreRtlHarness::set_gain(int voice, int gain_l, int gain_r) {
   voice_control_.set_gain(voice, gain_l, gain_r);
 }
 
-void QuickRtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
+void CoreRtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
   voice_control_.set_phase_inc(voice, phase_inc);
 }
 
-void QuickRtlHarness::set_filter(int voice, const FilterConfig& filter) {
+void CoreRtlHarness::set_filter(int voice, const FilterConfig& filter) {
   voices_.at(voice).filter_enable = filter.enable;
   voice_control_.set_filter(voice, filter);
 }
 
-void QuickRtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
+void CoreRtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
   voices_.at(voice).enabled = enable != 0;
   voices_.at(voice).stereo = r.stereo;
   voices_.at(voice).filter_enable = r.filter_enable;
   voice_control_.commit_voice(voice, enable, phase_inc, r);
 }
 
-void QuickRtlHarness::release_voice(int voice, const Region& r) {
+void CoreRtlHarness::release_voice(int voice, const Region& r) {
   voice_control_.release_voice(voice, r);
 }
 
-std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
+std::pair<int16_t, int16_t> CoreRtlHarness::request_sample(int produced) {
   top_->sample_tick = 1;
   uint64_t start_memory_reads = total_memory_reads_;
   uint32_t enabled_voices = count_enabled_voices();
@@ -100,7 +100,7 @@ std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
     ++render_cycles;
   }
   if (!top_->sample_valid) {
-    throw std::runtime_error("quick RTL sample response timed out at output sample " +
+    throw std::runtime_error("core RTL sample response timed out at output sample " +
                              std::to_string(produced) + " after " +
                              std::to_string(timeout_limit) + " cycles" +
                              " busy=" + std::to_string(int(top_->busy)) +
@@ -124,7 +124,7 @@ std::pair<int16_t, int16_t> QuickRtlHarness::request_sample(int produced) {
   return {int16_t(top_->sample_l), int16_t(top_->sample_r)};
 }
 
-void QuickRtlHarness::write_register(uint16_t address, uint32_t data) {
+void CoreRtlHarness::write_register(uint16_t address, uint32_t data) {
   constexpr int kBusTimeoutCycles = 1000;
   note_register_write(register_write_stats_, address);
   top_->bus_valid = 1;
@@ -137,14 +137,14 @@ void QuickRtlHarness::write_register(uint16_t address, uint32_t data) {
     ++waited;
   }
   if (!top_->bus_ready || top_->bus_error) {
-    throw std::runtime_error("quick RTL bus write failed at address 0x" + hex16(address));
+    throw std::runtime_error("core RTL bus write failed at address 0x" + hex16(address));
   }
   top_->bus_valid = 0;
   top_->bus_write = 0;
   tick();
 }
 
-void QuickRtlHarness::tick() {
+void CoreRtlHarness::tick() {
   ++total_cycles_;
   top_->clk = 0;
   top_->mem_req_ready = 1;
@@ -166,11 +166,11 @@ void QuickRtlHarness::tick() {
   top_->eval();
 }
 
-int16_t QuickRtlHarness::read_word(uint32_t address) const {
+int16_t CoreRtlHarness::read_word(uint32_t address) const {
   return address < memory_.size() ? memory_[address] : 0;
 }
 
-uint32_t QuickRtlHarness::count_enabled_voices() const {
+uint32_t CoreRtlHarness::count_enabled_voices() const {
   uint32_t count = 0;
   for (const auto& voice : voices_) {
     if (voice.enabled) ++count;
@@ -178,7 +178,7 @@ uint32_t QuickRtlHarness::count_enabled_voices() const {
   return count;
 }
 
-uint32_t QuickRtlHarness::count_audible_voices() const {
+uint32_t CoreRtlHarness::count_audible_voices() const {
   uint32_t count = 0;
   for (const auto& voice : voices_) {
     if (voice.enabled && voice.envelope_level > 0) ++count;
@@ -186,7 +186,7 @@ uint32_t QuickRtlHarness::count_audible_voices() const {
   return count;
 }
 
-uint32_t QuickRtlHarness::count_filtered_voices() const {
+uint32_t CoreRtlHarness::count_filtered_voices() const {
   uint32_t count = 0;
   for (const auto& voice : voices_) {
     if (voice.enabled && voice.filter_enable) ++count;
@@ -194,7 +194,7 @@ uint32_t QuickRtlHarness::count_filtered_voices() const {
   return count;
 }
 
-uint32_t QuickRtlHarness::count_stereo_voices() const {
+uint32_t CoreRtlHarness::count_stereo_voices() const {
   uint32_t count = 0;
   for (const auto& voice : voices_) {
     if (voice.enabled && voice.stereo) ++count;

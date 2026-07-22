@@ -1,6 +1,6 @@
 #include "fanout_sink.h"
 #include "midi_parser.h"
-#include "quick_rtl_harness.h"
+#include "core_rtl_harness.h"
 #include "reference_synth.h"
 #include "render_support.h"
 #include "sf2_loader.h"
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
     render::RenderDiagnostics diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
-    render::QuickRtlHarness rtl(wave_memory);
+    render::CoreRtlHarness rtl(wave_memory);
     rtl.reset();
     render::FanoutSink control(reference, rtl);
     render::McuModel mcu(control, regions, &diagnostics);
@@ -82,10 +82,10 @@ int main(int argc, char** argv) {
     }
 
     if (nonzero_words == 0) {
-      throw std::runtime_error("quick render produced all-zero RTL PCM; increase SECONDS or inspect event/region mapping");
+      throw std::runtime_error("RTL core render produced all-zero PCM; increase SECONDS or inspect event/region mapping");
     }
     if (mismatches != 0) {
-      throw std::runtime_error("quick render found " + std::to_string(mismatches) +
+      throw std::runtime_error("RTL core render found " + std::to_string(mismatches) +
                                " RTL/reference mismatches, max_diff_l=" + std::to_string(max_diff_l) +
                                " max_diff_r=" + std::to_string(max_diff_r));
     }
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 
     std::ostringstream stats;
     const auto& reg = rtl.register_write_stats();
-    stats << "  \"render_target\": \"render-quick\""
+    stats << "  \"render_target\": \"render-rtl-core\""
           << ",\n  \"rtl_top\": \"wavetable_render_core\""
           << ",\n" << render::render_input_json_fields(args, adsr_tick_samples)
           << ",\n  \"rtl_total_cycles\": " << rtl.total_cycles()
@@ -128,10 +128,10 @@ int main(int argc, char** argv) {
           << ",\n  \"register_writes_release\": " << reg.release
           << ",\n  \"register_writes_config\": " << reg.config
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
-    render::write_summary(args.out_dir + "/quick_render_config.json", regions, args.sample_rate,
+    render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
                           sample_count, int(events.size()), stats.str());
 
-    std::cout << "PASS: quick RTL/reference render matched " << sample_count
+    std::cout << "PASS: RTL core/reference render matched " << sample_count
               << " stereo samples, regions=" << regions.size()
               << " wave_words=" << wave_memory.size()
               << " events=" << events.size()
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
               << " wav=" << wav_path << "\n";
     return 0;
   } catch (const std::exception& e) {
-    std::cerr << "render-quick failed: " << e.what() << "\n";
+    std::cerr << "render-rtl-core failed: " << e.what() << "\n";
     return 1;
   }
 }

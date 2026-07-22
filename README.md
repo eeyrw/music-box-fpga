@@ -206,9 +206,9 @@ full SF2 file image, runs the Verilator render testbench, and writes
 Render a simple MIDI-driven score through one of the C++ harnesses:
 
 ```bash
-make render-quick SECONDS=1
+make render-reference SECONDS=1
+make render-rtl-core SECONDS=1
 make render-memory SECONDS=2
-make render-full-system SECONDS=0.1
 make render-board-loader SECONDS=0.1
 make render-memory MIDI=song.mid SECONDS=20
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
@@ -225,9 +225,14 @@ loads the CH347 vendor library at runtime. See
 [`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
 
 With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
-render-quick` is the fast algorithm/RTL comparison path: it drives `wavetable_render_core`
+render-reference` is the pure C++ algorithm path: it parses SF2/MIDI, runs the
+shared MCU policy model, renders with `ReferenceSynth`, and writes
+`build/render_reference/out.wav` plus
+`build/render_reference/reference_render_config.json`.
+
+`make render-rtl-core` is the fast algorithm/RTL comparison path: it drives `wavetable_render_core`
 with a direct word-memory model and compares every RTL output sample against a C++
-fixed-point reference implementation. It also writes `build/render_quick/out.wav`
+fixed-point reference implementation. It also writes `build/render_rtl_core/out.wav`
 for quick listening after the exact comparison passes.
 
 `make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
@@ -238,13 +243,6 @@ responds. The output WAV is `build/render_memory/out.wav`, and memory
 hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
 `MEMORY_PROFILE` selects a read-only external memory timing model: `ddr`, `sdram`,
 or `parallel-nor`.
-
-`make render-full-system` is the pin-level integration path. The C++ harness uses
-an SPI master model to program the top-level SPI pins of the common board
-wrapper, serves the external line memory interface as a storage model, decodes
-the I2S output pins, and writes `build/render_full_system/out.wav` from that I2S
-receiver. The current full-system wrapper uses a `100 MHz` system clock and
-fractional 48 kHz audio timing.
 
 `make render-board-loader` verifies the board asset-load path before rendering. It
 constructs a raw SD image from the selected SF2, drives the native-SD command/data

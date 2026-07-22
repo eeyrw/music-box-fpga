@@ -11,10 +11,10 @@ class Vwavetable_render_core;
 
 namespace render {
 
-class QuickRtlHarness : public VoiceControlSink, private RegisterWriteSink {
+class CoreRtlHarness : public VoiceControlSink, private RegisterWriteSink {
  public:
-  explicit QuickRtlHarness(const std::vector<int16_t>& memory);
-  ~QuickRtlHarness();
+  explicit CoreRtlHarness(const std::vector<int16_t>& memory);
+  ~CoreRtlHarness();
 
   void reset();
   void set_envelope(int voice, int level) override;

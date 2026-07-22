@@ -46,10 +46,9 @@ class RegisterWriteSink {
 ```
 
 `RegisterVoiceControl` implements the documented voice register sequence on top
-of that interface. The C++ DUT adapters under `sim/harness/dut/`, the demo
-full-system harness, the board-loader harness, and the CH347 host tools all share
-this class so that note setup, envelope updates, release handling, and commit
-ordering stay identical.
+of that interface. The C++ DUT adapters under `sim/harness/dut/`, the board-loader
+harness, and the CH347 host tools all share this class so that note setup,
+envelope updates, release handling, and commit ordering stay identical.
 
 ## CH347 Transport Shape
 

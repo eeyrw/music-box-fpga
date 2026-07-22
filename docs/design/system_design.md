@@ -254,9 +254,10 @@ Minimum measurements before board migration:
 
 ## Board-Level Backlog
 
-The current `make render-full-system` path verifies the pin-level integration of
-SPI control, line-memory traffic, fixed 48 kHz audio ticks, and I2S output. It
-still uses idealized C++ models around the RTL. The next board-proximity tasks
+The old C++ full-system render path has been removed; it was too slow and still
+depended on idealized C++ models around the RTL. Board-proximity verification now
+stays focused on small peripheral tests and board-loader render coverage until a
+real board wrapper and timing model are ready. The next board-proximity tasks
 are, in priority order:
 
 Board-specific synthesis and bring-up files belong under `fpga/`. The current
@@ -266,9 +267,8 @@ memory-controller, audio, asset-image, and tool-flow decisions without binding
 the generic RTL to one vendor flow.
 
 1. Strengthen output FIFO and deadline accounting.
-   The full-system wrapper now records render latency, FIFO level, memory
-   responses, deadline misses, I2S underruns, and sample drops. Next, fail longer full-system stress
-   tests on steady-state deadline misses, underruns, or sample drops.
+   Keep focused I2S/FIFO tests self-checking, and add small integration cases
+   only when the clocking and memory models match the intended board wrapper.
 
 2. Continue voice-control storage reduction where it is worth the protocol cost.
    The latest register-bank passes moved active configuration, shadow register
@@ -324,7 +324,7 @@ the generic RTL to one vendor flow.
    and host/MCU-owned SF2 metadata and voice policy. Runtime `.sf2` parsing remains
    outside the generic wavetable core.
 
-10. Strengthen full-system pass/fail checks.
-   Compare I2S-decoded PCM against the `render-quick` reference on short exact
-   cases, record SPI transaction counts and memory stall cycles, and run longer
-   high-polyphony stress cases.
+10. Strengthen board-facing pass/fail checks.
+   Compare board-loader render PCM against the `render-rtl-core` reference on
+   short exact cases, record control transaction counts and memory stall cycles,
+   and run longer high-polyphony stress cases once the board wrapper is concrete.

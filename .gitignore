@@ -50,6 +50,7 @@ htmlcov/
 venv/
 
 # Editors and operating systems
+.qoder/
 .vscode/
 .idea/
 *.swp

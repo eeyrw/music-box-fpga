@@ -27,10 +27,10 @@ The default build uses 256 voices. Simulation builds can override the voice coun
 from `make`:
 
 ```bash
-make render-quick NUM_VOICES=8 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
-make render-quick NUM_VOICES=16 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
-make render-quick NUM_VOICES=32 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
-make render-quick NUM_VOICES=256 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
+make render-rtl-core NUM_VOICES=8 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
+make render-rtl-core NUM_VOICES=16 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
+make render-rtl-core NUM_VOICES=32 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
+make render-rtl-core NUM_VOICES=256 MIDI=assets/midi/dense_many_notes.mid SECONDS=5
 ```
 
 `NUM_VOICES` drives both sides of the simulation build:
@@ -586,17 +586,17 @@ warnings. No fatal lint or simulation failures remain.
 
 ## Cycle Accounting
 
-`render-quick` records RTL cycle counts in
-`build/render_quick/quick_render_config.json` after a successful render. These
+`render-rtl-core` records RTL cycle counts in
+`build/render_rtl_core/rtl_core_render_config.json` after a successful render. These
 fields are intended for architecture comparisons and regression tracking:
 
 | Field | Meaning |
 | --- | --- |
-| `rtl_total_cycles` | Total `QuickRtlHarness::tick()` cycles from reset through the completed quick render, including reset, register writes, envelope updates, memory handshakes, and sample rendering. |
-| `rtl_total_memory_reads` | Total wave-memory word reads accepted by the quick harness during the full run. |
+| `rtl_total_cycles` | Total `CoreRtlHarness::tick()` cycles from reset through the completed RTL core render, including reset, register writes, envelope updates, memory handshakes, and sample rendering. |
+| `rtl_total_memory_reads` | Total wave-memory word reads accepted by the RTL core harness during the full run. |
 | `rtl_render_cycles_sum` | Sum of per-output-sample render cycles measured from the `sample_tick` cycle through the cycle where `sample_valid` is observed. |
 | `rtl_avg_render_cycles` | `rtl_render_cycles_sum / output_samples`. |
-| `rtl_max_render_cycles` | Maximum per-output-sample render latency observed during the quick render. |
+| `rtl_max_render_cycles` | Maximum per-output-sample render latency observed during the RTL core render. |
 | `rtl_render_memory_reads_sum` | Sum of accepted wave-memory word reads during per-sample render windows. |
 | `rtl_avg_render_memory_reads` | Average wave-memory word reads per output sample. Mono interpolated voices normally cost two reads; stereo interpolated voices normally cost four reads. |
 | `rtl_max_render_memory_reads` | Maximum wave-memory word reads accepted during one output sample render. |
@@ -610,11 +610,11 @@ fields are intended for architecture comparisons and regression tracking:
 | `rtl_max_stereo_voices` | Maximum enabled stereo voice slots. |
 
 The per-sample render counters measure RTL scheduler and memory-service cost for
-the current abstract one-cycle memory response model used by `render-quick`. They
+the current abstract one-cycle memory response model used by `render-rtl-core`. They
 are cycle counts, not absolute time. Converting them into real-time margin still
 requires a target system clock and the final memory profile.
 
-`render-quick` waits for `sample_valid` using a timeout derived from the
+`render-rtl-core` waits for `sample_valid` using a timeout derived from the
 configured voice count, not a fixed smoke-test limit:
 
 ```text
@@ -622,7 +622,7 @@ timeout_cycles = 64 + NUM_VOICES * 4 * 8
 ```
 
 The factor of four covers the maximum word reads for one stereo interpolated
-voice in the quick one-cycle memory model, and the final factor leaves pipeline
+voice in the direct one-cycle memory model, and the final factor leaves pipeline
 and scheduler slack around each read. A timeout is therefore still treated as a
 possible RTL progress bug, but high-polyphony renders are not constrained by the
 old 32-voice-era fixed limit.
@@ -645,7 +645,7 @@ These counters make it possible to separate the main costs:
 The following measurements used the same workload for each build:
 
 ```bash
-make clean && make render-quick NUM_VOICES=<N> \
+make clean && make render-rtl-core NUM_VOICES=<N> \
   SF2="/home/yuan/下载/MS_Basic.sf2" \
   MIDI=assets/midi/dense_many_notes.mid \
   SECONDS=5
@@ -669,7 +669,7 @@ workload for this MIDI, but the 32-voice build still spent more cycles because
 the scheduler scanned every configured voice slot, including empty slots. The
 current scheduler uses `config_valid` to skip invalid slots, so these numbers are
 historical baseline data rather than current throughput measurements. Re-run the
-same `render-quick` commands after throughput changes before using this table for
+same `render-rtl-core` commands after throughput changes before using this table for
 new cycle comparisons.
 
 ## Limitations
