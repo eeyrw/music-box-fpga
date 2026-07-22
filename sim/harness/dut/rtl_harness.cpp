@@ -41,7 +41,7 @@ RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wa
   top_->sample_tick = 0;
   top_->ext_req_ready = 1;
   top_->ext_rsp_valid = 0;
-  for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
+  for (int i = 0; i < kLineWords / 2; ++i) top_->ext_rsp_data[i] = 0;
 }
 
 RtlHarness::~RtlHarness() {
@@ -144,6 +144,11 @@ void RtlHarness::tick() {
     response_latency_sum_ += latency;
     if (latency > response_latency_max_) response_latency_max_ = latency;
   }
+  if (top_->cache_demand_hit_pulse) ++cache_demand_hits_;
+  if (top_->cache_demand_miss_pulse) ++cache_demand_misses_;
+  if (top_->cache_line_fill_pulse) ++cache_line_fills_;
+  if (top_->cache_same_line_endpoint_hit_pulse) ++cache_same_line_endpoint_hits_;
+  if (top_->cache_replacement_pulse) ++cache_replacements_;
 
   top_->clk = 0;
   top_->eval();
@@ -155,7 +160,7 @@ void RtlHarness::service_external_memory() {
 
   if (line_pending_) {
     if (line_countdown_ == 0) {
-      for (int i = 0; i < 4; ++i) top_->ext_rsp_data[i] = 0;
+      for (int i = 0; i < kLineWords / 2; ++i) top_->ext_rsp_data[i] = 0;
       for (int w = 0; w < kLineWords; ++w) {
         uint32_t addr = line_pending_addr_ + uint32_t(w);
         uint16_t value = addr < memory_.size() ? uint16_t(memory_[addr]) : 0;
@@ -190,6 +195,11 @@ void RtlHarness::print_memory_stats() const {
             << " external_line_requests=" << stats.external_line_requests
             << " sequential_line_requests=" << stats.sequential_line_requests
             << " responses=" << stats.responses
+            << " cache_demand_hits=" << stats.cache_demand_hits
+            << " cache_demand_misses=" << stats.cache_demand_misses
+            << " cache_line_fills=" << stats.cache_line_fills
+            << " cache_same_line_endpoint_hits=" << stats.cache_same_line_endpoint_hits
+            << " cache_replacements=" << stats.cache_replacements
             << " avg_response_latency_cycles=" << avg_latency
             << " max_response_latency_cycles=" << stats.response_latency_max
             << " line_words=" << stats.line_words
@@ -206,6 +216,11 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.sequential_line_requests = sequential_line_requests_;
   stats.response_latency_sum = response_latency_sum_;
   stats.response_latency_max = response_latency_max_;
+  stats.cache_demand_hits = cache_demand_hits_;
+  stats.cache_demand_misses = cache_demand_misses_;
+  stats.cache_line_fills = cache_line_fills_;
+  stats.cache_same_line_endpoint_hits = cache_same_line_endpoint_hits_;
+  stats.cache_replacements = cache_replacements_;
   stats.line_words = kLineWords;
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;
   stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;

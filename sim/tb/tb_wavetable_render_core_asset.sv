@@ -36,6 +36,7 @@ module tb_wavetable_render_core_asset;
   pcm_t sample_r;
   logic busy;
   logic mem_req_valid;
+  logic [VOICE_ID_WIDTH-1:0] mem_req_voice;
   logic [31:0] mem_req_addr;
   logic mem_req_ready;
   logic mem_rsp_valid;
@@ -46,9 +47,15 @@ module tb_wavetable_render_core_asset;
   logic ext_req_ready;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
-  logic [8*16-1:0] ext_rsp_data;
+  localparam int LINE_WORDS = 32;
+  logic [LINE_WORDS*16-1:0] ext_rsp_data;
   logic mem_response_trace_pulse;
   logic [15:0] mem_response_trace_latency;
+  logic cache_demand_hit_pulse;
+  logic cache_demand_miss_pulse;
+  logic cache_line_fill_pulse;
+  logic cache_same_line_endpoint_hit_pulse;
+  logic cache_replacement_pulse;
   logic unused_status;
   int pcm_fd;
   int produced;
@@ -60,31 +67,40 @@ module tb_wavetable_render_core_asset;
   // Keep Verilator from warning about observed-but-unused status outputs. The
   // render harness does not need to inspect read data or busy status.
   assign unused_status = |bus_rdata | busy | mem_response_trace_pulse |
-                         (|mem_response_trace_latency);
+                         (|mem_response_trace_latency) |
+                         cache_demand_hit_pulse | cache_demand_miss_pulse |
+                         cache_line_fill_pulse | cache_same_line_endpoint_hit_pulse |
+                         cache_replacement_pulse;
 
   wavetable_render_core dut (.*);
 
   assign core_mem_req.valid = mem_req_valid;
+  assign core_mem_req.voice = mem_req_voice;
   assign core_mem_req.addr = mem_req_addr;
   assign mem_rsp_valid = core_mem_rsp.valid;
   assign mem_rsp_data = core_mem_rsp.data;
 
-  wave_memory_subsystem #(.LINE_WORDS(8)) memory_subsystem (
+  voice_line_cache #(.LINE_WORDS(LINE_WORDS), .LINES_PER_VOICE(2)) memory_subsystem (
     .clk,
     .rst,
-    .core_req(core_mem_req),
-    .core_req_ready(mem_req_ready),
-    .core_rsp(core_mem_rsp),
+    .req(core_mem_req),
+    .req_ready(mem_req_ready),
+    .rsp(core_mem_rsp),
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
     .response_trace_pulse(mem_response_trace_pulse),
-    .response_trace_latency(mem_response_trace_latency)
+    .response_trace_latency(mem_response_trace_latency),
+    .demand_hit_pulse(cache_demand_hit_pulse),
+    .demand_miss_pulse(cache_demand_miss_pulse),
+    .line_fill_pulse(cache_line_fill_pulse),
+    .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
+    .replacement_pulse(cache_replacement_pulse)
   );
 
-  line_memory_model #(.DEPTH(RENDER_MEMORY_DEPTH), .LINE_WORDS(8), .LATENCY(4)) memory_model (
+  line_memory_model #(.DEPTH(RENDER_MEMORY_DEPTH), .LINE_WORDS(LINE_WORDS), .LATENCY(4)) memory_model (
     .clk,
     .rst,
     .req_valid(ext_req_valid),

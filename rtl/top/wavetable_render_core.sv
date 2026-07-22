@@ -14,6 +14,7 @@ module wavetable_render_core (
   output synth_pkg::pcm_t          sample_r,
   output logic                     busy,
   output logic                     mem_req_valid,
+  output logic [synth_pkg::VOICE_ID_WIDTH-1:0] mem_req_voice,
   output logic [31:0]              mem_req_addr,
   input  logic                     mem_req_ready,
   input  logic                     mem_rsp_valid,
@@ -43,6 +44,7 @@ module wavetable_render_core (
   assign bus_ready = bus_rsp.ready;
   assign bus_error = bus_rsp.error;
   assign mem_req_valid = core_mem_req.valid;
+  assign mem_req_voice = core_mem_req.voice;
   assign mem_req_addr = core_mem_req.addr;
   assign core_mem_rsp.valid = mem_rsp_valid;
   assign core_mem_rsp.data = mem_rsp_data;

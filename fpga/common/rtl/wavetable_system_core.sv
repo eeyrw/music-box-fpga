@@ -1,5 +1,5 @@
 module wavetable_system_core #(
-  parameter int LINE_WORDS = 8
+  parameter int LINE_WORDS = 32
 ) (
   input  logic                     clk,
   input  logic                     rst,
@@ -24,6 +24,7 @@ module wavetable_system_core #(
   output logic [15:0]              mem_response_trace_latency
 );
   logic mem_req_valid;
+  logic [synth_pkg::VOICE_ID_WIDTH-1:0] mem_req_voice;
   logic [31:0] mem_req_addr;
   logic mem_req_ready;
   logic mem_rsp_valid;
@@ -32,6 +33,7 @@ module wavetable_system_core #(
   synth_pkg::wave_word_rsp_t mem_rsp;
 
   assign mem_req.valid = mem_req_valid;
+  assign mem_req.voice = mem_req_voice;
   assign mem_req.addr = mem_req_addr;
   assign mem_rsp_valid = mem_rsp.valid;
   assign mem_rsp_data = mem_rsp.data;
@@ -52,6 +54,7 @@ module wavetable_system_core #(
     .sample_r,
     .busy,
     .mem_req_valid,
+    .mem_req_voice,
     .mem_req_addr,
     .mem_req_ready,
     .mem_rsp_valid,

@@ -1,5 +1,5 @@
 module wavetable_demo_system #(
-  parameter int LINE_WORDS = 8,
+  parameter int LINE_WORDS = 32,
   parameter int OUTPUT_FIFO_DEPTH = 8,
   parameter int SYS_CLK_HZ = 100_000_000,
   parameter int SAMPLE_RATE_HZ = 48_000,

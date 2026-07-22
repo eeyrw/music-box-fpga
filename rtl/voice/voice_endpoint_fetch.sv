@@ -126,12 +126,16 @@ module voice_endpoint_fetch (
 
   always_comb begin
     mem_req.addr = 32'd0;
-    if (!word_req_empty)
+    mem_req.voice = '0;
+    if (!word_req_empty) begin
       mem_req.addr = word_req_queue[word_req_rd].req.addr;
+      mem_req.voice = word_req_queue[word_req_rd].req.voice;
+    end
 
     enqueue_word_req = 1'b0;
     enqueue_word_req_data = '0;
     enqueue_word_req_data.slot = enq_slot;
+    enqueue_word_req_data.req.voice = fetch_slot_context[enq_slot].voice_index;
     unique case (enq_state)
       ENQ_L0: begin
         enqueue_word_req = !word_req_full;

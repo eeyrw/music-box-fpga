@@ -13,7 +13,8 @@ module tb_wavetable_demo_common_status;
   logic ext_req_ready;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
-  logic [8*16-1:0] ext_rsp_data;
+  localparam int LINE_WORDS = 32;
+  logic [LINE_WORDS*16-1:0] ext_rsp_data;
   logic i2s_bclk;
   logic i2s_lrclk;
   logic i2s_sdata;
@@ -33,7 +34,7 @@ module tb_wavetable_demo_common_status;
   always #5 clk <= ~clk;
 
   wavetable_demo_system #(
-    .LINE_WORDS(8),
+    .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(8),
     .SYS_CLK_HZ(1_000_000),
     .SAMPLE_RATE_HZ(1)

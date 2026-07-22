@@ -9,7 +9,7 @@
 namespace render {
 namespace {
 
-constexpr int kLineWords = 8;
+constexpr int kLineWords = 32;
 constexpr int kMigBeatBytes = 16;
 constexpr uint16_t kRca = 0x1234;
 
@@ -154,7 +154,7 @@ void BoardLoaderRenderHarness::init_inputs() {
   top_->core_sample_tick = 0;
   top_->core_ext_req_ready = 1;
   top_->core_ext_rsp_valid = 0;
-  for (int i = 0; i < 4; ++i) top_->core_ext_rsp_data[i] = 0;
+  for (int i = 0; i < kLineWords / 2; ++i) top_->core_ext_rsp_data[i] = 0;
 }
 
 void BoardLoaderRenderHarness::write_register(uint16_t address, uint32_t data) {
@@ -222,7 +222,7 @@ void BoardLoaderRenderHarness::drive_combinational_inputs() {
   }
 
   if (line_pending_ && line_countdown_ == 0) {
-    for (int i = 0; i < 4; ++i) top_->core_ext_rsp_data[i] = 0;
+    for (int i = 0; i < kLineWords / 2; ++i) top_->core_ext_rsp_data[i] = 0;
     for (int w = 0; w < kLineWords; ++w) {
       uint32_t word_addr = line_pending_addr_ + uint32_t(w);
       uint16_t value = word_at(word_addr);

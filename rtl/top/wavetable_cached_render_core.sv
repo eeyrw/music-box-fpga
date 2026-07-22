@@ -1,5 +1,6 @@
 module wavetable_cached_render_core #(
-  parameter int LINE_WORDS = 8
+  parameter int LINE_WORDS = 32,
+  parameter int LINES_PER_VOICE = 2
 ) (
   input  logic                     clk,
   input  logic                     rst,
@@ -21,7 +22,12 @@ module wavetable_cached_render_core #(
   input  logic                     ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0] ext_rsp_data,
   output logic                     mem_response_trace_pulse,
-  output logic [15:0]              mem_response_trace_latency
+  output logic [15:0]              mem_response_trace_latency,
+  output logic                     cache_demand_hit_pulse,
+  output logic                     cache_demand_miss_pulse,
+  output logic                     cache_line_fill_pulse,
+  output logic                     cache_same_line_endpoint_hit_pulse,
+  output logic                     cache_replacement_pulse
 );
   logic mem_req_ready;
   synth_pkg::wave_word_req_t mem_req;
@@ -43,24 +49,33 @@ module wavetable_cached_render_core #(
     .sample_r,
     .busy,
     .mem_req_valid(mem_req.valid),
+    .mem_req_voice(mem_req.voice),
     .mem_req_addr(mem_req.addr),
     .mem_req_ready,
     .mem_rsp_valid(mem_rsp.valid),
     .mem_rsp_data(mem_rsp.data)
   );
 
-  wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) memory (
+  voice_line_cache #(
+    .LINE_WORDS(LINE_WORDS),
+    .LINES_PER_VOICE(LINES_PER_VOICE)
+  ) memory (
     .clk,
     .rst,
-    .core_req(mem_req),
-    .core_req_ready(mem_req_ready),
-    .core_rsp(mem_rsp),
+    .req(mem_req),
+    .req_ready(mem_req_ready),
+    .rsp(mem_rsp),
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
     .response_trace_pulse(mem_response_trace_pulse),
-    .response_trace_latency(mem_response_trace_latency)
+    .response_trace_latency(mem_response_trace_latency),
+    .demand_hit_pulse(cache_demand_hit_pulse),
+    .demand_miss_pulse(cache_demand_miss_pulse),
+    .line_fill_pulse(cache_line_fill_pulse),
+    .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
+    .replacement_pulse(cache_replacement_pulse)
   );
 endmodule

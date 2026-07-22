@@ -29,7 +29,9 @@ Implemented RTL pieces:
 - Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
   saturated stereo mixing.
 - Abstract one-word memory request/response interface.
-- Minimal one-line cache/burst adapter through `wave_memory_subsystem`.
+- Per-voice two-line demand cache through `voice_line_cache` on the cached render
+  path, plus a minimal single-line `wave_memory_subsystem` baseline adapter for
+  some common/board wrappers.
 - Output sample FIFO for wrappers that consume rendered PCM frames.
 
 Board/common wrapper pieces under `fpga/common/rtl` provide the current
@@ -73,10 +75,10 @@ register bus -> voice_register_bank -> multi_voice_pipeline
                                       -> sample_valid + sample_l/sample_r
 ```
 
-`rtl/top/wavetable_cached_render_core.sv` adds the line-memory subsystem:
+`rtl/top/wavetable_cached_render_core.sv` adds the per-voice line cache:
 
 ```text
-wavetable_render_core -> wave_memory_subsystem -> external line-read interface
+wavetable_render_core -> voice_line_cache -> external line-read interface
 ```
 
 `fpga/common/rtl/wavetable_system_core.sv` is the reusable system core:
@@ -296,14 +298,14 @@ the generic RTL to one vendor flow.
    requests, response latency, render latency, deadline misses, and output FIFO
    underruns. These counters define the baseline for any 256-voice work.
 
-4. Design a wavetable-optimized memory subsystem in incremental stages.
-   The current `wave_memory_subsystem` is a minimal single-line cache. The first
-   optimized pass should preserve deterministic output and avoid unnecessary
-   interface churn: carry or infer `voice_id`/channel locality, add per-voice
-   two-line or small set-associative caches, satisfy same-line interpolation
-   endpoints from one fill, and give demand reads strict priority over
-   speculative prefetch. The next pass should use `phase_inc` to prefetch the
-   next output frame's left/right endpoint lines, including loop-wrap cases.
+4. Continue the wavetable-optimized memory subsystem in incremental stages.
+   The first optimized pass now carries `voice_id` locality into
+   `voice_line_cache`, uses two demand-filled lines per voice, satisfies
+   same-line interpolation endpoints from one fill, and gives demand reads strict
+   priority by omitting speculative prefetch. The next pass should use
+   `phase_inc` to prefetch the next output frame's left/right endpoint lines,
+   including loop-wrap cases, and should only add multiple outstanding fills once
+   counters show miss latency is still the bottleneck.
    Larger DDR burst lines, multiple outstanding line fills, and tagged endpoint
    assembly are later steps once counters show that the simpler cache/prefetch
    design cannot meet the 256-stereo target.

@@ -2,7 +2,7 @@ module board_loader_render_tops #(
   parameter int LBA_WIDTH = 32,
   parameter int MIG_ADDR_WIDTH = smart_artix_pkg::MIG_ADDR_WIDTH,
   parameter int MIG_DATA_WIDTH = smart_artix_pkg::MIG_DATA_WIDTH,
-  parameter int LINE_WORDS = 8
+  parameter int LINE_WORDS = 32
 ) (
   input  logic                      clk,
   input  logic                      rst,

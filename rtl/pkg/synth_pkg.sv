@@ -37,8 +37,9 @@ package synth_pkg;
   } stereo_pcm_t;
 
   typedef struct packed {
-    logic                  valid;
-    logic [ADDR_WIDTH-1:0] addr;
+    logic                       valid;
+    logic [VOICE_ID_WIDTH-1:0]  voice;
+    logic [ADDR_WIDTH-1:0]      addr;
   } wave_word_req_t;
 
   typedef struct packed {

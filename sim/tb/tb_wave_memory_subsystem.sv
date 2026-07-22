@@ -1,7 +1,7 @@
 module tb_wave_memory_subsystem;
   import synth_pkg::*;
 
-  localparam int LINE_WORDS = 8;
+  localparam int LINE_WORDS = 32;
 
   logic clk = 1'b0;
   logic rst;
@@ -63,6 +63,7 @@ module tb_wave_memory_subsystem;
     begin
       @(negedge clk);
       core_req.valid = 1'b1;
+      core_req.voice = '0;
       core_req.addr = address;
       while (!core_req_ready)
         @(negedge clk);
@@ -107,7 +108,7 @@ module tb_wave_memory_subsystem;
       errors++;
     end
 
-    read_word(32'd12, 32);
+    read_word(32'd36, 296);
     if (ext_request_count != 2) begin
       $error("second line miss made %0d external requests expected 2", ext_request_count);
       errors++;

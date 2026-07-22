@@ -802,11 +802,21 @@ build/render_memory/memory_stats.json
 
 The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 `sequential_latency_cycles`, `ready_gap_cycles`, `external_line_requests`,
-`sequential_line_requests`, `responses`, `avg_response_latency_cycles`,
-`max_response_latency_cycles`, and the same register-write breakdown used by
-`render-rtl-core`. The supported read-only timing profiles are `ddr`, `sdram`, and
-`parallel-nor`. These profiles apply only to memory-backed render targets such as
-`render-memory` and `render-board-loader`.
+`sequential_line_requests`, `responses`, cache demand hit/miss/fill/replacement
+counters, `avg_response_latency_cycles`, `max_response_latency_cycles`, and the
+same register-write breakdown used by `render-rtl-core`. The supported read-only
+timing profiles are `ddr`, `sdram`, and `parallel-nor`. These profiles apply only
+to memory-backed render targets such as `render-memory` and
+`render-board-loader`.
+
+The `ddr` profile is a deliberately simple, optimistic DDR-like line timing
+profile: 10 cycles for random lines, 4 cycles for sequential lines, and no ready
+gap. It is appropriate for relative cache-policy and line-size comparisons, but
+it is not a MIG/DDR3 behavioral model. It does not cover refresh, bank or row
+state, command scheduling, read-data bus turnaround, calibration, clock-domain
+crossing, controller FIFO pressure, or multiple outstanding read throughput.
+Board-level DDR acceptance must use the Smart Artix DDR line-reader tests,
+board-loader render path, or hardware measurements.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.

@@ -19,6 +19,11 @@ struct MemoryStats {
   uint64_t sequential_line_requests = 0;
   uint64_t response_latency_sum = 0;
   uint16_t response_latency_max = 0;
+  uint64_t cache_demand_hits = 0;
+  uint64_t cache_demand_misses = 0;
+  uint64_t cache_line_fills = 0;
+  uint64_t cache_same_line_endpoint_hits = 0;
+  uint64_t cache_replacements = 0;
   int line_words = 0;
   int random_latency_cycles = 0;
   int sequential_latency_cycles = 0;
@@ -50,7 +55,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void print_memory_stats() const;
 
  private:
-  static constexpr int kLineWords = 8;
+  static constexpr int kLineWords = 32;
 
   void write_register(uint16_t address, uint32_t data) override;
   void tick();
@@ -75,6 +80,11 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint64_t sequential_line_requests_ = 0;
   uint64_t response_latency_sum_ = 0;
   uint16_t response_latency_max_ = 0;
+  uint64_t cache_demand_hits_ = 0;
+  uint64_t cache_demand_misses_ = 0;
+  uint64_t cache_line_fills_ = 0;
+  uint64_t cache_same_line_endpoint_hits_ = 0;
+  uint64_t cache_replacements_ = 0;
   RegisterWriteStats register_write_stats_;
 };
 

@@ -22,7 +22,7 @@ generic core you want to include:
 | `wavetable_demo_system` | `fpga/common/rtl/wavetable_demo_system.sv` | You want the current pin-level demo composition that wires SPI control, common status registers, the reusable system core, and I2S output together. |
 
 For most generic RTL work, start at `wavetable_render_core`. For memory-adapter
-work, start at `wavetable_cached_render_core` or `wave_memory_subsystem`. For
+work, start at `wavetable_cached_render_core` or `voice_line_cache`. For
 pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 
 ## Directory Ownership
@@ -34,7 +34,7 @@ pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 | `rtl/control` | `voice_register_bank` | Register decode, shadow descriptor storage, commit sequencing, active renderer snapshots, and runtime control storage. | `wavetable_render_core`. |
 | `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
 | `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
-| `rtl/memory` | `wave_memory_subsystem` | Adapter from the core's one-word PCM read interface to an external line-read interface with a one-line cache. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and some render testbenches. |
+| `rtl/memory` | `voice_line_cache`, `wave_memory_subsystem` | Adapters from the core's one-word PCM read interface to an external line-read interface. `voice_line_cache` is the current cached render path; `wave_memory_subsystem` is the older single-line baseline used by some common/board wrappers. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and render testbenches. |
 | `rtl/audio` | `output_sample_fifo` | Generic synchronous PCM frame FIFO for wrappers that decouple render output from audio serialization. | `fpga/common/rtl/wavetable_i2s_output.sv`; not used by the bare `rtl/top` cores. |
 
 There is currently no `rtl/bus` source file. The generic register and memory
@@ -216,18 +216,21 @@ and PCM saturation to `voice_dsp_pipeline`.
 
 ## Memory Layer
 
-`wave_memory_subsystem` is the top and only module in `rtl/memory`. It adapts:
+`voice_line_cache` is the current cached render adapter in `rtl/memory`. It adapts:
 
 ```text
 core one-word PCM read request
-  -> one-line cache lookup
+  -> per-voice two-line cache lookup
   -> external aligned line read on miss
   -> one-word PCM response
 ```
 
-It is intentionally policy-light. The renderer still issues absolute word
-addresses, and responses return in accepted-request order. Future cache policy
-work should keep phase and DSP arithmetic out of this adapter.
+It is intentionally demand-only in this milestone: ordered responses, one
+outstanding miss, no prefetch. `wave_memory_subsystem` remains as the older
+single-line baseline adapter used by some common/board wrapper paths. The
+renderer still issues absolute word addresses with a voice id, and responses
+return in accepted-request order. Future cache policy work should keep phase and
+DSP arithmetic out of this adapter.
 
 ## Audio Layer
 

@@ -665,11 +665,16 @@ Assumptions:
 - The current front end still walks voices through the `multi_voice_pipeline`
   scheduler states and must snapshot config/runtime, calculate phase/frame
   values, issue endpoint fetch work, and later retire DSP results.
-- The current memory-backed path uses `wave_memory_subsystem` with one global
-  `LINE_WORDS = 8` cache line and one outstanding core-side word request.
-- The current C++ DDR timing profile is an approximation, not a board-proven MIG
-  timing model: random line latency is 10 core cycles, sequential line latency is
-  4 core cycles, and ready gap is 0 cycles.
+- The current cached memory-backed path uses `voice_line_cache` with two
+  `LINE_WORDS = 32` cache lines per voice and one outstanding miss. It is still
+  demand-only: ordered responses, no speculative prefetch, and no multiple
+  outstanding line fills.
+- The current C++ DDR timing profile is an optimistic DDR-like line-memory
+  approximation, not a board-proven MIG timing model: random line latency is 10
+  core cycles, sequential line latency is 4 core cycles, and ready gap is 0
+  cycles. It intentionally omits refresh, row/bank state, command scheduling,
+  bus turnaround, controller FIFO pressure, CDC, and multiple outstanding read
+  effects.
 
 ### DSP-Only Lower Bound
 

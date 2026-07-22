@@ -121,30 +121,53 @@ when the request struct's `valid` field is high and the separate ready signal is
 high. A response transfers when the response struct's `valid` field is high;
 responses must arrive in request order. In RTL, generic core-internal module
 boundaries use `synth_pkg::wave_word_req_t` and `synth_pkg::wave_word_rsp_t` for
-the request and response payloads. The initial simulation model accepts every
-request and returns its signed 16-bit value one cycle later.
+the request and response payloads. `wave_word_req_t` carries `valid`, `voice`,
+and `addr`; `voice` lets cache adapters preserve per-voice locality while the
+word address remains the memory lookup key. The initial simulation model accepts
+every request and returns its signed 16-bit value one cycle later.
 
 This single-word core-side contract is intentional. The renderer must not require
 a line, burst, pair-endpoint, or cache-line extraction interface because future
 board targets may use DDR, SDRAM, parallel NOR, SPI/QSPI NOR, SRAM, or another
 adapter with different natural access granularity. Wider reads, line fills,
 paired interpolation endpoints, and speculative prefetch are allowed inside an
-optional memory adapter such as `wave_memory_subsystem`, but they must remain
-implementation details behind the same one-word request/response interface unless
-a later project milestone explicitly changes this external contract.
+optional memory adapter such as `voice_line_cache` or `wave_memory_subsystem`,
+but they must remain implementation details behind the same one-word
+request/response interface unless a later project milestone explicitly changes
+this external contract.
+
+## Voice Line Cache
+
+`rtl/memory/voice_line_cache.sv` is the current cached render path used by
+`wavetable_cached_render_core`. It adapts ordered one-word requests to an
+external aligned line-read interface while keeping two cached lines per voice.
+The default line size is `LINE_WORDS = 32`.
+
+- Core side: `req` carries `valid/voice/addr`, `req_ready` accepts one request,
+  and `rsp` returns `valid/data` in accepted-request order.
+- External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
+  aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
+  on `ext_rsp_data`, with word 0 in bits `[15:0]`.
+- A demand hit returns the requested word from the selected voice's cached lines.
+  A miss backpressures the core-side request port, issues one external aligned
+  line request, fills one way for that voice, and returns the requested word.
+- The first implementation is demand-only: ordered responses, one outstanding
+  miss, no speculative prefetch, and simple per-voice round-robin replacement.
+- Cache observability is exposed as hit, miss, line fill, same-line endpoint hit,
+  and replacement pulses. `response_trace_pulse` and
+  `response_trace_latency` still report one pulse per returned word.
 
 ## Minimal Line Memory Subsystem
 
 `rtl/memory/wave_memory_subsystem.sv` adapts the core's one-word read interface
 to a wider external line-read interface suitable for an SDRAM/DDR controller
 wrapper or a burst-capable memory model. It contains one cached line and supports
-one outstanding core request:
+one outstanding core request. It remains as a small baseline adapter and is still
+used by some common/board wrapper paths:
 
-- Core side: `core_req_valid`, `core_req_ready`, `core_req_addr`,
-  `core_rsp_valid`, and `core_rsp_data` match the existing 16-bit word-addressed
-  wavetable read contract at legacy wrapper boundaries. Inside generic RTL
-  module connections, the same contract is carried as `core_req` with
-  `valid/addr`, `core_req_ready`, and `core_rsp` with `valid/data`.
+- Core side: `core_req` carries `valid/voice/addr`; this baseline adapter ignores
+  `voice` and caches by address only. `core_req_ready` and `core_rsp` complete
+  the ordered one-word handshake.
 - External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
   aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
   on `ext_rsp_data`, with word 0 in bits `[15:0]`.
@@ -158,22 +181,25 @@ the external line-read side.
 
 ## Memory Subsystem Test Baseline
 
-The current regression path exercises `wave_memory_subsystem` in both a focused
-unit test and the normal synthesis render path:
+The current regression path exercises both the baseline `wave_memory_subsystem`
+and the per-voice `voice_line_cache`:
 
 - `tb_wave_memory_subsystem` checks one line miss, one same-line hit, and one
-  second-line miss with `LINE_WORDS = 8` and `line_memory_model LATENCY = 4`.
-- `tb_wavetable_render_core` routes the full multi-voice self-checking datapath through
-  `wavetable_render_core -> wave_memory_subsystem -> line_memory_model`.
-- `tb_wavetable_render_core_asset` uses the same memory path for SF2-derived render
-  runs.
+  second-line miss with `LINE_WORDS = 32` and `line_memory_model LATENCY = 4`.
+- `tb_voice_line_cache` checks same-line hits, cross-line misses, per-voice
+  cache isolation, two-way replacement, reset invalidation, and miss
+  backpressure.
+- `tb_wavetable_render_core` routes the full multi-voice self-checking datapath
+  through `wavetable_render_core -> voice_line_cache -> line_memory_model`.
+- `tb_wavetable_render_core_asset` uses the same per-voice cache path for
+  SF2-derived render runs.
 
 Observed focused-test behavior:
 
-- Read `addr = 3`: first access to line `[0,7]`, cache miss, one external line
+- Read `addr = 3`: first access to line `[0,31]`, cache miss, one external line
   request.
-- Read `addr = 6`: same line `[0,7]`, cache hit, no additional external request.
-- Read `addr = 12`: first access to line `[8,15]`, cache miss, second external
+- Read `addr = 6`: same line `[0,31]`, cache hit, no additional external request.
+- Read `addr = 36`: first access to line `[32,63]`, cache miss, second external
   line request.
 
 With the current model parameters, a cache hit returns with much lower latency
@@ -192,14 +218,24 @@ PCM output: a same-line cached access must not issue another external line
 request. The C++ MIDI render path records aggregate counters for real render
 traffic in `build/render_memory/memory_stats.json`, including external line
 requests, sequential line requests, response count, average response latency, and
-maximum response latency.
+maximum response latency. The same JSON now includes demand hit, demand miss,
+line fill, same-line endpoint hit, and replacement counts from the RTL cache.
 
 ## External Memory Profiles
 
 The simulation models only read behavior for board-memory candidates. These
-profiles are not full DDR, SDRAM, or NOR controllers; they approximate line-read
-latency, faster sequential line access, and request backpressure while preserving
-the same RTL memory-subsystem interface.
+profiles are not full DDR, SDRAM, NOR, or MIG controller models; they approximate
+line-read latency, faster sequential line access, and request backpressure while
+preserving the same RTL memory-subsystem interface.
+
+The `ddr` profile should be treated as an optimistic DDR-like line-memory timing
+profile, not as board-proven DDR3 behavior. It is useful for comparing cache
+policies, line sizes, hit/miss counts, external request counts, and first-order
+miss latency effects. It does not model refresh, bank or row conflicts, command
+scheduling, read-data bus turnaround, calibration, CDC, MIG `app_rdy`/
+`app_wdf_rdy` behavior, finite controller FIFOs, or the throughput benefit of
+multiple outstanding reads. Real 256-voice acceptance still requires a board DDR
+line-reader model or hardware measurements.
 
 `make render-memory` accepts `MEMORY_PROFILE` for the external line-memory timing
 model:
@@ -218,17 +254,14 @@ Current C++ render profiles:
 | `sdram` | 16 cycles | 8 cycles | 1 cycle |
 | `parallel-nor` | 28 cycles | 14 cycles | 3 cycles |
 
-Using the built-in one-second MIDI smoke render against
-`assets/soundfonts/MT6276.sf2`, all three profiles produced the same audible
-render result and the same external request mix: 50,562 external line requests,
-8,490 sequential line requests, and 135,840 responses. The latency counters
-changed by profile:
-
-| Profile | Avg response latency | Max response latency |
-| --- | ---: | ---: |
-| `ddr` | 4.09 cycles | 12 cycles |
-| `sdram` | 6.20 cycles | 18 cycles |
-| `parallel-nor` | 10.29 cycles | 30 cycles |
+Using the built-in two-second MIDI smoke render against
+`assets/soundfonts/MT6276.sf2` with the current `LINE_WORDS = 32` per-voice cache,
+`MEMORY_PROFILE=ddr` produced the exact reference PCM result with 1,539 external
+line requests, 623 sequential line requests, 265,440 word responses, 263,901
+demand hits, 1,539 demand misses/fills, 171,119 same-line endpoint hits, and
+1,535 replacements. The observed response-latency counters were 0.055 average
+cycles and 12 maximum cycles. These numbers are workload and profile dependent;
+use them as a regression reference, not as a DDR bandwidth proof.
 
 The SystemVerilog `line_memory_model` exposes matching parameters for focused
 tests: `RANDOM_LATENCY`, `SEQUENTIAL_LATENCY`, and `READY_GAP`. Its legacy
@@ -293,5 +326,5 @@ boundary, mono/stereo, per-voice eviction isolation, and backpressure behavior.
 Use `render-memory` counters as the comparison baseline: external line requests,
 sequential line requests, average and maximum response latency, full render
 latency, deadline misses, and output underruns. A representative stress case is a
-layered stereo piano MIDI render, which currently stresses the one-line cache
-with many interleaved region streams.
+layered stereo piano MIDI render, which stresses cache locality with many
+interleaved region streams.

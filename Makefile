@@ -50,6 +50,7 @@ RTL_SOURCES := \
 	rtl/control/voice_runtime_store.sv \
 	rtl/control/voice_register_bank.sv \
 	rtl/memory/wave_memory_subsystem.sv \
+	rtl/memory/voice_line_cache.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/dsp/voice_dsp_pipeline.sv \
@@ -82,6 +83,9 @@ SPI_SIM_SOURCES := \
 MEMORY_SIM_SOURCES := \
 	sim/models/line_memory_model.sv \
 	sim/tb/tb_wave_memory_subsystem.sv
+
+VOICE_LINE_CACHE_SIM_SOURCES := \
+	sim/tb/tb_voice_line_cache.sv
 
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
@@ -206,6 +210,10 @@ test-rtl-core:
 		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
 		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
 	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_line_cache_obj_dir --top-module tb_voice_line_cache \
+		$(RTL_SOURCES) $(VOICE_LINE_CACHE_SIM_SOURCES)
+	$(BUILD_DIR)/voice_line_cache_obj_dir/Vtb_voice_line_cache
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
