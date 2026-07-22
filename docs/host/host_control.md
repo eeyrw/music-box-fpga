@@ -24,8 +24,13 @@ The simulation harness already contains reusable control-side code under
   `initialAttenuation`, because the left/right sample routing already provides
   the stereo image.
 - `render/render_support.*`: contains `McuModel`, which owns voice allocation,
-  note on, note off, ADSR stepping, and region selection for the current render
-  path.
+  note on, note off, ADSR stepping, region selection, MIDI controller policy, and
+  SF2 modulator evaluation for the current render path. MIDI velocity, CC7
+  volume, and CC11 expression use the SF2-style concave centibel attenuation
+  curve before the resulting level is quantized to Q1.15. SF2 modulator sources
+  preserve their declared polarity, direction, and linear/concave/convex/switch
+  source shape; bipolar sources are shaped around zero rather than by remapping a
+  unipolar result.
 - `control/register_control.*`: converts voice-control operations into register
   writes.
 

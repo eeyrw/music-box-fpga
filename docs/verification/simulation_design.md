@@ -793,8 +793,11 @@ Current SF2 support:
   Mono regions crossfade a single base gain by pan; stereo regions center the
   pan and keep independent left/right base gains, one per side's
   `initialAttenuation`.
-- Default MIDI velocity-to-initial-attenuation is approximated with a concave
-  centibel curve before the software envelope target is quantized to Q1.15.
+- Default MIDI velocity-to-initial-attenuation is approximated with an SF2-style
+  concave centibel curve before the software envelope target is quantized to
+  Q1.15. The same helper is used for CC7 volume and CC11 expression scaling, so
+  controller changes follow the same perceptual attenuation family as Note On
+  velocity rather than a linear or squared-amplitude law.
   Default MIDI velocity-to-filter-cutoff is also modeled as a linear negative
   unipolar source with a -2400 cent range.
 - Modulation and vibrato LFO generators `delayModLFO`, `freqModLFO`,
@@ -821,23 +824,26 @@ Current SF2 support:
   table, CC98/99 plus CC6/38 SoundFont NRPN generator offsets, CC100/101 plus
   CC6/38 RPN pitch-bend sensitivity/fine-tune/coarse-tune, CC120 All Sound Off,
   CC121 Reset All Controllers, CC123 All Notes Off, polyphonic key pressure,
-  channel pressure, and pitch bend. CC7 and CC11 use the same concave centibel
-  attenuation approximation as Note On velocity. CC1 and channel pressure add the
-  SF2 default vibrato-LFO pitch-depth modulation. CC10 and SoundFont NRPN `pan`
-  offsets are added at the SF2 `pan` summing node and clamped before left/right
-  gain conversion. Soft pedal is modeled as a fixed initial-attenuation increase
-  for the current dry path. These are MCU-side controller policy events that
-  drive runtime gain, envelope/release, and `PHASE_INC_RUNTIME` writes. Runtime
-  left/right gain updates use one packed register write so SPI cannot expose a
-  half-updated stereo gain pair.
+  channel pressure, and pitch bend. CC7 and CC11 use the same SF2-style concave
+  centibel attenuation approximation as Note On velocity. CC1 and channel
+  pressure add the SF2 default vibrato-LFO pitch-depth modulation. CC10 and
+  SoundFont NRPN `pan` offsets are added at the SF2 `pan` summing node and
+  clamped before left/right gain conversion. Soft pedal is modeled as a fixed
+  initial-attenuation increase for the current dry path. These are MCU-side
+  controller policy events that drive runtime gain, envelope/release, and
+  `PHASE_INC_RUNTIME` writes. Runtime left/right gain updates use one packed
+  register write so SPI cannot expose a half-updated stereo gain pair.
 - Multiple overlapping matching preset/instrument zones for layered Note On
   playback.
 - `pmod` and `imod` records for generator destinations that can affect the
   current dry wavetable path. The loader parses SF2 modulator source polarity,
   direction, linear/concave/convex/switch source type, secondary amount source,
   linear/absolute transform, and default/instrument/preset global/local
-  precedence. The MCU evaluator applies the resulting modulator set to initial
-  attenuation, pan, initial pitch, pitch-routing amounts, and filter cutoff.
+  precedence. Concave and convex source types use the SF2 logarithmic source
+  table shape with interpolation; bipolar sources are evaluated around zero, and
+  switch sources select the high or low endpoint. The MCU evaluator applies the
+  resulting modulator set to initial attenuation, pan, initial pitch,
+  pitch-routing amounts, and filter cutoff.
 - Standard MIDI renders silence Note On events whose selected preset/instrument
   has no matching key/velocity region, while still treating all-zero renders as
   failures.
@@ -926,7 +932,8 @@ MIDI and controller-policy gaps:
 
 - Velocity is used for zone selection and Note On peak level. The current peak
   level approximates the SF2 default velocity-to-volume concave attenuation
-  curve before the Q1.15 envelope model is applied.
+  curve before the Q1.15 envelope model is applied. The curve is clamped at the
+  SF2 127/128 source maximum and reaches unity at velocity 127.
 - Channel 10 percussion uses the General MIDI/SF2 convention of bank 128 and then
   relies on normal SF2 key-range selection for drum-note maps. More advanced
   preset-specific percussion policy is not modeled.

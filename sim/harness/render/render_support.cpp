@@ -245,17 +245,79 @@ bool is_realtime_source(uint16_t source) {
   return index == 10 || index == 13 || index == 14 || index == 16;
 }
 
-double source_shape(double x, int type) {
+constexpr int kVelCbSize = 128;
+constexpr double kPeakAttenuation = 960.0;
+constexpr double kSourceClamp = 127.0 / 128.0;
+
+const std::array<double, kVelCbSize>& concave_tab() {
+  static const std::array<double, kVelCbSize> tab = [] {
+    std::array<double, kVelCbSize> t{};
+    for (int i = 0; i < kVelCbSize; ++i) {
+      if (i == 0)
+        t[i] = 0.0;
+      else if (i == kVelCbSize - 1)
+        t[i] = 1.0;
+      else
+        t[i] = (-200.0 * 2.0 / kPeakAttenuation) *
+               std::log10(double((kVelCbSize - 1) - i) / double(kVelCbSize - 1));
+    }
+    return t;
+  }();
+  return tab;
+}
+
+const std::array<double, kVelCbSize>& convex_tab() {
+  static const std::array<double, kVelCbSize> tab = [] {
+    std::array<double, kVelCbSize> t{};
+    for (int i = 0; i < kVelCbSize; ++i) {
+      if (i == 0)
+        t[i] = 0.0;
+      else if (i == kVelCbSize - 1)
+        t[i] = 1.0;
+      else
+        t[i] = 1.0 - (-200.0 * 2.0 / kPeakAttenuation) *
+                         std::log10(double(i) / double(kVelCbSize - 1));
+    }
+    return t;
+  }();
+  return tab;
+}
+
+double curve_lookup(const std::array<double, kVelCbSize>& tab, double val) {
+  if (val <= 0.0) return 0.0;
+  if (val >= double(kVelCbSize - 1)) return tab[kVelCbSize - 1];
+  int i = int(val);
+  return tab[i] + (tab[i + 1] - tab[i]) * (val - double(i));
+}
+
+double concave_unit(double x) { return curve_lookup(concave_tab(), double(kVelCbSize) * x); }
+double convex_unit(double x) { return curve_lookup(convex_tab(), double(kVelCbSize) * x); }
+
+double shape_unipolar(double x, int type) {
   x = std::max(0.0, std::min(1.0, x));
   switch (type) {
     case 1:
-      return x * x;
+      return std::min(concave_unit(x), kSourceClamp);
     case 2:
-      return 1.0 - (1.0 - x) * (1.0 - x);
+      return std::min(convex_unit(x), kSourceClamp);
     case 3:
       return x >= 0.5 ? 1.0 : 0.0;
     default:
       return x;
+  }
+}
+
+double shape_bipolar(double v, int type) {
+  v = std::max(-1.0, std::min(1.0, v));
+  switch (type) {
+    case 1:
+      return v >= 0.0 ? std::min(concave_unit(v), kSourceClamp) : -concave_unit(-v);
+    case 2:
+      return v >= 0.0 ? std::min(convex_unit(v), kSourceClamp) : -convex_unit(-v);
+    case 3:
+      return v >= 0.0 ? 1.0 : -1.0;
+    default:
+      return v;
   }
 }
 
@@ -1167,8 +1229,8 @@ double McuModel::modulator_sum(const Region& region, const VoiceState& voice,
     }
     double native = native_7bit(source);
     double x = negative ? (127.0 - native) / 128.0 : native / 128.0;
-    double shaped = source_shape(x, type);
-    return bipolar ? shaped * 2.0 - 1.0 : shaped;
+    if (bipolar) return shape_bipolar(-1.0 + 2.0 * x, type);
+    return shape_unipolar(x, type);
   };
 
   const auto& mods = region.modulators.empty() ? fallback_default_modulators() : region.modulators;

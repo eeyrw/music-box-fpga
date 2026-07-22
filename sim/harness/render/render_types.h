@@ -2,6 +2,7 @@
 
 #include "generated/register_map.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <string>
@@ -267,8 +268,14 @@ inline int clamp_q15(int value) {
 
 inline int concave_attenuation_q15(int value) {
   int v = value < 0 ? 0 : (value > 127 ? 127 : value);
-  double missing = double(127 - v) / 128.0;
-  double attenuation_cb = 960.0 * missing * missing;
+  double shaped;
+  if (v >= 127)
+    shaped = 0.0;
+  else if (v <= 0)
+    shaped = 127.0 / 128.0;
+  else
+    shaped = std::min((-200.0 * 2.0 / 960.0) * std::log10(double(v) / 127.0), 127.0 / 128.0);
+  double attenuation_cb = 960.0 * shaped;
   int level = int(std::round(double(kQ15Full) * std::pow(10.0, -attenuation_cb / 200.0)));
   return clamp_q15(level);
 }
