@@ -640,6 +640,143 @@ These counters make it possible to separate the main costs:
 - `rtl_max_render_cycles` is the deadline number to compare against
   `system_clk_hz / output_sample_rate` for the tested workload.
 
+## 100 MHz / DDR3 Polyphony Estimate
+
+This section records the current analytical estimate for real-time polyphony
+before adding a more parallel memory/cache subsystem. It is an architectural
+budget, not a replacement for the `render-rtl-core` and `render-memory`
+counters. Re-run those counters after any scheduler, cache, DDR wrapper, or sample
+rate change.
+
+Assumptions:
+
+- System clock is `100 MHz`.
+- Output sample rate is `48 kHz`.
+- The render deadline for one stereo output frame is therefore:
+
+```text
+100,000,000 / 48,000 = 2083.33 core cycles/sample
+```
+
+- The current renderer accepts one `sample_tick` only when the prior output frame
+  has drained. It does not overlap frame `N + 1` with frame `N`.
+- The current `voice_dsp_pipeline` is fixed latency and can accept one complete
+  `voice_dsp_context_t` per cycle once endpoint samples are available.
+- The current front end still walks voices through the `multi_voice_pipeline`
+  scheduler states and must snapshot config/runtime, calculate phase/frame
+  values, issue endpoint fetch work, and later retire DSP results.
+- The current memory-backed path uses `wave_memory_subsystem` with one global
+  `LINE_WORDS = 8` cache line and one outstanding core-side word request.
+- The current C++ DDR timing profile is an approximation, not a board-proven MIG
+  timing model: random line latency is 10 core cycles, sequential line latency is
+  4 core cycles, and ready gap is 0 cycles.
+
+### DSP-Only Lower Bound
+
+If endpoint samples are assumed to be immediately available and memory stalls are
+ignored, the arithmetic pipe itself is not the limiting factor. A complete DSP
+context takes about seven clocks to retire, but the pipe can accept another
+complete context every clock. In isolation the DSP capacity would therefore be
+far beyond 256 voices at 48 kHz.
+
+The current top-level render latency is instead dominated by the voice scheduler
+and endpoint issue path. For a valid enabled voice, the steady state path is
+approximately:
+
+```text
+SCAN_VOICE -> READ_VOICE -> WAIT_VOICE -> START_VOICE -> PROCESS_VOICE -> DSP_START
+```
+
+That is about six scheduler clocks per rendered voice before memory effects.
+After the final voice is issued, the renderer also pays the remaining endpoint,
+DSP, drain, and finish tail. With ideal endpoint service, a useful first-order
+estimate is:
+
+```text
+mono frame cycles   ~= 6 * active_voices + 13
+stereo frame cycles ~= 6 * active_voices + 15
+```
+
+Using the 2083-cycle 48 kHz deadline:
+
+```text
+(2083 - 15) / 6 = 344 voices
+```
+
+The register map currently supports fewer voice slots than that estimate
+(`REG_MAX_ADDRESSABLE_VOICES` is 286), and normal builds use `NUM_VOICES = 256`.
+Therefore the current arithmetic and scheduler path is expected to fit 256 voices
+at `100 MHz`/`48 kHz` when memory service is ideal.
+
+Invalid slots are cheaper but not free. The active-slot scanner skips
+`config_valid == 0` slots without reading the full voice context, but it still
+spends scan cycles walking the configured voice range. Sparse workloads are
+therefore closer to:
+
+```text
+frame cycles ~= NUM_VOICES + 5 * valid_slots + tail
+```
+
+### Current DDR/Profile Estimate
+
+The memory path changes the practical limit. Mono interpolation requires two
+16-bit sample words per active voice (`L0` and `L1`). Stereo interpolation
+requires four words (`L0`, `L1`, `R0`, and `R1`). The current cache line holds
+eight 16-bit words. A common case is that `L0` and `L1` land in the same line, so
+one endpoint pair pays one line miss followed by one same-line hit. For stereo
+voices, the left and right samples are usually in separate SF2 regions, so the
+left pair and right pair often each pay their own line miss.
+
+With the current DDR profile, observed response latency is about 12 core cycles
+for a random line miss through the line adapter and about two core cycles for a
+same-line hit response through the one-word core interface. A conservative
+per-voice memory-service estimate is therefore:
+
+```text
+mono voice   ~= L miss + L hit       ~= 12 + 2 = 14 cycles
+stereo voice ~= L miss + L hit
+              + R miss + R hit       ~= 28 cycles
+```
+
+Dividing the 2083-cycle frame budget by those costs gives the memory-limited
+upper bounds:
+
+```text
+mono, poor inter-voice locality:   2083 / 14 ~= 148 voices
+stereo, poor inter-voice locality: 2083 / 28 ~= 74 voices
+```
+
+The scheduler, drain, output FIFO margin, fractional tick placement, and real DDR
+controller arbitration reduce the number that should be treated as safe. Until
+board measurements prove otherwise, the practical target range for the current
+architecture is:
+
+| Workload shape | Practical target at 100 MHz / 48 kHz |
+| --- | ---: |
+| Mostly mono samples | about 120 voices |
+| Mostly stereo samples | about 60 voices |
+| Mixed mono/stereo SoundFont playback | about 60-120 voices, depending on stereo ratio and cache locality |
+
+This estimate assumes relatively poor inter-voice cache locality. If many active
+voices read nearby samples inside the same cache line, the current one-line cache
+can do better. If active voices walk unrelated sample regions, especially linked
+stereo left/right regions, the cache line is frequently replaced and the estimate
+approaches the conservative numbers above.
+
+### Result
+
+At `100 MHz` core clock and `48 kHz` output:
+
+- RTL arithmetic and current scheduler structure are not the first blocker for
+  256 configured voices when memory is ideal.
+- The current one-line, one-outstanding memory adapter is the practical limiter.
+- A safe current design target is roughly 60 stereo voices or roughly 120 mono
+  voices before a wider, more voice-aware memory subsystem is added.
+- Stable 256-voice stereo playback requires memory-side architecture work:
+  per-voice or set-associative line caching, stride-aware prefetch, larger DDR
+  burst lines, multiple outstanding requests, or tagged/reordered endpoint
+  assembly.
+
 ## Voice-Count Scaling
 
 The following measurements used the same workload for each build:

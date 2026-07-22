@@ -243,6 +243,15 @@ I2S transmitter needs the next frame. If not, the next architecture work is an
 output FIFO, deeper prefetch/cache behavior, or a more overlapped voice scheduler,
 not simply increasing `NUM_VOICES`.
 
+The current 100 MHz / 48 kHz budget is about 2083 core cycles per stereo output
+frame. The arithmetic and scheduler path is estimated to fit the normal
+`NUM_VOICES = 256` build if endpoint samples are served ideally, but the present
+single-line, one-outstanding memory adapter is expected to limit practical
+polyphony first. With the current DDR profile and poor inter-voice cache
+locality, the working target is about 120 mostly-mono voices or about 60
+mostly-stereo voices. The detailed method, formulas, assumptions, and caveats are
+recorded in `voice_pipeline.md`.
+
 Minimum measurements before board migration:
 
 - worst-case `sample_valid - sample_tick` latency,
