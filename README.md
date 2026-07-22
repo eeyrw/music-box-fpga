@@ -211,6 +211,7 @@ make render-rtl-core SECONDS=1
 make render-memory SECONDS=2
 make render-board-loader SECONDS=0.1
 make render-memory MIDI=song.mid SECONDS=20
+make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 ```
 
@@ -229,6 +230,14 @@ render-reference` is the pure C++ algorithm path: it parses SF2/MIDI, runs the
 shared MCU policy model, renders with `ReferenceSynth`, and writes
 `build/render_reference/out.wav` plus
 `build/render_reference/reference_render_config.json`.
+
+For MIDI renders, `START_SECONDS` selects a window inside the MIDI file. The
+harness advances pre-window non-note MIDI events such as controller, pitch-bend,
+channel-pressure, and key-pressure events to output time zero, then shifts events
+inside `[START_SECONDS, START_SECONDS + SECONDS)` down to the start of the WAV.
+It does not reconstruct notes that started before the window and are still
+sounding at `START_SECONDS`; use a full pre-roll render when exact sustained-note
+state at the cut point matters.
 
 `make render-rtl-core` is the fast algorithm/RTL comparison path: it drives
 `wavetable_render_core` with an ideal one-cycle word responder on the RTL memory

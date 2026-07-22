@@ -54,6 +54,7 @@ struct Args {
   std::string out_dir = "build/render_memory";
   std::string memory_profile = "ddr";
   int key = 60;
+  double start_seconds = 0.0;
   double seconds = 2.0;
   int sample_rate = 48000;
   double adsr_tick_ms = 5.0;

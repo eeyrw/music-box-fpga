@@ -357,6 +357,7 @@ std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
   else
     s << json_string_impl(args.instrument);
   s << ",\n  \"key\": " << args.key
+    << ",\n  \"start_seconds\": " << args.start_seconds
     << ",\n  \"requested_seconds\": " << args.seconds
     << ",\n  \"envelope_mode\": "
     << json_string_impl(args.sample_accurate_envelope ? "sample_accurate" : "control_tick")
@@ -388,6 +389,7 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--midi") args.midi = need("--midi");
     else if (a == "--instrument") args.instrument = need("--instrument");
     else if (a == "--key") args.key = std::stoi(need("--key"));
+    else if (a == "--start-seconds") args.start_seconds = std::stod(need("--start-seconds"));
     else if (a == "--seconds") args.seconds = std::stod(need("--seconds"));
     else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
     else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
@@ -516,9 +518,23 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
                                 std::vector<Region>& regions,
                                 std::vector<int16_t>& wave_memory) {
   double render_seconds = double(sample_count) / double(args.sample_rate);
-  events.erase(std::remove_if(events.begin(), events.end(), [&](const NoteEvent& e) {
-                 return e.time_seconds >= render_seconds;
-               }), events.end());
+  double start_seconds = std::max(0.0, args.start_seconds);
+  double end_seconds = start_seconds + render_seconds;
+  std::vector<NoteEvent> windowed_events;
+  windowed_events.reserve(events.size());
+  for (NoteEvent e : events) {
+    if (e.time_seconds < start_seconds) {
+      if (e.type != NoteEvent::EVENT_NOTE) {
+        e.time_seconds = 0.0;
+        windowed_events.push_back(e);
+      }
+      continue;
+    }
+    if (e.time_seconds >= end_seconds) continue;
+    e.time_seconds -= start_seconds;
+    windowed_events.push_back(e);
+  }
+  events.swap(windowed_events);
   if (events.empty()) throw std::runtime_error("no MIDI events fall inside the requested render window");
 
   std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {

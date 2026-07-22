@@ -244,7 +244,15 @@ model:
 make render-memory SECONDS=1 MEMORY_PROFILE=ddr
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 make render-memory SECONDS=1 MEMORY_PROFILE=parallel-nor
+make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30 MEMORY_PROFILE=ddr
 ```
+
+`START_SECONDS` is a render-window convenience for MIDI-driven harnesses. Events
+inside `[START_SECONDS, START_SECONDS + SECONDS)` are shifted to start at zero;
+non-note MIDI events before `START_SECONDS` are replayed at output time zero so
+controller, pitch-bend, pressure, and similar channel state can affect the
+window. Notes that began before `START_SECONDS` are not recreated, so this mode
+is not a fully faithful preroll snapshot for sustained voices.
 
 Current C++ render profiles:
 

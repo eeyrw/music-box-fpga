@@ -22,6 +22,7 @@ HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 SF2 ?= assets/soundfonts/MT6276.sf2
 INSTRUMENT ?=
 KEY ?= 60
+START_SECONDS ?= 0
 SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 ADSR_TICK_MS ?= 5
@@ -301,7 +302,7 @@ render-reference:
 	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
@@ -324,7 +325,7 @@ render-rtl-core:
 	$(BUILD_DIR)/render_rtl_core_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
@@ -349,7 +350,7 @@ render-memory:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
@@ -375,7 +376,7 @@ render-board-loader:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)

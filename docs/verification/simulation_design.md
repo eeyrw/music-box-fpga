@@ -277,7 +277,16 @@ Render a standard MIDI file:
 
 ```bash
 make render-reference MIDI=song.mid SECONDS=20
+make render-reference MIDI=song.mid START_SECONDS=144 SECONDS=30
 ```
+
+`START_SECONDS` selects a MIDI render window. The shared render preparation keeps
+non-note MIDI events before the window and moves them to output time zero, then
+shifts events in `[START_SECONDS, START_SECONDS + SECONDS)` down by
+`START_SECONDS`. This preserves controller, pitch-bend, channel-pressure, and
+key-pressure state that was established earlier in the file. It does not recreate
+notes that started before the window; exact sustained-note state requires a true
+pre-roll render or an explicit voice-state snapshot.
 
 The run writes:
 
@@ -779,6 +788,7 @@ Render a standard MIDI file:
 ```bash
 make render-memory MIDI=song.mid SECONDS=20
 make render-memory MIDI=song.mid SECONDS=20 MEMORY_PROFILE=parallel-nor
+make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30 MEMORY_PROFILE=ddr
 ```
 
 The C++ harness performs only simulation-side work:

@@ -256,6 +256,56 @@ int main() {
     if (regions[1].bank != 128 || regions[1].preset != "Drums" || regions[1].sample_left != "Kick") {
       throw std::runtime_error("channel-10 note did not select the SF2 percussion bank region");
     }
+    {
+      render::Args window_args = args;
+      window_args.start_seconds = 0.05;
+      window_args.seconds = 0.10;
+      std::vector<render::NoteEvent> window_events;
+      render::NoteEvent pre_note;
+      pre_note.time_seconds = 0.04;
+      pre_note.note = 60;
+      pre_note.on = true;
+      pre_note.velocity = 100;
+      pre_note.channel = 0;
+      window_events.push_back(pre_note);
+      render::NoteEvent pre_control;
+      pre_control.time_seconds = 0.03;
+      pre_control.channel = 0;
+      pre_control.type = render::NoteEvent::EVENT_CONTROL;
+      pre_control.controller = 7;
+      pre_control.value = 90;
+      window_events.push_back(pre_control);
+      render::NoteEvent in_note;
+      in_note.time_seconds = 0.06;
+      in_note.note = 60;
+      in_note.on = true;
+      in_note.velocity = 100;
+      in_note.channel = 0;
+      window_events.push_back(in_note);
+      render::NoteEvent in_off = in_note;
+      in_off.time_seconds = 0.08;
+      in_off.on = false;
+      in_off.velocity = 0;
+      window_events.push_back(in_off);
+      render::NoteEvent after = in_note;
+      after.time_seconds = 0.20;
+      window_events.push_back(after);
+      std::vector<render::Region> window_regions;
+      std::vector<int16_t> window_memory = sf2.file_words;
+      render::prepare_events_and_regions(window_args, sf2, 4800, 480, window_events, window_regions, window_memory);
+      if (window_events.size() != 3) throw std::runtime_error("MIDI start window kept the wrong number of events");
+      if (window_events[0].type != render::NoteEvent::EVENT_CONTROL || window_events[0].time_seconds != 0.0) {
+        throw std::runtime_error("pre-window MIDI control was not replayed at the window start");
+      }
+      if (window_events[1].type != render::NoteEvent::EVENT_NOTE || !window_events[1].on ||
+          std::fabs(window_events[1].time_seconds - 0.01) > 1e-9) {
+        throw std::runtime_error("in-window note-on was not shifted to the render-window origin");
+      }
+      if (window_events[2].type != render::NoteEvent::EVENT_NOTE || window_events[2].on ||
+          std::fabs(window_events[2].time_seconds - 0.03) > 1e-9) {
+        throw std::runtime_error("in-window note-off was not shifted to the render-window origin");
+      }
+    }
     regions[0].preset = "Melodic \"Preset\"";
     regions[0].sample_right = "PianoC\\R";
     regions[0].modulators.push_back({0x00db, 16, 300, 0, 0});
@@ -325,6 +375,7 @@ int main() {
     input_args.midi = "/tmp/example.mid";
     input_args.instrument = "Piano";
     input_args.key = 64;
+    input_args.start_seconds = 144.0;
     input_args.seconds = 12.5;
     input_args.adsr_tick_ms = 1.0;
     std::string input_json = render::render_input_json_fields(input_args, 48);
@@ -332,6 +383,7 @@ int main() {
         input_json.find("\"midi_path\": \"/tmp/example.mid\"") == std::string::npos ||
         input_json.find("\"uses_default_melody\": false") == std::string::npos ||
         input_json.find("\"instrument_override\": \"Piano\"") == std::string::npos ||
+        input_json.find("\"start_seconds\": 144") == std::string::npos ||
         input_json.find("\"envelope_mode\": \"control_tick\"") == std::string::npos ||
         input_json.find("\"adsr_tick_ms_ignored\": false") == std::string::npos ||
         input_json.find("\"adsr_tick_samples\": 48") == std::string::npos ||
@@ -373,6 +425,11 @@ int main() {
     if (!parsed_sample_accurate.sample_accurate_envelope ||
         render::envelope_tick_samples(parsed_sample_accurate) != 1) {
       throw std::runtime_error("sample-accurate envelope argument did not ignore ADSR tick ms");
+    }
+    const char* start_seconds_argv[] = {"render", "--start-seconds", "144", "--seconds", "30"};
+    render::Args parsed_start = render::parse_args(5, const_cast<char**>(start_seconds_argv));
+    if (parsed_start.start_seconds != 144.0 || parsed_start.seconds != 30.0) {
+      throw std::runtime_error("start-seconds argument was not parsed");
     }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");
