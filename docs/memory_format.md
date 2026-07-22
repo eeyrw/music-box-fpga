@@ -151,10 +151,18 @@ The default line size is `LINE_WORDS = 32`.
 - A demand hit returns the requested word from the selected voice's cached lines.
   A miss backpressures the core-side request port, issues one external aligned
   line request, fills one way for that voice, and returns the requested word.
-- The first implementation is demand-only: ordered responses, one outstanding
-  miss, no speculative prefetch, and simple per-voice round-robin replacement.
+- The cache includes a conservative stride prefetch path. When a demand hit
+  reads the second half of a line, the adapter may queue a request for the next
+  aligned line for the same voice. It does not predict loop wrap or sample-region
+  boundaries. Demand requests take priority over queued prefetches, and prefetch
+  requests issue only while the external line interface is otherwise idle.
+  External traffic remains one outstanding line request at a time.
 - Cache observability is exposed as hit, miss, line fill, same-line endpoint hit,
-  and replacement pulses. `response_trace_pulse` and
+  replacement, prefetch issued, prefetch filled, prefetch used, prefetch dropped,
+  and prefetch late pulses. `prefetch_used` fires once when a later demand lookup
+  hits a line filled by prefetch before any ordinary demand hit consumes that
+  line. `prefetch_late` means a demand miss needed a queued or in-flight
+  prefetch line before it became a normal hit. `response_trace_pulse` and
   `response_trace_latency` still report one pulse per returned word.
 
 ## Minimal Line Memory Subsystem
@@ -214,12 +222,16 @@ The real-SF2 smoke run `make render-instrument SECONDS=1 KEY=60` used
 `vibes52`, rendered 48,000 stereo samples, and passed with this memory path.
 
 The focused tests assert cache behavior through external request counts and exact
-PCM output: a same-line cached access must not issue another external line
-request. The C++ MIDI render path records aggregate counters for real render
-traffic in `build/render_memory/memory_stats.json`, including external line
-requests, sequential line requests, response count, average response latency, and
-maximum response latency. The same JSON now includes demand hit, demand miss,
-line fill, same-line endpoint hit, and replacement counts from the RTL cache.
+PCM output: a same-line cached access must not issue another external demand line
+request, second-half hits issue next-line prefetch when the external interface is
+idle, prefetched lines can satisfy later demand hits, demand misses outrank
+queued prefetches, and reset clears prefetch pending state. The C++ MIDI render
+path records aggregate counters for real render traffic in
+`build/render_memory/memory_stats.json`, including external line requests,
+sequential line requests, response count, average response latency, and maximum
+response latency. The same JSON now includes demand hit, demand miss, line fill,
+same-line endpoint hit, replacement, prefetch, render-cycle, deadline-miss, and
+over-budget counts from the RTL cache/render top.
 
 ## External Memory Profiles
 
@@ -290,30 +302,45 @@ renderer interleaves requests from many voices.
 
 A later memory subsystem should evaluate these improvements in order:
 
-1. Add counters for demand hits/misses, same-line endpoint reuse, cross-line
-   endpoint pairs, prefetch issued/used/drop counts, external line requests,
-   response latency, render latency, deadline misses, output underruns, and
-   endpoint/DSP queue occupancy.
-2. Carry `voice_id` and channel/stream locality into the endpoint/cache path, or
-   place the optimized cache inside/near `voice_endpoint_fetch` where that
-   context is already available.
-3. Add per-voice two-line or small set-associative caches so one voice's locality
-   is not immediately evicted by another voice's region. Stereo voices need
-   independent left/right stream tags because linked stereo samples usually live
-   in separate regions.
-4. Detect same-line interpolation endpoints and satisfy both samples from one
-   line fill where possible.
-5. Add stride-aware prefetch using `phase_inc` to fetch the line containing the
-   next interpolated frame, including loop-wrap cases. Demand reads must outrank
-   speculative prefetches, and redundant or no-longer-useful prefetches should be
-   suppressed.
-6. Evaluate larger burst lines, such as 16 or 32 words, after per-voice cache and
-   prefetch counters exist.
+1. Add the next layer of counters that separates voice-scheduler cost from
+   memory-service cost: cross-line endpoint pairs, endpoint queue depth,
+   fetch-slot pressure, DSP context queue occupancy, memory-stall cycles, and
+   DSP-ready/no-context cycles. The current top-level render/deadline counters
+   and cache demand/prefetch counters are already present.
+2. Carry explicit channel/stream locality into the endpoint/cache path. The
+   current cache keys by `voice_id` and line tag only; linked-stereo regions need
+   independent left/right stream tags because left and right samples usually live
+   in separate memory regions but share one voice id.
+3. Move stride prediction closer to `voice_endpoint_fetch`, or add enough request
+   metadata for `voice_line_cache` to know the current channel, endpoint kind,
+   `phase_inc`, next phase, loop range, release state, and sample length. This is
+   the information needed to predict the actual next endpoint line instead of
+   blindly fetching `aligned_addr + LINE_WORDS`.
+4. Replace the current second-half next-line prefetch with phase-aware prefetch:
+   prefetch the next output frame's L0/L1 and, for stereo, R0/R1 endpoint lines;
+   suppress same-line duplicates; handle loop-wrap targets; and stop prefetching
+   no-loop or released voices near the end of the region. Demand reads must
+   continue to outrank speculative prefetches.
+5. Re-run the fixed stress windows and compare `cache_demand_misses`,
+   `prefetch_used / prefetch_issued`, `avg_render_cycles`, `max_render_cycles`,
+   `deadline_misses`, and `over_budget_frames`. Keep PCM exact-match as the
+   gating correctness check.
+6. Evaluate larger burst lines only after phase-aware prefetch counters exist.
+   Larger lines can amortize DDR command overhead, but the current stress result
+   shows enough dropped or unused speculative reads that line-size changes should
+   be justified by render-cycle counters, not hit-rate alone.
 7. Add multi-request tracking so cache fills and prefetches can overlap with
    sequential voice rendering when the single-fill path is measured as the
    remaining limiter.
 8. Add tagged or reordered endpoint assembly only if in-order responses still
    block useful DDR/cache overlap.
+
+Current measurement caveat: in the 144-second Hedwig/SGM DDR stress window, the
+simple next-line prefetch reached only about `11.1%` useful prefetches
+(`887,025 / 7,965,833`) before the run was interrupted near completion. It still
+completed the measured frames without deadline misses, but the low useful ratio
+means the next optimization should improve prefetch targeting before adding more
+speculation.
 
 The generic core-side memory port should still remain a one-word in-order read
 interface for the first optimized pass where practical. Throughput work in the

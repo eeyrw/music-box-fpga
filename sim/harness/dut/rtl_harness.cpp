@@ -122,7 +122,16 @@ void RtlHarness::request_sample(int produced) {
                              " busy=" + std::to_string(int(top_->busy)) +
                              " ext_req_valid=" + std::to_string(int(top_->ext_req_valid)) +
                              " ext_req_ready=" + std::to_string(int(top_->ext_req_ready)) +
-                             " ext_rsp_valid=" + std::to_string(int(top_->ext_rsp_valid)));
+                             " ext_rsp_valid=" + std::to_string(int(top_->ext_rsp_valid)) +
+                             " render_active=" + std::to_string(int(top_->render_active)) +
+                             " render_cycle_counter=" + std::to_string(uint32_t(top_->render_cycle_counter)) +
+                             " render_frame_count=" + std::to_string(uint64_t(top_->render_frame_count)) +
+                             " deadline_misses=" + std::to_string(uint64_t(top_->deadline_miss_count)) +
+                             " prefetch_issued=" + std::to_string(prefetch_issued_) +
+                             " prefetch_filled=" + std::to_string(prefetch_filled_) +
+                             " prefetch_used=" + std::to_string(prefetch_used_) +
+                             " prefetch_dropped=" + std::to_string(prefetch_dropped_) +
+                             " prefetch_late=" + std::to_string(prefetch_late_));
   }
   wav_.write_stereo(int16_t(top_->sample_l), int16_t(top_->sample_r));
 }
@@ -149,6 +158,11 @@ void RtlHarness::tick() {
   if (top_->cache_line_fill_pulse) ++cache_line_fills_;
   if (top_->cache_same_line_endpoint_hit_pulse) ++cache_same_line_endpoint_hits_;
   if (top_->cache_replacement_pulse) ++cache_replacements_;
+  if (top_->cache_prefetch_issued_pulse) ++prefetch_issued_;
+  if (top_->cache_prefetch_filled_pulse) ++prefetch_filled_;
+  if (top_->cache_prefetch_used_pulse) ++prefetch_used_;
+  if (top_->cache_prefetch_dropped_pulse) ++prefetch_dropped_;
+  if (top_->cache_prefetch_late_pulse) ++prefetch_late_;
 
   top_->clk = 0;
   top_->eval();
@@ -200,6 +214,18 @@ void RtlHarness::print_memory_stats() const {
             << " cache_line_fills=" << stats.cache_line_fills
             << " cache_same_line_endpoint_hits=" << stats.cache_same_line_endpoint_hits
             << " cache_replacements=" << stats.cache_replacements
+            << " prefetch_issued=" << stats.prefetch_issued
+            << " prefetch_filled=" << stats.prefetch_filled
+            << " prefetch_used=" << stats.prefetch_used
+            << " prefetch_dropped=" << stats.prefetch_dropped
+            << " prefetch_late=" << stats.prefetch_late
+            << " render_frames=" << stats.render_frames
+            << " avg_render_cycles="
+            << (stats.render_frames == 0 ? 0.0 : double(stats.render_cycle_sum) / double(stats.render_frames))
+            << " max_render_cycles=" << stats.max_render_cycles
+            << " deadline_misses=" << stats.deadline_misses
+            << " over_budget_frames=" << stats.over_budget_frames
+            << " max_over_budget_cycles=" << stats.max_over_budget_cycles
             << " avg_response_latency_cycles=" << avg_latency
             << " max_response_latency_cycles=" << stats.response_latency_max
             << " line_words=" << stats.line_words
@@ -221,6 +247,18 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.cache_line_fills = cache_line_fills_;
   stats.cache_same_line_endpoint_hits = cache_same_line_endpoint_hits_;
   stats.cache_replacements = cache_replacements_;
+  stats.prefetch_issued = prefetch_issued_;
+  stats.prefetch_filled = prefetch_filled_;
+  stats.prefetch_used = prefetch_used_;
+  stats.prefetch_dropped = prefetch_dropped_;
+  stats.prefetch_late = prefetch_late_;
+  stats.render_frames = top_->render_frame_count;
+  stats.last_render_cycles = top_->last_render_cycles;
+  stats.render_cycle_sum = top_->render_cycle_sum;
+  stats.max_render_cycles = top_->max_render_cycles;
+  stats.deadline_misses = top_->deadline_miss_count;
+  stats.over_budget_frames = top_->over_budget_frames;
+  stats.max_over_budget_cycles = top_->over_budget_max_cycles;
   stats.line_words = kLineWords;
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;
   stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;

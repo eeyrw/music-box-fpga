@@ -20,6 +20,8 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats,
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   double avg_latency = stats.responses == 0 ? 0.0 : (double(stats.response_latency_sum) / double(stats.responses));
+  double avg_render_cycles = stats.render_frames == 0 ? 0.0 :
+                             (double(stats.render_cycle_sum) / double(stats.render_frames));
   f << "{\n"
     << "  \"profile\": \"" << stats.profile << "\",\n"
     << "  \"line_words\": " << stats.line_words << ",\n"
@@ -34,6 +36,18 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats,
     << "  \"cache_line_fills\": " << stats.cache_line_fills << ",\n"
     << "  \"cache_same_line_endpoint_hits\": " << stats.cache_same_line_endpoint_hits << ",\n"
     << "  \"cache_replacements\": " << stats.cache_replacements << ",\n"
+    << "  \"prefetch_issued\": " << stats.prefetch_issued << ",\n"
+    << "  \"prefetch_filled\": " << stats.prefetch_filled << ",\n"
+    << "  \"prefetch_used\": " << stats.prefetch_used << ",\n"
+    << "  \"prefetch_dropped\": " << stats.prefetch_dropped << ",\n"
+    << "  \"prefetch_late\": " << stats.prefetch_late << ",\n"
+    << "  \"render_frames\": " << stats.render_frames << ",\n"
+    << "  \"last_render_cycles\": " << stats.last_render_cycles << ",\n"
+    << "  \"avg_render_cycles\": " << avg_render_cycles << ",\n"
+    << "  \"max_render_cycles\": " << stats.max_render_cycles << ",\n"
+    << "  \"deadline_misses\": " << stats.deadline_misses << ",\n"
+    << "  \"over_budget_frames\": " << stats.over_budget_frames << ",\n"
+    << "  \"max_over_budget_cycles\": " << stats.max_over_budget_cycles << ",\n"
     << "  \"avg_response_latency_cycles\": " << avg_latency << ",\n"
     << "  \"max_response_latency_cycles\": " << stats.response_latency_max << ",\n"
     << "  \"register_writes_total\": " << stats.register_writes.total << ",\n"

@@ -666,9 +666,10 @@ Assumptions:
   scheduler states and must snapshot config/runtime, calculate phase/frame
   values, issue endpoint fetch work, and later retire DSP results.
 - The current cached memory-backed path uses `voice_line_cache` with two
-  `LINE_WORDS = 32` cache lines per voice and one outstanding miss. It is still
-  demand-only: ordered responses, no speculative prefetch, and no multiple
-  outstanding line fills.
+  `LINE_WORDS = 32` cache lines per voice and one outstanding external line
+  request. It includes conservative next-line prefetch from second-half demand
+  hits, but no phase-aware loop/channel prediction and no multiple outstanding
+  line fills.
 - The current C++ DDR timing profile is an optimistic DDR-like line-memory
   approximation, not a board-proven MIG timing model: random line latency is 10
   core cycles, sequential line latency is 4 core cycles, and ready gap is 0
@@ -930,36 +931,35 @@ system, the token and reorder policy must make output accumulation deterministic
 
 Potential next steps, in increasing complexity:
 
-1. Add focused throughput counters for issued contexts, retired contexts,
-   DSP-stage occupancy, invalid-slot scan cycles, memory stalls, and per-frame
-   render latency.
+1. Add the remaining focused throughput counters for issued contexts, retired
+   contexts, DSP-stage occupancy, invalid-slot scan cycles, memory stalls, and
+   endpoint/DSP queue pressure. Top-level per-frame render latency, deadline,
+   demand-cache, and prefetch counters already exist.
 2. Add endpoint-fetch observability inside `voice_endpoint_fetch`: word-request
    queue depth, response-metadata occupancy, fetch-slot pressure, DSP context
    queue occupancy, context push/pop counts, and cycles where DSP is ready but no
    complete context is available.
-3. Add cache-policy counters before changing the cache: demand hit/miss counts,
-   same-line endpoint reuse, cross-line endpoint pairs, prefetch issued/used/drop
-   counts, line-fill count, external request count, response latency, deadline
-   misses, and output FIFO underruns.
-4. Carry explicit locality into the memory path. The first version can add
-   `voice_id` and channel metadata to internal endpoint/cache requests while
-   keeping the external core-side word-response behavior ordered. If that creates
-   too much interface churn, place the optimized cache inside or adjacent to
-   `voice_endpoint_fetch`, where `voice_index`, stereo mode, endpoint frames,
-   phase increment, and loop context are already visible.
-5. Replace the global one-line cache with a per-voice cache. Each active voice
-   should have at least two cached lines for the left/mono stream so `L0` and
-   `L1` can cross a line boundary without evicting the current line. Stereo
-   voices need independent left/right stream tags because linked SF2 samples are
-   usually stored in separate regions.
-6. Add demand-priority stride prefetch. After the current endpoint frames and
-   next phase are known, prefetch the line or lines for the next output frame.
-   Suppress redundant prefetches, handle loop-wrap targets, and stop prefetching
-   no-loop or released voices as they approach completion. Demand reads must
-   always outrank speculative prefetches.
-7. Sweep larger DDR line sizes, such as 16 or 32 words, only after the per-voice
-   cache and prefetch counters exist. Larger lines can amortize DDR command
-   overhead but waste bandwidth when many voices read unrelated regions.
+3. Add cross-line endpoint-pair counters so cache policy can distinguish
+   interpolation locality from unrelated inter-voice misses.
+4. Carry explicit stream locality into the memory path. The current cache already
+   keys by `voice_id`; the next useful metadata is left/right channel or stream
+   identity while keeping the external core-side word-response behavior ordered.
+   If that creates too much interface churn, place the optimized cache inside or
+   adjacent to `voice_endpoint_fetch`, where `voice_index`, stereo mode, endpoint
+   frames, phase increment, and loop context are already visible.
+5. Split per-voice cache tags by stream. Each active voice should have at least
+   two cached lines for the left/mono stream so `L0` and `L1` can cross a line
+   boundary without evicting the current line. Stereo voices need independent
+   left/right stream tags because linked SF2 samples are usually stored in
+   separate regions.
+6. Replace blind next-line prefetch with phase-aware demand-priority prefetch.
+   After the current endpoint frames and next phase are known, prefetch the line
+   or lines for the next output frame. Suppress redundant prefetches, handle
+   loop-wrap targets, and stop prefetching no-loop or released voices as they
+   approach completion. Demand reads must always outrank speculative prefetches.
+7. Sweep larger DDR line sizes only after stream-aware cache and phase-aware
+   prefetch counters exist. Larger lines can amortize DDR command overhead but
+   waste bandwidth when many voices read unrelated regions.
 8. Add multiple outstanding line fills when cache misses or prefetches still
    leave the DSP context queue empty. Track each fill with request metadata so
    returning lines update the correct voice/channel cache entry and wake any

@@ -88,6 +88,9 @@ MEMORY_SIM_SOURCES := \
 VOICE_LINE_CACHE_SIM_SOURCES := \
 	sim/tb/tb_voice_line_cache.sv
 
+CACHED_RENDER_COUNTER_SIM_SOURCES := \
+	sim/tb/tb_wavetable_cached_render_core_counters.sv
+
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
@@ -215,6 +218,10 @@ test-rtl-core:
 		--Mdir $(BUILD_DIR)/voice_line_cache_obj_dir --top-module tb_voice_line_cache \
 		$(RTL_SOURCES) $(VOICE_LINE_CACHE_SIM_SOURCES)
 	$(BUILD_DIR)/voice_line_cache_obj_dir/Vtb_voice_line_cache
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/cached_render_counter_obj_dir --top-module tb_wavetable_cached_render_core_counters \
+		$(RTL_SOURCES) $(CACHED_RENDER_COUNTER_SIM_SOURCES)
+	$(BUILD_DIR)/cached_render_counter_obj_dir/Vtb_wavetable_cached_render_core_counters
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)

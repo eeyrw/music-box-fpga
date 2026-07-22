@@ -39,6 +39,11 @@ module tb_wavetable_render_core;
   logic cache_line_fill_pulse;
   logic cache_same_line_endpoint_hit_pulse;
   logic cache_replacement_pulse;
+  logic cache_prefetch_issued_pulse;
+  logic cache_prefetch_filled_pulse;
+  logic cache_prefetch_used_pulse;
+  logic cache_prefetch_dropped_pulse;
+  logic cache_prefetch_late_pulse;
   logic unused_mem_trace;
   int errors = 0;
   int last_latency_cycles = 0;
@@ -62,7 +67,9 @@ module tb_wavetable_render_core;
                             mem_response_trace_pulse | (|mem_response_trace_latency) |
                             cache_demand_hit_pulse | cache_demand_miss_pulse |
                             cache_line_fill_pulse | cache_same_line_endpoint_hit_pulse |
-                            cache_replacement_pulse;
+                            cache_replacement_pulse | cache_prefetch_issued_pulse |
+                            cache_prefetch_filled_pulse | cache_prefetch_used_pulse |
+                            cache_prefetch_dropped_pulse | cache_prefetch_late_pulse;
 
   voice_line_cache #(.LINE_WORDS(LINE_WORDS), .LINES_PER_VOICE(2)) memory_subsystem (
     .clk,
@@ -81,7 +88,12 @@ module tb_wavetable_render_core;
     .demand_miss_pulse(cache_demand_miss_pulse),
     .line_fill_pulse(cache_line_fill_pulse),
     .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
-    .replacement_pulse(cache_replacement_pulse)
+    .replacement_pulse(cache_replacement_pulse),
+    .prefetch_issued_pulse(cache_prefetch_issued_pulse),
+    .prefetch_filled_pulse(cache_prefetch_filled_pulse),
+    .prefetch_used_pulse(cache_prefetch_used_pulse),
+    .prefetch_dropped_pulse(cache_prefetch_dropped_pulse),
+    .prefetch_late_pulse(cache_prefetch_late_pulse)
   );
 
   line_memory_model #(.DEPTH(256), .LINE_WORDS(LINE_WORDS), .LATENCY(4)) memory_model (

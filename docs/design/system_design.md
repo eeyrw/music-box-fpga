@@ -29,9 +29,9 @@ Implemented RTL pieces:
 - Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
   saturated stereo mixing.
 - Abstract one-word memory request/response interface.
-- Per-voice two-line demand cache through `voice_line_cache` on the cached render
-  path, plus a minimal single-line `wave_memory_subsystem` baseline adapter for
-  some common/board wrappers.
+- Per-voice two-line cache through `voice_line_cache` on the cached render path,
+  including conservative next-line stride prefetch, plus a minimal single-line
+  `wave_memory_subsystem` baseline adapter for some common/board wrappers.
 - Output sample FIFO for wrappers that consume rendered PCM frames.
 
 Board/common wrapper pieces under `fpga/common/rtl` provide the current
@@ -258,10 +258,37 @@ Minimum measurements before board migration:
 
 - worst-case `sample_valid - sample_tick` latency,
 - cache hit/miss counts and memory stall cycles,
+- stride-prefetch issued/filled/used/drop/late counts,
 - output FIFO level and underrun count,
 - steady-state `sample_drop_pulse == 0`,
 - steady-state `render_deadline_miss_pulse == 0`,
 - high-polyphony MIDI/SF2 stress cases with stereo samples and release tails.
+
+### Current Stress Snapshot
+
+The first render-counter and conservative stride-prefetch pass was checked with:
+
+```bash
+make render-memory MEMORY_PROFILE=ddr START_SECONDS=144 SECONDS=20 \
+  SF2="/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2" \
+  MIDI="/media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid"
+```
+
+The run was interrupted near completion after `953,371` of `960,000` requested
+stereo frames so the partial JSON could be inspected. The RTL counters had
+completed `953,370` frames with `avg_render_cycles = 1441.78`,
+`max_render_cycles = 2351`, `deadline_misses = 0`, `over_budget_frames = 9`, and
+`max_over_budget_cycles = 268` against the 100 MHz / 48 kHz integer budget of
+`2083` cycles. The cache recorded `21,239,692` demand misses,
+`7,965,833` prefetches issued, and `887,025` prefetches used. That puts the
+first conservative `prefetch_used / prefetch_issued` ratio at about `11.1%`.
+
+Interpretation: the render path now has enough RTL observability to answer the
+deadline question directly. This stress window did not miss deadlines, but it
+still produced a small number of over-budget completed frames and the simple
+second-half next-line prefetch has a low useful-prefetch ratio. The next cache
+work should therefore improve prediction quality and demand stall reduction
+rather than only increasing the number of speculative reads.
 
 ## Board-Level Backlog
 
@@ -299,16 +326,15 @@ the generic RTL to one vendor flow.
    underruns. These counters define the baseline for any 256-voice work.
 
 4. Continue the wavetable-optimized memory subsystem in incremental stages.
-   The first optimized pass now carries `voice_id` locality into
-   `voice_line_cache`, uses two demand-filled lines per voice, satisfies
-   same-line interpolation endpoints from one fill, and gives demand reads strict
-   priority by omitting speculative prefetch. The next pass should use
-   `phase_inc` to prefetch the next output frame's left/right endpoint lines,
-   including loop-wrap cases, and should only add multiple outstanding fills once
-   counters show miss latency is still the bottleneck.
-   Larger DDR burst lines, multiple outstanding line fills, and tagged endpoint
-   assembly are later steps once counters show that the simpler cache/prefetch
-   design cannot meet the 256-stereo target.
+   The first optimized passes now carry `voice_id` locality into
+   `voice_line_cache`, use two lines per voice, satisfy same-line interpolation
+   endpoints from one fill, and add conservative next-line stride prefetch from
+   second-half demand hits. The next pass should use `phase_inc` to prefetch the
+   next output frame's left/right endpoint lines, including loop-wrap cases, and
+   should separate left/right stream locality before making prefetch more
+   aggressive. Larger DDR burst lines, multiple outstanding line fills, and
+   tagged endpoint assembly are later steps once counters show that the simpler
+   cache/prefetch design cannot meet the 256-stereo target.
 
 5. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a

@@ -73,6 +73,25 @@ module board_loader_render_tops #(
   smart_artix_pkg::mig_app_write_data_t loader_mig_write_data;
   smart_artix_pkg::mig_app_response_t loader_mig_response;
   logic loader_sd_transfer_clock_ready;
+  logic core_cache_demand_hit_pulse;
+  logic core_cache_demand_miss_pulse;
+  logic core_cache_line_fill_pulse;
+  logic core_cache_same_line_endpoint_hit_pulse;
+  logic core_cache_replacement_pulse;
+  logic core_cache_prefetch_issued_pulse;
+  logic core_cache_prefetch_filled_pulse;
+  logic core_cache_prefetch_used_pulse;
+  logic core_cache_prefetch_dropped_pulse;
+  logic core_cache_prefetch_late_pulse;
+  logic core_render_active;
+  logic [31:0] core_render_cycle_counter;
+  logic [31:0] core_last_render_cycles;
+  logic [31:0] core_max_render_cycles;
+  logic [63:0] core_render_cycle_sum;
+  logic [63:0] core_render_frame_count;
+  logic [63:0] core_deadline_miss_count;
+  logic [63:0] core_over_budget_frames;
+  logic [31:0] core_over_budget_max_cycles;
 
   assign mig_app_addr = MIG_ADDR_WIDTH'(loader_mig_command.addr);
   assign mig_app_cmd = loader_mig_command.cmd;
@@ -148,11 +167,49 @@ module board_loader_render_tops #(
     .ext_rsp_valid(core_ext_rsp_valid),
     .ext_rsp_data(core_ext_rsp_data),
     .mem_response_trace_pulse(core_mem_response_trace_pulse),
-    .mem_response_trace_latency(core_mem_response_trace_latency)
+    .mem_response_trace_latency(core_mem_response_trace_latency),
+    .cache_demand_hit_pulse(core_cache_demand_hit_pulse),
+    .cache_demand_miss_pulse(core_cache_demand_miss_pulse),
+    .cache_line_fill_pulse(core_cache_line_fill_pulse),
+    .cache_same_line_endpoint_hit_pulse(core_cache_same_line_endpoint_hit_pulse),
+    .cache_replacement_pulse(core_cache_replacement_pulse),
+    .cache_prefetch_issued_pulse(core_cache_prefetch_issued_pulse),
+    .cache_prefetch_filled_pulse(core_cache_prefetch_filled_pulse),
+    .cache_prefetch_used_pulse(core_cache_prefetch_used_pulse),
+    .cache_prefetch_dropped_pulse(core_cache_prefetch_dropped_pulse),
+    .cache_prefetch_late_pulse(core_cache_prefetch_late_pulse),
+    .render_active(core_render_active),
+    .render_cycle_counter(core_render_cycle_counter),
+    .last_render_cycles(core_last_render_cycles),
+    .max_render_cycles(core_max_render_cycles),
+    .render_cycle_sum(core_render_cycle_sum),
+    .render_frame_count(core_render_frame_count),
+    .deadline_miss_count(core_deadline_miss_count),
+    .over_budget_frames(core_over_budget_frames),
+    .over_budget_max_cycles(core_over_budget_max_cycles)
   );
 
 /* verilator lint_off UNUSEDSIGNAL */
   logic unused_loader_status;
 /* verilator lint_on UNUSEDSIGNAL */
-  assign unused_loader_status = loader_sd_transfer_clock_ready;
+  assign unused_loader_status = loader_sd_transfer_clock_ready |
+                                core_cache_demand_hit_pulse |
+                                core_cache_demand_miss_pulse |
+                                core_cache_line_fill_pulse |
+                                core_cache_same_line_endpoint_hit_pulse |
+                                core_cache_replacement_pulse |
+                                core_cache_prefetch_issued_pulse |
+                                core_cache_prefetch_filled_pulse |
+                                core_cache_prefetch_used_pulse |
+                                core_cache_prefetch_dropped_pulse |
+                                core_cache_prefetch_late_pulse |
+                                core_render_active |
+                                (|core_render_cycle_counter) |
+                                (|core_last_render_cycles) |
+                                (|core_max_render_cycles) |
+                                (|core_render_cycle_sum) |
+                                (|core_render_frame_count) |
+                                (|core_deadline_miss_count) |
+                                (|core_over_budget_frames) |
+                                (|core_over_budget_max_cycles);
 endmodule

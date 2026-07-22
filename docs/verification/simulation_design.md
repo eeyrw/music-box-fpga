@@ -813,11 +813,16 @@ build/render_memory/memory_stats.json
 The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 `sequential_latency_cycles`, `ready_gap_cycles`, `external_line_requests`,
 `sequential_line_requests`, `responses`, cache demand hit/miss/fill/replacement
-counters, `avg_response_latency_cycles`, `max_response_latency_cycles`, and the
-same register-write breakdown used by `render-rtl-core`. The supported read-only
-timing profiles are `ddr`, `sdram`, and `parallel-nor`. These profiles apply only
-to memory-backed render targets such as `render-memory` and
-`render-board-loader`.
+counters, prefetch issued/filled/used/dropped/late counters,
+`render_frames`, `last_render_cycles`, `avg_render_cycles`,
+`max_render_cycles`, `deadline_misses`, `over_budget_frames`,
+`max_over_budget_cycles`, `avg_response_latency_cycles`,
+`max_response_latency_cycles`, and the same register-write breakdown used by
+`render-rtl-core`. The render-cycle and deadline fields are read from RTL
+counters exposed by `wavetable_cached_render_core`; the average is derived from
+the RTL frame count and cycle sum. The supported read-only timing profiles are
+`ddr`, `sdram`, and `parallel-nor`. These profiles apply only to memory-backed
+render targets such as `render-memory` and `render-board-loader`.
 
 The `ddr` profile is a deliberately simple, optimistic DDR-like line timing
 profile: 10 cycles for random lines, 4 cycles for sequential lines, and no ready

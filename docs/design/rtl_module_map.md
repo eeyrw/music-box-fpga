@@ -225,12 +225,15 @@ core one-word PCM read request
   -> one-word PCM response
 ```
 
-It is intentionally demand-only in this milestone: ordered responses, one
-outstanding miss, no prefetch. `wave_memory_subsystem` remains as the older
-single-line baseline adapter used by some common/board wrapper paths. The
-renderer still issues absolute word addresses with a voice id, and responses
-return in accepted-request order. Future cache policy work should keep phase and
-DSP arithmetic out of this adapter.
+It keeps ordered one-word responses and one outstanding external line request,
+with demand misses taking priority over conservative next-line prefetch. A
+prefetch can be queued after a demand hit reaches the second half of a cache
+line; phase-aware loop/channel prediction is deferred. `wave_memory_subsystem`
+remains as the older single-line baseline adapter used by some common/board
+wrapper paths. The renderer still issues absolute word addresses with a voice id,
+and responses return in accepted-request order. Future cache policy work should
+keep DSP arithmetic out of this adapter; phase-aware prefetch may need metadata
+from `voice_endpoint_fetch`.
 
 ## Audio Layer
 

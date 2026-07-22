@@ -21,6 +21,11 @@ module tb_voice_line_cache;
   logic line_fill_pulse;
   logic same_line_endpoint_hit_pulse;
   logic replacement_pulse;
+  logic prefetch_issued_pulse;
+  logic prefetch_filled_pulse;
+  logic prefetch_used_pulse;
+  logic prefetch_dropped_pulse;
+  logic prefetch_late_pulse;
 
   pcm_t memory [MEMORY_DEPTH];
   logic line_pending;
@@ -33,6 +38,12 @@ module tb_voice_line_cache;
   int fill_count = 0;
   int same_line_hit_count = 0;
   int replacement_count = 0;
+  int prefetch_issued_count = 0;
+  int prefetch_filled_count = 0;
+  int prefetch_used_count = 0;
+  int prefetch_dropped_count = 0;
+  int prefetch_late_count = 0;
+  logic [ADDR_WIDTH-1:0] last_ext_req_addr;
   int backpressure_timeout;
   logic unused_trace;
 
@@ -60,7 +71,12 @@ module tb_voice_line_cache;
     .demand_miss_pulse,
     .line_fill_pulse,
     .same_line_endpoint_hit_pulse,
-    .replacement_pulse
+    .replacement_pulse,
+    .prefetch_issued_pulse,
+    .prefetch_filled_pulse,
+    .prefetch_used_pulse,
+    .prefetch_dropped_pulse,
+    .prefetch_late_pulse
   );
 
   always_ff @(posedge clk) begin
@@ -76,6 +92,12 @@ module tb_voice_line_cache;
       fill_count <= 0;
       same_line_hit_count <= 0;
       replacement_count <= 0;
+      prefetch_issued_count <= 0;
+      prefetch_filled_count <= 0;
+      prefetch_used_count <= 0;
+      prefetch_dropped_count <= 0;
+      prefetch_late_count <= 0;
+      last_ext_req_addr <= '0;
     end else begin
       ext_rsp_valid <= 1'b0;
       if (ext_req_valid && ext_req_ready) begin
@@ -83,6 +105,7 @@ module tb_voice_line_cache;
         line_pending_addr <= ext_req_addr;
         line_countdown <= 2;
         ext_request_count <= ext_request_count + 1;
+        last_ext_req_addr <= ext_req_addr;
       end
       if (line_pending) begin
         if (line_countdown == 0) begin
@@ -107,6 +130,16 @@ module tb_voice_line_cache;
         same_line_hit_count <= same_line_hit_count + 1;
       if (replacement_pulse)
         replacement_count <= replacement_count + 1;
+      if (prefetch_issued_pulse)
+        prefetch_issued_count <= prefetch_issued_count + 1;
+      if (prefetch_filled_pulse)
+        prefetch_filled_count <= prefetch_filled_count + 1;
+      if (prefetch_used_pulse)
+        prefetch_used_count <= prefetch_used_count + 1;
+      if (prefetch_dropped_pulse)
+        prefetch_dropped_count <= prefetch_dropped_count + 1;
+      if (prefetch_late_pulse)
+        prefetch_late_count <= prefetch_late_count + 1;
     end
   end
 
@@ -151,6 +184,36 @@ module tb_voice_line_cache;
       @(negedge clk);
       if (got != expected) begin
         $error("%s got %0d expected %0d", name, got, expected);
+        errors++;
+      end
+    end
+  endtask
+
+  task automatic wait_for_prefetch_issued(input int expected);
+    int timeout;
+    begin
+      timeout = 0;
+      while (prefetch_issued_count < expected && timeout < 50) begin
+        @(negedge clk);
+        timeout++;
+      end
+      if (prefetch_issued_count != expected) begin
+        $error("prefetch issued got %0d expected %0d", prefetch_issued_count, expected);
+        errors++;
+      end
+    end
+  endtask
+
+  task automatic wait_for_prefetch_filled(input int expected);
+    int timeout;
+    begin
+      timeout = 0;
+      while (prefetch_filled_count < expected && timeout < 50) begin
+        @(negedge clk);
+        timeout++;
+      end
+      if (prefetch_filled_count != expected) begin
+        $error("prefetch filled got %0d expected %0d", prefetch_filled_count, expected);
         errors++;
       end
     end
@@ -221,6 +284,52 @@ module tb_voice_line_cache;
     repeat (2) @(negedge clk);
     read_word('0, 32'd40, -20);
     expect_count("reset invalidates cached lines", ext_request_count, 1);
+    expect_count("reset clears prefetch issued", prefetch_issued_count, 0);
+    expect_count("reset clears prefetch filled", prefetch_filled_count, 0);
+    expect_count("reset clears prefetch used", prefetch_used_count, 0);
+
+    read_word('0, 32'd44, 8);
+    repeat (6) @(negedge clk);
+    expect_count("first-half hit does not prefetch", prefetch_issued_count, 0);
+    expect_count("first-half hit external requests", ext_request_count, 1);
+
+    read_word('0, 32'd52, 64);
+    wait_for_prefetch_issued(1);
+    wait_for_prefetch_filled(1);
+    expect_count("prefetch adds one external request", ext_request_count, 2);
+
+    read_word('0, 32'd70, 190);
+    expect_count("prefetched next line demand hit", hit_count, 3);
+    expect_count("prefetched next line used", prefetch_used_count, 1);
+    expect_count("prefetched next line no demand miss", ext_request_count, 2);
+
+    rst = 1'b1;
+    repeat (2) @(negedge clk);
+    rst = 1'b0;
+    repeat (2) @(negedge clk);
+    read_word('0, 32'd40, -20);
+    read_word('0, 32'd52, 64);
+    read_word('0, 32'd96, 372);
+    if (last_ext_req_addr != 32'd96) begin
+      $error("demand miss did not outrank pending prefetch: last ext addr %0d expected 96",
+             last_ext_req_addr);
+      errors++;
+    end
+
+    rst = 1'b1;
+    repeat (2) @(negedge clk);
+    rst = 1'b0;
+    repeat (2) @(negedge clk);
+    read_word('0, 32'd40, -20);
+    read_word('0, 32'd52, 64);
+    wait_for_prefetch_issued(1);
+    rst = 1'b1;
+    repeat (2) @(negedge clk);
+    rst = 1'b0;
+    repeat (2) @(negedge clk);
+    expect_count("reset clears in-flight prefetch issued", prefetch_issued_count, 0);
+    read_word('0, 32'd70, 190);
+    expect_count("reset drops in-flight prefetched line", miss_count, 1);
 
     if (response_trace_latency === 16'hxxxx) begin
       $error("response trace latency contains unknown bits");
