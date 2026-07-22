@@ -136,6 +136,7 @@ struct Region {
   int attack_ticks = 1;
   int decay_ticks = 1;
   int release_ticks = 1;
+  bool attack_sub_tick = false;
   int attack_step = kQ15Full;
   int decay_step = kQ15Full;
   int release_step = kQ15Full;
@@ -157,6 +158,7 @@ struct Region {
   int mod_env_attack_ticks = 1;
   int mod_env_decay_ticks = 1;
   int mod_env_release_ticks = 1;
+  bool mod_env_attack_sub_tick = false;
   int mod_env_attack_step = kQ15Full;
   int mod_env_decay_step = kQ15Full;
   int mod_env_release_step = kQ15Full;

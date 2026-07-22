@@ -162,6 +162,7 @@ void write_modulation_json(std::ostream& out, const Region& r) {
       << ", \"attack_ticks\": " << r.mod_env_attack_ticks
       << ", \"decay_ticks\": " << r.mod_env_decay_ticks
       << ", \"release_ticks\": " << r.mod_env_release_ticks
+      << ", \"attack_sub_tick\": " << (r.mod_env_attack_sub_tick ? "true" : "false")
       << ", \"attack_step\": " << r.mod_env_attack_step
       << ", \"decay_step\": " << r.mod_env_decay_step
       << ", \"release_step\": " << r.mod_env_release_step
@@ -457,6 +458,7 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
       << ", \"attack_ticks\": " << r.attack_ticks
       << ", \"decay_ticks\": " << r.decay_ticks
       << ", \"release_ticks\": " << r.release_ticks
+      << ", \"attack_sub_tick\": " << (r.attack_sub_tick ? "true" : "false")
       << ", \"attack_step\": " << r.attack_step
       << ", \"decay_step\": " << r.decay_step
       << ", \"release_step\": " << r.release_step
@@ -1180,6 +1182,19 @@ void McuModel::note_on(const NoteEvent& event) {
                                           kGenInitialAttenuation, true, false);
   voices_[slot].target = attenuation_to_q15(note_attenuation);
   voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
+  if (r.delay_ticks == 0 && r.attack_sub_tick) {
+    voices_[slot].level = voices_[slot].target;
+    r.initial_envelope = voices_[slot].level;
+    voices_[slot].ticks_remaining = r.hold_ticks;
+    voices_[slot].env_stage_tick = 0;
+    voices_[slot].state = r.hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
+  }
+  if (r.mod_env_delay_ticks == 0 && r.mod_env_attack_sub_tick) {
+    voices_[slot].mod_env_level = kQ15Full;
+    voices_[slot].mod_env_ticks_remaining = r.mod_env_hold_ticks;
+    voices_[slot].mod_env_stage_tick = 0;
+    voices_[slot].mod_env_state = r.mod_env_hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
+  }
   prime_runtime_envelope_level(slot, r.initial_envelope);
 
   const ChannelState& channel = channels_[event.channel & 0x0f];

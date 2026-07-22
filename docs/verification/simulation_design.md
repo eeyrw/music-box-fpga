@@ -937,6 +937,13 @@ to 5 ms. This is intentionally simpler than a sample-rate SF2 envelope, but it
 exercises the hardware contract: runtime `ENVELOPE_RUNTIME` writes update
 runtime amplitude without commit and without reloading phase.
 
+When a volume or modulation envelope attack time is shorter than the active
+ADSR/control tick and the corresponding delay is not active, the MCU model folds
+that sub-tick attack into the Note On state. Volume envelopes commit the
+post-attack level as the initial runtime envelope; modulation envelopes start
+from full modulation level before the first runtime pitch/filter update. Region
+JSON records these cases with `attack_sub_tick`.
+
 The C++ render harnesses also accept a sample-accurate envelope mode. Set
 `SAMPLE_ACCURATE_ENVELOPE=1` on the Make command line, or pass
 `--sample-accurate-envelope` to a built harness, to convert SF2 envelope times

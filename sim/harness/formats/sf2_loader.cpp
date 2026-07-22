@@ -868,6 +868,10 @@ int envelope_ticks(double seconds, int tick_samples, int sample_rate) {
   return std::max(0, int(std::round(seconds * sample_rate / tick_samples)));
 }
 
+bool envelope_time_is_sub_tick(double seconds, int tick_samples, int sample_rate) {
+  return seconds < (double(tick_samples) / double(sample_rate));
+}
+
 uint32_t lfo_step(int freq_cents, int tick_samples, int sample_rate) {
   double hz = 8.176 * std::pow(2.0, double(signed_amount(freq_cents)) / 1200.0);
   double cycles_per_tick = hz * double(tick_samples) / double(sample_rate);
@@ -914,6 +918,7 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
   region.mod_env_decay_ticks = scaled_envelope_tick_count(d, double(mod_sustain_drop) / 1000.0,
                                                           tick_samples, sample_rate);
   region.mod_env_release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
+  region.mod_env_attack_sub_tick = envelope_time_is_sub_tick(a, tick_samples, sample_rate);
   region.mod_env_attack_step = envelope_step(a, tick_samples, sample_rate);
   region.mod_env_decay_step = envelope_step(d, tick_samples, sample_rate);
   region.mod_env_release_step = envelope_step(r, tick_samples, sample_rate);
@@ -943,6 +948,7 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
   region.decay_ticks = scaled_envelope_tick_count(d, double(std::min(1000, vol_sustain_cb)) / 1000.0,
                                                   tick_samples, sample_rate);
   region.release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
+  region.attack_sub_tick = envelope_time_is_sub_tick(a, tick_samples, sample_rate);
   region.attack_step = envelope_step(a, tick_samples, sample_rate);
   region.decay_step = envelope_step(d, tick_samples, sample_rate);
   region.release_step = envelope_step(r, tick_samples, sample_rate);

@@ -852,6 +852,62 @@ int main() {
       throw std::runtime_error("volume envelope release did not use a dB-linear curve");
     }
 
+    render::Region folded_attack_region;
+    folded_attack_region.length = 4;
+    folded_attack_region.loop_end = 4;
+    folded_attack_region.attack_ticks = 1;
+    folded_attack_region.attack_sub_tick = true;
+    folded_attack_region.gain_l = 0x4000;
+    folded_attack_region.gain_r = 0x4000;
+    std::vector<render::Region> folded_attack_regions{folded_attack_region};
+    RecordingSink folded_attack_sink;
+    render::McuModel folded_attack_mcu(folded_attack_sink, folded_attack_regions);
+    render::NoteEvent folded_attack_note;
+    folded_attack_note.on = true;
+    folded_attack_note.velocity = 127;
+    folded_attack_note.phase_inc = render::kPhaseFracScale;
+    folded_attack_mcu.handle_event(folded_attack_note);
+    if (folded_attack_sink.last_initial_envelope != render::kQ15Full) {
+      throw std::runtime_error("sub-tick volume attack was not folded into Note On initial envelope");
+    }
+
+    render::Region one_tick_attack_region = folded_attack_region;
+    one_tick_attack_region.attack_sub_tick = false;
+    std::vector<render::Region> one_tick_attack_regions{one_tick_attack_region};
+    RecordingSink one_tick_attack_sink;
+    render::McuModel one_tick_attack_mcu(one_tick_attack_sink, one_tick_attack_regions);
+    one_tick_attack_mcu.handle_event(folded_attack_note);
+    if (one_tick_attack_sink.last_initial_envelope != 0) {
+      throw std::runtime_error("one-tick non-sub-tick volume attack was folded into Note On initial envelope");
+    }
+
+    render::Region delayed_attack_region = folded_attack_region;
+    delayed_attack_region.delay_ticks = 1;
+    std::vector<render::Region> delayed_attack_regions{delayed_attack_region};
+    RecordingSink delayed_attack_sink;
+    render::McuModel delayed_attack_mcu(delayed_attack_sink, delayed_attack_regions);
+    delayed_attack_mcu.handle_event(folded_attack_note);
+    if (delayed_attack_sink.last_initial_envelope != 0) {
+      throw std::runtime_error("delayed volume attack was folded before the delay phase");
+    }
+
+    render::Region folded_mod_attack_region;
+    folded_mod_attack_region.length = 4;
+    folded_mod_attack_region.loop_end = 4;
+    folded_mod_attack_region.phase_inc = render::kPhaseFracScale;
+    folded_mod_attack_region.mod_env_attack_ticks = 4;
+    folded_mod_attack_region.mod_env_attack_sub_tick = true;
+    folded_mod_attack_region.mod_env_to_pitch = 1200;
+    folded_mod_attack_region.gain_l = 0x4000;
+    folded_mod_attack_region.gain_r = 0x4000;
+    std::vector<render::Region> folded_mod_attack_regions{folded_mod_attack_region};
+    RecordingSink folded_mod_attack_sink;
+    render::McuModel folded_mod_attack_mcu(folded_mod_attack_sink, folded_mod_attack_regions);
+    folded_mod_attack_mcu.handle_event(folded_attack_note);
+    if (folded_mod_attack_sink.last_phase_inc <= render::kPhaseFracScale * 19 / 10) {
+      throw std::runtime_error("sub-tick modulation attack was not folded before initial controls");
+    }
+
     render::Region pan_region;
     pan_region.length = 4;
     pan_region.loop_end = 4;
