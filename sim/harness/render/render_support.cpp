@@ -363,9 +363,12 @@ std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
     << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
     << ",\n  \"adsr_tick_ms_ignored\": " << (args.sample_accurate_envelope ? "true" : "false")
     << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
-    << ",\n  \"render_num_voices\": " << kNumVoices
-    << ",\n  \"memory_profile\": " << json_string_impl(args.memory_profile);
+    << ",\n  \"render_num_voices\": " << kNumVoices;
   return s.str();
+}
+
+std::string memory_profile_json_field(const Args& args) {
+  return "  \"memory_profile\": " + json_string_impl(args.memory_profile);
 }
 
 int envelope_tick_samples(const Args& args) {

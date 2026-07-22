@@ -263,6 +263,10 @@ parses the same SF2 and MIDI inputs as the RTL harnesses, runs the shared MCU
 policy model, renders through `ReferenceSynth`, and writes a WAV plus the region
 and diagnostics summary.
 
+This target does not instantiate or parameterize a memory model. `ReferenceSynth`
+reads sample words directly from the in-memory SF2 word vector, so
+`MEMORY_PROFILE` and external-memory latency settings do not apply.
+
 Run the built-in smoke melody:
 
 ```bash
@@ -332,14 +336,16 @@ model, and drives two backends from the same control writes:
 
 - `ReferenceSynth`: a C++ fixed-point model of the current wavetable playback,
   interpolation, Q1.15 gain/envelope, loop, and saturation rules.
-- `CoreRtlHarness`: a Verilated `wavetable_render_core` instance with a direct one-word
-  memory response model.
+- `CoreRtlHarness`: a Verilated `wavetable_render_core` instance with an ideal
+  one-cycle word responder on the RTL memory port.
 
 This path intentionally skips SPI, I2S, `wave_memory_subsystem`, and external
-storage profiles. Its primary job is to answer one question quickly: does the RTL
-core produce the same integer PCM stream as the project reference algorithm? It
-also writes the matched RTL PCM stream as a WAV so real MIDI renders can be
-auditioned without using the slower memory harness.
+storage profiles. It does not use `MEMORY_PROFILE`, DDR/SDRAM/NOR latency
+parameters, cache hit/miss behavior, or request backpressure. Its primary job is
+to answer one question quickly: does the RTL core produce the same integer PCM
+stream as the project reference algorithm? It also writes the matched RTL PCM
+stream as a WAV so real MIDI renders can be auditioned without using the slower
+memory harness.
 
 Run the built-in smoke melody:
 
@@ -463,9 +469,11 @@ included.
 The summary JSON also records render provenance fields that are useful when
 comparing audition runs: `render_target`, `rtl_top`, `sf2_path`, `midi_path`,
 `uses_default_melody`, `instrument_override`, `key`, `requested_seconds`,
-`adsr_tick_ms`, `adsr_tick_samples`, `render_num_voices`, and
-`memory_profile`. Each region records `volume_envelope` and `loop_mode` in
-addition to addressing, gain, filter, and modulation data.
+`adsr_tick_ms`, `adsr_tick_samples`, and `render_num_voices`. Memory-backed
+targets add `memory_profile` because they instantiate an external-memory timing
+model. Pure C++ reference and direct RTL-core comparison targets omit it. Each
+region records `volume_envelope` and `loop_mode` in addition to addressing,
+gain, filter, and modulation data.
 
 Any sample mismatch reports the first few differing frames and exits nonzero.
 The current comparison is exact; it does not allow tolerance windows.
@@ -680,7 +688,8 @@ The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 `sequential_line_requests`, `responses`, `avg_response_latency_cycles`,
 `max_response_latency_cycles`, and the same register-write breakdown used by
 `render-rtl-core`. The supported read-only timing profiles are `ddr`, `sdram`, and
-`parallel-nor`.
+`parallel-nor`. These profiles apply only to memory-backed render targets such as
+`render-memory` and `render-board-loader`.
 
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.

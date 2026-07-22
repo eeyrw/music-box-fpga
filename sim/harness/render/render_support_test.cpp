@@ -338,6 +338,12 @@ int main() {
         input_json.find("\"render_num_voices\": ") == std::string::npos) {
       throw std::runtime_error("input JSON fields did not include render provenance");
     }
+    if (input_json.find("memory_profile") != std::string::npos) {
+      throw std::runtime_error("generic input JSON fields included memory profile");
+    }
+    if (render::memory_profile_json_field(input_args).find("\"memory_profile\": \"ddr\"") == std::string::npos) {
+      throw std::runtime_error("memory profile JSON field did not record memory profile");
+    }
     if (render::envelope_tick_samples(input_args) != 48) {
       throw std::runtime_error("control-tick envelope sample count was not derived from ADSR ms");
     }

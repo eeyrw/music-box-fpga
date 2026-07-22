@@ -201,7 +201,8 @@ profiles are not full DDR, SDRAM, or NOR controllers; they approximate line-read
 latency, faster sequential line access, and request backpressure while preserving
 the same RTL memory-subsystem interface.
 
-`make render-memory` accepts `MEMORY_PROFILE`:
+`make render-memory` accepts `MEMORY_PROFILE` for the external line-memory timing
+model:
 
 ```bash
 make render-memory SECONDS=1 MEMORY_PROFILE=ddr
@@ -233,6 +234,11 @@ The SystemVerilog `line_memory_model` exposes matching parameters for focused
 tests: `RANDOM_LATENCY`, `SEQUENTIAL_LATENCY`, and `READY_GAP`. Its legacy
 `LATENCY` parameter remains as the default for all three values when a test does
 not need a specific memory profile.
+
+The pure C++ `render-reference` target and the direct `render-rtl-core`
+comparison target do not use these profiles. The reference synthesizer reads from
+an in-memory word vector, and `render-rtl-core` serves the RTL memory port with an
+ideal one-cycle word responder only to keep the core interface active.
 
 ## Future Wavetable-Optimized Memory Subsystem
 

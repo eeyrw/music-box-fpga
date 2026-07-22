@@ -66,7 +66,8 @@ int main(int argc, char** argv) {
                           sample_count, int(events.size()),
                           "  \"render_target\": \"render-memory\""
                           ",\n  \"rtl_top\": \"wavetable_cached_render_core\""
-                          ",\n" + render::render_input_json_fields(args, adsr_tick_samples));
+                          ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
+                          ",\n" + render::memory_profile_json_field(args));
 
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
     render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);

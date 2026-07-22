@@ -98,6 +98,7 @@ int main(int argc, char** argv) {
     std::string extra = "  \"render_target\": \"render-board-loader\""
         ",\n  \"rtl_top\": \"board_loader_render_tops\""
         ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
+        ",\n" + render::memory_profile_json_field(args) +
         ",\n  \"loader_cycles\": " + std::to_string(board.loader_cycles()) +
         ",\n  \"sd_image_bytes\": " + std::to_string(sd_image.size()) +
         ",\n  \"sf2_size_bytes\": " + std::to_string(sf2_bytes.size()) +

@@ -15,6 +15,7 @@ Args parse_args(int argc, char** argv);
 int envelope_tick_samples(const Args& args);
 std::string json_string(const std::string& value);
 std::string render_input_json_fields(const Args& args, int adsr_tick_samples);
+std::string memory_profile_json_field(const Args& args);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events,
                    const std::string& extra_fields = "");

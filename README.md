@@ -230,10 +230,12 @@ shared MCU policy model, renders with `ReferenceSynth`, and writes
 `build/render_reference/out.wav` plus
 `build/render_reference/reference_render_config.json`.
 
-`make render-rtl-core` is the fast algorithm/RTL comparison path: it drives `wavetable_render_core`
-with a direct word-memory model and compares every RTL output sample against a C++
-fixed-point reference implementation. It also writes `build/render_rtl_core/out.wav`
-for quick listening after the exact comparison passes.
+`make render-rtl-core` is the fast algorithm/RTL comparison path: it drives
+`wavetable_render_core` with an ideal one-cycle word responder on the RTL memory
+port and compares every RTL output sample against a C++ fixed-point reference
+implementation. It does not use `MEMORY_PROFILE` or any external-memory timing
+model. It also writes `build/render_rtl_core/out.wav` for quick listening after
+the exact comparison passes.
 
 `make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
 runtime, models MCU-side note allocation and Q1.15 ADSR envelope writes, and
@@ -241,8 +243,8 @@ drives `wavetable_cached_render_core` through the register interface. Wave reads
 through the line-cache memory subsystem before the C++ external line-memory model
 responds. The output WAV is `build/render_memory/out.wav`, and memory
 hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
-`MEMORY_PROFILE` selects a read-only external memory timing model: `ddr`, `sdram`,
-or `parallel-nor`.
+`MEMORY_PROFILE` selects a read-only external memory timing model for this target:
+`ddr`, `sdram`, or `parallel-nor`.
 
 `make render-board-loader` verifies the board asset-load path before rendering. It
 constructs a raw SD image from the selected SF2, drives the native-SD command/data
