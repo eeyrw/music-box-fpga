@@ -57,6 +57,7 @@ struct Args {
   double seconds = 2.0;
   int sample_rate = 48000;
   double adsr_tick_ms = 5.0;
+  bool sample_accurate_envelope = false;
 };
 
 struct NoteEvent {

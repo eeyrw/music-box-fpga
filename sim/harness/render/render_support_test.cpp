@@ -332,17 +332,41 @@ int main() {
         input_json.find("\"midi_path\": \"/tmp/example.mid\"") == std::string::npos ||
         input_json.find("\"uses_default_melody\": false") == std::string::npos ||
         input_json.find("\"instrument_override\": \"Piano\"") == std::string::npos ||
+        input_json.find("\"envelope_mode\": \"control_tick\"") == std::string::npos ||
+        input_json.find("\"adsr_tick_ms_ignored\": false") == std::string::npos ||
         input_json.find("\"adsr_tick_samples\": 48") == std::string::npos ||
         input_json.find("\"render_num_voices\": ") == std::string::npos) {
       throw std::runtime_error("input JSON fields did not include render provenance");
     }
+    if (render::envelope_tick_samples(input_args) != 48) {
+      throw std::runtime_error("control-tick envelope sample count was not derived from ADSR ms");
+    }
+    input_args.sample_accurate_envelope = true;
+    if (render::envelope_tick_samples(input_args) != 1) {
+      throw std::runtime_error("sample-accurate envelope mode did not force one-sample ticks");
+    }
+    input_json = render::render_input_json_fields(input_args, 1);
+    if (input_json.find("\"envelope_mode\": \"sample_accurate\"") == std::string::npos ||
+        input_json.find("\"adsr_tick_ms_ignored\": true") == std::string::npos ||
+        input_json.find("\"adsr_tick_samples\": 1") == std::string::npos) {
+      throw std::runtime_error("input JSON fields did not record sample-accurate envelope mode");
+    }
     input_args.midi.clear();
     input_args.instrument.clear();
+    input_args.sample_accurate_envelope = false;
     input_json = render::render_input_json_fields(input_args, 240);
     if (input_json.find("\"midi_path\": null") == std::string::npos ||
         input_json.find("\"uses_default_melody\": true") == std::string::npos ||
         input_json.find("\"instrument_override\": null") == std::string::npos) {
       throw std::runtime_error("input JSON fields did not mark default inputs");
+    }
+    const char* sample_accurate_argv[] = {"render", "--sample-rate", "48000",
+                                          "--adsr-tick-ms", "123",
+                                          "--sample-accurate-envelope"};
+    render::Args parsed_sample_accurate = render::parse_args(6, const_cast<char**>(sample_accurate_argv));
+    if (!parsed_sample_accurate.sample_accurate_envelope ||
+        render::envelope_tick_samples(parsed_sample_accurate) != 1) {
+      throw std::runtime_error("sample-accurate envelope argument did not ignore ADSR tick ms");
     }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");

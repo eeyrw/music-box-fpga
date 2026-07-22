@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
-    int adsr_tick_samples = std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
+    int adsr_tick_samples = render::envelope_tick_samples(args);
 
     render::Sf2Data sf2 = render::load_sf2(args.sf2);
     std::vector<uint8_t> sf2_bytes = render::read_file_bytes(args.sf2);

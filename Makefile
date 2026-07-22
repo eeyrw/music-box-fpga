@@ -25,6 +25,7 @@ KEY ?= 60
 SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 ADSR_TICK_MS ?= 5
+SAMPLE_ACCURATE_ENVELOPE ?= 0
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -294,6 +295,7 @@ render-reference:
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:
@@ -316,6 +318,7 @@ render-rtl-core:
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
 
 render-memory:
@@ -340,6 +343,7 @@ render-memory:
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
 
 render-board-loader:
@@ -365,6 +369,7 @@ render-board-loader:
 		--memory-profile "$(MEMORY_PROFILE)" \
 		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 vivado-summary:

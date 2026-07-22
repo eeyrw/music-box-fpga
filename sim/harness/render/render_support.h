@@ -12,6 +12,7 @@
 namespace render {
 
 Args parse_args(int argc, char** argv);
+int envelope_tick_samples(const Args& args);
 std::string json_string(const std::string& value);
 std::string render_input_json_fields(const Args& args, int adsr_tick_samples);
 void write_summary(const std::string& path, const std::vector<Region>& regions,

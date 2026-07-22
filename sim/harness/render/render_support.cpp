@@ -358,11 +358,19 @@ std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
     s << json_string_impl(args.instrument);
   s << ",\n  \"key\": " << args.key
     << ",\n  \"requested_seconds\": " << args.seconds
+    << ",\n  \"envelope_mode\": "
+    << json_string_impl(args.sample_accurate_envelope ? "sample_accurate" : "control_tick")
     << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
+    << ",\n  \"adsr_tick_ms_ignored\": " << (args.sample_accurate_envelope ? "true" : "false")
     << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
     << ",\n  \"render_num_voices\": " << kNumVoices
     << ",\n  \"memory_profile\": " << json_string_impl(args.memory_profile);
   return s.str();
+}
+
+int envelope_tick_samples(const Args& args) {
+  if (args.sample_accurate_envelope) return 1;
+  return std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
 }
 
 Args parse_args(int argc, char** argv) {
@@ -380,6 +388,7 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--seconds") args.seconds = std::stod(need("--seconds"));
     else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
     else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
+    else if (a == "--sample-accurate-envelope") args.sample_accurate_envelope = true;
     else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);

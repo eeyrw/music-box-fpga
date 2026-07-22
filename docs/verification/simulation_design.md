@@ -726,6 +726,16 @@ to 5 ms. This is intentionally simpler than a sample-rate SF2 envelope, but it
 exercises the hardware contract: runtime `ENVELOPE_RUNTIME` writes update
 runtime amplitude without commit and without reloading phase.
 
+The C++ render harnesses also accept a sample-accurate envelope mode. Set
+`SAMPLE_ACCURATE_ENVELOPE=1` on the Make command line, or pass
+`--sample-accurate-envelope` to a built harness, to convert SF2 envelope times
+with one envelope tick per output sample. The same attack, decay, and release
+curves are used, but runtime envelope updates occur at sample boundaries instead
+of the coarser MCU control tick. In this mode `adsr_tick_ms` is ignored for
+envelope scheduling. JSON summaries record
+`"envelope_mode": "sample_accurate"`, `"adsr_tick_ms_ignored": true`, and
+`adsr_tick_samples: 1`.
+
 The normal Note On register sequence is:
 
 ```text
