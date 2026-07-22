@@ -36,6 +36,14 @@ struct MemoryStats {
   uint64_t deadline_misses = 0;
   uint64_t over_budget_frames = 0;
   uint32_t max_over_budget_cycles = 0;
+  uint64_t endpoint_cross_line_pairs = 0;
+  uint64_t endpoint_fetch_slot_pressure_cycles = 0;
+  uint64_t endpoint_memory_stall_cycles = 0;
+  uint8_t endpoint_fetch_slot_max_occupancy = 0;
+  uint8_t endpoint_word_req_max_occupancy = 0;
+  uint8_t endpoint_rsp_meta_max_occupancy = 0;
+  uint8_t dsp_context_queue_max_occupancy = 0;
+  uint64_t dsp_ready_no_context_cycles = 0;
   int line_words = 0;
   int random_latency_cycles = 0;
   int sequential_latency_cycles = 0;
@@ -102,6 +110,10 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   uint64_t prefetch_used_ = 0;
   uint64_t prefetch_dropped_ = 0;
   uint64_t prefetch_late_ = 0;
+  uint64_t endpoint_cross_line_pairs_ = 0;
+  uint64_t endpoint_fetch_slot_pressure_cycles_ = 0;
+  uint64_t endpoint_memory_stall_cycles_ = 0;
+  uint64_t dsp_ready_no_context_cycles_ = 0;
   RegisterWriteStats register_write_stats_;
 };
 

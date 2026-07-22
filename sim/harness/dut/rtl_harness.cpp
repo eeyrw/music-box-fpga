@@ -163,6 +163,10 @@ void RtlHarness::tick() {
   if (top_->cache_prefetch_used_pulse) ++prefetch_used_;
   if (top_->cache_prefetch_dropped_pulse) ++prefetch_dropped_;
   if (top_->cache_prefetch_late_pulse) ++prefetch_late_;
+  if (top_->endpoint_cross_line_pair_pulse) ++endpoint_cross_line_pairs_;
+  if (top_->endpoint_fetch_slot_pressure_pulse) ++endpoint_fetch_slot_pressure_cycles_;
+  if (top_->endpoint_memory_stall_pulse) ++endpoint_memory_stall_cycles_;
+  if (top_->dsp_ready_no_context_pulse) ++dsp_ready_no_context_cycles_;
 
   top_->clk = 0;
   top_->eval();
@@ -226,6 +230,14 @@ void RtlHarness::print_memory_stats() const {
             << " deadline_misses=" << stats.deadline_misses
             << " over_budget_frames=" << stats.over_budget_frames
             << " max_over_budget_cycles=" << stats.max_over_budget_cycles
+            << " endpoint_cross_line_pairs=" << stats.endpoint_cross_line_pairs
+            << " endpoint_fetch_slot_pressure_cycles=" << stats.endpoint_fetch_slot_pressure_cycles
+            << " endpoint_memory_stall_cycles=" << stats.endpoint_memory_stall_cycles
+            << " endpoint_fetch_slot_max_occupancy=" << int(stats.endpoint_fetch_slot_max_occupancy)
+            << " endpoint_word_req_max_occupancy=" << int(stats.endpoint_word_req_max_occupancy)
+            << " endpoint_rsp_meta_max_occupancy=" << int(stats.endpoint_rsp_meta_max_occupancy)
+            << " dsp_context_queue_max_occupancy=" << int(stats.dsp_context_queue_max_occupancy)
+            << " dsp_ready_no_context_cycles=" << stats.dsp_ready_no_context_cycles
             << " avg_response_latency_cycles=" << avg_latency
             << " max_response_latency_cycles=" << stats.response_latency_max
             << " line_words=" << stats.line_words
@@ -259,6 +271,14 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.deadline_misses = top_->deadline_miss_count;
   stats.over_budget_frames = top_->over_budget_frames;
   stats.max_over_budget_cycles = top_->over_budget_max_cycles;
+  stats.endpoint_cross_line_pairs = endpoint_cross_line_pairs_;
+  stats.endpoint_fetch_slot_pressure_cycles = endpoint_fetch_slot_pressure_cycles_;
+  stats.endpoint_memory_stall_cycles = endpoint_memory_stall_cycles_;
+  stats.endpoint_fetch_slot_max_occupancy = top_->endpoint_fetch_slot_max_occupancy;
+  stats.endpoint_word_req_max_occupancy = top_->endpoint_word_req_max_occupancy;
+  stats.endpoint_rsp_meta_max_occupancy = top_->endpoint_rsp_meta_max_occupancy;
+  stats.dsp_context_queue_max_occupancy = top_->dsp_context_queue_max_occupancy;
+  stats.dsp_ready_no_context_cycles = dsp_ready_no_context_cycles_;
   stats.line_words = kLineWords;
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;
   stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;

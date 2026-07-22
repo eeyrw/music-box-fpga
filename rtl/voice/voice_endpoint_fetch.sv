@@ -1,4 +1,6 @@
-module voice_endpoint_fetch (
+module voice_endpoint_fetch #(
+  parameter int LINE_WORDS = 32
+) (
   input  logic                                  clk,
   input  logic                                  rst,
   input  logic                                  issue_valid,
@@ -16,7 +18,18 @@ module voice_endpoint_fetch (
   output logic                                  empty,
   output synth_pkg::wave_word_req_t             mem_req,
   input  logic                                  mem_req_ready,
-  input  synth_pkg::wave_word_rsp_t             mem_rsp
+  input  synth_pkg::wave_word_rsp_t             mem_rsp,
+  output logic                                  cross_line_endpoint_pair_pulse,
+  output logic                                  fetch_slot_pressure_pulse,
+  output logic                                  memory_stall_pulse,
+  output logic [2:0]                            fetch_slot_occupancy,
+  output logic [2:0]                            fetch_slot_max_occupancy,
+  output logic [4:0]                            word_req_occupancy,
+  output logic [4:0]                            word_req_max_occupancy,
+  output logic [4:0]                            rsp_meta_occupancy,
+  output logic [4:0]                            rsp_meta_max_occupancy,
+  output logic [2:0]                            dsp_context_queue_occupancy,
+  output logic [2:0]                            dsp_context_queue_max_occupancy
 );
   import synth_pkg::*;
 
@@ -105,6 +118,15 @@ module voice_endpoint_fetch (
   logic fetch_context_push;
   logic fetch_queue_store;
   logic fetch_slot_complete;
+  logic issue_cross_line_pair;
+  logic [ADDR_WIDTH-1:0] issue_addr_l0;
+  logic [ADDR_WIDTH-1:0] issue_addr_l1;
+  logic [ADDR_WIDTH-1:0] issue_addr_r0;
+  logic [ADDR_WIDTH-1:0] issue_addr_r1;
+  logic [ADDR_WIDTH-1:0] issue_line_l0;
+  logic [ADDR_WIDTH-1:0] issue_line_l1;
+  logic [ADDR_WIDTH-1:0] issue_line_r0;
+  logic [ADDR_WIDTH-1:0] issue_line_r1;
 
   assign fetch_queue_empty = (fetch_queue_count == '0);
   assign fetch_slot_full = (fetch_slot_count == FETCH_SLOT_COUNT_WIDTH'(FETCH_SLOT_DEPTH));
@@ -123,6 +145,27 @@ module voice_endpoint_fetch (
   assign mem_req.valid = !word_req_empty && !rsp_meta_full;
   assign word_req_accept = !word_req_empty && !rsp_meta_full && mem_req_ready;
   assign rsp_meta_pop = mem_rsp.valid && !rsp_meta_empty;
+  assign fetch_slot_pressure_pulse = issue_valid && !issue_ready;
+  assign memory_stall_pulse = mem_req.valid && !mem_req_ready;
+  assign fetch_slot_occupancy = 3'(fetch_slot_count);
+  assign word_req_occupancy = 5'(word_req_count);
+  assign rsp_meta_occupancy = 5'(rsp_meta_count);
+  assign dsp_context_queue_occupancy = 3'(fetch_queue_count);
+  assign issue_addr_l0 = issue_base_addr +
+                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_0};
+  assign issue_addr_l1 = issue_base_addr +
+                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_1};
+  assign issue_addr_r0 = issue_base_addr_r +
+                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_r0};
+  assign issue_addr_r1 = issue_base_addr_r +
+                         {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_r1};
+  assign issue_line_l0 = issue_addr_l0 / ADDR_WIDTH'(LINE_WORDS);
+  assign issue_line_l1 = issue_addr_l1 / ADDR_WIDTH'(LINE_WORDS);
+  assign issue_line_r0 = issue_addr_r0 / ADDR_WIDTH'(LINE_WORDS);
+  assign issue_line_r1 = issue_addr_r1 / ADDR_WIDTH'(LINE_WORDS);
+  assign issue_cross_line_pair = (issue_line_l0 != issue_line_l1) ||
+                                 (issue_stereo && (issue_line_r0 != issue_line_r1));
+  assign cross_line_endpoint_pair_pulse = issue_accept && issue_cross_line_pair;
 
   always_comb begin
     mem_req.addr = 32'd0;
@@ -217,6 +260,10 @@ module voice_endpoint_fetch (
       rsp_meta_rd <= '0;
       rsp_meta_wr <= '0;
       rsp_meta_count <= '0;
+      fetch_slot_max_occupancy <= '0;
+      word_req_max_occupancy <= '0;
+      rsp_meta_max_occupancy <= '0;
+      dsp_context_queue_max_occupancy <= '0;
     end else begin
       if (issue_accept) begin
         enq_state <= ENQ_L0;
@@ -248,7 +295,11 @@ module voice_endpoint_fetch (
         fetch_queue_wr <= fetch_queue_wr + 1'b1;
       end
       unique case ({fetch_queue_store, context_pop})
-        2'b10: fetch_queue_count <= fetch_queue_count + 1'b1;
+        2'b10: begin
+          fetch_queue_count <= fetch_queue_count + 1'b1;
+          if ((fetch_queue_count + 1'b1) > dsp_context_queue_max_occupancy)
+            dsp_context_queue_max_occupancy <= 3'(fetch_queue_count + 1'b1);
+        end
         2'b01: fetch_queue_count <= fetch_queue_count - 1'b1;
         default: begin
         end
@@ -267,7 +318,11 @@ module voice_endpoint_fetch (
         rsp_meta_rd <= rsp_meta_rd + 1'b1;
       end
       unique case ({issue_accept, fetch_slot_complete})
-        2'b10: fetch_slot_count <= fetch_slot_count + 1'b1;
+        2'b10: begin
+          fetch_slot_count <= fetch_slot_count + 1'b1;
+          if ((fetch_slot_count + 1'b1) > fetch_slot_max_occupancy)
+            fetch_slot_max_occupancy <= 3'(fetch_slot_count + 1'b1);
+        end
         2'b01: fetch_slot_count <= fetch_slot_count - 1'b1;
         default: begin
         end
@@ -284,13 +339,21 @@ module voice_endpoint_fetch (
         word_req_rd <= word_req_rd + 1'b1;
       end
       unique case ({enqueue_word_req, word_req_accept})
-        2'b10: word_req_count <= word_req_count + 1'b1;
+        2'b10: begin
+          word_req_count <= word_req_count + 1'b1;
+          if ((word_req_count + 1'b1) > word_req_max_occupancy)
+            word_req_max_occupancy <= 5'(word_req_count + 1'b1);
+        end
         2'b01: word_req_count <= word_req_count - 1'b1;
         default: begin
         end
       endcase
       unique case ({word_req_accept, rsp_meta_pop})
-        2'b10: rsp_meta_count <= rsp_meta_count + 1'b1;
+        2'b10: begin
+          rsp_meta_count <= rsp_meta_count + 1'b1;
+          if ((rsp_meta_count + 1'b1) > rsp_meta_max_occupancy)
+            rsp_meta_max_occupancy <= 5'(rsp_meta_count + 1'b1);
+        end
         2'b01: rsp_meta_count <= rsp_meta_count - 1'b1;
         default: begin
         end

@@ -816,11 +816,14 @@ The recorded fields are `profile`, `line_words`, `random_latency_cycles`,
 counters, prefetch issued/filled/used/dropped/late counters,
 `render_frames`, `last_render_cycles`, `avg_render_cycles`,
 `max_render_cycles`, `deadline_misses`, `over_budget_frames`,
-`max_over_budget_cycles`, `avg_response_latency_cycles`,
-`max_response_latency_cycles`, and the same register-write breakdown used by
-`render-rtl-core`. The render-cycle and deadline fields are read from RTL
-counters exposed by `wavetable_cached_render_core`; the average is derived from
-the RTL frame count and cycle sum. The supported read-only timing profiles are
+`max_over_budget_cycles`, endpoint cross-line pair count, endpoint fetch-slot
+pressure cycles, endpoint memory-stall cycles, endpoint queue high-water marks,
+DSP context queue high-water mark, DSP-ready/no-context cycles,
+`avg_response_latency_cycles`, `max_response_latency_cycles`, and the same
+register-write breakdown used by `render-rtl-core`. The render-cycle, deadline,
+endpoint, and queue-pressure fields are read from RTL counters exposed by
+`wavetable_cached_render_core`; averages are derived from RTL frame count and
+cycle sums. The supported read-only timing profiles are
 `ddr`, `sdram`, and `parallel-nor`. These profiles apply only to memory-backed
 render targets such as `render-memory` and `render-board-loader`.
 

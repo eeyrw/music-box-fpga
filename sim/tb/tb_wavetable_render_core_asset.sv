@@ -61,6 +61,18 @@ module tb_wavetable_render_core_asset;
   logic cache_prefetch_used_pulse;
   logic cache_prefetch_dropped_pulse;
   logic cache_prefetch_late_pulse;
+  logic endpoint_cross_line_pair_pulse;
+  logic endpoint_fetch_slot_pressure_pulse;
+  logic endpoint_memory_stall_pulse;
+  logic [2:0] endpoint_fetch_slot_occupancy;
+  logic [2:0] endpoint_fetch_slot_max_occupancy;
+  logic [4:0] endpoint_word_req_occupancy;
+  logic [4:0] endpoint_word_req_max_occupancy;
+  logic [4:0] endpoint_rsp_meta_occupancy;
+  logic [4:0] endpoint_rsp_meta_max_occupancy;
+  logic [2:0] dsp_context_queue_occupancy;
+  logic [2:0] dsp_context_queue_max_occupancy;
+  logic dsp_ready_no_context_pulse;
   logic unused_status;
   int pcm_fd;
   int produced;
@@ -77,7 +89,13 @@ module tb_wavetable_render_core_asset;
                          cache_line_fill_pulse | cache_same_line_endpoint_hit_pulse |
                          cache_replacement_pulse | cache_prefetch_issued_pulse |
                          cache_prefetch_filled_pulse | cache_prefetch_used_pulse |
-                         cache_prefetch_dropped_pulse | cache_prefetch_late_pulse;
+                         cache_prefetch_dropped_pulse | cache_prefetch_late_pulse |
+                         endpoint_cross_line_pair_pulse | endpoint_fetch_slot_pressure_pulse |
+                         endpoint_memory_stall_pulse | (|endpoint_fetch_slot_occupancy) |
+                         (|endpoint_fetch_slot_max_occupancy) | (|endpoint_word_req_occupancy) |
+                         (|endpoint_word_req_max_occupancy) | (|endpoint_rsp_meta_occupancy) |
+                         (|endpoint_rsp_meta_max_occupancy) | (|dsp_context_queue_occupancy) |
+                         (|dsp_context_queue_max_occupancy) | dsp_ready_no_context_pulse;
 
   wavetable_render_core dut (.*);
 

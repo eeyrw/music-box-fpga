@@ -31,14 +31,41 @@ module wavetable_system_core #(
   synth_pkg::pcm_t mem_rsp_data;
   synth_pkg::wave_word_req_t mem_req;
   synth_pkg::wave_word_rsp_t mem_rsp;
+  logic endpoint_cross_line_pair_pulse;
+  logic endpoint_fetch_slot_pressure_pulse;
+  logic endpoint_memory_stall_pulse;
+  logic [2:0] endpoint_fetch_slot_occupancy;
+  logic [2:0] endpoint_fetch_slot_max_occupancy;
+  logic [4:0] endpoint_word_req_occupancy;
+  logic [4:0] endpoint_word_req_max_occupancy;
+  logic [4:0] endpoint_rsp_meta_occupancy;
+  logic [4:0] endpoint_rsp_meta_max_occupancy;
+  logic [2:0] dsp_context_queue_occupancy;
+  logic [2:0] dsp_context_queue_max_occupancy;
+  logic dsp_ready_no_context_pulse;
+  logic unused_render_diagnostics;
 
   assign mem_req.valid = mem_req_valid;
   assign mem_req.voice = mem_req_voice;
   assign mem_req.addr = mem_req_addr;
   assign mem_rsp_valid = mem_rsp.valid;
   assign mem_rsp_data = mem_rsp.data;
+  assign unused_render_diagnostics = endpoint_cross_line_pair_pulse |
+                                     endpoint_fetch_slot_pressure_pulse |
+                                     endpoint_memory_stall_pulse |
+                                     (|endpoint_fetch_slot_occupancy) |
+                                     (|endpoint_fetch_slot_max_occupancy) |
+                                     (|endpoint_word_req_occupancy) |
+                                     (|endpoint_word_req_max_occupancy) |
+                                     (|endpoint_rsp_meta_occupancy) |
+                                     (|endpoint_rsp_meta_max_occupancy) |
+                                     (|dsp_context_queue_occupancy) |
+                                     (|dsp_context_queue_max_occupancy) |
+                                     dsp_ready_no_context_pulse;
 
-  wavetable_render_core core (
+  wavetable_render_core #(
+    .LINE_WORDS(LINE_WORDS)
+  ) core (
     .clk,
     .rst,
     .bus_valid,
@@ -58,7 +85,19 @@ module wavetable_system_core #(
     .mem_req_addr,
     .mem_req_ready,
     .mem_rsp_valid,
-    .mem_rsp_data
+    .mem_rsp_data,
+    .endpoint_cross_line_pair_pulse,
+    .endpoint_fetch_slot_pressure_pulse,
+    .endpoint_memory_stall_pulse,
+    .endpoint_fetch_slot_occupancy,
+    .endpoint_fetch_slot_max_occupancy,
+    .endpoint_word_req_occupancy,
+    .endpoint_word_req_max_occupancy,
+    .endpoint_rsp_meta_occupancy,
+    .endpoint_rsp_meta_max_occupancy,
+    .dsp_context_queue_occupancy,
+    .dsp_context_queue_max_occupancy,
+    .dsp_ready_no_context_pulse
   );
 
   wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) memory (

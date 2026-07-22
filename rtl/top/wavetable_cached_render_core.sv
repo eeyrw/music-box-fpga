@@ -43,7 +43,19 @@ module wavetable_cached_render_core #(
   output logic [63:0]              render_frame_count,
   output logic [63:0]              deadline_miss_count,
   output logic [63:0]              over_budget_frames,
-  output logic [31:0]              over_budget_max_cycles
+  output logic [31:0]              over_budget_max_cycles,
+  output logic                     endpoint_cross_line_pair_pulse,
+  output logic                     endpoint_fetch_slot_pressure_pulse,
+  output logic                     endpoint_memory_stall_pulse,
+  output logic [2:0]               endpoint_fetch_slot_occupancy,
+  output logic [2:0]               endpoint_fetch_slot_max_occupancy,
+  output logic [4:0]               endpoint_word_req_occupancy,
+  output logic [4:0]               endpoint_word_req_max_occupancy,
+  output logic [4:0]               endpoint_rsp_meta_occupancy,
+  output logic [4:0]               endpoint_rsp_meta_max_occupancy,
+  output logic [2:0]               dsp_context_queue_occupancy,
+  output logic [2:0]               dsp_context_queue_max_occupancy,
+  output logic                     dsp_ready_no_context_pulse
 );
   localparam int FRAME_BUDGET_CYCLES = CLK_HZ / SAMPLE_RATE;
 
@@ -54,7 +66,9 @@ module wavetable_cached_render_core #(
 
   assign sample_tick_accepted = sample_tick && !busy;
 
-  wavetable_render_core core (
+  wavetable_render_core #(
+    .LINE_WORDS(LINE_WORDS)
+  ) core (
     .clk,
     .rst,
     .bus_valid,
@@ -74,7 +88,19 @@ module wavetable_cached_render_core #(
     .mem_req_addr(mem_req.addr),
     .mem_req_ready,
     .mem_rsp_valid(mem_rsp.valid),
-    .mem_rsp_data(mem_rsp.data)
+    .mem_rsp_data(mem_rsp.data),
+    .endpoint_cross_line_pair_pulse,
+    .endpoint_fetch_slot_pressure_pulse,
+    .endpoint_memory_stall_pulse,
+    .endpoint_fetch_slot_occupancy,
+    .endpoint_fetch_slot_max_occupancy,
+    .endpoint_word_req_occupancy,
+    .endpoint_word_req_max_occupancy,
+    .endpoint_rsp_meta_occupancy,
+    .endpoint_rsp_meta_max_occupancy,
+    .dsp_context_queue_occupancy,
+    .dsp_context_queue_max_occupancy,
+    .dsp_ready_no_context_pulse
   );
 
   voice_line_cache #(

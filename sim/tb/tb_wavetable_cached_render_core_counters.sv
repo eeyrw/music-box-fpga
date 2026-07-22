@@ -46,6 +46,19 @@ module tb_wavetable_cached_render_core_counters;
   logic [63:0] deadline_miss_count;
   logic [63:0] over_budget_frames;
   logic [31:0] over_budget_max_cycles;
+  logic endpoint_cross_line_pair_pulse;
+  logic endpoint_fetch_slot_pressure_pulse;
+  logic endpoint_memory_stall_pulse;
+  logic [2:0] endpoint_fetch_slot_occupancy;
+  logic [2:0] endpoint_fetch_slot_max_occupancy;
+  logic [4:0] endpoint_word_req_occupancy;
+  logic [4:0] endpoint_word_req_max_occupancy;
+  logic [4:0] endpoint_rsp_meta_occupancy;
+  logic [4:0] endpoint_rsp_meta_max_occupancy;
+  logic [2:0] dsp_context_queue_occupancy;
+  logic [2:0] dsp_context_queue_max_occupancy;
+  logic dsp_ready_no_context_pulse;
+  int dsp_ready_no_context_count = 0;
 
   logic unused_outputs;
   int errors = 0;
@@ -59,7 +72,13 @@ module tb_wavetable_cached_render_core_counters;
                           cache_prefetch_used_pulse | cache_prefetch_dropped_pulse |
                           cache_prefetch_late_pulse |
                           render_active | (|render_cycle_counter) | (|render_cycle_sum) |
-                          (|over_budget_frames) | (|over_budget_max_cycles);
+                          (|over_budget_frames) | (|over_budget_max_cycles) |
+                          endpoint_cross_line_pair_pulse | endpoint_fetch_slot_pressure_pulse |
+                          endpoint_memory_stall_pulse | (|endpoint_fetch_slot_occupancy) |
+                          (|endpoint_fetch_slot_max_occupancy) | (|endpoint_word_req_occupancy) |
+                          (|endpoint_word_req_max_occupancy) | (|endpoint_rsp_meta_occupancy) |
+                          (|endpoint_rsp_meta_max_occupancy) | (|dsp_context_queue_occupancy) |
+                          (|dsp_context_queue_max_occupancy) | dsp_ready_no_context_pulse;
 
   always #5 clk <= ~clk;
 
@@ -108,8 +127,27 @@ module tb_wavetable_cached_render_core_counters;
     .render_frame_count,
     .deadline_miss_count,
     .over_budget_frames,
-    .over_budget_max_cycles
+    .over_budget_max_cycles,
+    .endpoint_cross_line_pair_pulse,
+    .endpoint_fetch_slot_pressure_pulse,
+    .endpoint_memory_stall_pulse,
+    .endpoint_fetch_slot_occupancy,
+    .endpoint_fetch_slot_max_occupancy,
+    .endpoint_word_req_occupancy,
+    .endpoint_word_req_max_occupancy,
+    .endpoint_rsp_meta_occupancy,
+    .endpoint_rsp_meta_max_occupancy,
+    .dsp_context_queue_occupancy,
+    .dsp_context_queue_max_occupancy,
+    .dsp_ready_no_context_pulse
   );
+
+  always_ff @(posedge clk) begin
+    if (rst)
+      dsp_ready_no_context_count <= 0;
+    else if (dsp_ready_no_context_pulse)
+      dsp_ready_no_context_count <= dsp_ready_no_context_count + 1;
+  end
 
   task automatic pulse_sample_tick;
     begin
@@ -165,6 +203,10 @@ module tb_wavetable_cached_render_core_counters;
       $error("max_render_cycles got %0d expected %0d", max_render_cycles, last_render_cycles);
       errors++;
     end
+    if (dsp_ready_no_context_count == 0) begin
+      $error("dsp_ready_no_context_count did not observe scheduler bubbles");
+      errors++;
+    end
 
     pulse_sample_tick();
     repeat (2) @(negedge clk);
@@ -183,7 +225,12 @@ module tb_wavetable_cached_render_core_counters;
     if (render_active || render_cycle_counter != 32'd0 || last_render_cycles != 32'd0 ||
         max_render_cycles != 32'd0 || render_cycle_sum != 64'd0 ||
         render_frame_count != 64'd0 || deadline_miss_count != 64'd0 ||
-        over_budget_frames != 64'd0 || over_budget_max_cycles != 32'd0) begin
+        over_budget_frames != 64'd0 || over_budget_max_cycles != 32'd0 ||
+        endpoint_fetch_slot_max_occupancy != 3'd0 ||
+        endpoint_word_req_max_occupancy != 5'd0 ||
+        endpoint_rsp_meta_max_occupancy != 5'd0 ||
+        dsp_context_queue_max_occupancy != 3'd0 ||
+        dsp_ready_no_context_count != 0) begin
       $error("render counters did not clear on reset");
       errors++;
     end

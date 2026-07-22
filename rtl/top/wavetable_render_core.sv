@@ -1,4 +1,6 @@
-module wavetable_render_core (
+module wavetable_render_core #(
+  parameter int LINE_WORDS = 32
+) (
   input  logic                     clk,
   input  logic                     rst,
   input  logic                     bus_valid,
@@ -18,7 +20,19 @@ module wavetable_render_core (
   output logic [31:0]              mem_req_addr,
   input  logic                     mem_req_ready,
   input  logic                     mem_rsp_valid,
-  input  synth_pkg::pcm_t          mem_rsp_data
+  input  synth_pkg::pcm_t          mem_rsp_data,
+  output logic                     endpoint_cross_line_pair_pulse,
+  output logic                     endpoint_fetch_slot_pressure_pulse,
+  output logic                     endpoint_memory_stall_pulse,
+  output logic [2:0]               endpoint_fetch_slot_occupancy,
+  output logic [2:0]               endpoint_fetch_slot_max_occupancy,
+  output logic [4:0]               endpoint_word_req_occupancy,
+  output logic [4:0]               endpoint_word_req_max_occupancy,
+  output logic [4:0]               endpoint_rsp_meta_occupancy,
+  output logic [4:0]               endpoint_rsp_meta_max_occupancy,
+  output logic [2:0]               dsp_context_queue_occupancy,
+  output logic [2:0]               dsp_context_queue_max_occupancy,
+  output logic                     dsp_ready_no_context_pulse
 );
   localparam int VOICE_INDEX_WIDTH = $clog2(synth_pkg::NUM_VOICES);
 
@@ -62,7 +76,9 @@ module wavetable_render_core (
     .commit_pulse
   );
 
-  multi_voice_pipeline voices (
+  multi_voice_pipeline #(
+    .LINE_WORDS(LINE_WORDS)
+  ) voices (
     .clk,
     .rst,
     .voice_read_index,
@@ -77,6 +93,18 @@ module wavetable_render_core (
     .sample_r,
     .mem_req(core_mem_req),
     .mem_req_ready,
-    .mem_rsp(core_mem_rsp)
+    .mem_rsp(core_mem_rsp),
+    .endpoint_cross_line_pair_pulse,
+    .endpoint_fetch_slot_pressure_pulse,
+    .endpoint_memory_stall_pulse,
+    .endpoint_fetch_slot_occupancy,
+    .endpoint_fetch_slot_max_occupancy,
+    .endpoint_word_req_occupancy,
+    .endpoint_word_req_max_occupancy,
+    .endpoint_rsp_meta_occupancy,
+    .endpoint_rsp_meta_max_occupancy,
+    .dsp_context_queue_occupancy,
+    .dsp_context_queue_max_occupancy,
+    .dsp_ready_no_context_pulse
   );
 endmodule

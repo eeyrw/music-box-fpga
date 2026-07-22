@@ -1,4 +1,6 @@
-module multi_voice_pipeline (
+module multi_voice_pipeline #(
+  parameter int LINE_WORDS = 32
+) (
   input  logic                       clk,
   input  logic                       rst,
   output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] voice_read_index,
@@ -13,7 +15,19 @@ module multi_voice_pipeline (
   output synth_pkg::pcm_t            sample_r,
   output synth_pkg::wave_word_req_t  mem_req,
   input  logic                       mem_req_ready,
-  input  synth_pkg::wave_word_rsp_t  mem_rsp
+  input  synth_pkg::wave_word_rsp_t  mem_rsp,
+  output logic                       endpoint_cross_line_pair_pulse,
+  output logic                       endpoint_fetch_slot_pressure_pulse,
+  output logic                       endpoint_memory_stall_pulse,
+  output logic [2:0]                 endpoint_fetch_slot_occupancy,
+  output logic [2:0]                 endpoint_fetch_slot_max_occupancy,
+  output logic [4:0]                 endpoint_word_req_occupancy,
+  output logic [4:0]                 endpoint_word_req_max_occupancy,
+  output logic [4:0]                 endpoint_rsp_meta_occupancy,
+  output logic [4:0]                 endpoint_rsp_meta_max_occupancy,
+  output logic [2:0]                 dsp_context_queue_occupancy,
+  output logic [2:0]                 dsp_context_queue_max_occupancy,
+  output logic                       dsp_ready_no_context_pulse
 );
   import synth_pkg::*;
 
@@ -140,6 +154,7 @@ module multi_voice_pipeline (
                                 current_config_valid && !voice_done;
   assign phase_write_en = endpoint_issue_valid && endpoint_issue_ready;
   assign dsp_issue_valid = endpoint_context_valid;
+  assign dsp_ready_no_context_pulse = (state != IDLE) && !endpoint_context_valid;
   assign cfg_enable = voice_config.enable;
   assign cfg_stereo = voice_config.stereo;
   assign cfg_base_addr = voice_config.base_addr;
@@ -211,7 +226,9 @@ module multi_voice_pipeline (
     endpoint_issue_context.fraction = phase_fraction;
   end
 
-  voice_endpoint_fetch endpoint_fetch (
+  voice_endpoint_fetch #(
+    .LINE_WORDS(LINE_WORDS)
+  ) endpoint_fetch (
     .clk,
     .rst,
     .issue_valid(endpoint_issue_valid),
@@ -229,7 +246,18 @@ module multi_voice_pipeline (
     .empty(endpoint_empty),
     .mem_req,
     .mem_req_ready,
-    .mem_rsp
+    .mem_rsp,
+    .cross_line_endpoint_pair_pulse(endpoint_cross_line_pair_pulse),
+    .fetch_slot_pressure_pulse(endpoint_fetch_slot_pressure_pulse),
+    .memory_stall_pulse(endpoint_memory_stall_pulse),
+    .fetch_slot_occupancy(endpoint_fetch_slot_occupancy),
+    .fetch_slot_max_occupancy(endpoint_fetch_slot_max_occupancy),
+    .word_req_occupancy(endpoint_word_req_occupancy),
+    .word_req_max_occupancy(endpoint_word_req_max_occupancy),
+    .rsp_meta_occupancy(endpoint_rsp_meta_occupancy),
+    .rsp_meta_max_occupancy(endpoint_rsp_meta_max_occupancy),
+    .dsp_context_queue_occupancy(dsp_context_queue_occupancy),
+    .dsp_context_queue_max_occupancy(dsp_context_queue_max_occupancy)
   );
 
   voice_dsp_pipeline dsp_pipeline (
