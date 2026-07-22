@@ -479,6 +479,12 @@ std::string diagnostics_json_fields(const RenderDiagnostics& d) {
     << ",\n  \"diagnostics_max_abs_mix_input_l\": " << d.max_abs_mix_input_l
     << ",\n  \"diagnostics_max_abs_mix_input_r\": " << d.max_abs_mix_input_r
     << ",\n  \"diagnostics_voice_steals\": " << d.voice_steals
+    << ",\n  \"diagnostics_max_voice_steal_score\": " << d.max_voice_steal_score
+    << ",\n  \"diagnostics_max_voice_steal_level\": " << d.max_voice_steal_level
+    << ",\n  \"diagnostics_max_voice_steal_gain_l\": " << d.max_voice_steal_gain_l
+    << ",\n  \"diagnostics_max_voice_steal_gain_r\": " << d.max_voice_steal_gain_r
+    << ",\n  \"diagnostics_max_voice_steal_voice\": " << d.max_voice_steal_voice
+    << ",\n  \"diagnostics_max_voice_steal_tick\": " << d.max_voice_steal_tick
     << ",\n  \"diagnostics_runtime_envelope_updates\": " << d.runtime_envelope_updates
     << ",\n  \"diagnostics_runtime_gain_updates\": " << d.runtime_gain_updates
     << ",\n  \"diagnostics_runtime_phase_updates\": " << d.runtime_phase_updates
@@ -1082,7 +1088,25 @@ void McuModel::note_on(const NoteEvent& event) {
   }
 
   int slot = first_free_or_steal_slot();
-  if (voices_[slot].state != ENV_SILENT && diagnostics_) diagnostics_->voice_steals += 1;
+  if (voices_[slot].state != ENV_SILENT && diagnostics_) {
+    const VoiceState& stolen = voices_[slot];
+    const Region& stolen_region = regions_.at(stolen.region);
+    const ChannelState& stolen_channel = channels_[stolen.channel & 0x0f];
+    const auto gains = runtime_gains(stolen_region, stolen, stolen_channel);
+    const uint32_t level = uint32_t(std::max(0, stolen.level));
+    const uint32_t gain_l = uint32_t(std::max(0, gains.first));
+    const uint32_t gain_r = uint32_t(std::max(0, gains.second));
+    const uint64_t score = uint64_t(level) * uint64_t(std::max(gain_l, gain_r));
+    diagnostics_->voice_steals += 1;
+    if (score >= diagnostics_->max_voice_steal_score) {
+      diagnostics_->max_voice_steal_score = score;
+      diagnostics_->max_voice_steal_level = level;
+      diagnostics_->max_voice_steal_gain_l = gain_l;
+      diagnostics_->max_voice_steal_gain_r = gain_r;
+      diagnostics_->max_voice_steal_voice = slot;
+      diagnostics_->max_voice_steal_tick = envelope_tick_index_;
+    }
+  }
   alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
   if (alloc_stamp_ == 0) alloc_stamp_ = 1;
 

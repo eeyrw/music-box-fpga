@@ -339,11 +339,11 @@ same group records the largest absolute pre-saturation input observed at the
 filter output, filter state, per-voice contribution, and final mix saturation
 points, so a render can show both how often clipping happened and how far the
 raw calculation exceeded its target range. The MCU policy records
-`diagnostics_voice_steals` plus the largest runtime gain,
-`PHASE_INC_RUNTIME`, and filter-coefficient jumps. `render-memory` writes the
-same MCU-side diagnostics into its stats JSON file; it does not currently expose
-RTL-internal filter/contribution saturation because it does not run
-`ReferenceSynth` in parallel.
+`diagnostics_voice_steals`, the loudest voice steal by envelope/gain score, plus
+the largest runtime gain, `PHASE_INC_RUNTIME`, and filter-coefficient jumps.
+`render-memory` writes the same MCU-side diagnostics into its stats JSON file;
+it does not currently expose RTL-internal filter/contribution saturation because
+it does not run `ReferenceSynth` in parallel.
 
 ### Render Diagnostics Fields
 
@@ -393,6 +393,17 @@ The remaining diagnostics describe MCU policy and runtime control churn:
 
 - `diagnostics_voice_steals`: active voices forcibly reused because no free
   voice slot was available.
+- `diagnostics_max_voice_steal_score`: largest estimated audibility score among
+  stolen voices, calculated as runtime envelope level times the larger of the
+  left/right runtime gains. Envelope and gain are both Q1.15 integers, so this
+  score is a relative comparison value, not a PCM amplitude.
+- `diagnostics_max_voice_steal_level`,
+  `diagnostics_max_voice_steal_gain_l`, and
+  `diagnostics_max_voice_steal_gain_r`: the stolen voice envelope and runtime
+  gains that produced the maximum steal score.
+- `diagnostics_max_voice_steal_voice` and
+  `diagnostics_max_voice_steal_tick`: the voice slot and zero-based
+  ADSR/control tick index where the maximum steal score was recorded.
 - `diagnostics_runtime_gain_updates`,
   `diagnostics_runtime_phase_updates`, and
   `diagnostics_runtime_filter_updates`: runtime register writes that changed

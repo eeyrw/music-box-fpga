@@ -198,6 +198,12 @@ struct RenderDiagnostics {
   uint64_t max_abs_mix_input_l = 0;
   uint64_t max_abs_mix_input_r = 0;
   uint64_t voice_steals = 0;
+  uint64_t max_voice_steal_score = 0;
+  uint32_t max_voice_steal_level = 0;
+  uint32_t max_voice_steal_gain_l = 0;
+  uint32_t max_voice_steal_gain_r = 0;
+  int max_voice_steal_voice = -1;
+  uint64_t max_voice_steal_tick = 0;
   uint64_t runtime_envelope_updates = 0;
   uint64_t runtime_gain_updates = 0;
   uint64_t runtime_phase_updates = 0;

@@ -315,6 +315,7 @@ int main() {
     if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos ||
+        diagnostics_text.find("diagnostics_max_voice_steal_score") == std::string::npos ||
         diagnostics_text.find("diagnostics_runtime_envelope_updates") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_runtime_envelope_jump_tick") == std::string::npos) {
       throw std::runtime_error("diagnostics JSON did not include pre-saturation maxima");
@@ -873,7 +874,8 @@ int main() {
     quiet_region.base_gain = 1;
     std::vector<render::Region> audible_steal_regions{loud_region, quiet_region};
     RecordingSink audible_steal_sink;
-    render::McuModel audible_steal_mcu(audible_steal_sink, audible_steal_regions);
+    render::RenderDiagnostics audible_steal_diag;
+    render::McuModel audible_steal_mcu(audible_steal_sink, audible_steal_regions, &audible_steal_diag);
     render::NoteEvent audible_note = steal_note;
     audible_note.on = true;
     audible_note.velocity = 127;
@@ -889,6 +891,15 @@ int main() {
     audible_steal_mcu.handle_event(audible_note);
     if (audible_steal_sink.last_commit_voice != render::kNumVoices - 1) {
       throw std::runtime_error("voice steal did not prefer the quietest audible slot over the oldest slot");
+    }
+    if (audible_steal_diag.voice_steals != 1 ||
+        audible_steal_diag.max_voice_steal_voice != render::kNumVoices - 1 ||
+        audible_steal_diag.max_voice_steal_level != uint32_t(render::kQ15Full) ||
+        audible_steal_diag.max_voice_steal_gain_l != 1 ||
+        audible_steal_diag.max_voice_steal_gain_r != 1 ||
+        audible_steal_diag.max_voice_steal_score != uint64_t(render::kQ15Full) ||
+        audible_steal_diag.max_voice_steal_tick != 1) {
+      throw std::runtime_error("voice steal diagnostics did not record stolen voice audibility");
     }
 
     std::cout << "PASS: render support maps channel-10 percussion to SF2 bank 128 and silences unmapped notes\n";
