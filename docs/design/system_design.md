@@ -29,9 +29,10 @@ Implemented RTL pieces:
 - Per-channel Q1.15 gain, runtime envelope level, optional biquad IIR filter, and
   saturated stereo mixing.
 - Abstract one-word memory request/response interface.
-- Per-voice two-line cache through `voice_line_cache` on the cached render path,
-  including conservative next-line stride prefetch, plus a minimal single-line
-  `wave_memory_subsystem` baseline adapter for some common/board wrappers.
+- Per-voice/per-stream two-line cache through `voice_line_cache` on the cached
+  render path, including conservative next-line stride prefetch, plus a minimal
+  single-line `wave_memory_subsystem` baseline adapter for some common/board
+  wrappers.
 - Output sample FIFO for wrappers that consume rendered PCM frames.
 
 Board/common wrapper pieces under `fpga/common/rtl` provide the current
@@ -248,11 +249,12 @@ not simply increasing `NUM_VOICES`.
 The current 100 MHz / 48 kHz budget is about 2083 core cycles per stereo output
 frame. The arithmetic and scheduler path is estimated to fit the normal
 `NUM_VOICES = 256` build if endpoint samples are served ideally, but the present
-single-line, one-outstanding memory adapter is expected to limit practical
-polyphony first. With the current DDR profile and poor inter-voice cache
-locality, the working target is about 120 mostly-mono voices or about 60
-mostly-stereo voices. The detailed method, formulas, assumptions, and caveats are
-recorded in `voice_pipeline.md`.
+one-outstanding memory adapter is expected to limit practical polyphony before
+the arithmetic pipe does. `voice_line_cache` now keeps two cached lines per
+voice/stream pair, separating mono/left reads from right stereo reads; this
+removed the worst linked-stereo cache self-eviction seen in the fixed DDR stress
+window. The detailed method, formulas, assumptions, and caveats are recorded in
+`voice_pipeline.md`.
 
 Minimum measurements before board migration:
 
@@ -290,6 +292,24 @@ second-half next-line prefetch has a low useful-prefetch ratio. The next cache
 work should therefore improve prediction quality and demand stall reduction
 rather than only increasing the number of speculative reads.
 
+The follow-up stream-local cache pass was checked with the same SGM/Hedwig input
+using a shorter fixed window:
+
+```bash
+make render-memory MEMORY_PROFILE=ddr START_SECONDS=164 SECONDS=5 \
+  SF2="/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2" \
+  MIDI="/media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid"
+```
+
+Against the pre-stream-local baseline for that 164s to 169s window, demand
+misses fell from `1,856,176` to `262,933`, external line requests fell from
+`2,772,578` to `697,665`, and useful prefetch ratio improved from about `19.4%`
+to about `86.7%`. Average render cycles moved from `688.391` to `645.828`, max
+render cycles moved from `1251` to `1047`, and both runs had
+`deadline_misses = 0` and `over_budget_frames = 0`. The next measured policy
+change should therefore be phase-aware prefetch rather than more blind
+speculation.
+
 ## Board-Level Backlog
 
 The old C++ full-system render path has been removed; it was too slow and still
@@ -318,23 +338,24 @@ the generic RTL to one vendor flow.
    or timing data justifies the added control complexity.
 
 3. Add throughput and memory-pressure observability before changing policy.
-   The next render counters should separate voice-scheduler cost from
-   memory-service cost: context issue/retire counts, DSP bubbles, invalid-slot
-   scan cycles, word-request FIFO depth, fetch-slot pressure, DSP context queue
-   occupancy, demand hit/miss counts, prefetch hit/use/drop counts, external line
-   requests, response latency, render latency, deadline misses, and output FIFO
-   underruns. These counters define the baseline for any 256-voice work.
+   The current render counters already separate many memory-service costs:
+   word-request FIFO depth, fetch-slot pressure, DSP context queue occupancy,
+   memory-stall cycles, DSP-ready/no-context cycles, demand hit/miss counts,
+   prefetch issue/fill/use/drop/late counts, external line requests, response
+   latency, render latency, and deadline misses. Remaining scheduler-only
+   counters such as context issue/retire counts, DSP-stage occupancy, and
+   invalid-slot scan cycles can be added when a scheduler change needs them.
 
 4. Continue the wavetable-optimized memory subsystem in incremental stages.
-   The first optimized passes now carry `voice_id` locality into
-   `voice_line_cache`, use two lines per voice, satisfy same-line interpolation
-   endpoints from one fill, and add conservative next-line stride prefetch from
-   second-half demand hits. The next pass should use `phase_inc` to prefetch the
-   next output frame's left/right endpoint lines, including loop-wrap cases, and
-   should separate left/right stream locality before making prefetch more
-   aggressive. Larger DDR burst lines, multiple outstanding line fills, and
-   tagged endpoint assembly are later steps once counters show that the simpler
-   cache/prefetch design cannot meet the 256-stereo target.
+   The optimized passes now carry both `voice_id` and `stream_id` locality into
+   `voice_line_cache`, use two lines per voice/stream, satisfy same-line
+   interpolation endpoints from one fill, and add conservative next-line stride
+   prefetch from second-half demand hits. The next pass should use `phase_inc`
+   and loop/release context to prefetch the next output frame's actual left/right
+   endpoint lines, including loop-wrap cases. Larger DDR burst lines, multiple
+   outstanding line fills, and tagged endpoint assembly are later steps once
+   counters show that the simpler stream-local cache/prefetch design cannot meet
+   the 256-stereo target.
 
 5. Replace the C++ storage model with concrete DDR3 controller models.
    The current board target is a Micron `MT41K256M16TW` DDR3 device behind a

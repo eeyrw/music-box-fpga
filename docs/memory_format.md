@@ -140,23 +140,27 @@ this external contract.
 
 `rtl/memory/voice_line_cache.sv` is the current cached render path used by
 `wavetable_cached_render_core`. It adapts ordered one-word requests to an
-external aligned line-read interface while keeping two cached lines per voice.
-The default line size is `LINE_WORDS = 32`.
+external aligned line-read interface while keeping two cached lines per
+voice/stream pair. The default line size is `LINE_WORDS = 32`.
 
-- Core side: `req` carries `valid/voice/addr`, `req_ready` accepts one request,
-  and `rsp` returns `valid/data` in accepted-request order.
+- Core side: `req` carries `valid/voice/stream_id/addr`, `req_ready` accepts one
+  request, and `rsp` returns `valid/data` in accepted-request order.
+  `stream_id` separates the mono/left sample stream from the right stereo stream
+  so linked stereo endpoint reads do not replace each other's cached lines.
 - External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
   aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
   on `ext_rsp_data`, with word 0 in bits `[15:0]`.
-- A demand hit returns the requested word from the selected voice's cached lines.
+- A demand hit returns the requested word from the selected voice/stream's cached lines.
   A miss backpressures the core-side request port, issues one external aligned
-  line request, fills one way for that voice, and returns the requested word.
+  line request, fills one way for that voice/stream, and returns the requested
+  word.
 - The cache includes a conservative stride prefetch path. When a demand hit
   reads the second half of a line, the adapter may queue a request for the next
-  aligned line for the same voice. It does not predict loop wrap or sample-region
-  boundaries. Demand requests take priority over queued prefetches, and prefetch
-  requests issue only while the external line interface is otherwise idle.
-  External traffic remains one outstanding line request at a time.
+  aligned line for the same voice and stream. It does not predict loop wrap or
+  sample-region boundaries. Demand requests take priority over queued
+  prefetches, and prefetch requests issue only while the external line interface
+  is otherwise idle. External traffic remains one outstanding line request at a
+  time.
 - Cache observability is exposed as hit, miss, line fill, same-line endpoint hit,
   replacement, prefetch issued, prefetch filled, prefetch used, prefetch dropped,
   and prefetch late pulses. `prefetch_used` fires once when a later demand lookup
@@ -164,6 +168,15 @@ The default line size is `LINE_WORDS = 32`.
   line. `prefetch_late` means a demand miss needed a queued or in-flight
   prefetch line before it became a normal hit. `response_trace_pulse` and
   `response_trace_latency` still report one pulse per returned word.
+
+The stream split is a cache-locality contract, not a change to memory ordering.
+Mono and left-channel endpoints use `STREAM_LEFT`; right-channel endpoints use
+`STREAM_RIGHT`. A mono voice therefore still uses one stream, while a stereo
+voice gets independent left and right line/tag/replacement state. This keeps
+linked SF2 stereo samples from evicting each other when their absolute left and
+right regions alternate through the same voice id. The response path remains
+in-order and does not expose stream metadata on `rsp`; the stream id is used
+only to find or fill the correct cache entry for the accepted request.
 
 ## Minimal Line Memory Subsystem
 
@@ -173,9 +186,9 @@ wrapper or a burst-capable memory model. It contains one cached line and support
 one outstanding core request. It remains as a small baseline adapter and is still
 used by some common/board wrapper paths:
 
-- Core side: `core_req` carries `valid/voice/addr`; this baseline adapter ignores
-  `voice` and caches by address only. `core_req_ready` and `core_rsp` complete
-  the ordered one-word handshake.
+- Core side: `core_req` carries `valid/voice/stream_id/addr`; this baseline
+  adapter ignores `voice` and `stream_id` and caches by address only.
+  `core_req_ready` and `core_rsp` complete the ordered one-word handshake.
 - External side: `ext_req_valid`, `ext_req_ready`, and `ext_req_addr` request an
   aligned line. `ext_rsp_valid` returns `LINE_WORDS` packed signed 16-bit words
   on `ext_rsp_data`, with word 0 in bits `[15:0]`.
@@ -300,47 +313,66 @@ the access pattern of a polyphonic wavetable synthesizer, where each active voic
 walks through one sample region with a predictable Q24.8 phase stride while the
 renderer interleaves requests from many voices.
 
-A later memory subsystem should evaluate these improvements in order:
+The current optimized cache work is staged. Completed steps:
 
-1. Add the next layer of counters that separates voice-scheduler cost from
-   memory-service cost: cross-line endpoint pairs, endpoint queue depth,
-   fetch-slot pressure, DSP context queue occupancy, memory-stall cycles, and
-   DSP-ready/no-context cycles. The current top-level render/deadline counters
-   and cache demand/prefetch counters are already present.
-2. Carry explicit channel/stream locality into the endpoint/cache path. The
-   current cache keys by `voice_id` and line tag only; linked-stereo regions need
-   independent left/right stream tags because left and right samples usually live
-   in separate memory regions but share one voice id.
-3. Move stride prediction closer to `voice_endpoint_fetch`, or add enough request
+1. Added counters that separate voice-scheduler cost from memory-service cost:
+   cross-line endpoint pairs, endpoint queue high-water marks, fetch-slot
+   pressure, DSP context queue occupancy, memory-stall cycles, and
+   DSP-ready/no-context cycles. These live beside the top-level render/deadline,
+   demand-cache, and prefetch counters.
+2. Added explicit stream locality to the endpoint/cache path. The core word
+   request now carries `stream_id`, and `voice_line_cache` keys cache lines by
+   `voice_id`, `stream_id`, and line tag. Linked-stereo regions therefore get
+   independent left and right stream tags while preserving the one-word ordered
+   request/response interface.
+
+Remaining improvements should be evaluated in order:
+
+1. Add any still-missing scheduler-only counters when a scheduler change needs
+   them, such as issued context count, retired context count, DSP-stage
+   occupancy, and invalid-slot scan cycles. The current top-level
+   render/deadline counters, cache demand/prefetch counters, endpoint/cache
+   high-water counters, memory-stall counters, and DSP-ready/no-context counters
+   are already present.
+2. Move stride prediction closer to `voice_endpoint_fetch`, or add enough request
    metadata for `voice_line_cache` to know the current channel, endpoint kind,
    `phase_inc`, next phase, loop range, release state, and sample length. This is
    the information needed to predict the actual next endpoint line instead of
    blindly fetching `aligned_addr + LINE_WORDS`.
-4. Replace the current second-half next-line prefetch with phase-aware prefetch:
+3. Replace the current second-half next-line prefetch with phase-aware prefetch:
    prefetch the next output frame's L0/L1 and, for stereo, R0/R1 endpoint lines;
    suppress same-line duplicates; handle loop-wrap targets; and stop prefetching
    no-loop or released voices near the end of the region. Demand reads must
    continue to outrank speculative prefetches.
-5. Re-run the fixed stress windows and compare `cache_demand_misses`,
+4. Re-run the fixed stress windows and compare `cache_demand_misses`,
    `prefetch_used / prefetch_issued`, `avg_render_cycles`, `max_render_cycles`,
    `deadline_misses`, and `over_budget_frames`. Keep PCM exact-match as the
    gating correctness check.
-6. Evaluate larger burst lines only after phase-aware prefetch counters exist.
+5. Evaluate larger burst lines only after phase-aware prefetch counters exist.
    Larger lines can amortize DDR command overhead, but the current stress result
    shows enough dropped or unused speculative reads that line-size changes should
    be justified by render-cycle counters, not hit-rate alone.
-7. Add multi-request tracking so cache fills and prefetches can overlap with
+6. Add multi-request tracking so cache fills and prefetches can overlap with
    sequential voice rendering when the single-fill path is measured as the
    remaining limiter.
-8. Add tagged or reordered endpoint assembly only if in-order responses still
+7. Add tagged or reordered endpoint assembly only if in-order responses still
    block useful DDR/cache overlap.
 
-Current measurement caveat: in the 144-second Hedwig/SGM DDR stress window, the
-simple next-line prefetch reached only about `11.1%` useful prefetches
-(`887,025 / 7,965,833`) before the run was interrupted near completion. It still
-completed the measured frames without deadline misses, but the low useful ratio
-means the next optimization should improve prefetch targeting before adding more
-speculation.
+Current measurement status:
+
+- In the earlier 144-second Hedwig/SGM DDR stress window, the simple next-line
+  prefetch reached only about `11.1%` useful prefetches
+  (`887,025 / 7,965,833`) before the run was interrupted near completion. It
+  still completed the measured frames without deadline misses, but the low useful
+  ratio showed that prefetch targeting and stream locality needed attention
+  before adding more speculation.
+- In the fixed 164-second to 169-second Hedwig/SGM DDR window, stream-local
+  cache tags reduced `cache_demand_misses` from `1,856,176` to `262,933`,
+  reduced `external_line_requests` from `2,772,578` to `697,665`, improved
+  `prefetch_used / prefetch_issued` from about `19.4%` to about `86.7%`, reduced
+  `avg_render_cycles` from `688.391` to `645.828`, and reduced
+  `max_render_cycles` from `1251` to `1047`. Both runs had zero deadline misses
+  and zero over-budget frames.
 
 The generic core-side memory port should still remain a one-word in-order read
 interface for the first optimized pass where practical. Throughput work in the

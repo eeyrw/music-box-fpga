@@ -220,7 +220,7 @@ and PCM saturation to `voice_dsp_pipeline`.
 
 ```text
 core one-word PCM read request
-  -> per-voice two-line cache lookup
+  -> per-voice/per-stream two-line cache lookup
   -> external aligned line read on miss
   -> one-word PCM response
 ```
@@ -228,12 +228,15 @@ core one-word PCM read request
 It keeps ordered one-word responses and one outstanding external line request,
 with demand misses taking priority over conservative next-line prefetch. A
 prefetch can be queued after a demand hit reaches the second half of a cache
-line; phase-aware loop/channel prediction is deferred. `wave_memory_subsystem`
-remains as the older single-line baseline adapter used by some common/board
-wrapper paths. The renderer still issues absolute word addresses with a voice id,
-and responses return in accepted-request order. Future cache policy work should
-keep DSP arithmetic out of this adapter; phase-aware prefetch may need metadata
-from `voice_endpoint_fetch`.
+line for the same voice/stream; phase-aware loop/channel prediction is deferred.
+`stream_id` separates mono/left endpoint reads from right stereo endpoint reads
+so linked stereo regions do not evict each other's cache lines while sharing one
+voice id. `wave_memory_subsystem` remains as the older single-line baseline
+adapter used by some common/board wrapper paths. The renderer still issues
+absolute word addresses with a voice id and stream id, and responses return in
+accepted-request order. Future cache policy work should keep DSP arithmetic out
+of this adapter; phase-aware prefetch may need metadata from
+`voice_endpoint_fetch`.
 
 ## Audio Layer
 

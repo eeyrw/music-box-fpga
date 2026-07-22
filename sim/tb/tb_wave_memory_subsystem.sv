@@ -64,6 +64,7 @@ module tb_wave_memory_subsystem;
       @(negedge clk);
       core_req.valid = 1'b1;
       core_req.voice = '0;
+      core_req.stream_id = STREAM_LEFT;
       core_req.addr = address;
       while (!core_req_ready)
         @(negedge clk);

@@ -143,8 +143,9 @@ module tb_voice_line_cache;
     end
   end
 
-  task automatic read_word(
+  task automatic read_word_stream(
     input logic [VOICE_ID_WIDTH-1:0] voice,
+    input logic [STREAM_ID_WIDTH-1:0] stream_id,
     input logic [ADDR_WIDTH-1:0] address,
     input int expected
   );
@@ -156,6 +157,7 @@ module tb_voice_line_cache;
         @(negedge clk);
       req.valid = 1'b1;
       req.voice = voice;
+      req.stream_id = stream_id;
       req.addr = address;
       @(negedge clk);
       req.valid = 1'b0;
@@ -176,6 +178,16 @@ module tb_voice_line_cache;
         errors++;
         end
       end
+    end
+  endtask
+
+  task automatic read_word(
+    input logic [VOICE_ID_WIDTH-1:0] voice,
+    input logic [ADDR_WIDTH-1:0] address,
+    input int expected
+  );
+    begin
+      read_word_stream(voice, STREAM_LEFT, address, expected);
     end
   endtask
 
@@ -239,19 +251,24 @@ module tb_voice_line_cache;
     expect_count("same-line hit count", hit_count, 1);
     expect_count("same-line endpoint hit count", same_line_hit_count, 1);
 
+    read_word_stream('0, STREAM_RIGHT, 32'd6, -258);
+    expect_count("right stream same line is separate miss", ext_request_count, 2);
+    read_word('0, 32'd6, -258);
+    expect_count("left stream survives right stream fill", ext_request_count, 2);
+
     read_word(VOICE_ID_WIDTH'(1), 32'd64, 148);
-    expect_count("second voice miss external requests", ext_request_count, 2);
+    expect_count("second voice miss external requests", ext_request_count, 3);
 
     read_word('0, 32'd8, -244);
-    expect_count("voice 0 line survives voice 1 miss", ext_request_count, 2);
+    expect_count("voice 0 line survives voice 1 miss", ext_request_count, 3);
 
     read_word('0, 32'd40, -20);
     read_word('0, 32'd70, 190);
-    expect_count("third voice-local line external requests", ext_request_count, 4);
+    expect_count("third voice-local line external requests", ext_request_count, 5);
     expect_count("replacement count", replacement_count, 1);
 
     read_word('0, 32'd40, -20);
-    expect_count("unreplaced second way hit", ext_request_count, 4);
+    expect_count("unreplaced second way hit", ext_request_count, 5);
 
     ext_req_ready = 1'b0;
     @(negedge clk);
@@ -259,6 +276,7 @@ module tb_voice_line_cache;
       @(negedge clk);
     req.valid = 1'b1;
     req.voice = '0;
+    req.stream_id = STREAM_LEFT;
     req.addr = 32'd128;
     @(negedge clk);
     req.valid = 1'b0;

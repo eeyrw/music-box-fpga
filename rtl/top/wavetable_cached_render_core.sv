@@ -85,6 +85,7 @@ module wavetable_cached_render_core #(
     .busy,
     .mem_req_valid(mem_req.valid),
     .mem_req_voice(mem_req.voice),
+    .mem_req_stream_id(mem_req.stream_id),
     .mem_req_addr(mem_req.addr),
     .mem_req_ready,
     .mem_rsp_valid(mem_rsp.valid),

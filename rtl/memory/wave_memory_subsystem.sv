@@ -36,11 +36,13 @@ module wave_memory_subsystem #(
   logic pending_hit;
   logic [15:0] latency_counter;
   logic [VOICE_ID_WIDTH-1:0] unused_core_req_voice;
+  logic [STREAM_ID_WIDTH-1:0] unused_core_req_stream_id;
 
   assign core_req_ready = (state == STATE_IDLE);
   assign ext_req_valid = (state == STATE_EXT_REQ);
   assign ext_req_addr = pending_line_addr;
   assign unused_core_req_voice = core_req.voice;
+  assign unused_core_req_stream_id = core_req.stream_id;
 
   always_comb begin
     pending_hit = cache_valid && (cache_tag == core_req.addr[31:INDEX_WIDTH]);

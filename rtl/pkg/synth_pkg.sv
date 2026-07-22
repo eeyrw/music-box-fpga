@@ -19,8 +19,11 @@ package synth_pkg;
   localparam int NUM_VOICES = 32;
 `endif
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
+  localparam int STREAM_ID_WIDTH = 1;
 
   /* verilator lint_off UNUSEDPARAM */
+  localparam logic [STREAM_ID_WIDTH-1:0] STREAM_LEFT = 1'b0;
+  localparam logic [STREAM_ID_WIDTH-1:0] STREAM_RIGHT = 1'b1;
   localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
   localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;
   localparam logic [1:0] LOOP_MODE_UNTIL_RELEASE = 2'd2;
@@ -39,6 +42,7 @@ package synth_pkg;
   typedef struct packed {
     logic                       valid;
     logic [VOICE_ID_WIDTH-1:0]  voice;
+    logic [STREAM_ID_WIDTH-1:0] stream_id;
     logic [ADDR_WIDTH-1:0]      addr;
   } wave_word_req_t;
 

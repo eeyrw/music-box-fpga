@@ -243,7 +243,10 @@ low-rate compared with rendering.
 
 ## Target Wave-Memory Architecture
 
-The current global one-line cache should remain only as a simple baseline.
+Status note: the original global one-line cache now remains only as the
+`wave_memory_subsystem` baseline adapter. The cached render path uses
+`voice_line_cache`, with two cached lines per voice/stream pair and explicit
+mono/left versus right stream metadata on `wave_word_req_t`.
 
 The next memory subsystem should exploit the access pattern:
 
@@ -269,7 +272,7 @@ Recommended optimized-memory sequence:
    `voice_endpoint_fetch`, where voice index, stereo mode, endpoint frames, phase
    increment, and loop context are already available.
 
-3. Replace the global one-line cache with per-voice line state.
+3. Replace the global one-line cache with per-voice/per-stream line state.
    Give each voice at least two cached lines for the left/mono stream so `L0`
    and `L1` can straddle a line boundary without evicting the current line.
    Stereo voices need separate left and right stream tags because linked SF2
@@ -355,14 +358,18 @@ after the measured per-voice cache/prefetch path proves insufficient.
    voice-bank resource pass before making further area/timing claims.
 
 9. Add render and memory-pressure counters.
-   Implement the counters listed in the optimized-memory sequence before
-   replacing the one-line cache. Expose enough of them through simulation summary
-   JSON and, where useful, common status registers to compare workloads.
+   The cached render path now exposes render/deadline, cache demand/prefetch,
+   endpoint pressure, queue high-water, memory-stall, and DSP-ready/no-context
+   counters through simulation summary JSON. Common status registers still expose
+   only the board-facing runtime status subset.
 
 10. Design the first per-voice wave cache.
    Preserve ordered word responses for the first pass if practical, carry
    voice/channel locality internally, and cover mono same-line, mono cross-line,
    stereo independent streams, loop-wrap, reset, and backpressure behavior.
+   The first stream-local `voice_line_cache` pass now covers voice/stream
+   locality, mono same-line behavior, reset, backpressure, and prefetch priority;
+   phase-aware loop-wrap prefetch remains future work.
 
 11. Add stride-aware prefetch after the demand cache is stable.
    Prefetch the next-frame line from `phase_inc` and loop context, keep demand

@@ -170,37 +170,44 @@ module voice_endpoint_fetch #(
   always_comb begin
     mem_req.addr = 32'd0;
     mem_req.voice = '0;
+    mem_req.stream_id = STREAM_LEFT;
     if (!word_req_empty) begin
       mem_req.addr = word_req_queue[word_req_rd].req.addr;
       mem_req.voice = word_req_queue[word_req_rd].req.voice;
+      mem_req.stream_id = word_req_queue[word_req_rd].req.stream_id;
     end
 
     enqueue_word_req = 1'b0;
     enqueue_word_req_data = '0;
     enqueue_word_req_data.slot = enq_slot;
     enqueue_word_req_data.req.voice = fetch_slot_context[enq_slot].voice_index;
+    enqueue_word_req_data.req.stream_id = STREAM_LEFT;
     unique case (enq_state)
       ENQ_L0: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_L0;
+        enqueue_word_req_data.req.stream_id = STREAM_LEFT;
         enqueue_word_req_data.req.addr = enq_base_addr +
                                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_0};
       end
       ENQ_L1: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_L1;
+        enqueue_word_req_data.req.stream_id = STREAM_LEFT;
         enqueue_word_req_data.req.addr = enq_base_addr +
                                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_1};
       end
       ENQ_R0: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_R0;
+        enqueue_word_req_data.req.stream_id = STREAM_RIGHT;
         enqueue_word_req_data.req.addr = enq_base_addr_r +
                                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r0};
       end
       ENQ_R1: begin
         enqueue_word_req = !word_req_full;
         enqueue_word_req_data.endpoint = ENDPOINT_R1;
+        enqueue_word_req_data.req.stream_id = STREAM_RIGHT;
         enqueue_word_req_data.req.addr = enq_base_addr_r +
                                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, enq_frame_r1};
       end

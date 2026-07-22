@@ -37,6 +37,7 @@ module tb_wavetable_render_core_asset;
   logic busy;
   logic mem_req_valid;
   logic [VOICE_ID_WIDTH-1:0] mem_req_voice;
+  logic [STREAM_ID_WIDTH-1:0] mem_req_stream_id;
   logic [31:0] mem_req_addr;
   logic mem_req_ready;
   logic mem_rsp_valid;
@@ -101,6 +102,7 @@ module tb_wavetable_render_core_asset;
 
   assign core_mem_req.valid = mem_req_valid;
   assign core_mem_req.voice = mem_req_voice;
+  assign core_mem_req.stream_id = mem_req_stream_id;
   assign core_mem_req.addr = mem_req_addr;
   assign mem_rsp_valid = core_mem_rsp.valid;
   assign mem_rsp_data = core_mem_rsp.data;

@@ -836,6 +836,28 @@ crossing, controller FIFO pressure, or multiple outstanding read throughput.
 Board-level DDR acceptance must use the Smart Artix DDR line-reader tests,
 board-loader render path, or hardware measurements.
 
+The fixed high-pressure comparison window for cache-policy work is currently
+the SGM/Hedwig render from `START_SECONDS=164` for `SECONDS=5` with
+`MEMORY_PROFILE=ddr`. In that window, adding `stream_id` to the core word
+request and splitting `voice_line_cache` tags by mono/left versus right stream
+changed the measured counters as follows:
+
+| Counter | Before stream-local cache | After stream-local cache |
+| --- | ---: | ---: |
+| `cache_demand_misses` | `1,856,176` | `262,933` |
+| `external_line_requests` | `2,772,578` | `697,665` |
+| `prefetch_issued` | `609,294` | `390,329` |
+| `prefetch_used` | `118,197` | `338,225` |
+| `prefetch_used / prefetch_issued` | `19.4%` | `86.7%` |
+| `avg_render_cycles` | `688.391` | `645.828` |
+| `max_render_cycles` | `1251` | `1047` |
+| `deadline_misses` | `0` | `0` |
+| `over_budget_frames` | `0` | `0` |
+
+This comparison keeps the same MIDI/SF2 input, output sample rate, DDR timing
+profile, and 240,000-frame window. It is a policy comparison inside the
+simulation harness, not a board-level DDR timing claim.
+
 The C++ path intentionally reads standard MIDI files directly; no intermediate
 event file or generated MIDI SystemVerilog include is part of the current flow.
 The parser is validated against the local Standard MIDI File reference in
