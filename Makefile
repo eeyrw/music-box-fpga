@@ -100,6 +100,9 @@ HARNESS_RENDER_COMMON_SRCS := \
 HARNESS_WAV_SRC := \
 	$(abspath sim/harness/common/wav_writer.cpp)
 
+HARNESS_INTERRUPT_SRC := \
+	$(abspath sim/harness/common/render_interrupt.cpp)
+
 HARNESS_MEMORY_PROFILE_SRC := \
 	$(abspath sim/harness/common/memory_profile.cpp)
 
@@ -283,6 +286,7 @@ render-reference:
 		$(abspath sim/harness/apps/render_reference_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_WAV_SRC) \
+		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
 		-o $(BUILD_DIR)/render_reference_cpp
 	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
@@ -301,6 +305,7 @@ render-rtl-core:
 		$(abspath sim/harness/apps/render_rtl_core_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_WAV_SRC) \
+		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
 		$(abspath sim/harness/dut/core_rtl_harness.cpp) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)"
@@ -324,6 +329,7 @@ render-memory:
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_MEMORY_PROFILE_SRC) \
 		$(HARNESS_WAV_SRC) \
+		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/dut/rtl_harness.cpp) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)"
 	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_cached_render_core.mk \
@@ -347,6 +353,7 @@ render-board-loader:
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_MEMORY_PROFILE_SRC) \
 		$(HARNESS_WAV_SRC) \
+		$(HARNESS_INTERRUPT_SRC) \
 		$(HARNESS_BOARD_LOADER_SRCS) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)"

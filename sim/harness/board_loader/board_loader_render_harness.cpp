@@ -1,6 +1,7 @@
 #include "board_loader_render_harness.h"
 
 #include "Vboard_loader_render_tops.h"
+#include "render_interrupt.h"
 
 #include <stdexcept>
 #include <string>
@@ -46,7 +47,7 @@ void BoardLoaderRenderHarness::load_from_sd() {
 
   int timeout = 0;
   const int timeout_limit = int((sd_image_.size() / 512u + 64u) * 20000u);
-  while (!top_->loader_asset_loaded && timeout < timeout_limit) {
+  while (!top_->loader_asset_loaded && timeout < timeout_limit && !interrupt_requested()) {
     if (top_->loader_sd_error_code != 0 || top_->loader_error_code != 0) {
       throw std::runtime_error("loader error sd=" + std::to_string(int(top_->loader_sd_error_code)) +
                                " loader=" + std::to_string(int(top_->loader_error_code)) +

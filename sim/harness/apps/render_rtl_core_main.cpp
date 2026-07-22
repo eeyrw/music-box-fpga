@@ -2,6 +2,7 @@
 #include "midi_parser.h"
 #include "core_rtl_harness.h"
 #include "reference_synth.h"
+#include "render_interrupt.h"
 #include "render_support.h"
 #include "sf2_loader.h"
 #include "wav_writer.h"
@@ -27,6 +28,7 @@ int abs_diff(int16_t a, int16_t b) {
 
 int main(int argc, char** argv) {
   try {
+    render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
@@ -54,7 +56,8 @@ int main(int argc, char** argv) {
     std::string wav_path = args.out_dir + "/out.wav";
     render::WavWriter wav(wav_path, args.sample_rate);
 
-    for (int produced = 0; produced < sample_count; ++produced) {
+    int produced = 0;
+    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -81,10 +84,10 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (nonzero_words == 0) {
+    if (!render::interrupt_requested() && nonzero_words == 0) {
       throw std::runtime_error("RTL core render produced all-zero PCM; increase SECONDS or inspect event/region mapping");
     }
-    if (mismatches != 0) {
+    if (!render::interrupt_requested() && mismatches != 0) {
       throw std::runtime_error("RTL core render found " + std::to_string(mismatches) +
                                " RTL/reference mismatches, max_diff_l=" + std::to_string(max_diff_l) +
                                " max_diff_r=" + std::to_string(max_diff_r));
@@ -119,6 +122,7 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_avg_stereo_voices\": " << avg(rtl.stereo_voice_sum())
           << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices()
           << ",\n" << render::diagnostics_json_fields(diagnostics)
+          << ",\n  \"interrupted\": " << (render::interrupt_requested() ? "true" : "false")
           << ",\n  \"register_writes_total\": " << reg.total
           << ",\n  \"register_writes_envelope\": " << reg.envelope
           << ",\n  \"register_writes_gain_runtime\": " << reg.gain_runtime
@@ -129,7 +133,14 @@ int main(int argc, char** argv) {
           << ",\n  \"register_writes_config\": " << reg.config
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()), stats.str());
+                          produced, int(events.size()), stats.str());
+
+    if (render::interrupt_requested()) {
+      std::cout << "INTERRUPTED: RTL core/reference render wrote " << produced
+                << " of " << sample_count << " stereo samples to " << wav_path
+                << ", mismatches_seen=" << mismatches << "\n";
+      return 130;
+    }
 
     std::cout << "PASS: RTL core/reference render matched " << sample_count
               << " stereo samples, regions=" << regions.size()

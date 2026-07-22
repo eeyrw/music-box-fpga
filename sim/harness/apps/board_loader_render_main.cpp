@@ -4,6 +4,7 @@
 #include "memory_profile.h"
 #include "midi_parser.h"
 #include "reference_synth.h"
+#include "render_interrupt.h"
 #include "render_support.h"
 #include "sf2_loader.h"
 
@@ -19,6 +20,7 @@
 
 int main(int argc, char** argv) {
   try {
+    render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
@@ -34,6 +36,10 @@ int main(int argc, char** argv) {
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
     render::BoardLoaderRenderHarness board(sd_image, sf2_bytes.size(), wav_path, args.sample_rate, memory_profile);
     board.load_from_sd();
+    if (render::interrupt_requested()) {
+      std::cout << "INTERRUPTED: board loader render stopped during SD load, wav=" << wav_path << "\n";
+      return 130;
+    }
 
     const auto& loaded = board.ddr_bytes();
     if (loaded.size() < sf2_bytes.size()) {
@@ -59,7 +65,8 @@ int main(int argc, char** argv) {
     size_t event_index = 0;
     int next_adsr_sample = 0;
     int mismatches = 0;
-    for (int produced = 0; produced < sample_count; ++produced) {
+    int produced = 0;
+    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -79,10 +86,10 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (board.nonzero_output_words() == 0) {
+    if (!render::interrupt_requested() && board.nonzero_output_words() == 0) {
       throw std::runtime_error("board loader render produced all-zero PCM");
     }
-    if (mismatches != 0) {
+    if (!render::interrupt_requested() && mismatches != 0) {
       throw std::runtime_error("board loader render found " + std::to_string(mismatches) +
                                " RTL/reference mismatches");
     }
@@ -95,13 +102,21 @@ int main(int argc, char** argv) {
         ",\n  \"sd_image_bytes\": " + std::to_string(sd_image.size()) +
         ",\n  \"sf2_size_bytes\": " + std::to_string(sf2_bytes.size()) +
         ",\n  \"loaded_words\": " + std::to_string(wave_memory.size()) +
+        ",\n  \"interrupted\": " + std::string(render::interrupt_requested() ? "true" : "false") +
         ",\n  \"nonzero_output_words\": " + std::to_string(board.nonzero_output_words()) +
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
         ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
         ",\n" + render::diagnostics_json_fields(diagnostics) +
         ",\n  \"wav_path\": " + render::json_string(wav_path);
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,
-                          args.sample_rate, sample_count, int(events.size()), extra);
+                          args.sample_rate, produced, int(events.size()), extra);
+
+    if (render::interrupt_requested()) {
+      std::cout << "INTERRUPTED: board loader render wrote " << produced
+                << " of " << sample_count << " stereo samples to " << wav_path
+                << ", mismatches_seen=" << mismatches << "\n";
+      return 130;
+    }
 
     std::cout << "PASS: board loader render loaded " << sf2_bytes.size()
               << " SF2 bytes from raw SD image, matched " << sample_count

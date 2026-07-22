@@ -1,5 +1,6 @@
 #include "midi_parser.h"
 #include "reference_synth.h"
+#include "render_interrupt.h"
 #include "render_support.h"
 #include "sf2_loader.h"
 #include "wav_writer.h"
@@ -13,6 +14,7 @@
 
 int main(int argc, char** argv) {
   try {
+    render::install_interrupt_handler();
     render::Args args = render::parse_args(argc, argv);
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
     int adsr_tick_samples = std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
@@ -34,7 +36,8 @@ int main(int argc, char** argv) {
     std::string wav_path = args.out_dir + "/out.wav";
     render::WavWriter wav(wav_path, args.sample_rate);
 
-    for (int produced = 0; produced < sample_count; ++produced) {
+    int produced = 0;
+    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -49,7 +52,7 @@ int main(int argc, char** argv) {
       if (sample.second != 0) ++nonzero_words;
     }
 
-    if (nonzero_words == 0) {
+    if (!render::interrupt_requested() && nonzero_words == 0) {
       throw std::runtime_error("reference render produced all-zero PCM; increase SECONDS or inspect event/region mapping");
     }
 
@@ -58,10 +61,17 @@ int main(int argc, char** argv) {
           << ",\n  \"algorithm\": \"cpp_reference_synth\""
           << ",\n" << render::render_input_json_fields(args, adsr_tick_samples)
           << ",\n" << render::diagnostics_json_fields(diagnostics)
+          << ",\n  \"interrupted\": " << (render::interrupt_requested() ? "true" : "false")
           << ",\n  \"nonzero_output_words\": " << nonzero_words
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/reference_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()), stats.str());
+                          produced, int(events.size()), stats.str());
+
+    if (render::interrupt_requested()) {
+      std::cout << "INTERRUPTED: C++ reference render wrote " << produced
+                << " of " << sample_count << " stereo samples to " << wav_path << "\n";
+      return 130;
+    }
 
     std::cout << "PASS: C++ reference render produced " << sample_count
               << " stereo samples, regions=" << regions.size()

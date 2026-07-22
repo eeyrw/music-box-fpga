@@ -252,6 +252,12 @@ sample against the C++ fixed-point reference. The output WAV is
 `build/render_board_loader/out.wav`, and the summary JSON is
 `build/render_board_loader/board_loader_render_config.json`.
 
+The C++ render harnesses handle `Ctrl+C` as a graceful interrupt. If a long run
+is stopped, the harness exits at the next sample boundary, rewrites the WAV
+header for the samples already produced, records `interrupted: true` in the
+summary when that target writes one, and exits with status 130 instead of
+reporting PASS.
+
 For board bring-up, generate and verify the raw SD image expected by the Smart
 Artix loader:
 

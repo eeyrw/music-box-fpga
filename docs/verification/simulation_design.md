@@ -282,6 +282,13 @@ build/render_reference/reference_render_config.json
 build/render_reference/out.wav
 ```
 
+If `Ctrl+C` sends `SIGINT` during a C++ render harness, the signal handler only
+marks an interrupt request. The main loop exits at the next sample boundary so
+normal C++ destructors run; this lets `WavWriter` rewrite the RIFF header and
+leave a playable partial WAV for the samples already produced. Interrupted runs
+record `interrupted: true` in the JSON summary when that target writes one and
+return status 130, so they do not count as passing regressions.
+
 ## C++ RTL Core/Reference Flow
 
 `make render-rtl-core` is the fast SF2/MIDI algorithm-verification path. It parses

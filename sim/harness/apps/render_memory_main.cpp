@@ -1,4 +1,5 @@
 #include "midi_parser.h"
+#include "render_interrupt.h"
 #include "render_support.h"
 #include "rtl_harness.h"
 #include "sf2_loader.h"
@@ -47,6 +48,7 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats,
 
 int main(int argc, char** argv) {
   try {
+    render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
     int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
@@ -74,7 +76,8 @@ int main(int argc, char** argv) {
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
-    for (int produced = 0; produced < sample_count; ++produced) {
+    int produced = 0;
+    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -85,11 +88,19 @@ int main(int argc, char** argv) {
       rtl.request_sample(produced);
     }
 
-    if (rtl.nonzero_output_words() == 0) {
+    if (!render::interrupt_requested() && rtl.nonzero_output_words() == 0) {
       throw std::runtime_error("render produced all-zero PCM; increase SECONDS if the MIDI starts later, or inspect event/region mapping");
     }
 
     render::MemoryStats stats = rtl.memory_stats();
+    if (render::interrupt_requested()) {
+      std::cout << "INTERRUPTED: C++ harness rendered " << produced << " of "
+                << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
+      render::write_memory_stats(args.out_dir + "/memory_stats.json", stats, diagnostics);
+      rtl.print_memory_stats();
+      return 130;
+    }
+
     std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
     std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
               << " nonzero_output_words=" << rtl.nonzero_output_words()
