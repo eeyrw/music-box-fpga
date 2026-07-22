@@ -514,6 +514,123 @@ continuity. If they line up with nearby Note On or Note Off events but not the
 control grid, inspect voice commit/release policy and the selected sample's
 attack or release behavior.
 
+### SF2 Access-Span Analysis
+
+Use `tools/analyze_sf2_access_span.py` to estimate sample-memory locality for a
+specific SF2/MIDI pair before changing the RTL memory subsystem. It does not run
+Verilator and does not render audio. It parses the MIDI events, expands matching
+SF2 preset/instrument/sample zones, and simulates only the Q24.8 sample-address
+walk for each selected sample stream.
+
+Example:
+
+```bash
+python3 tools/analyze_sf2_access_span.py \
+  --sf2 /path/to/file.sf2 \
+  --midi /path/to/song.mid \
+  --sample-rate 48000 \
+  --line-words 8,16,32,64 \
+  --lookahead-ms 1,2,5,10 \
+  --json-out build/sf2_access_span/access.json \
+  --md-out build/sf2_access_span/access.md
+```
+
+Important counters:
+
+- `endpoint_reads_per_second`: abstract 16-bit endpoint reads requested by the
+  simulated sample streams.
+- `source_frames_per_output`: source-sample stride caused by Q24.8 `phase_inc`.
+  Values near `1.0` mean one source frame per output frame. Larger values mean a
+  high-pitched or high-rate sample walks through memory faster and spends fewer
+  output frames in each cache line.
+- `estimated_line_dwell_frames`: rough `LINE_WORDS / source_frames_per_output`
+  estimate for how many output frames a stream can stay in one line before
+  crossing. Compare this with DDR miss latency and prefetch lead time.
+- `stream_line_fills_per_second`: per-stream cache-line fills. This is the
+  counter to size per-voice or per-stream caches.
+- `physical_unique_lines_per_second`: unique DDR line addresses touched by the
+  whole workload. This can be much lower than per-stream fills when many notes
+  reuse the same sample regions.
+- `endpoint_to_stream_line_reuse_ratio`: average endpoint reads served per
+  stream-local line fill. Higher values mean cache-line and prefetch reuse are
+  useful.
+- `lookahead_windows_ms`: maximum and percentile counts of newly needed lines
+  inside 1 ms, 2 ms, 5 ms, or 10 ms windows. Use these values to size prefetch
+  queues and outstanding line-fill capacity.
+
+Report interpretation:
+
+- Start with `active_streams_per_frame`. This is the instantaneous number of
+  sample streams the memory system must feed, independent of final mix level.
+- Use `source_frames_per_output` and `estimated_line_dwell_frames` to understand
+  phase-driven address span. If the minimum dwell is close to or below the DDR
+  random-miss latency, demand reads will often miss the audio deadline unless
+  prefetch runs ahead.
+- Use `endpoint_to_stream_line_reuse_ratio` to decide whether line caching is
+  worthwhile. A low value near 1 means each line produces little reuse; high
+  values mean larger lines and prefetch should help.
+- Use `stream_line_fills_per_second` for per-voice or per-stream cache refill
+  pressure. This is intentionally stricter than `physical_unique_lines_per_second`
+  because separate voices may need their own current/next line state even when
+  they touch the same sample file region at different times.
+- Use `physical_unique_lines_per_second` to estimate the concentration of the SF2
+  working set. A low value relative to stream fills suggests the same sample
+  regions are reused heavily across notes.
+- Use the p99 and max values in `lookahead_windows_ms` to size prefetch queues,
+  outstanding fill entries, and audio FIFO slack. Averages are not enough for
+  avoiding underruns.
+- Inspect `top_samples_by_stream_line_fills` to find the sample headers that
+  dominate line-fill pressure. High `source_frames_per_output`, high cross-line
+  rate, or very small dwell identifies samples that need larger lines or earlier
+  prefetch.
+
+This is a memory-address model, not a replacement for `render-memory`. It ignores
+DSP arithmetic, amplitude envelopes, output saturation, and exact hardware cache
+replacement policy. Its purpose is to answer whether an SF2/MIDI workload has
+enough line reuse and prefetch lead time to justify a larger voice-aware memory
+subsystem.
+
+On 2026-07-22, the tool was run against:
+
+```text
+sf2_path  = /home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2
+midi_path = /media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid
+```
+
+The generated reports are under `build/sf2_access_span/`:
+
+```text
+sgm_hedwig_access_lw8.json/.md
+sgm_hedwig_access_lw16.json/.md
+sgm_hedwig_access_lw32.json/.md
+sgm_hedwig_access_lw64.json/.md
+```
+
+Summary:
+
+| `LINE_WORDS` | Stream line fills/s | Physical lines/s | Reuse | 10 ms stream-line p99/max |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 60,245.6 | 2,305.2 | 19.71 | 1,955 / 2,927 |
+| 16 | 30,152.4 | 1,152.8 | 39.37 | 977 / 1,465 |
+| 32 | 15,105.6 | 576.6 | 78.59 | 489 / 735 |
+| 64 | 7,587.6 | 288.5 | 156.46 | 246 / 370 |
+
+The workload spans `264.044 s`, contains `13,855` MIDI Note On events, expands to
+`16,679` selected sample streams, and reaches a maximum of `54` active streams
+with p99 active streams of `38`. These numbers indicate that line reuse is strong
+for this real SF2/MIDI pair, especially with 32- or 64-word lines. The next cache
+design should still use `render-memory` with RTL cache counters to prove that a
+specific replacement and prefetch policy converts this address locality into
+lower render latency.
+
+The regenerated `LINE_WORDS = 32` report also records phase-span metrics:
+`source_frames_per_output` average `0.889`, p95 `1.375`, and max `3.570`.
+The corresponding estimated 32-word line dwell is average `39.19` frames, p50
+`34.86` frames, and minimum `8.96` frames. That means most streams give tens of
+audio frames of prefetch lead time per line, but the fastest notes can cross a
+32-word line in fewer than ten output frames and should drive the prefetch
+worst-case tests.
+
 ### Hedwig Quick-Render ADSR Tick Experiment
 
 On 2026-07-21, the following long MIDI/SF2 quick-render audition was used to

@@ -763,6 +763,69 @@ can do better. If active voices walk unrelated sample regions, especially linked
 stereo left/right regions, the cache line is frequently replaced and the estimate
 approaches the conservative numbers above.
 
+### SF2/MIDI Access-Span Result
+
+The static estimate above treats line misses pessimistically. On 2026-07-22,
+`tools/analyze_sf2_access_span.py` was added to measure the address stream implied
+by a real SF2/MIDI pair without running RTL or rendering audio. The tool expands
+MIDI Note On events through the SF2 preset/instrument/sample tables, simulates
+Q24.8 sample-frame advancement for each selected sample stream, and counts cache
+line reuse and prefetch-window pressure.
+
+The following workload was analyzed:
+
+```bash
+python3 tools/analyze_sf2_access_span.py \
+  --sf2 "/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2" \
+  --midi "/media/yuan/60AE34D2AE34A308/Users/yuan/Desktop/midi合集/Hedwigs_Themefinished.mid" \
+  --sample-rate 48000 \
+  --line-words <N> \
+  --lookahead-ms 1,2,5,10
+```
+
+The full MIDI spans `264.044 s`, contains `13,855` Note On events, and expands to
+`16,679` selected sample streams in this address-only model. `183` notes had no
+matching SF2 regions under the simplified selection model. The maximum active
+sample-stream count was `54`, with a p99 active-stream count of `38`.
+
+Results by cache-line size:
+
+| `LINE_WORDS` | Endpoint reads/s | Stream line fills/s | Physical lines/s | Endpoint/stream-line reuse | New stream lines/frame max | 10 ms stream-line p99/max |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 1,187,153.7 | 60,245.6 | 2,305.2 | 19.71 | 56 | 1,955 / 2,927 |
+| 16 | 1,187,153.7 | 30,152.4 | 1,152.8 | 39.37 | 54 | 977 / 1,465 |
+| 32 | 1,187,153.7 | 15,105.6 | 576.6 | 78.59 | 54 | 489 / 735 |
+| 64 | 1,187,153.7 | 7,587.6 | 288.5 | 156.46 | 54 | 246 / 370 |
+
+Interpretation:
+
+- The access pattern is still random at the DDR line level, but it is highly
+  predictable and has strong line reuse inside each sample stream.
+- Increasing line size from 8 to 32 words cuts stream-local line fills by about
+  `4x` for this workload. Increasing from 32 to 64 words cuts them by another
+  `2x`, at the cost of larger fills and potentially more wasted bandwidth on
+  less sequential workloads.
+- The `physical lines/s` count is far lower than the per-stream fill count
+  because many notes reuse the same sample regions. Physical uniqueness is not a
+  direct replacement for per-stream cache sizing, but it shows that the SF2
+  working set is concentrated.
+- A 10 ms lookahead window with `LINE_WORDS = 32` sees p99 `489` and max `735`
+  newly needed stream-local lines. With `LINE_WORDS = 64`, the p99/max drops to
+  `246`/`370`. These numbers are more useful for sizing prefetch queues and
+  outstanding line-fill tracking than the average fills/s alone.
+- For `LINE_WORDS = 32`, phase-driven source stride averaged `0.889` source
+  frames per output frame, with p95 `1.375` and max `3.570`. The estimated
+  32-word line dwell was average `39.19` output frames, p50 `34.86`, and minimum
+  `8.96`. This suggests normal notes have enough lead time for prefetch, while
+  the fastest notes still require demand-priority fallback and enough outstanding
+  line-fill capacity.
+
+This supports the memory-side optimization direction: a larger line size plus
+voice- or stream-aware cache and stride prefetch can exploit real SF2/MIDI
+locality. It does not by itself prove that DDR bandwidth is sufficient, because
+the final RTL still needs concrete cache replacement, arbitration, outstanding
+fill, and audio FIFO behavior.
+
 ### Result
 
 At `100 MHz` core clock and `48 kHz` output:
