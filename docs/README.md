@@ -35,6 +35,8 @@ change.
   and instantiation tree.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): detailed renderer
   pipeline, latency/cycle accounting, limitations, and optimization notes.
+- [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
+  proposed breaking redesign for a timestamp-block command stream control plane.
 - [`design/control_memory_refactor_plan.md`](design/control_memory_refactor_plan.md):
   historical and remaining control-plane and wave-memory cleanup plan.
 
