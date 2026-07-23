@@ -1,6 +1,7 @@
 #include "render_support.h"
 #include "reference_synth.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <fstream>
@@ -49,6 +50,14 @@ struct RecordingSink : public render::VoiceControlSink {
     last_initial_envelope = region.initial_envelope;
   }
   void release_voice(int, const render::Region&) override { ++release_count; }
+};
+
+struct RecordingEventSink : public render::EnvelopeEventSink {
+  std::vector<render::EnvelopeEvent> events;
+
+  void push_envelope_event(const render::EnvelopeEvent& event) override {
+    events.push_back(event);
+  }
 };
 
 void push_u16(std::vector<uint8_t>& out, uint16_t value) {
@@ -850,6 +859,46 @@ int main() {
     int linear_release = int(std::round(double(first_decay) * 3.0 / 4.0));
     if (first_release >= linear_release) {
       throw std::runtime_error("volume envelope release did not use a dB-linear curve");
+    }
+
+    render::Region event_envelope_region;
+    event_envelope_region.length = 4;
+    event_envelope_region.loop_end = 4;
+    event_envelope_region.attack_ticks = 1;
+    event_envelope_region.attack_sub_tick = true;
+    event_envelope_region.release_ticks = 0x00ffffff;
+    event_envelope_region.gain_l = 0x4000;
+    event_envelope_region.gain_r = 0x4000;
+    std::vector<render::Region> event_envelope_regions{event_envelope_region};
+    RecordingSink event_envelope_sink;
+    RecordingEventSink event_sink;
+    render::RenderDiagnostics event_envelope_diag;
+    render::McuModel event_envelope_mcu(event_envelope_sink, event_envelope_regions,
+                                        &event_envelope_diag);
+    event_envelope_mcu.set_rtl_envelope_events(true);
+    event_envelope_mcu.set_envelope_event_sink(&event_sink);
+    render::NoteEvent event_note = curve_note;
+    event_note.phase_inc = render::kPhaseFracScale;
+    event_envelope_mcu.handle_event(event_note);
+    event_envelope_mcu.envelope_tick();
+    if (!event_envelope_sink.envelopes.empty() ||
+        event_envelope_diag.runtime_envelope_updates != 0) {
+      throw std::runtime_error("event envelope mode still wrote per-sample runtime envelope levels");
+    }
+    render::NoteEvent event_note_off = event_note;
+    event_note_off.on = false;
+    event_envelope_mcu.handle_event(event_note_off);
+    auto release_it = std::find_if(event_sink.events.begin(), event_sink.events.end(),
+        [](const render::EnvelopeEvent& event) {
+          return event.opcode == render::EnvelopeEventOpcode::kVolReleaseCb;
+        });
+    if (release_it == event_sink.events.end()) {
+      throw std::runtime_error("event envelope mode did not emit a release cB event");
+    }
+    uint32_t release_duration = release_it->payload2 & 0x00ffffffu;
+    if (release_it->payload0 != 0 || release_it->payload1 != 0 ||
+        release_duration != uint32_t(event_envelope_region.release_ticks)) {
+      throw std::runtime_error("event envelope release did not carry 24-bit duration samples");
     }
 
     render::Region folded_attack_region;

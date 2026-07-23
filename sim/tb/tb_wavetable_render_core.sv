@@ -241,11 +241,13 @@ module tb_wavetable_render_core;
     input logic [7:0] opcode,
     input logic [7:0] voice,
     input logic [15:0] payload0,
-    input logic [31:0] payload1
+    input logic [31:0] payload1,
+    input logic [31:0] payload2 = 32'd0
   );
     bus_write_word(REG_EVENT_FIFO_DATA0, timestamp);
     bus_write_word(REG_EVENT_FIFO_DATA1, {payload0, opcode, voice});
     bus_write_word(REG_EVENT_FIFO_DATA2, payload1);
+    bus_write_word(REG_EVENT_FIFO_DATA3, payload2);
     bus_write_word(REG_EVENT_FIFO_PUSH, 32'h0000_0001);
   endtask
 

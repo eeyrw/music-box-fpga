@@ -203,10 +203,11 @@ filter controls. Volume envelope timing has two control paths: the legacy runtim
 path lets software write `ENVELOPE_RUNTIME` at a coarse control tick or every
 sample for exact reference runs, while the event path lets software compile Note
 On/Off into timestamped attack, centibel decay/release, release-flag, and stop
-primitives consumed by the RTL envelope event engine. Decay and release advance
-in cB, then use a generated 0..960 cB SoundFont amplitude LUT shared by RTL and
-the C++ reference. The FPGA still does not parse SoundFont semantics, timecents,
-or modulators. Pitch bend, vibrato,
+primitives consumed by the RTL envelope event engine. Decay and release events
+carry a 24-bit sample-domain duration; the engine advances a Q0.32 phase
+accumulator across that duration, maps progress to cB, then uses a generated
+0..960 cB SoundFont amplitude LUT shared by RTL and the C++ reference. The FPGA
+still does not parse SoundFont semantics, timecents, or modulators. Pitch bend, vibrato,
 tremolo, modulation-envelope effects, and filter cutoff modulation remain
 host-driven first through runtime register updates. Reverb/chorus, strict complex
 linked stereo pairing, and higher-polyphony layered playback are deferred
@@ -220,6 +221,11 @@ The hardware contract is register-level:
 - Envelope updates may either write `ENVELOPE_RUNTIME` directly, or push
   timestamped envelope primitive events through the system event FIFO. Direct
   runtime writes remain the manual/fallback path and do not reload phase.
+- Hardware SPI software should push a reused voice's Note On envelope events
+  first, beginning with `EVT_ENV_SET 0`, using a future timestamp with enough
+  safety offset for the event and voice-configuration register writes. Committing
+  the voice before its envelope events arrive can produce initial silence or a
+  short stale generated-envelope level.
 - Runtime gain, pitch, release, and committed filter updates do not reload phase
   and update the runtime state sampled by the renderer when it accepts each voice
   snapshot.

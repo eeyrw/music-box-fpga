@@ -215,6 +215,17 @@ int db_release(int start, int tick, int ticks) {
   return clamp_q15(int(std::round(double(start) * std::pow(1.0 / double(std::max(1, start)), x))));
 }
 
+uint16_t q15_to_cb(int level) {
+  int q15 = clamp_q15(level);
+  if (q15 <= 0) return 960;
+  double cb = -200.0 * std::log10(double(q15) / double(kQ15Full));
+  return uint16_t(std::max(0.0, std::min(960.0, std::round(cb))));
+}
+
+uint32_t clamp_env_duration24(uint32_t samples) {
+  return std::max(1u, std::min(samples, 0x00ff'ffffu));
+}
+
 int linear_release(int start, int tick, int ticks) {
   return linear_ramp(start, 0, tick, ticks);
 }
@@ -634,10 +645,6 @@ void McuModel::handle_event(const NoteEvent& event) {
 }
 
 void McuModel::envelope_tick() {
-  if (rtl_envelope_events_) {
-    envelope_tick_index_ += 1;
-    return;
-  }
   for (int v = 0; v < kNumVoices; ++v) {
     int next = voices_[v].level;
     if (voices_[v].state == ENV_DELAY) {
@@ -680,8 +687,10 @@ void McuModel::envelope_tick() {
 
     if (voices_[v].state != ENV_SILENT || voices_[v].level != 0) {
       voices_[v].level = clamp_q15(next);
-      record_runtime_envelope_update(v, voices_[v].level);
-      sink_.set_envelope(v, voices_[v].level);
+      if (!rtl_envelope_events_) {
+        record_runtime_envelope_update(v, voices_[v].level);
+        sink_.set_envelope(v, voices_[v].level);
+      }
       update_voice_modulation(v);
     }
   }
@@ -1228,35 +1237,44 @@ void McuModel::schedule_note_on_envelope_events(int voice, const Region& r) {
   const uint32_t attack = uint32_t(std::max(1, r.attack_ticks));
   const uint32_t hold = uint32_t(std::max(0, r.hold_ticks));
   const uint32_t decay = uint32_t(std::max(1, r.decay_ticks));
-  const int target = std::max(1, clamp_q15(voices_[voice].target));
-  const int sustain = std::max(1, clamp_q15(voices_[voice].sustain));
-  const double ratio = std::min(1.0, double(sustain) / double(target));
-  const uint32_t sustain_cb = uint32_t(std::max(0.0, std::min(960.0, -200.0 * std::log10(ratio))));
-  const uint16_t target_cb = uint16_t(std::min<uint32_t>(1000u, sustain_cb));
-  const uint16_t cb_step = uint16_t(std::max<uint32_t>(1, uint32_t(target_cb) / decay));
+  const int initial = clamp_q15(voices_[voice].level);
+  const int target = clamp_q15(voices_[voice].target);
+  const int sustain = clamp_q15(voices_[voice].sustain);
+  const uint16_t target_start_cb = q15_to_cb(target);
+  const uint16_t sustain_cb = q15_to_cb(sustain);
+  const uint32_t decay_duration = clamp_env_duration24(decay);
+  uint32_t decay_timestamp = current_sample_ + hold;
 
   envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kEnvSet, 0, 0});
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_ + delay, voice, EnvelopeEventOpcode::kVolAttack,
-                    uint16_t(target), attack});
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_ + delay + attack + hold, voice,
-                    EnvelopeEventOpcode::kVolDecayCb, 0,
-                    (uint32_t(cb_step) << 16) | target_cb});
+      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kEnvSet,
+                    uint16_t(std::max(0, initial)), 0});
+  if (voices_[voice].state == ENV_DELAY || voices_[voice].state == ENV_ATTACK) {
+    envelope_events_->push_envelope_event(
+        EnvelopeEvent{current_sample_ + delay, voice, EnvelopeEventOpcode::kVolAttack,
+                      uint16_t(std::max(0, target)), clamp_env_duration24(attack)});
+    decay_timestamp = current_sample_ + delay + attack + hold;
+  }
+  if (sustain_cb > target_start_cb) {
+    envelope_events_->push_envelope_event(
+        EnvelopeEvent{decay_timestamp, voice, EnvelopeEventOpcode::kVolDecayCb,
+                      target_start_cb,
+                      sustain_cb,
+                      decay_duration});
+  }
 }
 
 void McuModel::schedule_release_envelope_events(int voice, const Region& r) {
   if (!envelope_events_) return;
   const uint32_t release = uint32_t(std::max(1, r.release_ticks));
-  const uint16_t cb_step = uint16_t(std::max<uint32_t>(1, 1000u / release));
+  const uint16_t start_cb = q15_to_cb(voices_[voice].release_start);
+  const uint32_t release_duration = clamp_env_duration24(release);
   envelope_events_->push_envelope_event(
       EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kReleaseFlag, 0, 0});
   envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kVolReleaseCb, 0,
-                    uint32_t(cb_step) << 16});
+      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kVolReleaseCb, start_cb,
+                    0, release_duration});
   envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_ + release, voice, EnvelopeEventOpcode::kStopVoice, 0, 0});
+      EnvelopeEvent{current_sample_ + release_duration, voice, EnvelopeEventOpcode::kStopVoice, 0, 0});
 }
 
 int McuModel::first_free_or_steal_slot() const {

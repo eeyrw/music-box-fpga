@@ -19,10 +19,31 @@ void update_max(uint64_t& maximum, uint64_t value) {
   maximum = std::max(maximum, value);
 }
 
+uint32_t duration24_or_one(uint32_t duration) {
+  uint32_t clipped = duration & 0x00ffffffu;
+  return clipped == 0 ? 1u : clipped;
+}
+
+uint32_t phase_inc_for_duration(uint32_t duration) {
+  duration = duration24_or_one(duration);
+  if (duration <= 1) return 0xffffffffu;
+  return uint32_t(((uint64_t(1) << 32) + duration - 1u) / duration);
+}
+
+uint32_t ramp_cb_q8_8(uint32_t start_cb_q8_8, uint32_t target_cb_q8_8, uint32_t phase_q0_32) {
+  if (target_cb_q8_8 <= start_cb_q8_8) return target_cb_q8_8;
+  uint64_t delta = uint64_t(target_cb_q8_8 - start_cb_q8_8);
+  return start_cb_q8_8 + uint32_t((delta * uint64_t(phase_q0_32)) >> 32);
+}
+
 }  // namespace
 
 ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics)
-    : memory_(memory), voices_(kNumVoices), envelopes_(kNumVoices), diagnostics_(diagnostics) {}
+    : memory_(memory),
+      voices_(kNumVoices),
+      envelopes_(kNumVoices),
+      envelope_events_(kNumVoices),
+      diagnostics_(diagnostics) {}
 
 void ReferenceSynth::set_envelope(int voice, int level) {
   voices_.at(voice).envelope = int16_t(clamp_q15(level));
@@ -84,6 +105,7 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.filter_z2_r = 0;
   v.loop_mode = r.loop_mode;
   envelopes_.at(voice) = EnvelopeState{};
+  envelope_events_.at(voice).clear();
 }
 
 void ReferenceSynth::release_voice(int voice, const Region& region) {
@@ -93,7 +115,12 @@ void ReferenceSynth::release_voice(int voice, const Region& region) {
 }
 
 void ReferenceSynth::push_envelope_event(const EnvelopeEvent& event) {
-  envelope_events_.push_back(event);
+  int voice = std::max(0, std::min(kNumVoices - 1, event.voice));
+  if (event.opcode == EnvelopeEventOpcode::kEnvSet ||
+      event.opcode == EnvelopeEventOpcode::kReleaseFlag) {
+    envelope_events_.at(voice).clear();
+  }
+  envelope_events_.at(voice).push_back(event);
 }
 
 int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q8_8) {
@@ -111,40 +138,47 @@ void ReferenceSynth::apply_envelope_event(const EnvelopeEvent& event) {
   int voice = std::max(0, std::min(kNumVoices - 1, event.voice));
   VoiceConfig& v = voices_.at(voice);
   EnvelopeState& e = envelopes_.at(voice);
-  e.active = true;
-  e.phase = 0;
   switch (event.opcode) {
     case EnvelopeEventOpcode::kEnvSet:
+      e = EnvelopeState{};
       e.mode = 0;
       e.gain_q23 = int32_t(uint32_t(event.payload0) << 8);
       v.envelope = int16_t(event.payload0);
       break;
     case EnvelopeEventOpcode::kVolAttack:
+      e.active = true;
+      e.phase = 0;
       e.mode = 1;
       e.gain_q23 = 0;
       e.target = event.payload0;
-      e.duration = event.payload1 == 0 ? 1 : event.payload1;
+      e.duration = duration24_or_one(event.payload1);
       e.step = (uint32_t(event.payload0) << 8) / e.duration;
       v.envelope = 0;
       break;
     case EnvelopeEventOpcode::kVolDecayCb:
+      e.active = true;
+      e.phase = 0;
       e.mode = 2;
       e.cb_q8_8 = uint32_t(event.payload0) << 8;
       e.target = (event.payload1 & 0xffffu) << 8;
-      e.step = (event.payload1 >> 16) << 8;
+      e.duration = duration24_or_one(event.payload2);
+      e.step = phase_inc_for_duration(e.duration);
       v.envelope = cb_to_q15(e.cb_q8_8);
       e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       break;
     case EnvelopeEventOpcode::kVolReleaseCb:
+      e.active = true;
+      e.phase = 0;
       e.mode = 3;
       e.cb_q8_8 = uint32_t(event.payload0) << 8;
-      e.step = (event.payload1 >> 16) << 8;
+      e.target = envelope_lut::kCbSilenceQ8_8;
+      e.duration = duration24_or_one(event.payload2);
+      e.step = phase_inc_for_duration(e.duration);
       v.envelope = cb_to_q15(e.cb_q8_8);
       e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       break;
     case EnvelopeEventOpcode::kReleaseFlag:
       v.released = true;
-      e.active = e.active;
       break;
     case EnvelopeEventOpcode::kStopVoice:
       e.active = false;
@@ -157,14 +191,10 @@ void ReferenceSynth::apply_envelope_event(const EnvelopeEvent& event) {
 
 void ReferenceSynth::prepare_event_envelope(int voice) {
   bool applied_event = false;
-  for (;;) {
-    auto it = std::find_if(envelope_events_.begin(), envelope_events_.end(),
-        [&](const EnvelopeEvent& event) {
-          return event.timestamp <= sample_counter_ && event.voice == voice;
-        });
-    if (it == envelope_events_.end()) break;
-    EnvelopeEvent event = *it;
-    envelope_events_.erase(it);
+  auto& queue = envelope_events_.at(voice);
+  while (!queue.empty() && queue.front().timestamp <= sample_counter_) {
+    EnvelopeEvent event = queue.front();
+    queue.pop_front();
     apply_envelope_event(event);
     applied_event = true;
   }
@@ -190,28 +220,30 @@ void ReferenceSynth::prepare_event_envelope(int voice) {
       break;
     }
     case 2: {
-      uint32_t next = uint32_t(e.cb_q8_8) + e.step;
-      if (next >= e.target) {
-        e.cb_q8_8 = e.target;
+      uint64_t phase_next = uint64_t(e.phase) + uint64_t(e.step);
+      if (phase_next >= (uint64_t(1) << 32)) {
         e.mode = 0;
+        v.envelope = cb_to_q15(e.target);
+        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       } else {
-        e.cb_q8_8 = next;
+        e.phase = uint32_t(phase_next);
+        uint32_t cb_q8_8 = ramp_cb_q8_8(e.cb_q8_8, e.target, e.phase);
+        v.envelope = cb_to_q15(cb_q8_8);
+        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       }
-      v.envelope = cb_to_q15(e.cb_q8_8);
-      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       break;
     }
     case 3: {
-      uint32_t next = uint32_t(e.cb_q8_8) + e.step;
-      if (next >= envelope_lut::kCbSilenceQ8_8) {
-        e.cb_q8_8 = 0;
+      uint64_t phase_next = uint64_t(e.phase) + uint64_t(e.step);
+      if (phase_next >= (uint64_t(1) << 32)) {
         e.gain_q23 = 0;
         e.active = false;
         e.mode = 0;
         v.envelope = 0;
       } else {
-        e.cb_q8_8 = next;
-        v.envelope = cb_to_q15(e.cb_q8_8);
+        e.phase = uint32_t(phase_next);
+        uint32_t cb_q8_8 = ramp_cb_q8_8(e.cb_q8_8, e.target, e.phase);
+        v.envelope = cb_to_q15(cb_q8_8);
         e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
       }
       break;

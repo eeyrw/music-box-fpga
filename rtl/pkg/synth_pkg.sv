@@ -21,7 +21,7 @@ package synth_pkg;
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
   localparam int STREAM_ID_WIDTH = 1;
   /* verilator lint_off UNUSEDPARAM */
-  localparam int ENV_EVENT_WIDTH = 96;
+  localparam int ENV_EVENT_WIDTH = 128;
   localparam int ENV_EVENT_OPCODE_WIDTH = 8;
   localparam int ENV_CB_WIDTH = 24;
   localparam int ENV_GAIN_Q23_WIDTH = 24;
@@ -85,6 +85,7 @@ package synth_pkg;
     envelope_event_opcode_t              opcode;
     logic [7:0]                          voice;
     logic [31:0]                         payload1;
+    logic [31:0]                         payload2;
   } envelope_event_t;
 
   typedef struct packed {

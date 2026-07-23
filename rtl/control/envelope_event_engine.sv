@@ -77,7 +77,8 @@ module envelope_event_engine (
   logic [31:0] next_duration;
   logic signed [31:0] gain_step_signed;
   logic signed [31:0] gain_next_signed;
-  logic [31:0] cb_next_wide;
+  logic [32:0] phase_next_wide;
+  logic [ENV_CB_WIDTH-1:0] ramp_cb_next;
   env_next_t event_calc;
 
   envelope_state_store state_store (
@@ -161,40 +162,90 @@ module envelope_event_engine (
                            (event_word.voice[VOICE_ID_WIDTH-1:0] < snapshot_voice);
   endfunction
 
+  function automatic logic [31:0] duration24_or_one(input logic [31:0] duration);
+    begin
+      duration24_or_one = {8'd0, duration[23:0]};
+      if (duration24_or_one == 32'd0) begin
+        duration24_or_one = 32'd1;
+      end
+    end
+  endfunction
+
+  function automatic logic [31:0] phase_inc_for_duration(input logic [31:0] duration);
+    logic [31:0] clipped_duration;
+    logic [32:0] numerator;
+    begin
+      clipped_duration = duration24_or_one(duration);
+      if (clipped_duration <= 32'd1) begin
+        phase_inc_for_duration = 32'hffff_ffff;
+      end else begin
+        numerator = 33'h1_0000_0000 + {1'b0, clipped_duration} - 33'd1;
+        phase_inc_for_duration = 32'(numerator / {1'b0, clipped_duration});
+      end
+    end
+  endfunction
+
+  function automatic logic [ENV_CB_WIDTH-1:0] ramp_cb_q8_8(
+    input logic [ENV_CB_WIDTH-1:0] start_cb_q8_8,
+    input logic [ENV_CB_WIDTH-1:0] target_cb_q8_8,
+    input logic [31:0] phase_q0_32
+  );
+    logic [ENV_CB_WIDTH-1:0] delta;
+    logic [63:0] scaled;
+    begin
+      if (target_cb_q8_8 <= start_cb_q8_8) begin
+        ramp_cb_q8_8 = target_cb_q8_8;
+      end else begin
+        delta = target_cb_q8_8 - start_cb_q8_8;
+        scaled = {40'd0, delta} * {32'd0, phase_q0_32};
+        ramp_cb_q8_8 = start_cb_q8_8 + ENV_CB_WIDTH'(scaled >> 32);
+      end
+    end
+  endfunction
+
   function automatic env_next_t apply_event_calc(input env_next_t in_state,
                                                  input envelope_event_t event_word);
     env_next_t out_state;
     begin
       out_state = in_state;
-      out_state.active = 1'b1;
-      out_state.phase = 32'd0;
       unique case (event_word.opcode)
         EVT_ENV_SET: begin
+          out_state.active = 1'b1;
+          out_state.phase = 32'd0;
           out_state.mode = ENV_MODE_HOLD;
           out_state.gain_q23 = $signed({event_word.payload0, 8'd0});
           out_state.envelope = $signed(event_word.payload0);
         end
         EVT_VOL_ATTACK: begin
+          out_state.active = 1'b1;
+          out_state.phase = 32'd0;
           out_state.mode = ENV_MODE_ATTACK;
           out_state.gain_q23 = '0;
           out_state.target = {16'd0, event_word.payload0};
-          out_state.duration = event_word.payload1 == 32'd0 ? 32'd1 : event_word.payload1;
+          out_state.duration = duration24_or_one(event_word.payload1);
           out_state.step = ({8'd0, event_word.payload0, 8'd0} /
-                            (event_word.payload1 == 32'd0 ? 32'd1 : event_word.payload1));
+                            duration24_or_one(event_word.payload1));
           out_state.envelope = 16'sh0000;
         end
         EVT_VOL_DECAY_CB: begin
+          out_state.active = 1'b1;
+          out_state.phase = 32'd0;
           out_state.mode = ENV_MODE_DECAY_CB;
           out_state.cb_q8_8 = {event_word.payload0, 8'd0};
           out_state.target = {8'd0, event_word.payload1[15:0], 8'd0};
-          out_state.step = {8'd0, event_word.payload1[31:16], 8'd0};
+          out_state.duration = duration24_or_one(event_word.payload2);
+          out_state.step = phase_inc_for_duration(event_word.payload2);
           out_state.envelope = cb_to_q15({event_word.payload0, 8'd0});
           out_state.gain_q23 = $signed({cb_to_q15({event_word.payload0, 8'd0}), 8'd0});
         end
         EVT_VOL_RELEASE_CB: begin
+          out_state.active = 1'b1;
+          out_state.phase = 32'd0;
           out_state.mode = ENV_MODE_RELEASE_CB;
           out_state.cb_q8_8 = {event_word.payload0, 8'd0};
-          out_state.step = {8'd0, event_word.payload1[31:16], 8'd0};
+          out_state.target = ENV_CB_SILENCE_Q8_8;
+          out_state.duration = duration24_or_one(event_word.payload2);
+          out_state.step = phase_inc_for_duration(event_word.payload2);
           out_state.envelope = cb_to_q15({event_word.payload0, 8'd0});
           out_state.gain_q23 = $signed({cb_to_q15({event_word.payload0, 8'd0}), 8'd0});
         end
@@ -219,7 +270,8 @@ module envelope_event_engine (
   always_comb begin
     gain_step_signed = $signed({9'd0, state_step[22:0]});
     gain_next_signed = $signed({{8{state_gain_q23[23]}}, state_gain_q23});
-    cb_next_wide = {8'd0, state_cb_q8_8};
+    phase_next_wide = 33'd0;
+    ramp_cb_next = '0;
 
     next_mode = state_mode;
     next_gain_q23 = state_gain_q23;
@@ -264,30 +316,35 @@ module envelope_event_engine (
           end
         end
         ENV_MODE_DECAY_CB: begin
-          cb_next_wide = {8'd0, state_cb_q8_8} + state_step;
-          if (cb_next_wide >= state_target) begin
-            next_cb_q8_8 = state_target[ENV_CB_WIDTH-1:0];
+          phase_next_wide = {1'b0, state_phase} + {1'b0, state_step};
+          if (phase_next_wide[32]) begin
             next_mode = ENV_MODE_HOLD;
+            next_phase = 32'd0;
+            next_cb_q8_8 = state_target[ENV_CB_WIDTH-1:0];
             next_envelope = cb_to_q15(state_target[ENV_CB_WIDTH-1:0]);
             next_gain_q23 = $signed({cb_to_q15(state_target[ENV_CB_WIDTH-1:0]), 8'd0});
           end else begin
-            next_cb_q8_8 = cb_next_wide[ENV_CB_WIDTH-1:0];
-            next_envelope = cb_to_q15(cb_next_wide[ENV_CB_WIDTH-1:0]);
-            next_gain_q23 = $signed({cb_to_q15(cb_next_wide[ENV_CB_WIDTH-1:0]), 8'd0});
+            ramp_cb_next = ramp_cb_q8_8(state_cb_q8_8, state_target[ENV_CB_WIDTH-1:0],
+                                        phase_next_wide[31:0]);
+            next_phase = phase_next_wide[31:0];
+            next_envelope = cb_to_q15(ramp_cb_next);
+            next_gain_q23 = $signed({cb_to_q15(ramp_cb_next), 8'd0});
           end
         end
         ENV_MODE_RELEASE_CB: begin
-          cb_next_wide = {8'd0, state_cb_q8_8} + state_step;
-          if (cb_next_wide >= ENV_CB_SILENCE_Q8_8) begin
-            next_cb_q8_8 = '0;
+          phase_next_wide = {1'b0, state_phase} + {1'b0, state_step};
+          if (phase_next_wide[32]) begin
             next_gain_q23 = '0;
             next_active = 1'b0;
             next_mode = ENV_MODE_HOLD;
+            next_phase = 32'd0;
             next_envelope = 16'sh0000;
           end else begin
-            next_cb_q8_8 = cb_next_wide[ENV_CB_WIDTH-1:0];
-            next_envelope = cb_to_q15(cb_next_wide[ENV_CB_WIDTH-1:0]);
-            next_gain_q23 = $signed({cb_to_q15(cb_next_wide[ENV_CB_WIDTH-1:0]), 8'd0});
+            ramp_cb_next = ramp_cb_q8_8(state_cb_q8_8, state_target[ENV_CB_WIDTH-1:0],
+                                        phase_next_wide[31:0]);
+            next_phase = phase_next_wide[31:0];
+            next_envelope = cb_to_q15(ramp_cb_next);
+            next_gain_q23 = $signed({cb_to_q15(ramp_cb_next), 8'd0});
           end
         end
         default: begin

@@ -77,6 +77,7 @@ void RegisterVoiceControl::push_envelope_event(const EnvelopeEvent& event) {
   registers_.write_register(regs::kEventFifoData0, event.timestamp);
   registers_.write_register(regs::kEventFifoData1, data1);
   registers_.write_register(regs::kEventFifoData2, event.payload1);
+  registers_.write_register(regs::kEventFifoData3, event.payload2);
   registers_.write_register(regs::kEventFifoPush, 1);
 }
 

@@ -48,6 +48,7 @@ module voice_register_bank (
   localparam logic [15:0] ADDR_EVENT_FIFO_DATA0 = REG_EVENT_FIFO_DATA0;
   localparam logic [15:0] ADDR_EVENT_FIFO_DATA1 = REG_EVENT_FIFO_DATA1;
   localparam logic [15:0] ADDR_EVENT_FIFO_DATA2 = REG_EVENT_FIFO_DATA2;
+  localparam logic [15:0] ADDR_EVENT_FIFO_DATA3 = REG_EVENT_FIFO_DATA3;
   localparam logic [15:0] ADDR_EVENT_FIFO_PUSH = REG_EVENT_FIFO_PUSH;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
@@ -175,6 +176,7 @@ module voice_register_bank (
   logic [31:0] event_data0;
   logic [31:0] event_data1;
   logic [31:0] event_data2;
+  logic [31:0] event_data3;
   logic signed [15:0] prepared_envelope_level;
   logic prepared_envelope_active;
   logic event_release_write;
@@ -348,6 +350,7 @@ module voice_register_bank (
                      (bus_req.address == ADDR_EVENT_FIFO_DATA0) ||
                      (bus_req.address == ADDR_EVENT_FIFO_DATA1) ||
                      (bus_req.address == ADDR_EVENT_FIFO_DATA2) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_DATA3) ||
                      (bus_req.address == ADDR_EVENT_FIFO_PUSH);
 
     inspect_address = bus_read_address;
@@ -373,6 +376,7 @@ module voice_register_bank (
     event_push_word.opcode = envelope_event_opcode_t'(event_data1[15:8]);
     event_push_word.voice = event_data1[7:0];
     event_push_word.payload1 = event_data2;
+    event_push_word.payload2 = event_data3;
     bus_read_start = bus_req.valid && !bus_req.write && voice_address &&
                      known_voice_offset(selected_offset) && (bus_state == BUS_IDLE);
 
@@ -463,6 +467,8 @@ module voice_register_bank (
       inspect_data = event_data1;
     end else if (inspect_address == ADDR_EVENT_FIFO_DATA2) begin
       inspect_data = event_data2;
+    end else if (inspect_address == ADDR_EVENT_FIFO_DATA3) begin
+      inspect_data = event_data3;
     end
 
     address_valid = (voice_address && known_voice_offset(selected_offset)) || global_address;
@@ -488,6 +494,7 @@ module voice_register_bank (
         ADDR_EVENT_FIFO_DATA0: bus_rsp.rdata = event_data0;
         ADDR_EVENT_FIFO_DATA1: bus_rsp.rdata = event_data1;
         ADDR_EVENT_FIFO_DATA2: bus_rsp.rdata = event_data2;
+        ADDR_EVENT_FIFO_DATA3: bus_rsp.rdata = event_data3;
         default: bus_rsp.rdata = 32'd0;
       endcase
     end
@@ -517,6 +524,7 @@ module voice_register_bank (
       event_data0 <= 32'd0;
       event_data1 <= 32'd0;
       event_data2 <= 32'd0;
+      event_data3 <= 32'd0;
       bus_read_address <= 16'd0;
       bus_state <= BUS_IDLE;
     end else begin
@@ -531,6 +539,7 @@ module voice_register_bank (
           ADDR_EVENT_FIFO_DATA0: event_data0 <= bus_req.wdata;
           ADDR_EVENT_FIFO_DATA1: event_data1 <= bus_req.wdata;
           ADDR_EVENT_FIFO_DATA2: event_data2 <= bus_req.wdata;
+          ADDR_EVENT_FIFO_DATA3: event_data3 <= bus_req.wdata;
           default: begin
           end
         endcase

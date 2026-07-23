@@ -104,7 +104,8 @@ module tb_envelope_event_engine;
     input envelope_event_opcode_t opcode,
     input logic [VOICE_ID_WIDTH-1:0] voice,
     input logic [15:0] payload0,
-    input logic [31:0] payload1
+    input logic [31:0] payload1,
+    input logic [31:0] payload2 = 32'd0
   );
     @(negedge clk);
     event_head_in.timestamp = timestamp;
@@ -112,6 +113,7 @@ module tb_envelope_event_engine;
     event_head_in.opcode = opcode;
     event_head_in.voice = {{(8 - VOICE_ID_WIDTH){1'b0}}, voice};
     event_head_in.payload1 = payload1;
+    event_head_in.payload2 = payload2;
     push = 1'b1;
     @(negedge clk);
     push = 1'b0;
@@ -185,7 +187,7 @@ module tb_envelope_event_engine;
     expect_level(16'h4000);
 
     begin_case("decay cb");
-    push_event(32'd9, EVT_VOL_DECAY_CB, 0, 16'd0, {16'd1, 16'd4});
+    push_event(32'd9, EVT_VOL_DECAY_CB, 0, 16'd0, 32'd4, 32'd4);
     prepare(32'd9, 0);
     expect_level(cb_to_q15(0));
     prepare(32'd10, 0);
@@ -194,7 +196,7 @@ module tb_envelope_event_engine;
     expect_level(cb_to_q15(2));
 
     begin_case("release to zero");
-    push_event(32'd12, EVT_VOL_RELEASE_CB, 0, 16'd0, {16'd200, 16'd0});
+    push_event(32'd12, EVT_VOL_RELEASE_CB, 0, 16'd0, 32'd0, 32'd4);
     prepare(32'd12, 0);
     expect_level(cb_to_q15(0));
     for (int i = 13; i < 80; i++) begin

@@ -88,7 +88,8 @@
           {"name": "EVENT_FIFO_DATA0", "addressOffset": "0x0080"},
           {"name": "EVENT_FIFO_DATA1", "addressOffset": "0x0084"},
           {"name": "EVENT_FIFO_DATA2", "addressOffset": "0x0088"},
-          {"name": "EVENT_FIFO_PUSH", "addressOffset": "0x008c"},
+          {"name": "EVENT_FIFO_DATA3", "addressOffset": "0x008c"},
+          {"name": "EVENT_FIFO_PUSH", "addressOffset": "0x0090"},
           {
             "name": "PLATFORM_STATUS",
             "addressOffset": "0x0040",

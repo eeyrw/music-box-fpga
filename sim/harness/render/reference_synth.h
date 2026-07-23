@@ -3,6 +3,7 @@
 #include "render_types.h"
 
 #include <cstdint>
+#include <deque>
 #include <utility>
 #include <vector>
 
@@ -83,7 +84,7 @@ class ReferenceSynth : public VoiceControlSink, public EnvelopeEventSink {
   const std::vector<int16_t>& memory_;
   std::vector<VoiceConfig> voices_;
   std::vector<EnvelopeState> envelopes_;
-  std::vector<EnvelopeEvent> envelope_events_;
+  std::vector<std::deque<EnvelopeEvent>> envelope_events_;
   uint32_t sample_counter_ = 0;
   RenderDiagnostics* diagnostics_ = nullptr;
 };

@@ -100,9 +100,10 @@ software-owned. Updating `envelope_level` does not reload playback phase.
 `0x7fff` means full level and is treated as a bypass to preserve exact samples
 from the channel-gain stage.
 
-Envelope event attack ramps linearly in Q1.15. Decay and release advance linearly
-in centibel space using an internal Q8.8 cB state, then convert cB to Q1.15 with
-a generated SoundFont amplitude curve:
+Envelope event attack ramps linearly in Q1.15. Decay and release events carry
+integer cB endpoints and a 24-bit sample duration. The engine advances a Q0.32
+phase accumulator over that duration, maps phase progress to an internal Q8.8 cB
+value, then converts cB to Q1.15 with a generated SoundFont amplitude curve:
 
 ```text
 level_q15 ~= round(32767 * 10 ^ (-centibel / 200))

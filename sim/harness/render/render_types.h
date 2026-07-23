@@ -202,6 +202,7 @@ struct EnvelopeEvent {
   EnvelopeEventOpcode opcode = EnvelopeEventOpcode::kEnvSet;
   uint16_t payload0 = 0;
   uint32_t payload1 = 0;
+  uint32_t payload2 = 0;
 };
 
 struct RenderDiagnostics {
@@ -328,7 +329,8 @@ inline uint16_t voice_addr(int voice, int offset) {
 inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
   ++stats.total;
   if (address == regs::kEventFifoData0 || address == regs::kEventFifoData1 ||
-      address == regs::kEventFifoData2 || address == regs::kEventFifoPush) {
+      address == regs::kEventFifoData2 || address == regs::kEventFifoData3 ||
+      address == regs::kEventFifoPush) {
     ++stats.envelope_events;
     return;
   }

@@ -92,12 +92,34 @@ void test_voice_register_sequence() {
   expect_write(sink, 24, uint16_t(base + kRegReleaseControl), 0x00000001);
 }
 
+void test_envelope_event_sequence() {
+  CaptureSink sink;
+  RegisterVoiceControl control(sink);
+
+  EnvelopeEvent event;
+  event.timestamp = 0x01020304;
+  event.voice = 5;
+  event.opcode = EnvelopeEventOpcode::kVolDecayCb;
+  event.payload0 = 0x0123;
+  event.payload1 = 0x456789ab;
+  event.payload2 = 0x00fedcba;
+  control.push_envelope_event(event);
+
+  if (sink.writes.size() != 5) throw std::runtime_error("wrong event register write count");
+  expect_write(sink, 0, regs::kEventFifoData0, 0x01020304);
+  expect_write(sink, 1, regs::kEventFifoData1, 0x01230305);
+  expect_write(sink, 2, regs::kEventFifoData2, 0x456789ab);
+  expect_write(sink, 3, regs::kEventFifoData3, 0x00fedcba);
+  expect_write(sink, 4, regs::kEventFifoPush, 0x00000001);
+}
+
 }  // namespace
 }  // namespace render
 
 int main() {
   try {
     render::test_voice_register_sequence();
+    render::test_envelope_event_sequence();
   } catch (const std::exception& e) {
     std::cerr << "FAIL: " << e.what() << "\n";
     return 1;
