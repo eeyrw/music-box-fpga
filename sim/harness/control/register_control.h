@@ -14,7 +14,7 @@ class RegisterWriteSink {
   virtual void write_registers(uint16_t start_address, const std::vector<uint32_t>& data);
 };
 
-class RegisterVoiceControl : public VoiceControlSink {
+class RegisterVoiceControl : public VoiceControlSink, public EnvelopeEventSink {
  public:
   explicit RegisterVoiceControl(RegisterWriteSink& registers);
 
@@ -24,6 +24,7 @@ class RegisterVoiceControl : public VoiceControlSink {
   void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
   void release_voice(int voice, const Region& region) override;
+  void push_envelope_event(const EnvelopeEvent& event) override;
 
  private:
   RegisterWriteSink& registers_;

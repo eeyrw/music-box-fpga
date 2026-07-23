@@ -4,7 +4,7 @@
 
 namespace render {
 
-class FanoutSink : public VoiceControlSink {
+class FanoutSink : public VoiceControlSink, public EnvelopeEventSink {
  public:
   FanoutSink(VoiceControlSink& a, VoiceControlSink& b) : a_(a), b_(b) {}
 
@@ -36,6 +36,15 @@ class FanoutSink : public VoiceControlSink {
   void release_voice(int voice, const Region& region) override {
     a_.release_voice(voice, region);
     b_.release_voice(voice, region);
+  }
+
+  void push_envelope_event(const EnvelopeEvent& event) override {
+    if (auto* a_events = dynamic_cast<EnvelopeEventSink*>(&a_)) {
+      a_events->push_envelope_event(event);
+    }
+    if (auto* b_events = dynamic_cast<EnvelopeEventSink*>(&b_)) {
+      b_events->push_envelope_event(event);
+    }
   }
 
  private:

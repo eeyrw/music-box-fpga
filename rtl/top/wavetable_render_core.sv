@@ -44,6 +44,10 @@ module wavetable_render_core #(
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
   logic voices_busy;
   logic frame_boundary;
+  logic [31:0] sample_counter;
+  logic [31:0] current_render_sample;
+  logic runtime_snapshot_prepare;
+  logic [VOICE_INDEX_WIDTH-1:0] runtime_snapshot_voice;
   synth_pkg::reg_bus_req_t bus_req;
   synth_pkg::reg_bus_rsp_t bus_rsp;
   synth_pkg::wave_word_req_t core_mem_req;
@@ -72,6 +76,9 @@ module wavetable_render_core #(
     .frame_boundary,
     .bus_rsp,
     .render_voice_index(voice_read_index),
+    .runtime_snapshot_prepare,
+    .runtime_snapshot_voice,
+    .current_sample(current_render_sample),
     .render_config,
     .render_runtime,
     .config_valid,
@@ -84,6 +91,8 @@ module wavetable_render_core #(
     .clk,
     .rst,
     .voice_read_index,
+    .runtime_snapshot_prepare,
+    .runtime_snapshot_voice,
     .voice_config(render_config),
     .voice_runtime(render_runtime),
     .config_valid,
@@ -109,4 +118,14 @@ module wavetable_render_core #(
     .dsp_context_queue_max_occupancy,
     .dsp_ready_no_context_pulse
   );
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      sample_counter <= 32'd0;
+      current_render_sample <= 32'd0;
+    end else if (frame_boundary) begin
+      current_render_sample <= sample_counter;
+      sample_counter <= sample_counter + 32'd1;
+    end
+  end
 endmodule

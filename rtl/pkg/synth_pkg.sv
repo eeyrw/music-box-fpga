@@ -20,6 +20,12 @@ package synth_pkg;
 `endif
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
   localparam int STREAM_ID_WIDTH = 1;
+  /* verilator lint_off UNUSEDPARAM */
+  localparam int ENV_EVENT_WIDTH = 96;
+  localparam int ENV_EVENT_OPCODE_WIDTH = 8;
+  localparam int ENV_CB_WIDTH = 24;
+  localparam int ENV_GAIN_Q23_WIDTH = 24;
+  /* verilator lint_on UNUSEDPARAM */
 
   /* verilator lint_off UNUSEDPARAM */
   localparam logic [STREAM_ID_WIDTH-1:0] STREAM_LEFT = 1'b0;
@@ -63,6 +69,23 @@ package synth_pkg;
     logic        ready;
     logic        error;
   } reg_bus_rsp_t;
+
+  typedef enum logic [ENV_EVENT_OPCODE_WIDTH-1:0] {
+    EVT_ENV_SET        = 8'd1,
+    EVT_VOL_ATTACK     = 8'd2,
+    EVT_VOL_DECAY_CB   = 8'd3,
+    EVT_VOL_RELEASE_CB = 8'd4,
+    EVT_RELEASE_FLAG   = 8'd5,
+    EVT_STOP_VOICE     = 8'd6
+  } envelope_event_opcode_t;
+
+  typedef struct packed {
+    logic [31:0]                         timestamp;
+    logic [15:0]                         payload0;
+    envelope_event_opcode_t              opcode;
+    logic [7:0]                          voice;
+    logic [31:0]                         payload1;
+  } envelope_event_t;
 
   typedef struct packed {
     logic signed [15:0] l;

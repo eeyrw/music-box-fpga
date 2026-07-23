@@ -70,4 +70,14 @@ void RegisterVoiceControl::release_voice(int voice, const Region& r) {
   registers_.write_register(voice_addr(voice, kRegReleaseControl), 1);
 }
 
+void RegisterVoiceControl::push_envelope_event(const EnvelopeEvent& event) {
+  uint32_t data1 = (uint32_t(event.payload0) << 16) |
+                   (uint32_t(event.opcode) << 8) |
+                   uint32_t(uint8_t(event.voice));
+  registers_.write_register(regs::kEventFifoData0, event.timestamp);
+  registers_.write_register(regs::kEventFifoData1, data1);
+  registers_.write_register(regs::kEventFifoData2, event.payload1);
+  registers_.write_register(regs::kEventFifoPush, 1);
+}
+
 }  // namespace render

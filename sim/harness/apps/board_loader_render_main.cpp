@@ -61,12 +61,17 @@ int main(int argc, char** argv) {
     board.reset_core();
     render::FanoutSink control(board, reference);
     render::McuModel mcu(control, regions, &diagnostics);
+    if (args.rtl_envelope_events) {
+      mcu.set_rtl_envelope_events(true);
+      mcu.set_envelope_event_sink(&control);
+    }
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
     int mismatches = 0;
     int produced = 0;
     for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
+      mcu.set_current_sample(uint32_t(produced));
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -107,6 +112,7 @@ int main(int argc, char** argv) {
         ",\n  \"nonzero_output_words\": " + std::to_string(board.nonzero_output_words()) +
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
         ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
+        ",\n  \"register_writes_envelope_events\": " + std::to_string(reg.envelope_events) +
         ",\n" + render::diagnostics_json_fields(diagnostics) +
         ",\n  \"wav_path\": " + render::json_string(wav_path);
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,

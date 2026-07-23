@@ -5,6 +5,9 @@ module voice_register_bank (
   input  logic                       frame_boundary,
   output synth_pkg::reg_bus_rsp_t    bus_rsp,
   input  logic [$clog2(synth_pkg::NUM_VOICES)-1:0] render_voice_index,
+  input  logic                       runtime_snapshot_prepare,
+  input  logic [$clog2(synth_pkg::NUM_VOICES)-1:0] runtime_snapshot_voice,
+  input  logic [31:0]                current_sample,
   output synth_pkg::voice_config_t   render_config,
   output synth_pkg::voice_runtime_t  render_runtime,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
@@ -40,6 +43,12 @@ module voice_register_bank (
   localparam logic [15:0] OFF_RELEASE     = REG_OFF_RELEASE_CONTROL;
   localparam logic [15:0] OFF_STATUS      = REG_OFF_STATUS;
   localparam logic [15:0] ADDR_VERSION    = REG_VERSION;
+  localparam logic [15:0] ADDR_EVENT_TIME = REG_EVENT_TIME;
+  localparam logic [15:0] ADDR_EVENT_FIFO_STATUS = REG_EVENT_FIFO_STATUS;
+  localparam logic [15:0] ADDR_EVENT_FIFO_DATA0 = REG_EVENT_FIFO_DATA0;
+  localparam logic [15:0] ADDR_EVENT_FIFO_DATA1 = REG_EVENT_FIFO_DATA1;
+  localparam logic [15:0] ADDR_EVENT_FIFO_DATA2 = REG_EVENT_FIFO_DATA2;
+  localparam logic [15:0] ADDR_EVENT_FIFO_PUSH = REG_EVENT_FIFO_PUSH;
 
   localparam int VOICE_INDEX_WIDTH = $clog2(NUM_VOICES);
   localparam int VOICE_OFFSET_WIDTH = REG_VOICE_STRIDE_SHIFT;
@@ -61,6 +70,7 @@ module voice_register_bank (
     16'sh0000,
     16'sh0000
   };
+  localparam int EVENT_FIFO_DEPTH = 32;
 
   function automatic logic known_voice_offset(input logic [15:0] offset);
     unique case (offset)
@@ -146,6 +156,32 @@ module voice_register_bank (
   logic [31:0] commit_runtime_phase_write_data;
   logic [31:0] commit_runtime_gain_write_data;
   logic [15:0] commit_runtime_envelope_write_data;
+  voice_runtime_t runtime_store_render_runtime;
+  envelope_event_t event_push_word;
+  envelope_event_t event_head_word;
+  envelope_event_t event_head1_word;
+  envelope_event_t event_head2_word;
+  envelope_event_t event_head3_word;
+  logic event_fifo_push;
+  logic event_fifo_push_ready;
+  logic [2:0] event_fifo_pop_count;
+  logic event_fifo_head_valid;
+  logic event_fifo_head1_valid;
+  logic event_fifo_head2_valid;
+  logic event_fifo_head3_valid;
+  logic event_fifo_empty;
+  logic event_fifo_full;
+  logic [$clog2(EVENT_FIFO_DEPTH+1)-1:0] event_fifo_level;
+  logic [31:0] event_data0;
+  logic [31:0] event_data1;
+  logic [31:0] event_data2;
+  logic signed [15:0] prepared_envelope_level;
+  logic prepared_envelope_active;
+  logic event_release_write;
+  logic [VOICE_INDEX_WIDTH-1:0] event_release_write_voice;
+  logic event_release_write_value;
+  logic event_late_flag;
+  logic event_order_error_flag;
 
   assign commit_engine_start = commit_start_voice || commit_start_filter;
 
@@ -168,7 +204,7 @@ module voice_register_bank (
     .clk(clk),
     .rst(rst),
     .render_voice_index(render_voice_index),
-    .render_runtime(render_runtime),
+    .render_runtime(runtime_store_render_runtime),
     .inspect_voice(inspect_voice),
     .inspect_phase_inc(runtime_phase_inspect_data),
     .inspect_gain(runtime_gain_inspect_data),
@@ -180,10 +216,11 @@ module voice_register_bank (
                     (selected_offset == OFF_GAIN_RT) && (bus_state == BUS_IDLE)),
     .bus_envelope_write(bus_req.valid && bus_req.write && voice_address &&
                         (selected_offset == OFF_ENVELOPE_RT) && (bus_state == BUS_IDLE)),
-    .bus_release_write(bus_req.valid && bus_req.write && voice_address &&
-                       (selected_offset == OFF_RELEASE) && (bus_state == BUS_IDLE)),
-    .bus_write_voice(selected_voice),
-    .bus_wdata(bus_req.wdata),
+    .bus_release_write((bus_req.valid && bus_req.write && voice_address &&
+                       (selected_offset == OFF_RELEASE) && (bus_state == BUS_IDLE)) ||
+                       event_release_write),
+    .bus_write_voice(event_release_write ? event_release_write_voice : selected_voice),
+    .bus_wdata(event_release_write ? {31'd0, event_release_write_value} : bus_req.wdata),
     .commit_phase_write(commit_runtime_phase_write),
     .commit_gain_write(commit_runtime_gain_write),
     .commit_envelope_write(commit_runtime_envelope_write),
@@ -197,6 +234,64 @@ module voice_register_bank (
     .commit_filter_data(runtime_filter_write_word),
     .commit_filter_enable_data(runtime_filter_enable_data)
   );
+
+  control_event_fifo #(
+    .DEPTH(EVENT_FIFO_DEPTH)
+  ) event_fifo (
+    .clk,
+    .rst,
+    .push(event_fifo_push),
+    .push_event(event_push_word),
+    .push_ready(event_fifo_push_ready),
+    .pop_count(event_fifo_pop_count),
+    .head_valid(event_fifo_head_valid),
+    .head_event(event_head_word),
+    .head1_valid(event_fifo_head1_valid),
+    .head1_event(event_head1_word),
+    .head2_valid(event_fifo_head2_valid),
+    .head2_event(event_head2_word),
+    .head3_valid(event_fifo_head3_valid),
+    .head3_event(event_head3_word),
+    .empty(event_fifo_empty),
+    .full(event_fifo_full),
+    .level(event_fifo_level)
+  );
+
+  envelope_event_engine event_engine (
+    .clk,
+    .rst,
+    .current_sample,
+    .snapshot_prepare(runtime_snapshot_prepare),
+    .snapshot_voice(runtime_snapshot_voice),
+    .manual_envelope_level(runtime_store_render_runtime.envelope_level),
+    .manual_envelope_write((bus_req.valid && bus_req.write && voice_address &&
+                           (selected_offset == OFF_ENVELOPE_RT) && (bus_state == BUS_IDLE)) ||
+                           commit_runtime_envelope_write),
+    .manual_envelope_write_voice(commit_runtime_envelope_write ? commit_runtime_write_voice : selected_voice),
+    .event_head(event_head_word),
+    .event_head_valid(event_fifo_head_valid),
+    .event_head1(event_head1_word),
+    .event_head1_valid(event_fifo_head1_valid),
+    .event_head2(event_head2_word),
+    .event_head2_valid(event_fifo_head2_valid),
+    .event_head3(event_head3_word),
+    .event_head3_valid(event_fifo_head3_valid),
+    .event_pop_count(event_fifo_pop_count),
+    .prepared_envelope_level,
+    .prepared_envelope_active,
+    .release_write(event_release_write),
+    .release_write_voice(event_release_write_voice),
+    .release_write_value(event_release_write_value),
+    .late_flag(event_late_flag),
+    .order_error_flag(event_order_error_flag)
+  );
+
+  always_comb begin
+    render_runtime = runtime_store_render_runtime;
+    if (prepared_envelope_active) begin
+      render_runtime.envelope_level = prepared_envelope_level;
+    end
+  end
 
   voice_commit_engine commit_engine (
     .clk(clk),
@@ -247,7 +342,13 @@ module voice_register_bank (
     selected_offset = 16'(voice_relative[VOICE_OFFSET_WIDTH-1:0]);
     voice_address = (bus_req.address >= VOICE_BASE) &&
                     (voice_relative < VOICE_LIMIT);
-    global_address = (bus_req.address == ADDR_VERSION);
+    global_address = (bus_req.address == ADDR_VERSION) ||
+                     (bus_req.address == ADDR_EVENT_TIME) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_STATUS) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_DATA0) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_DATA1) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_DATA2) ||
+                     (bus_req.address == ADDR_EVENT_FIFO_PUSH);
 
     inspect_address = bus_read_address;
     inspect_relative = inspect_address - VOICE_BASE;
@@ -264,6 +365,14 @@ module voice_register_bank (
                           (selected_offset == OFF_FILTER_A2) &&
                           (| (bus_req.wdata & REG_FILTER_A2_APPLY_MASK)) &&
                           (bus_state == BUS_IDLE);
+    event_fifo_push = bus_req.valid && bus_req.write &&
+                      (bus_req.address == ADDR_EVENT_FIFO_PUSH) &&
+                      (bus_state == BUS_IDLE) && event_fifo_push_ready;
+    event_push_word.timestamp = event_data0;
+    event_push_word.payload0 = event_data1[31:16];
+    event_push_word.opcode = envelope_event_opcode_t'(event_data1[15:8]);
+    event_push_word.voice = event_data1[7:0];
+    event_push_word.payload1 = event_data2;
     bus_read_start = bus_req.valid && !bus_req.write && voice_address &&
                      known_voice_offset(selected_offset) && (bus_state == BUS_IDLE);
 
@@ -340,6 +449,20 @@ module voice_register_bank (
       endcase
     end else if (inspect_address == ADDR_VERSION) begin
       inspect_data = REG_VERSION_VALUE;
+    end else if (inspect_address == ADDR_EVENT_TIME) begin
+      inspect_data = current_sample;
+    end else if (inspect_address == ADDR_EVENT_FIFO_STATUS) begin
+      inspect_data[0] = event_fifo_empty;
+      inspect_data[1] = event_fifo_full;
+      inspect_data[7:2] = 6'(event_fifo_level);
+      inspect_data[16] = event_late_flag;
+      inspect_data[17] = event_order_error_flag;
+    end else if (inspect_address == ADDR_EVENT_FIFO_DATA0) begin
+      inspect_data = event_data0;
+    end else if (inspect_address == ADDR_EVENT_FIFO_DATA1) begin
+      inspect_data = event_data1;
+    end else if (inspect_address == ADDR_EVENT_FIFO_DATA2) begin
+      inspect_data = event_data2;
     end
 
     address_valid = (voice_address && known_voice_offset(selected_offset)) || global_address;
@@ -350,6 +473,23 @@ module voice_register_bank (
       address_valid = 1'b0;
     end else if (bus_req.address == ADDR_VERSION) begin
       bus_rsp.rdata = REG_VERSION_VALUE;
+    end else if ((bus_state == BUS_IDLE) && global_address) begin
+      unique case (bus_req.address)
+        ADDR_VERSION: bus_rsp.rdata = REG_VERSION_VALUE;
+        ADDR_EVENT_TIME: bus_rsp.rdata = current_sample;
+        ADDR_EVENT_FIFO_STATUS: begin
+          bus_rsp.rdata = 32'd0;
+          bus_rsp.rdata[0] = event_fifo_empty;
+          bus_rsp.rdata[1] = event_fifo_full;
+          bus_rsp.rdata[7:2] = 6'(event_fifo_level);
+          bus_rsp.rdata[16] = event_late_flag;
+          bus_rsp.rdata[17] = event_order_error_flag;
+        end
+        ADDR_EVENT_FIFO_DATA0: bus_rsp.rdata = event_data0;
+        ADDR_EVENT_FIFO_DATA1: bus_rsp.rdata = event_data1;
+        ADDR_EVENT_FIFO_DATA2: bus_rsp.rdata = event_data2;
+        default: bus_rsp.rdata = 32'd0;
+      endcase
     end
 
     bus_rsp.ready = 1'b0;
@@ -362,7 +502,10 @@ module voice_register_bank (
         bus_rsp.ready = 1'b1;
       end
     end
-    bus_rsp.error = bus_req.valid && !address_valid && (bus_state == BUS_IDLE);
+    bus_rsp.error = bus_req.valid && (bus_state == BUS_IDLE) &&
+                    ((!address_valid) ||
+                     (bus_req.write && (bus_req.address == ADDR_EVENT_FIFO_PUSH) &&
+                      !event_fifo_push_ready));
   end
 
   always_ff @(posedge clk) begin
@@ -371,6 +514,9 @@ module voice_register_bank (
       shadow_filter_enable_read_data <= 1'b0;
       shadow_filter_coeff <= '{default: DEFAULT_FILTER_COEFF};
       shadow_filter_enable <= '{default: 1'b0};
+      event_data0 <= 32'd0;
+      event_data1 <= 32'd0;
+      event_data2 <= 32'd0;
       bus_read_address <= 16'd0;
       bus_state <= BUS_IDLE;
     end else begin
@@ -380,6 +526,15 @@ module voice_register_bank (
         shadow_filter_coeff[selected_voice] <= shadow_filter_write_data;
       if (shadow_filter_enable_write)
         shadow_filter_enable[selected_voice] <= bus_req.wdata[0];
+      if (bus_req.valid && bus_req.write && (bus_state == BUS_IDLE)) begin
+        unique case (bus_req.address)
+          ADDR_EVENT_FIFO_DATA0: event_data0 <= bus_req.wdata;
+          ADDR_EVENT_FIFO_DATA1: event_data1 <= bus_req.wdata;
+          ADDR_EVENT_FIFO_DATA2: event_data2 <= bus_req.wdata;
+          default: begin
+          end
+        endcase
+      end
 
       unique case (bus_state)
         BUS_IDLE: begin

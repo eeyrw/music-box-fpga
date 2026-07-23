@@ -1,5 +1,7 @@
 #include "reference_synth.h"
 
+#include "generated/envelope_lut.h"
+
 #include <algorithm>
 
 namespace render {
@@ -20,10 +22,11 @@ void update_max(uint64_t& maximum, uint64_t value) {
 }  // namespace
 
 ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics)
-    : memory_(memory), voices_(kNumVoices), diagnostics_(diagnostics) {}
+    : memory_(memory), voices_(kNumVoices), envelopes_(kNumVoices), diagnostics_(diagnostics) {}
 
 void ReferenceSynth::set_envelope(int voice, int level) {
   voices_.at(voice).envelope = int16_t(clamp_q15(level));
+  envelopes_.at(voice) = EnvelopeState{};
 }
 
 void ReferenceSynth::set_gain(int voice, int gain_l, int gain_r) {
@@ -80,12 +83,143 @@ void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, con
   v.filter_z1_r = 0;
   v.filter_z2_r = 0;
   v.loop_mode = r.loop_mode;
+  envelopes_.at(voice) = EnvelopeState{};
 }
 
 void ReferenceSynth::release_voice(int voice, const Region& region) {
   VoiceConfig& v = voices_.at(voice);
   v.loop_mode = region.loop_mode;
   v.released = true;
+}
+
+void ReferenceSynth::push_envelope_event(const EnvelopeEvent& event) {
+  envelope_events_.push_back(event);
+}
+
+int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q8_8) {
+  if (cb_q8_8 >= envelope_lut::kCbSilenceQ8_8) return 0;
+  uint32_t index = cb_q8_8 >> 10;
+  uint32_t fraction = cb_q8_8 & 0x3ffu;
+  uint32_t low = uint16_t(envelope_lut::kCbToQ15.at(index));
+  uint32_t high = uint16_t(envelope_lut::kCbToQ15.at(index + 1));
+  uint32_t delta = low - high;
+  uint32_t interp = low - ((delta * fraction + 512u) >> 10);
+  return int16_t(interp);
+}
+
+void ReferenceSynth::apply_envelope_event(const EnvelopeEvent& event) {
+  int voice = std::max(0, std::min(kNumVoices - 1, event.voice));
+  VoiceConfig& v = voices_.at(voice);
+  EnvelopeState& e = envelopes_.at(voice);
+  e.active = true;
+  e.phase = 0;
+  switch (event.opcode) {
+    case EnvelopeEventOpcode::kEnvSet:
+      e.mode = 0;
+      e.gain_q23 = int32_t(uint32_t(event.payload0) << 8);
+      v.envelope = int16_t(event.payload0);
+      break;
+    case EnvelopeEventOpcode::kVolAttack:
+      e.mode = 1;
+      e.gain_q23 = 0;
+      e.target = event.payload0;
+      e.duration = event.payload1 == 0 ? 1 : event.payload1;
+      e.step = (uint32_t(event.payload0) << 8) / e.duration;
+      v.envelope = 0;
+      break;
+    case EnvelopeEventOpcode::kVolDecayCb:
+      e.mode = 2;
+      e.cb_q8_8 = uint32_t(event.payload0) << 8;
+      e.target = (event.payload1 & 0xffffu) << 8;
+      e.step = (event.payload1 >> 16) << 8;
+      v.envelope = cb_to_q15(e.cb_q8_8);
+      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+      break;
+    case EnvelopeEventOpcode::kVolReleaseCb:
+      e.mode = 3;
+      e.cb_q8_8 = uint32_t(event.payload0) << 8;
+      e.step = (event.payload1 >> 16) << 8;
+      v.envelope = cb_to_q15(e.cb_q8_8);
+      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+      break;
+    case EnvelopeEventOpcode::kReleaseFlag:
+      v.released = true;
+      e.active = e.active;
+      break;
+    case EnvelopeEventOpcode::kStopVoice:
+      e.active = false;
+      e.mode = 0;
+      e.gain_q23 = 0;
+      v.envelope = 0;
+      break;
+  }
+}
+
+void ReferenceSynth::prepare_event_envelope(int voice) {
+  bool applied_event = false;
+  for (;;) {
+    auto it = std::find_if(envelope_events_.begin(), envelope_events_.end(),
+        [&](const EnvelopeEvent& event) {
+          return event.timestamp <= sample_counter_ && event.voice == voice;
+        });
+    if (it == envelope_events_.end()) break;
+    EnvelopeEvent event = *it;
+    envelope_events_.erase(it);
+    apply_envelope_event(event);
+    applied_event = true;
+  }
+  if (applied_event) return;
+
+  EnvelopeState& e = envelopes_.at(voice);
+  VoiceConfig& v = voices_.at(voice);
+  if (!e.active) return;
+
+  switch (e.mode) {
+    case 1: {
+      int64_t next = int64_t(e.gain_q23) + int64_t(e.step & 0x7fffffu);
+      if ((e.phase + 1) >= e.duration || next >= int64_t(e.target << 8)) {
+        e.gain_q23 = int32_t(e.target << 8);
+        e.mode = 0;
+        e.phase = 0;
+        v.envelope = int16_t(e.target);
+      } else {
+        e.gain_q23 = int32_t(next);
+        e.phase += 1;
+        v.envelope = int16_t(clamp_q15(int(next >> 8)));
+      }
+      break;
+    }
+    case 2: {
+      uint32_t next = uint32_t(e.cb_q8_8) + e.step;
+      if (next >= e.target) {
+        e.cb_q8_8 = e.target;
+        e.mode = 0;
+      } else {
+        e.cb_q8_8 = next;
+      }
+      v.envelope = cb_to_q15(e.cb_q8_8);
+      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+      break;
+    }
+    case 3: {
+      uint32_t next = uint32_t(e.cb_q8_8) + e.step;
+      if (next >= envelope_lut::kCbSilenceQ8_8) {
+        e.cb_q8_8 = 0;
+        e.gain_q23 = 0;
+        e.active = false;
+        e.mode = 0;
+        v.envelope = 0;
+      } else {
+        e.cb_q8_8 = next;
+        v.envelope = cb_to_q15(e.cb_q8_8);
+        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+      }
+      break;
+    }
+    default:
+      v.envelope = int16_t(clamp_q15(e.gain_q23 >> 8));
+      break;
+  }
 }
 
 std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
@@ -100,7 +234,9 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
   uint64_t contribution_saturations = 0;
   uint64_t mix_saturations = 0;
 
-  for (VoiceConfig& v : voices_) {
+  for (int voice = 0; voice < int(voices_.size()); ++voice) {
+    prepare_event_envelope(voice);
+    VoiceConfig& v = voices_[voice];
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
     bool done_l = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
     bool done_r = !v.stereo || ((v.loop_mode == 0 || !loop_active) && ((v.phase_r >> kPhaseFracBits) >= v.length_r));
@@ -219,6 +355,7 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     if (frame_mix_saturated) diagnostics_->mix_saturated_frames += 1;
     diagnostics_->mix_saturations += mix_saturations;
   }
+  sample_counter_ += 1;
   return out;
 }
 

@@ -8,7 +8,7 @@
 
 namespace render {
 
-class ReferenceSynth : public VoiceControlSink {
+class ReferenceSynth : public VoiceControlSink, public EnvelopeEventSink {
  public:
   explicit ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics = nullptr);
 
@@ -18,6 +18,7 @@ class ReferenceSynth : public VoiceControlSink {
   void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
   void release_voice(int voice, const Region& region) override;
+  void push_envelope_event(const EnvelopeEvent& event) override;
   std::pair<int16_t, int16_t> render_sample();
 
  private:
@@ -53,6 +54,17 @@ class ReferenceSynth : public VoiceControlSink {
     int loop_mode = 0;
   };
 
+  struct EnvelopeState {
+    int mode = 0;
+    int32_t gain_q23 = 0;
+    uint32_t cb_q8_8 = 0;
+    uint32_t step = 0;
+    uint32_t target = 0;
+    uint32_t phase = 0;
+    uint32_t duration = 0;
+    bool active = false;
+  };
+
   static int16_t interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction);
   static int16_t apply_gain(int32_t sample, int16_t gain, bool* saturated = nullptr);
   static int16_t apply_output_gain(int32_t sample, int16_t gain, int16_t envelope,
@@ -60,13 +72,19 @@ class ReferenceSynth : public VoiceControlSink {
   static int16_t saturate(int32_t value, bool* saturated = nullptr);
   static int32_t saturate_i20(int64_t value, bool* saturated = nullptr);
   static int64_t saturate_filter_state(int64_t value, bool* saturated = nullptr);
+  static int16_t cb_to_q15(uint32_t cb_q8_8);
   static int32_t biquad(int16_t sample, int64_t& z1, int64_t& z2, const VoiceConfig& v,
                         bool* y_saturated = nullptr, bool* state_saturated = nullptr,
                         int64_t* y_input = nullptr, uint64_t* state_input = nullptr);
   int16_t read_word(uint32_t address) const;
+  void prepare_event_envelope(int voice);
+  void apply_envelope_event(const EnvelopeEvent& event);
 
   const std::vector<int16_t>& memory_;
   std::vector<VoiceConfig> voices_;
+  std::vector<EnvelopeState> envelopes_;
+  std::vector<EnvelopeEvent> envelope_events_;
+  uint32_t sample_counter_ = 0;
   RenderDiagnostics* diagnostics_ = nullptr;
 };
 

@@ -55,7 +55,7 @@ struct MemoryStats {
 // module, models the external line-memory slave, writes the generated stereo PCM
 // stream as a WAV file, and exposes firmware-like helpers for voice register
 // writes.
-class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
+class RtlHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
              int sample_rate, const MemoryProfile& memory_profile);
@@ -68,6 +68,7 @@ class RtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
   void release_voice(int voice, const Region& region) override;
+  void push_envelope_event(const EnvelopeEvent& event) override;
   void request_sample(int produced);
 
   int nonzero_output_words() const { return int(wav_.nonzero_words()); }

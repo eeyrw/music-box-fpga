@@ -4,6 +4,8 @@ module multi_voice_pipeline #(
   input  logic                       clk,
   input  logic                       rst,
   output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] voice_read_index,
+  output logic                       runtime_snapshot_prepare,
+  output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] runtime_snapshot_voice,
   input  synth_pkg::voice_config_t   voice_config,
   input  synth_pkg::voice_runtime_t  voice_runtime,
   input  logic [synth_pkg::NUM_VOICES-1:0] config_valid,
@@ -150,6 +152,10 @@ module multi_voice_pipeline #(
   endfunction
 
   assign voice_read_index = render_index;
+  assign runtime_snapshot_prepare = (state == WAIT_VOICE) ||
+                                    ((state == DSP_START) && prefetch_ready);
+  assign runtime_snapshot_voice = ((state == DSP_START) && prefetch_ready) ?
+                                  prefetch_index : voice_index;
   assign endpoint_issue_valid = (state == PROCESS_VOICE) && current_enable &&
                                 current_config_valid && !voice_done;
   assign phase_write_en = endpoint_issue_valid && endpoint_issue_ready;

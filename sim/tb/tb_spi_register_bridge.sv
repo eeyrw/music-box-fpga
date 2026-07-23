@@ -24,6 +24,9 @@ module tb_spi_register_bridge;
   voice_runtime_t render_runtime;
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
+  logic runtime_snapshot_prepare;
+  logic [$clog2(NUM_VOICES)-1:0] runtime_snapshot_voice;
+  logic [31:0] current_sample;
   logic unused_register_outputs;
   int errors = 0;
   localparam logic [15:0] INVALID_VERSION_NEIGHBOR_0 = REG_VERSION + 16'h0004;
@@ -55,6 +58,9 @@ module tb_spi_register_bridge;
   assign bus_rdata = bus_rsp.rdata;
   assign bus_ready = bus_rsp.ready;
   assign bus_error = bus_rsp.error;
+  assign runtime_snapshot_prepare = 1'b0;
+  assign runtime_snapshot_voice = '0;
+  assign current_sample = 32'd0;
 
   voice_register_bank registers (
     .clk,
@@ -62,6 +68,9 @@ module tb_spi_register_bridge;
     .bus_req,
     .frame_boundary,
     .bus_rsp,
+    .runtime_snapshot_prepare,
+    .runtime_snapshot_voice,
+    .current_sample,
     .render_voice_index,
     .render_config,
     .render_runtime,

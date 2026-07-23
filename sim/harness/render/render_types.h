@@ -59,6 +59,7 @@ struct Args {
   int sample_rate = 48000;
   double adsr_tick_ms = 5.0;
   bool sample_accurate_envelope = false;
+  bool rtl_envelope_events = false;
 };
 
 struct NoteEvent {
@@ -182,7 +183,25 @@ struct RegisterWriteStats {
   uint64_t filter = 0;
   uint64_t commit = 0;
   uint64_t release = 0;
+  uint64_t envelope_events = 0;
   uint64_t config = 0;
+};
+
+enum class EnvelopeEventOpcode : uint8_t {
+  kEnvSet = 1,
+  kVolAttack = 2,
+  kVolDecayCb = 3,
+  kVolReleaseCb = 4,
+  kReleaseFlag = 5,
+  kStopVoice = 6,
+};
+
+struct EnvelopeEvent {
+  uint32_t timestamp = 0;
+  int voice = 0;
+  EnvelopeEventOpcode opcode = EnvelopeEventOpcode::kEnvSet;
+  uint16_t payload0 = 0;
+  uint32_t payload1 = 0;
 };
 
 struct RenderDiagnostics {
@@ -230,6 +249,12 @@ class VoiceControlSink {
   virtual void set_filter(int voice, const FilterConfig& filter) = 0;
   virtual void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) = 0;
   virtual void release_voice(int voice, const Region& region) = 0;
+};
+
+class EnvelopeEventSink {
+ public:
+  virtual ~EnvelopeEventSink() = default;
+  virtual void push_envelope_event(const EnvelopeEvent& event) = 0;
 };
 
 struct VoiceState {
@@ -302,6 +327,11 @@ inline uint16_t voice_addr(int voice, int offset) {
 
 inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
   ++stats.total;
+  if (address == regs::kEventFifoData0 || address == regs::kEventFifoData1 ||
+      address == regs::kEventFifoData2 || address == regs::kEventFifoPush) {
+    ++stats.envelope_events;
+    return;
+  }
   if (address < kVoiceBase) return;
   int offset = int((address - kVoiceBase) % kVoiceStride);
   switch (offset) {

@@ -11,7 +11,7 @@ class Vwavetable_render_core;
 
 namespace render {
 
-class CoreRtlHarness : public VoiceControlSink, private RegisterWriteSink {
+class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
  public:
   explicit CoreRtlHarness(const std::vector<int16_t>& memory);
   ~CoreRtlHarness();
@@ -23,6 +23,7 @@ class CoreRtlHarness : public VoiceControlSink, private RegisterWriteSink {
   void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
   void release_voice(int voice, const Region& region) override;
+  void push_envelope_event(const EnvelopeEvent& event) override;
   std::pair<int16_t, int16_t> request_sample(int produced);
   uint64_t total_cycles() const { return total_cycles_; }
   uint64_t total_memory_reads() const { return total_memory_reads_; }

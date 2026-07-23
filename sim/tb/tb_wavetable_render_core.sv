@@ -236,6 +236,19 @@ module tb_wavetable_render_core;
     end
   endtask
 
+  task automatic push_env_event(
+    input logic [31:0] timestamp,
+    input logic [7:0] opcode,
+    input logic [7:0] voice,
+    input logic [15:0] payload0,
+    input logic [31:0] payload1
+  );
+    bus_write_word(REG_EVENT_FIFO_DATA0, timestamp);
+    bus_write_word(REG_EVENT_FIFO_DATA1, {payload0, opcode, voice});
+    bus_write_word(REG_EVENT_FIFO_DATA2, payload1);
+    bus_write_word(REG_EVENT_FIFO_PUSH, 32'h0000_0001);
+  endtask
+
   function automatic logic [31:0] voice_control_word(
     input logic stereo,
     input logic [1:0] loop_mode,
@@ -440,10 +453,19 @@ module tb_wavetable_render_core;
     bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_4000);
     request_and_check(375, 375);
 
+    // The low-rate envelope event path overrides ENVELOPE_RUNTIME exactly at
+    // the renderer's runtime snapshot boundary.
+    begin_case("event envelope set");
+    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_0000);
+    push_env_event(32'd4, EVT_ENV_SET, 8'd0, 16'h4000, 32'd0);
+    request_and_check(125, 125);
+    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_7fff);
+
     // Runtime stereo gain writes affect both active channels atomically without a commit.
     begin_case("runtime gain update");
+    configure_mono();
     bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h2000_2000);
-    request_and_check(62, 62);
+    request_and_check(125, 125);
 
     // Channel gain and envelope are applied as one wide output gain so the
     // datapath does not lose precision to an intermediate PCM16 truncation.

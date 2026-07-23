@@ -14,7 +14,7 @@ class Vboard_loader_render_tops;
 
 namespace render {
 
-class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteSink {
+class BoardLoaderRenderHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
  public:
   BoardLoaderRenderHarness(const std::vector<uint8_t>& sd_image, size_t sf2_size_bytes,
                            const std::string& wav_path, int sample_rate,
@@ -31,6 +31,7 @@ class BoardLoaderRenderHarness : public VoiceControlSink, private RegisterWriteS
   void set_filter(int voice, const FilterConfig& filter) override;
   void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) override;
   void release_voice(int voice, const Region& r) override;
+  void push_envelope_event(const EnvelopeEvent& event) override;
 
   const std::vector<uint8_t>& ddr_bytes() const { return ddr_bytes_; }
   uint64_t loader_cycles() const { return loader_cycles_; }

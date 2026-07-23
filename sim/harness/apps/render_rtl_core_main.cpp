@@ -46,6 +46,10 @@ int main(int argc, char** argv) {
     rtl.reset();
     render::FanoutSink control(reference, rtl);
     render::McuModel mcu(control, regions, &diagnostics);
+    if (args.rtl_envelope_events) {
+      mcu.set_rtl_envelope_events(true);
+      mcu.set_envelope_event_sink(&control);
+    }
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -58,6 +62,7 @@ int main(int argc, char** argv) {
 
     int produced = 0;
     for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
+      mcu.set_current_sample(uint32_t(produced));
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }
@@ -130,6 +135,7 @@ int main(int argc, char** argv) {
           << ",\n  \"register_writes_filter\": " << reg.filter
           << ",\n  \"register_writes_commit\": " << reg.commit
           << ",\n  \"register_writes_release\": " << reg.release
+          << ",\n  \"register_writes_envelope_events\": " << reg.envelope_events
           << ",\n  \"register_writes_config\": " << reg.config
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
@@ -155,6 +161,7 @@ int main(int argc, char** argv) {
               << " rtl_max_enabled_voices=" << rtl.max_enabled_voices()
               << " rtl_max_filtered_voices=" << rtl.max_filtered_voices()
               << " register_writes=" << reg.total
+              << " envelope_event_writes=" << reg.envelope_events
               << " filter_writes=" << reg.filter
               << " wav=" << wav_path << "\n";
     return 0;

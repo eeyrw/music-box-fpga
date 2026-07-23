@@ -27,6 +27,7 @@ SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 ADSR_TICK_MS ?= 5
 SAMPLE_ACCURATE_ENVELOPE ?= 0
+RTL_ENVELOPE_EVENTS ?= 0
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -43,9 +44,13 @@ RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
 	rtl/pkg/synth_register_pkg.sv \
+	rtl/generated/synth_envelope_lut_pkg.sv \
 	rtl/control/voice_active_store.sv \
 	rtl/control/voice_bram_1r1w.sv \
 	rtl/control/voice_bram_1w2r.sv \
+	rtl/control/control_event_fifo.sv \
+	rtl/control/envelope_state_store.sv \
+	rtl/control/envelope_event_engine.sv \
 	rtl/control/voice_commit_engine.sv \
 	rtl/control/voice_descriptor_store.sv \
 	rtl/control/voice_runtime_store.sv \
@@ -99,6 +104,9 @@ COMMON_STATUS_SIM_SOURCES := \
 
 VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
+
+ENV_EVENT_SIM_SOURCES := \
+	sim/tb/tb_envelope_event_engine.sv
 
 HARNESS_RENDER_COMMON_SRCS := \
 	$(abspath sim/harness/render/render_support.cpp) \
@@ -155,16 +163,25 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map check-register-map lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
+.PHONY: all generate-register-map generate-envelope-lut check-register-map check-envelope-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
 
 all: test
 
 generate-register-map:
 	python3 tools/gen_register_map.py
+	python3 tools/gen_envelope_lut.py
+
+generate-envelope-lut:
+	python3 tools/gen_envelope_lut.py
 
 check-register-map:
 	python3 tools/gen_register_map.py
-	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h
+	python3 tools/gen_envelope_lut.py
+	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h rtl/generated/synth_envelope_lut_pkg.sv sim/harness/generated/envelope_lut.h
+
+check-envelope-lut:
+	python3 tools/gen_envelope_lut.py
+	git diff --exit-code -- rtl/generated/synth_envelope_lut_pkg.sv sim/harness/generated/envelope_lut.h
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
@@ -205,6 +222,10 @@ test-rtl-core:
 		--Mdir $(BUILD_DIR)/voice_phase_obj_dir --top-module tb_voice_phase_frame \
 		$(RTL_SOURCES) $(VOICE_PHASE_SIM_SOURCES)
 	$(BUILD_DIR)/voice_phase_obj_dir/Vtb_voice_phase_frame
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/env_event_obj_dir --top-module tb_envelope_event_engine \
+		$(RTL_SOURCES) $(ENV_EVENT_SIM_SOURCES)
+	$(BUILD_DIR)/env_event_obj_dir/Vtb_envelope_event_engine
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
@@ -312,6 +333,7 @@ render-reference:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:
@@ -335,6 +357,7 @@ render-rtl-core:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
 
 render-memory:
@@ -360,6 +383,7 @@ render-memory:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
 
 render-board-loader:
@@ -386,6 +410,7 @@ render-board-loader:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 vivado-summary:

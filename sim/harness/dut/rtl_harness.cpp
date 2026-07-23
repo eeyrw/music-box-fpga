@@ -102,6 +102,10 @@ void RtlHarness::release_voice(int voice, const Region& r) {
   voice_control_.release_voice(voice, r);
 }
 
+void RtlHarness::push_envelope_event(const EnvelopeEvent& event) {
+  voice_control_.push_envelope_event(event);
+}
+
 void RtlHarness::request_sample(int produced) {
   // One call corresponds to one stereo output frame. sample_tick is pulsed for a
   // clock, then the harness waits for sample_valid while continuing to service

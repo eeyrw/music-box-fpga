@@ -131,6 +131,10 @@ void BoardLoaderRenderHarness::release_voice(int voice, const Region& r) {
   voice_control_.release_voice(voice, r);
 }
 
+void BoardLoaderRenderHarness::push_envelope_event(const EnvelopeEvent& event) {
+  voice_control_.push_envelope_event(event);
+}
+
 void BoardLoaderRenderHarness::init_inputs() {
   top_->clk = 0;
   top_->rst = 1;

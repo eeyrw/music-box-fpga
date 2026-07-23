@@ -199,20 +199,27 @@ See `../host/host_control.md` for the intended split.
 The SF2 feature boundary is intentionally split by update rate and audio-path
 ownership. SF2 filter audio processing belongs in RTL because it operates on each
 voice's PCM stream; software calculates cutoff/Q/modulation values and writes the
-filter controls. Pitch bend, vibrato, tremolo, and modulation-envelope effects are
-host-driven first through runtime register updates because the SPI path is
-expected to have enough bandwidth for the initial implementation. If those
-updates need sample-accurate timing or produce audible stepping, the LFO/envelope
-state machines can move into RTL later. Reverb/chorus, strict complex linked
-stereo pairing, and higher-polyphony layered playback are deferred architecture
-items.
+filter controls. Volume envelope timing has two control paths: the legacy runtime
+path lets software write `ENVELOPE_RUNTIME` at a coarse control tick or every
+sample for exact reference runs, while the event path lets software compile Note
+On/Off into timestamped attack, centibel decay/release, release-flag, and stop
+primitives consumed by the RTL envelope event engine. Decay and release advance
+in cB, then use a generated 0..960 cB SoundFont amplitude LUT shared by RTL and
+the C++ reference. The FPGA still does not parse SoundFont semantics, timecents,
+or modulators. Pitch bend, vibrato,
+tremolo, modulation-envelope effects, and filter cutoff modulation remain
+host-driven first through runtime register updates. Reverb/chorus, strict complex
+linked stereo pairing, and higher-polyphony layered playback are deferred
+architecture items.
 
 The hardware contract is register-level:
 
 - Note On writes wave address or linked-stereo addresses, per-channel length and
   loop range, phase increment, gains, initial envelope, and filter settings, then
   writes `VOICE_CONTROL` with enable and apply set.
-- Envelope updates write only `ENVELOPE_RUNTIME`; they do not reload phase.
+- Envelope updates may either write `ENVELOPE_RUNTIME` directly, or push
+  timestamped envelope primitive events through the system event FIFO. Direct
+  runtime writes remain the manual/fallback path and do not reload phase.
 - Runtime gain, pitch, release, and committed filter updates do not reload phase
   and update the runtime state sampled by the renderer when it accepts each voice
   snapshot.

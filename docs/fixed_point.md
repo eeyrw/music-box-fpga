@@ -91,10 +91,29 @@ scaled by channel gain only with a wide signed product shifted right by 15.
 ## Envelope Level
 
 Each voice has a signed Q1.15 `envelope_level` folded into the per-channel output
-gain before mixing. Software supplies the current level at runtime; the RTL does
-not calculate an SF2 ADSR curve. Updating `envelope_level` does not reload
-playback phase. `0x7fff` means full level and is treated as a bypass to preserve
-exact samples from the channel-gain stage.
+gain before mixing. Software may supply the current level directly through
+`ENVELOPE_RUNTIME`, or it may push low-rate envelope primitive events that the RTL
+envelope event engine converts into the renderer-facing level at each voice
+snapshot. The RTL event engine handles primitive attack and centibel decay/release
+curves only; SoundFont timecent, modulator, and region-policy calculations remain
+software-owned. Updating `envelope_level` does not reload playback phase.
+`0x7fff` means full level and is treated as a bypass to preserve exact samples
+from the channel-gain stage.
+
+Envelope event attack ramps linearly in Q1.15. Decay and release advance linearly
+in centibel space using an internal Q8.8 cB state, then convert cB to Q1.15 with
+a generated SoundFont amplitude curve:
+
+```text
+level_q15 ~= round(32767 * 10 ^ (-centibel / 200))
+```
+
+The generated table covers `0..960 cB` at 4 cB intervals and the RTL linearly
+interpolates between adjacent entries using the Q8.8 fractional cB value. Values
+at or above `960 cB` clamp to zero. `tools/gen_envelope_lut.py` generates both
+`rtl/generated/synth_envelope_lut_pkg.sv` and
+`sim/harness/generated/envelope_lut.h` so the FPGA event engine and C++ reference
+use the same integer table.
 
 ## Biquad IIR Filter
 

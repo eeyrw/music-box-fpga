@@ -29,6 +29,10 @@ int main(int argc, char** argv) {
     render::RenderDiagnostics diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
     render::McuModel mcu(reference, regions, &diagnostics);
+    if (args.rtl_envelope_events) {
+      mcu.set_rtl_envelope_events(true);
+      mcu.set_envelope_event_sink(&reference);
+    }
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -38,6 +42,7 @@ int main(int argc, char** argv) {
 
     int produced = 0;
     for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
+      mcu.set_current_sample(uint32_t(produced));
       while (event_index < events.size() && events[event_index].sample <= produced) {
         mcu.handle_event(events[event_index++]);
       }

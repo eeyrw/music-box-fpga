@@ -361,9 +361,11 @@ std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
     << ",\n  \"start_seconds\": " << args.start_seconds
     << ",\n  \"requested_seconds\": " << args.seconds
     << ",\n  \"envelope_mode\": "
-    << json_string_impl(args.sample_accurate_envelope ? "sample_accurate" : "control_tick")
+    << json_string_impl(args.rtl_envelope_events ? "rtl_events" :
+                        (args.sample_accurate_envelope ? "sample_accurate" : "control_tick"))
     << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
-    << ",\n  \"adsr_tick_ms_ignored\": " << (args.sample_accurate_envelope ? "true" : "false")
+    << ",\n  \"adsr_tick_ms_ignored\": "
+    << ((args.sample_accurate_envelope || args.rtl_envelope_events) ? "true" : "false")
     << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
     << ",\n  \"render_num_voices\": " << kNumVoices;
   return s.str();
@@ -374,7 +376,7 @@ std::string memory_profile_json_field(const Args& args) {
 }
 
 int envelope_tick_samples(const Args& args) {
-  if (args.sample_accurate_envelope) return 1;
+  if (args.sample_accurate_envelope || args.rtl_envelope_events) return 1;
   return std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
 }
 
@@ -395,6 +397,10 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
     else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
     else if (a == "--sample-accurate-envelope") args.sample_accurate_envelope = true;
+    else if (a == "--rtl-envelope-events") {
+      args.rtl_envelope_events = true;
+      args.sample_accurate_envelope = true;
+    }
     else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);
@@ -628,6 +634,10 @@ void McuModel::handle_event(const NoteEvent& event) {
 }
 
 void McuModel::envelope_tick() {
+  if (rtl_envelope_events_) {
+    envelope_tick_index_ += 1;
+    return;
+  }
   for (int v = 0; v < kNumVoices; ++v) {
     int next = voices_[v].level;
     if (voices_[v].state == ENV_DELAY) {
@@ -1093,7 +1103,11 @@ void McuModel::release_voice(int voice) {
   voices_[voice].mod_env_stage_tick = 0;
   voices_[voice].mod_env_release_start = voices_[voice].mod_env_level;
   voices_[voice].sustain_held = false;
-  sink_.release_voice(voice, regions_.at(voices_[voice].region));
+  if (rtl_envelope_events_ && envelope_events_) {
+    schedule_release_envelope_events(voice, regions_.at(voices_[voice].region));
+  } else {
+    sink_.release_voice(voice, regions_.at(voices_[voice].region));
+  }
 }
 
 void McuModel::note_off(int channel, int note) {
@@ -1202,7 +1216,47 @@ void McuModel::note_on(const NoteEvent& event) {
       channel.generator_offsets[kGenFineTune] + channel.generator_offsets[kGenCoarseTune] +
       modulator_sum(r, voices_[slot], channel, 0));
   sink_.commit_voice(slot, 1, phase_inc, r);
+  if (rtl_envelope_events_ && envelope_events_) {
+    schedule_note_on_envelope_events(slot, r);
+  }
   update_voice_controls(slot);
+}
+
+void McuModel::schedule_note_on_envelope_events(int voice, const Region& r) {
+  if (!envelope_events_) return;
+  const uint32_t delay = uint32_t(std::max(0, r.delay_ticks));
+  const uint32_t attack = uint32_t(std::max(1, r.attack_ticks));
+  const uint32_t hold = uint32_t(std::max(0, r.hold_ticks));
+  const uint32_t decay = uint32_t(std::max(1, r.decay_ticks));
+  const int target = std::max(1, clamp_q15(voices_[voice].target));
+  const int sustain = std::max(1, clamp_q15(voices_[voice].sustain));
+  const double ratio = std::min(1.0, double(sustain) / double(target));
+  const uint32_t sustain_cb = uint32_t(std::max(0.0, std::min(960.0, -200.0 * std::log10(ratio))));
+  const uint16_t target_cb = uint16_t(std::min<uint32_t>(1000u, sustain_cb));
+  const uint16_t cb_step = uint16_t(std::max<uint32_t>(1, uint32_t(target_cb) / decay));
+
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kEnvSet, 0, 0});
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_ + delay, voice, EnvelopeEventOpcode::kVolAttack,
+                    uint16_t(target), attack});
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_ + delay + attack + hold, voice,
+                    EnvelopeEventOpcode::kVolDecayCb, 0,
+                    (uint32_t(cb_step) << 16) | target_cb});
+}
+
+void McuModel::schedule_release_envelope_events(int voice, const Region& r) {
+  if (!envelope_events_) return;
+  const uint32_t release = uint32_t(std::max(1, r.release_ticks));
+  const uint16_t cb_step = uint16_t(std::max<uint32_t>(1, 1000u / release));
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kReleaseFlag, 0, 0});
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kVolReleaseCb, 0,
+                    uint32_t(cb_step) << 16});
+  envelope_events_->push_envelope_event(
+      EnvelopeEvent{current_sample_ + release, voice, EnvelopeEventOpcode::kStopVoice, 0, 0});
 }
 
 int McuModel::first_free_or_steal_slot() const {

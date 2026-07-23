@@ -81,6 +81,10 @@ void CoreRtlHarness::release_voice(int voice, const Region& r) {
   voice_control_.release_voice(voice, r);
 }
 
+void CoreRtlHarness::push_envelope_event(const EnvelopeEvent& event) {
+  voice_control_.push_envelope_event(event);
+}
+
 std::pair<int16_t, int16_t> CoreRtlHarness::request_sample(int produced) {
   top_->sample_tick = 1;
   uint64_t start_memory_reads = total_memory_reads_;
