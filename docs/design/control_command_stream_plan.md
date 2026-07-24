@@ -74,6 +74,11 @@ The command-stream SCLK workload model, FIFO sizing rules, and separate
 register-versus-stream timing recommendations are documented in
 [`spi_command_stream_throughput.md`](spi_command_stream_throughput.md).
 
+The current per-word overflow behavior and silent partial-final-word discard
+are known correctness bugs, not acceptable DMA flow control. The required
+packet-atomic replacement and acceptance criteria are tracked in
+[`spi_transport_backlog.md`](spi_transport_backlog.md).
+
 ## Opcodes And Payloads
 
 The command opcodes are:

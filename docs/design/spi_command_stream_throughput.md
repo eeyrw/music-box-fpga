@@ -67,6 +67,11 @@ It must send no more than `free_words`. Space must be reserved for the complete
 transaction before CS is asserted; observing only the full bit is insufficient
 for a multi-word write.
 
+This preflight rule reduces overflow risk for a single producer but does not
+make the current transaction atomic. Per-word rejection after a DMA has started
+and silent discard of a partial final word are tracked as P0 correctness bugs in
+[`spi_transport_backlog.md`](spi_transport_backlog.md).
+
 The current CH347 transport has a 256-byte local transfer buffer. One byte is
 the `0xa5` opcode, so a transaction can contain at most 63 command words:
 

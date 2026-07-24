@@ -10,6 +10,7 @@ external contracts live in:
 - `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
   sizing analysis.
 - `spi_register_timing.md`: SPI register read/write and burst timing analysis.
+- `spi_transport_backlog.md`: SPI correctness bugs and DMA-safe transport work.
 - `../verification/simulation_design.md`: tests and render flows.
 
 ## Scope

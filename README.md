@@ -315,11 +315,15 @@ See [the register map](docs/register_map.md) and
 
 ## Roadmap
 
-1. Broaden multi-voice backpressure and memory-latency verification.
-2. Replace the C++ DDR/SD storage models with concrete board-memory controller
+1. Fix the SPI transaction-atomicity bugs: a command DMA must commit all words
+   or none, partial final words must report framing errors, and variable-latency
+   register accesses must use a DMA-safe queued request/response protocol. See
+   [the SPI transport backlog](docs/design/spi_transport_backlog.md).
+2. Broaden multi-voice backpressure and memory-latency verification.
+3. Replace the C++ DDR/SD storage models with concrete board-memory controller
    and pin-level long-run checks.
-3. Add board-level timing constraints for native SD, SPI control, I2S, and DDR3.
-4. Move host/MCU voice allocation and preset selection from simulation policy into
+4. Add board-level timing constraints for native SD, SPI control, I2S, and DDR3.
+5. Move host/MCU voice allocation and preset selection from simulation policy into
    board-control firmware or software.
 
 Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing

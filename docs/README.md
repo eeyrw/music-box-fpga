@@ -47,6 +47,8 @@ change.
 - [`design/spi_register_timing.md`](design/spi_register_timing.md): register
   read/write timing paths, burst boundaries, wire throughput, separate SCLK
   targets, and hardware-qualification requirements.
+- [`design/spi_transport_backlog.md`](design/spi_transport_backlog.md): known
+  SPI transaction-atomicity bugs and the packetized DMA transport backlog.
 
 ## Verification And Render Flows
 

@@ -56,6 +56,11 @@ to the master. If a future register target can hold `bus_ready` low, gapless
 burst traffic can overrun the bridge unless the target is snapshotted, buffered,
 or the SPI transaction defines explicit dummy clocks.
 
+An MCU DMA cannot react to an in-transaction BUSY indication. The packetized
+request/response transport, posted-write behavior, and split-phase read tasks
+needed to remove this assumption are tracked in
+[`spi_transport_backlog.md`](spi_transport_backlog.md).
+
 The DDR debug aperture remains a register protocol, not a blocking DDR read.
 Writing its control register starts one 128-bit MIG operation; software polls a
 status register later. MIG latency therefore does not directly extend the SPI
