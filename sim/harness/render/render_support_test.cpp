@@ -2,6 +2,7 @@
 #include "reference_synth.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <fstream>
@@ -12,6 +13,27 @@
 #include <vector>
 
 namespace {
+
+constexpr int kMidiChannelCount = 16;
+constexpr int kCcDataEntryMsb = 6;
+constexpr int kCcDataEntryLsb = 38;
+constexpr int kCcSustain = 64;
+constexpr int kCcSostenuto = 66;
+constexpr int kCcSoftPedal = 67;
+constexpr int kCcAllNotesOff = 123;
+constexpr int kCcRpnLsb = 100;
+constexpr int kCcRpnMsb = 101;
+constexpr int kRpnPitchBendSensitivity = 0;
+constexpr int kRpnFineTune = 1;
+constexpr int kRpnNull = 127;
+constexpr int kPitchBendRangeSemitones = 12;
+constexpr int kFineTuneCenterMsb = 64;
+constexpr int kHalfPositivePitchBend = 4096;
+constexpr double kPitchWheelModulatorAmountCents = 12700.0;
+constexpr double kPitchWheelCenter = 8192.0;
+constexpr double kMidiSourceRange = 128.0;
+constexpr double kCentsPerSemitone = 100.0;
+constexpr double kCentsPerOctave = 1200.0;
 
 struct RecordingSink : public render::VoiceCommandSink {
   int commit_count = 0;
@@ -307,6 +329,111 @@ int main() {
       if (window_events[2].type != render::NoteEvent::EVENT_NOTE || window_events[2].on ||
           std::fabs(window_events[2].time_seconds - 0.03) > 1e-9) {
         throw std::runtime_error("in-window note-off was not shifted to the render-window origin");
+      }
+    }
+    {
+      std::vector<render::NoteEvent> ordered_events;
+      std::vector<std::array<int, 3>> expected_controls;
+      auto add_control = [&](int channel, int controller, int value) {
+        render::NoteEvent control;
+        control.channel = channel;
+        control.type = render::NoteEvent::EVENT_CONTROL;
+        control.controller = controller;
+        control.value = value;
+        ordered_events.push_back(control);
+        expected_controls.push_back({channel, controller, value});
+      };
+      for (int channel = 0; channel < kMidiChannelCount; ++channel) {
+        add_control(channel, kCcRpnLsb, kRpnPitchBendSensitivity);
+        add_control(channel, kCcRpnMsb, 0);
+        add_control(channel, kCcDataEntryMsb, kPitchBendRangeSemitones);
+        add_control(channel, kCcRpnMsb, 0);
+        add_control(channel, kCcRpnLsb, kRpnFineTune);
+        add_control(channel, kCcDataEntryMsb, kFineTuneCenterMsb);
+        add_control(channel, kCcDataEntryLsb, 0);
+        add_control(channel, kCcRpnMsb, kRpnNull);
+        add_control(channel, kCcRpnLsb, kRpnNull);
+      }
+      render::NoteEvent ordered_note;
+      ordered_note.time_seconds = 0.01;
+      ordered_note.channel = 7;
+      ordered_note.note = 60;
+      ordered_note.on = true;
+      ordered_note.velocity = 100;
+      ordered_events.push_back(ordered_note);
+      render::NoteEvent ordered_bend;
+      ordered_bend.time_seconds = 0.02;
+      ordered_bend.channel = 7;
+      ordered_bend.type = render::NoteEvent::EVENT_PITCH_BEND;
+      ordered_bend.pitch_bend = kHalfPositivePitchBend;
+      ordered_events.push_back(ordered_bend);
+
+      std::vector<render::Region> ordered_regions;
+      std::vector<int16_t> ordered_memory = sf2.file_words;
+      render::prepare_events_and_regions(args, sf2, 48000, 480, ordered_events,
+                                         ordered_regions, ordered_memory);
+      size_t control_index = 0;
+      for (const auto& event : ordered_events) {
+        if (event.type != render::NoteEvent::EVENT_CONTROL) continue;
+        if (control_index >= expected_controls.size() ||
+            expected_controls[control_index] !=
+                std::array<int, 3>{event.channel, event.controller, event.value}) {
+          throw std::runtime_error("same-sample MIDI controls did not preserve source order");
+        }
+        ++control_index;
+      }
+      if (control_index != expected_controls.size()) {
+        throw std::runtime_error("same-sample MIDI control sequence was truncated");
+      }
+
+      RecordingSink ordered_sink;
+      render::McuModel ordered_mcu(ordered_sink, ordered_regions);
+      for (const auto& event : ordered_events) ordered_mcu.handle_event(event);
+      double ordered_bend_cents =
+          kPitchWheelModulatorAmountCents *
+          (double(ordered_bend.pitch_bend) / kPitchWheelCenter) *
+          (double(kPitchBendRangeSemitones) / kMidiSourceRange);
+      uint32_t expected_ordered_phase = uint32_t(std::round(
+          double(ordered_regions[0].phase_inc) *
+          std::pow(2.0, ordered_bend_cents / kCentsPerOctave)));
+      if (ordered_sink.last_phase_inc != expected_ordered_phase) {
+        throw std::runtime_error("ordered RPN sequence corrupted pitch-bend sensitivity");
+      }
+    }
+    {
+      render::NoteEvent source_note;
+      source_note.note = 60;
+      source_note.on = true;
+      source_note.velocity = 100;
+      render::NoteEvent source_sostenuto;
+      source_sostenuto.type = render::NoteEvent::EVENT_CONTROL;
+      source_sostenuto.controller = kCcSostenuto;
+      source_sostenuto.value = 127;
+      render::NoteEvent source_note_off = source_note;
+      source_note_off.on = false;
+      std::vector<render::NoteEvent> source_events{
+          source_note, source_sostenuto, source_note_off};
+      std::vector<render::Region> source_regions;
+      std::vector<int16_t> source_memory = sf2.file_words;
+      render::prepare_events_and_regions(args, sf2, 48000, 480, source_events,
+                                         source_regions, source_memory);
+      if (source_events.size() != 3 ||
+          source_events[0].type != render::NoteEvent::EVENT_NOTE || !source_events[0].on ||
+          source_events[1].type != render::NoteEvent::EVENT_CONTROL ||
+          source_events[1].controller != kCcSostenuto ||
+          source_events[2].type != render::NoteEvent::EVENT_NOTE || source_events[2].on) {
+        throw std::runtime_error("same-sample MIDI events did not preserve source order");
+      }
+      RecordingSink source_sink;
+      render::McuModel source_mcu(source_sink, source_regions);
+      for (const auto& event : source_events) source_mcu.handle_event(event);
+      if (source_sink.release_count != 0) {
+        throw std::runtime_error("same-sample sostenuto did not capture the preceding note");
+      }
+      source_sostenuto.value = 0;
+      source_mcu.handle_event(source_sostenuto);
+      if (source_sink.release_count != 1) {
+        throw std::runtime_error("same-sample sostenuto note was not released with the pedal");
       }
     }
     regions[0].preset = "Melodic \"Preset\"";
@@ -668,13 +795,13 @@ int main() {
     render::McuModel bend_range_mcu(bend_range_sink, bend_range_regions);
     render::NoteEvent rpn_msb;
     rpn_msb.type = render::NoteEvent::EVENT_CONTROL;
-    rpn_msb.controller = 101;
+    rpn_msb.controller = kCcRpnMsb;
     rpn_msb.value = 0;
     render::NoteEvent rpn_lsb = rpn_msb;
-    rpn_lsb.controller = 100;
+    rpn_lsb.controller = kCcRpnLsb;
     render::NoteEvent data_entry = rpn_msb;
-    data_entry.controller = 6;
-    data_entry.value = 12;
+    data_entry.controller = kCcDataEntryMsb;
+    data_entry.value = kPitchBendRangeSemitones;
     bend_range_mcu.handle_event(rpn_msb);
     bend_range_mcu.handle_event(rpn_lsb);
     bend_range_mcu.handle_event(data_entry);
@@ -685,13 +812,32 @@ int main() {
     bend_range_mcu.handle_event(bend_range_note);
     render::NoteEvent wide_bend;
     wide_bend.type = render::NoteEvent::EVENT_PITCH_BEND;
-    wide_bend.pitch_bend = 4096;
+    wide_bend.pitch_bend = kHalfPositivePitchBend;
     bend_range_mcu.handle_event(wide_bend);
-    double wide_bend_cents = 12700.0 * (4096.0 / 8192.0) * (12.0 / 128.0);
+    double wide_bend_cents =
+        kPitchWheelModulatorAmountCents *
+        (double(wide_bend.pitch_bend) / kPitchWheelCenter) *
+        (double(data_entry.value) / kMidiSourceRange);
     uint32_t wide_bent = uint32_t(std::round(double(render::kPhaseFracScale) *
-                                             std::pow(2.0, wide_bend_cents / 1200.0)));
+                                             std::pow(2.0, wide_bend_cents / kCentsPerOctave)));
     if (bend_range_sink.last_phase_inc != wide_bent) {
       throw std::runtime_error("RPN pitch-bend sensitivity did not widen bend range");
+    }
+    render::NoteEvent data_entry_lsb = data_entry;
+    data_entry_lsb.controller = kCcDataEntryLsb;
+    data_entry_lsb.value = 50;
+    bend_range_mcu.handle_event(data_entry_lsb);
+    bend_range_mcu.handle_event(wide_bend);
+    double fractional_range = double(data_entry.value) +
+                              double(data_entry_lsb.value) / kCentsPerSemitone;
+    double fractional_bend_cents =
+        kPitchWheelModulatorAmountCents *
+        (double(wide_bend.pitch_bend) / kPitchWheelCenter) *
+        (fractional_range / kMidiSourceRange);
+    uint32_t fractional_bent = uint32_t(std::round(double(bend_range_region.phase_inc) *
+        std::pow(2.0, fractional_bend_cents / kCentsPerOctave)));
+    if (bend_range_sink.last_phase_inc != fractional_bent) {
+      throw std::runtime_error("RPN pitch-bend sensitivity ignored Data Entry LSB cents");
     }
 
     render::Region default_vibrato_region;
@@ -785,7 +931,7 @@ int main() {
     render::McuModel soft_mcu(soft_sink, pedal_regions);
     render::NoteEvent soft_on;
     soft_on.type = render::NoteEvent::EVENT_CONTROL;
-    soft_on.controller = 66;
+    soft_on.controller = kCcSoftPedal;
     soft_on.value = 127;
     soft_mcu.handle_event(soft_on);
     soft_mcu.handle_event(tremolo_note);
@@ -793,26 +939,72 @@ int main() {
                                               std::pow(10.0, -30.0 / 200.0)));
     int soft_gain = expected_pan_gain(soft_attenuated_base, 0, true);
     if (soft_sink.last_gain_l != soft_gain || soft_sink.last_gain_r != soft_gain) {
-      throw std::runtime_error("CC66 soft pedal did not attenuate runtime gain");
+      throw std::runtime_error("CC67 soft pedal did not attenuate runtime gain");
     }
 
     RecordingSink sostenuto_sink;
     render::McuModel sostenuto_mcu(sostenuto_sink, pedal_regions);
     sostenuto_mcu.handle_event(tremolo_note);
     render::NoteEvent sostenuto_on = soft_on;
-    sostenuto_on.controller = 67;
+    sostenuto_on.controller = kCcSostenuto;
     sostenuto_mcu.handle_event(sostenuto_on);
     render::NoteEvent pedal_note_off = tremolo_note;
     pedal_note_off.on = false;
     sostenuto_mcu.handle_event(pedal_note_off);
     if (sostenuto_sink.release_count != 0) {
-      throw std::runtime_error("CC67 sostenuto released a captured note too early");
+      throw std::runtime_error("CC66 sostenuto released a captured note too early");
     }
     render::NoteEvent sostenuto_off = sostenuto_on;
     sostenuto_off.value = 0;
     sostenuto_mcu.handle_event(sostenuto_off);
     if (sostenuto_sink.release_count != 1) {
-      throw std::runtime_error("CC67 sostenuto did not release captured note");
+      throw std::runtime_error("CC66 sostenuto did not release captured note");
+    }
+
+    RecordingSink all_notes_sustain_sink;
+    render::McuModel all_notes_sustain_mcu(all_notes_sustain_sink, pedal_regions);
+    all_notes_sustain_mcu.handle_event(tremolo_note);
+    render::NoteEvent sustain_on = soft_on;
+    sustain_on.controller = kCcSustain;
+    all_notes_sustain_mcu.handle_event(sustain_on);
+    render::NoteEvent pedal_all_notes_off = sustain_on;
+    pedal_all_notes_off.controller = kCcAllNotesOff;
+    pedal_all_notes_off.value = 0;
+    all_notes_sustain_mcu.handle_event(pedal_all_notes_off);
+    if (all_notes_sustain_sink.release_count != 0) {
+      throw std::runtime_error("All Notes Off overrode the sustain pedal");
+    }
+    sustain_on.value = 0;
+    all_notes_sustain_mcu.handle_event(sustain_on);
+    if (all_notes_sustain_sink.release_count != 1) {
+      throw std::runtime_error("sustain release did not finish deferred All Notes Off");
+    }
+
+    for (int mode_controller = 124; mode_controller <= 127; ++mode_controller) {
+      RecordingSink mode_sink;
+      render::McuModel mode_mcu(mode_sink, pedal_regions);
+      mode_mcu.handle_event(tremolo_note);
+      render::NoteEvent mode = pedal_all_notes_off;
+      mode.controller = mode_controller;
+      mode_mcu.handle_event(mode);
+      if (mode_sink.release_count != 1) {
+        throw std::runtime_error("channel mode message did not perform All Notes Off");
+      }
+    }
+
+    RecordingSink repeated_note_sink;
+    render::McuModel repeated_note_mcu(repeated_note_sink, pedal_regions);
+    repeated_note_mcu.handle_event(tremolo_note);
+    repeated_note_mcu.handle_event(tremolo_note);
+    render::NoteEvent repeated_note_off = tremolo_note;
+    repeated_note_off.on = false;
+    repeated_note_mcu.handle_event(repeated_note_off);
+    if (repeated_note_sink.release_count != 1) {
+      throw std::runtime_error("one Note Off did not release exactly one repeated Note On");
+    }
+    repeated_note_mcu.handle_event(repeated_note_off);
+    if (repeated_note_sink.release_count != 2) {
+      throw std::runtime_error("second Note Off did not release the remaining repeated Note On");
     }
 
     render::Region poly_pressure_region;
@@ -988,6 +1180,7 @@ int main() {
     render::NoteEvent release_newer = steal_note;
     release_newer.on = false;
     release_newer.note = 40 + render::kNumVoices - 1;
+    release_newer.note_instance = render::kNumVoices;
     steal_mcu.handle_event(release_newer);
     steal_note.note = 100;
     steal_mcu.handle_event(steal_note);

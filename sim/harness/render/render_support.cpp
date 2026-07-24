@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -46,11 +47,6 @@ constexpr uint16_t kTransformAbsoluteValue = 2;
 
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
-}
-
-int event_priority(const NoteEvent& e) {
-  if (e.type != NoteEvent::EVENT_NOTE) return 0;
-  return e.on ? 2 : 1;
 }
 
 int linear_ramp(int start, int target, int tick, int ticks) {
@@ -199,6 +195,27 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   double render_seconds = double(sample_count) / double(args.sample_rate);
   double start_seconds = std::max(0.0, args.start_seconds);
   double end_seconds = start_seconds + render_seconds;
+  std::stable_sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
+    return a.time_seconds < b.time_seconds;
+  });
+
+  std::array<std::deque<uint64_t>, 16 * 128> pending_notes;
+  uint64_t next_note_instance = 0;
+  for (NoteEvent& event : events) {
+    if (event.type != NoteEvent::EVENT_NOTE) continue;
+    auto& pending = pending_notes[(event.channel & 0x0f) * 128 + (event.note & 0x7f)];
+    if (event.on && event.velocity != 0) {
+      event.note_instance = ++next_note_instance;
+      pending.push_back(event.note_instance);
+    } else if (!pending.empty()) {
+      event.note_instance = pending.front();
+      pending.pop_front();
+    } else {
+      // Keep an unmatched Note Off from releasing an unrelated older voice.
+      event.note_instance = ++next_note_instance;
+    }
+  }
+
   std::vector<NoteEvent> windowed_events;
   windowed_events.reserve(events.size());
   for (NoteEvent e : events) {
@@ -215,13 +232,6 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   }
   events.swap(windowed_events);
   if (events.empty()) throw std::runtime_error("no MIDI events fall inside the requested render window");
-
-  std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
-    if (a.time_seconds != b.time_seconds) return a.time_seconds < b.time_seconds;
-    if (event_priority(a) != event_priority(b)) return event_priority(a) < event_priority(b);
-    if (a.on != b.on) return !a.on;
-    return a.note < b.note;
-  });
 
   std::map<std::array<int, 4>, std::vector<int>> region_by_key;
   int forced_inst = args.instrument.empty() ? -1 : select_instrument(sf2, args.instrument);
@@ -284,11 +294,8 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   for (auto& e : events) {
     e.sample = std::max(0, std::min(sample_count, int(std::round(e.time_seconds * args.sample_rate))));
   }
-  std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
-    if (a.sample != b.sample) return a.sample < b.sample;
-    if (event_priority(a) != event_priority(b)) return event_priority(a) < event_priority(b);
-    if (a.on != b.on) return !a.on;
-    return a.note < b.note;
+  std::stable_sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
+    return a.sample < b.sample;
   });
 }
 
@@ -302,7 +309,7 @@ void McuModel::handle_event(const NoteEvent& event) {
   else if (event.type == NoteEvent::EVENT_CHANNEL_PRESSURE) channel_pressure(event);
   else if (event.type == NoteEvent::EVENT_KEY_PRESSURE) key_pressure(event);
   else if (event.type == NoteEvent::EVENT_NOTE && event.on) note_on(event);
-  else if (event.type == NoteEvent::EVENT_NOTE) note_off(event.channel, event.note);
+  else if (event.type == NoteEvent::EVENT_NOTE) note_off(event.channel, event.note, event.note_instance);
 }
 
 void McuModel::control_tick() {
@@ -374,11 +381,11 @@ void McuModel::control_change(const NoteEvent& event) {
       channels_[channel].expression = value;
       update_channel_controls(channel);
       break;
-    case 66:
+    case 67:
       channels_[channel].soft = value >= 64;
       update_channel_controls(channel);
       break;
-    case 67:
+    case 66:
       if (value >= 64 && !channels_[channel].sostenuto) {
         channels_[channel].sostenuto = true;
         for (int v = 0; v < kNumVoices; ++v) {
@@ -416,10 +423,14 @@ void McuModel::control_change(const NoteEvent& event) {
       channels_[channel].data_entry_is_nrpn = false;
       break;
     case 6:
-      apply_data_entry_msb(channel, value);
+      apply_data_entry(channel, value);
       break;
     case 38:
       channels_[channel].data_entry_lsb = value;
+      if (!channels_[channel].data_entry_is_nrpn && channels_[channel].rpn_msb == 0 &&
+          (channels_[channel].rpn_lsb == 0 || channels_[channel].rpn_lsb == 1)) {
+        apply_data_entry(channel, channels_[channel].cc[6]);
+      }
       break;
     case 64:
       if (value >= 64) {
@@ -447,9 +458,11 @@ void McuModel::control_change(const NoteEvent& event) {
       release_deferred_pedal_voices(channel);
       break;
     case 123:
-      for (int v = 0; v < kNumVoices; ++v) {
-        if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel) release_voice(v);
-      }
+    case 124:
+    case 125:
+    case 126:
+    case 127:
+      all_notes_off(channel);
       break;
     default:
       break;
@@ -488,9 +501,20 @@ void McuModel::release_deferred_pedal_voices(int channel) {
   }
 }
 
-void McuModel::apply_data_entry_msb(int channel, int value) {
+void McuModel::all_notes_off(int channel) {
+  for (int v = 0; v < kNumVoices; ++v) {
+    if (voices_[v].state == ENV_SILENT || voices_[v].channel != channel || voices_[v].key_released) continue;
+    voices_[v].key_released = true;
+    if (channels_[channel].sustain) voices_[v].sustain_held = true;
+    if (channels_[channel].sustain || voices_[v].sostenuto_held) continue;
+    release_voice(v);
+  }
+}
+
+void McuModel::apply_data_entry(int channel, int msb_value) {
   ChannelState& c = channels_[channel];
-  int data14 = (std::max(0, std::min(127, value)) << 7) | std::max(0, std::min(127, c.data_entry_lsb));
+  int data14 = (std::max(0, std::min(127, msb_value)) << 7) |
+               std::max(0, std::min(127, c.data_entry_lsb));
   if (c.data_entry_is_nrpn && c.nrpn_msb == 120 && c.nrpn_generator >= 0 &&
       c.nrpn_generator < int(c.generator_offsets.size())) {
     double centered = double(data14 - 0x2000) / 8192.0;
@@ -526,14 +550,15 @@ void McuModel::apply_data_entry_msb(int channel, int value) {
   }
 
   if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 0) {
-    c.pitch_bend_range_semitones = std::max(0, std::min(127, value));
+    c.pitch_bend_range_semitones = std::max(0, std::min(127, msb_value));
     c.pitch_bend_range_cents = c.data_entry_lsb;
     update_channel_controls(channel);
   } else if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 1) {
     c.generator_offsets[kGenFineTune] = (double(data14) - 8192.0) * 100.0 / 8192.0;
     update_channel_controls(channel);
   } else if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 2) {
-    c.generator_offsets[kGenCoarseTune] = double(std::max(0, std::min(127, value)) - 64) * 100.0;
+    c.generator_offsets[kGenCoarseTune] =
+        double(std::max(0, std::min(127, msb_value)) - 64) * 100.0;
     update_channel_controls(channel);
   }
 }
@@ -739,10 +764,21 @@ void McuModel::release_voice(int voice) {
   sink_.release_voice(voice, envelope_release_step(region));
 }
 
-void McuModel::note_off(int channel, int note) {
+void McuModel::note_off(int channel, int note, uint64_t note_instance) {
   channel &= 0x0f;
+  if (note_instance == 0) {
+    for (int v = 0; v < kNumVoices; ++v) {
+      if (voices_[v].state == ENV_SILENT || voices_[v].channel != channel ||
+          voices_[v].note != (note & 0x7f) || voices_[v].key_released) continue;
+      if (note_instance == 0 || voices_[v].note_instance < note_instance) {
+        note_instance = voices_[v].note_instance;
+      }
+    }
+  }
   for (int v = 0; v < kNumVoices; ++v) {
-    if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel && voices_[v].note == (note & 0x7f)) {
+    if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel &&
+        voices_[v].note == (note & 0x7f) && !voices_[v].key_released &&
+        voices_[v].note_instance == note_instance) {
       voices_[v].key_released = true;
       if (channels_[channel].sustain) voices_[v].sustain_held = true;
       if (voices_[v].sostenuto_held) {
@@ -756,9 +792,13 @@ void McuModel::note_off(int channel, int note) {
 
 void McuModel::note_on(const NoteEvent& event) {
   if (event.velocity == 0) {
-    note_off(event.channel, event.note);
+    note_off(event.channel, event.note, event.note_instance);
     return;
   }
+
+  uint64_t note_instance = event.note_instance;
+  if (note_instance == 0) note_instance = ++next_note_instance_;
+  else next_note_instance_ = std::max(next_note_instance_, note_instance);
 
   int slot = first_free_or_steal_slot();
   if (voices_[slot].state != ENV_SILENT && diagnostics_) {
@@ -809,6 +849,7 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].sustain_held = false;
   voices_[slot].sostenuto_held = false;
   voices_[slot].key_released = false;
+  voices_[slot].note_instance = note_instance;
   voices_[slot].tremolo_attenuation_cb = 0.0;
   voices_[slot].mod_lfo_phase = 0;
   voices_[slot].vib_lfo_phase = 0;

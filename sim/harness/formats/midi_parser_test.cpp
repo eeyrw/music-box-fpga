@@ -196,6 +196,35 @@ std::string write_oversized_varlen_midi() {
   return write_file("midi_parser_test_oversized_varlen.mid", file);
 }
 
+std::string write_missing_end_of_track_midi() {
+  std::vector<uint8_t> file = make_header(0, 1);
+  std::vector<uint8_t> track;
+  push_varlen(track, 0);
+  track.insert(track.end(), {0x90, 60, 100});
+  append_track(file, track);
+  return write_file("midi_parser_test_missing_eot.mid", file);
+}
+
+std::string write_event_after_end_of_track_midi() {
+  std::vector<uint8_t> file = make_header(0, 1);
+  std::vector<uint8_t> track;
+  push_varlen(track, 0);
+  track.insert(track.end(), {0xff, 0x2f, 0x00});
+  push_varlen(track, 0);
+  track.insert(track.end(), {0x90, 60, 100});
+  append_track(file, track);
+  return write_file("midi_parser_test_event_after_eot.mid", file);
+}
+
+std::string write_nonzero_end_of_track_midi() {
+  std::vector<uint8_t> file = make_header(0, 1);
+  std::vector<uint8_t> track;
+  push_varlen(track, 0);
+  track.insert(track.end(), {0xff, 0x2f, 0x01, 0x00});
+  append_track(file, track);
+  return write_file("midi_parser_test_nonzero_eot.mid", file);
+}
+
 void expect_near(double actual, double expected, const char* label) {
   if (std::abs(actual - expected) > 1e-9) {
     throw std::runtime_error(std::string(label) + " expected " + std::to_string(expected) +
@@ -262,6 +291,12 @@ int main() {
     expect_throws([] { render::parse_midi(write_truncated_track_midi()); }, "truncated track validation");
     expect_throws([] { render::parse_midi(write_truncated_event_midi()); }, "truncated event validation");
     expect_throws([] { render::parse_midi(write_oversized_varlen_midi()); }, "oversized varlen validation");
+    expect_throws([] { render::parse_midi(write_missing_end_of_track_midi()); },
+                  "missing End of Track validation");
+    expect_throws([] { render::parse_midi(write_event_after_end_of_track_midi()); },
+                  "End of Track final-event validation");
+    expect_throws([] { render::parse_midi(write_nonzero_end_of_track_midi()); },
+                  "End of Track length validation");
 
     std::cout << "PASS: MIDI parser handles tempo, ordering, channel state, and strict SMF validation\n";
     return 0;

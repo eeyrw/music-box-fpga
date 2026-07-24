@@ -86,13 +86,14 @@ class McuModel {
   void update_voice_modulation(int voice);
   void update_channel_controls(int channel);
   void release_deferred_pedal_voices(int channel);
-  void apply_data_entry_msb(int channel, int value);
+  void all_notes_off(int channel);
+  void apply_data_entry(int channel, int msb_value);
   void reset_controllers(int channel);
   void record_runtime_gain_update(int voice, int gain_l, int gain_r);
   void record_runtime_phase_update(int voice, uint32_t phase_inc);
   void record_runtime_filter_update(int voice, const FilterConfig& filter);
   void release_voice(int voice);
-  void note_off(int channel, int note);
+  void note_off(int channel, int note, uint64_t note_instance = 0);
   void note_on(const NoteEvent& event);
   int first_free_or_steal_slot() const;
   static std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
@@ -118,6 +119,7 @@ class McuModel {
   std::array<FilterConfig, kNumVoices> last_runtime_filter_{};
   RenderDiagnostics* diagnostics_ = nullptr;
   int alloc_stamp_ = 0;
+  uint64_t next_note_instance_ = 0;
   uint64_t control_tick_index_ = 0;
   uint32_t current_sample_ = 0;
 };

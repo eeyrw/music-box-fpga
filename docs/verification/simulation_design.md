@@ -124,6 +124,9 @@ python3 tools/compare_reference_fluidsynth.py \
 The host side owns:
 
 - MIDI parsing, tempo, programs, banks, controllers, pressure, and pitch bend;
+- preservation of MIDI source order when multiple events map to the same output
+  sample, including order-sensitive controller/note sequences and RPN selection
+  followed by Data Entry;
 - SF2 preset/instrument/zone selection and sample-address calculation;
 - FluidSynth-compatible `0.4` scaling for every file-defined
   `initialAttenuation` generator, matching the EMU8k/10k behavior expected by
@@ -140,6 +143,27 @@ The host side owns:
 
 The FPGA owns prepared/active lifecycle, sample-rate volume-envelope progression,
 phase, filtering, mixing, and audio scheduling.
+
+The Standard MIDI File parser accepts format 0 and format 1 files with PPQ time
+division. It requires each track to end with a zero-length End of Track event and
+rejects events after it. Format 2, SMPTE time division, and synthesizer-specific
+SysEx execution are outside the current render subset. The channel policy does
+not currently implement portamento, Hold 2, Data Increment/Decrement, tuning
+program/bank RPNs, or the actual Omni/Mono/Poly mode transitions; CC124 through
+CC127 still perform their required All Notes Off action.
+
+Repeated Note On messages for the same channel/key receive distinct FIFO note
+instances. A corresponding Note Off releases one instance and all of its
+SoundFont layers. All Notes Off follows normal Note Off pedal precedence, while
+All Sound Off remains immediate.
+
+Controller execution follows the MIDI 1.0 assignments: CC64 is Sustain, CC66 is
+Sostenuto, and CC67 is Soft Pedal. CC123 through CC127 perform All Notes Off;
+CC120 bypasses release envelopes and stops sound immediately. RPN/NRPN selection
+and Data Entry are ordered channel state machines. RPN 0 implements pitch-bend
+sensitivity, including CC38 cents; RPN 1 and RPN 2 implement fine and coarse
+tuning. Events retain their source order even when timestamp conversion rounds
+several distinct times onto one output sample.
 
 ### File Attenuation Compatibility
 

@@ -59,6 +59,7 @@ struct NoteEvent {
   int sample = 0;
   uint32_t phase_inc = 1;
   int region = 0;
+  uint64_t note_instance = 0;
 };
 
 struct Sf2Modulator {
@@ -229,6 +230,7 @@ struct VoiceState {
   double tremolo_attenuation_cb = 0.0;
   bool key_released = false;
   bool sostenuto_held = false;
+  uint64_t note_instance = 0;
 };
 
 enum EnvState {

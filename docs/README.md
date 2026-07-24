@@ -51,6 +51,9 @@ change.
 - [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
   local copy of the Standard MIDI File format reference used when validating the
   C++ MIDI parser.
+- [`M1_v4-2-1_MIDI_1-0_Detailed_Specification_96-1-4.pdf`](M1_v4-2-1_MIDI_1-0_Detailed_Specification_96-1-4.pdf):
+  MIDI 1.0 Detailed Specification 4.2.1, including channel messages and the
+  registered-parameter/Data Entry state-machine rules.
 
 ## Host Control
 

@@ -136,6 +136,7 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
 
     uint32_t tick = 0;
     int running_status = -1;
+    bool saw_end_of_track = false;
 
     while (pos < end) {
       uint32_t delta = read_varlen(data, pos, end);
@@ -166,7 +167,11 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
         uint8_t meta = data[pos++];
         uint32_t len = read_varlen(data, pos, end);
         require_track_bytes(pos, end, len, "meta payload");
-        if (meta == 0x51 && len == 3) {
+        if (meta == 0x2f) {
+          if (len != 0) throw std::runtime_error("MIDI End of Track must have zero length");
+          if (pos != end) throw std::runtime_error("MIDI End of Track must be the final track event");
+          saw_end_of_track = true;
+        } else if (meta == 0x51 && len == 3) {
           // Set Tempo stores microseconds per quarter note in three big-endian
           // bytes. This value is not BPM; smaller numbers mean faster playback.
           uint32_t tempo = (uint32_t(data[pos]) << 16) |
@@ -202,6 +207,7 @@ std::vector<NoteEvent> parse_midi(const std::string& path) {
       else if (type == 0xd0) kind = RawKind::kChannelPressure;
       raw_events.push_back({tick, event_order++, kind, ch, a, b, type == 0x90});
     }
+    if (!saw_end_of_track) throw std::runtime_error("MIDI track is missing End of Track");
     pos = end;
   }
 
