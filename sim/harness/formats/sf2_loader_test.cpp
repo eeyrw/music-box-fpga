@@ -430,6 +430,12 @@ void expect_equal(int actual, int expected, const char* label) {
   }
 }
 
+int expected_mono_pan_gain(int base_gain, int pan, bool left) {
+  constexpr double kPi = 3.14159265358979323846;
+  int distance = left ? 500 - pan : 500 + pan;
+  return int(std::round(double(base_gain) * std::sin(double(distance) * kPi / 2000.0)));
+}
+
 void expect_load_fails_without_pmod(const std::string& good_path) {
   std::ifstream in(good_path, std::ios::binary);
   if (!in) throw std::runtime_error("failed to reopen " + good_path);
@@ -469,14 +475,15 @@ int main() {
     render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
     int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * render::kPhaseFracScale));
     int expected_gain = int(std::round(0x4000 * std::pow(10.0, -40.0 / 200.0)));
+    int expected_center_gain = expected_mono_pan_gain(expected_gain, 0, true);
     expect_equal(int(preset.phase_inc), expected_phase, "preset additive fineTune phase");
-    expect_equal(preset.gain_l, expected_gain, "EMU-scaled preset attenuation left gain");
-    expect_equal(preset.gain_r, expected_gain, "EMU-scaled preset attenuation right gain");
+    expect_equal(preset.gain_l, expected_center_gain, "EMU-scaled preset attenuation left gain");
+    expect_equal(preset.gain_r, expected_center_gain, "EMU-scaled preset attenuation right gain");
     sf2.isng = "Non-EMU engine";
     render::Region non_emu_preset =
         render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
-    expect_equal(non_emu_preset.gain_l, expected_gain, "file attenuation does not depend on isng");
-    expect_equal(non_emu_preset.gain_r, expected_gain, "right file attenuation does not depend on isng");
+    expect_equal(non_emu_preset.gain_l, expected_center_gain, "file attenuation does not depend on isng");
+    expect_equal(non_emu_preset.gain_r, expected_center_gain, "right file attenuation does not depend on isng");
     expect_equal(int(preset.length), 58, "sample address offsets length");
     expect_equal(int(preset.length_r), 58, "mono right length mirrors left length");
     expect_equal(int(preset.base_addr), int(sf2.smpl_word_offset + 2), "absolute smpl base address");
@@ -508,11 +515,15 @@ int main() {
     render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);
     expect_equal(int(inst.volume_envelope.attack_samples), 47,
                  "default 0.9766 ms volume attack remains sample-accurate");
-    expect_equal(inst.gain_l, 24576, "instrument pan left gain");
-    expect_equal(inst.gain_r, 8192, "instrument pan right gain");
+    expect_equal(inst.gain_l, expected_mono_pan_gain(0x4000, -250, true),
+                 "instrument equal-power pan left gain");
+    expect_equal(inst.gain_r, expected_mono_pan_gain(0x4000, -250, false),
+                 "instrument equal-power pan right gain");
     render::Region clamped = render::make_region_for_instrument(sf2, 1, 60, 100, 48000, 480, memory);
-    expect_equal(clamped.gain_l, 0x4000, "negative initial attenuation clamps left gain");
-    expect_equal(clamped.gain_r, 0x4000, "negative initial attenuation clamps right gain");
+    expect_equal(clamped.gain_l, expected_mono_pan_gain(0x4000, 0, true),
+                 "negative initial attenuation clamps left gain");
+    expect_equal(clamped.gain_r, expected_mono_pan_gain(0x4000, 0, false),
+                 "negative initial attenuation clamps right gain");
 
     render::Sf2Data stereo_sf2 = render::load_sf2(write_stereo_sf2());
     std::vector<int16_t> stereo_memory = stereo_sf2.file_words;
@@ -530,13 +541,19 @@ int main() {
                  "linked stereo phase uses right sample pitch generators");
     expect_equal(stereo.mod_lfo_to_pitch, 777, "linked stereo pitch generator uses right zone");
     bool saw_cc1 = false;
+    bool saw_cc10 = false;
     for (const auto& mod : stereo.modulators) {
       if (mod.src == 0x0081 && mod.dest == 6) {
         expect_equal(mod.amount, 75, "pmod CC1 adds to default vibrato modulator");
         saw_cc1 = true;
       }
+      if (mod.src == 0x028a && mod.dest == 17) {
+        expect_equal(mod.amount, 500, "FluidSynth-compatible default CC10 pan amount");
+        saw_cc10 = true;
+      }
     }
     if (!saw_cc1) throw std::runtime_error("pmod CC1 vibrato modulator was not preserved");
+    if (!saw_cc10) throw std::runtime_error("default CC10 pan modulator was not preserved");
 
     stereo_sf2.samples[0].sample_link = 2;
     stereo_sf2.samples[1].sample_link = 0;

@@ -97,6 +97,28 @@ image and board-loader path.
 If a requested time window contains no audible events, the harness reports that
 condition rather than treating an all-zero render as success.
 
+### FluidSynth Comparison Tool
+
+`tools/compare_reference_fluidsynth.py` automates a dry reference comparison.
+It renders the C++ reference with the normal Make target, renders the same MIDI
+and SF2 through FluidSynth with chorus and reverb disabled, trims both to the
+requested time window, and parses FFmpeg `astats` into `comparison.json`.
+Absolute RMS is reported but not compared because FluidSynth and the reference
+use different master gains; `left_minus_right_rms_db` is the cross-renderer
+balance metric.
+
+```bash
+python3 tools/compare_reference_fluidsynth.py \
+  --sf2 assets/soundfonts/example.sf2 --midi assets/midi/example.mid \
+  --seconds 30 --control-tick-ms 1 \
+  --out-dir build/example_fluid_compare
+
+python3 tools/compare_reference_fluidsynth.py \
+  --reference-wav build/reference/out.wav \
+  --fluid-wav build/fluidsynth.wav \
+  --out-dir build/existing_wav_compare
+```
+
 ## MIDI And SoundFont Policy
 
 The host side owns:
@@ -107,6 +129,11 @@ The host side owns:
   `initialAttenuation` generator, matching the EMU8k/10k behavior expected by
   existing SoundFonts; MIDI/runtime attenuation modulators retain standard
   centibel units;
+- FluidSynth-compatible default CC10 pan amount `500`, resolving the SF2 text's
+  inconsistent `1000` amount against the pan generator's `-500..+500` range;
+- sine-table equal-power panning for mono regions. Collapsed stereo regions use
+  the same curve normalized to unity at center because their samples are already
+  hard-routed to independent left and right outputs;
 - voice allocation, layering, exclusive class, sustain, and stealing;
 - fixed and real-time SF2 modulator evaluation;
 - conversion of durations, gains, pitch, and filter coefficients to FPGA fields.

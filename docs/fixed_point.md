@@ -20,6 +20,13 @@ once. V1 therefore requires the increment to be smaller than one loop length for
 looping playback. No-loop playback and released loop-until-release playback stop
 contributing once phase reaches `length`.
 
+The eight fractional bits can make dense pitch-bend automation audibly step at
+low phase increments. For example, one `phase_inc` LSB is about 7.8 cents at an
+increment of 222 and 13.8 cents at an increment of 125. Increasing phase
+precision, or adding an error-accumulation scheme while preserving the command
+format, is deferred for a separate architecture discussion; the current Q24.8
+interface and behavior are unchanged.
+
 ## Interpolation
 
 Linear interpolation is evaluated with signed intermediate values:

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace render {
@@ -244,6 +245,17 @@ inline int clamp_q15(int value) {
   if (value <= 0) return 0;
   if (value >= kQ15Full) return kQ15Full;
   return value;
+}
+
+inline std::pair<int, int> equal_power_pan_gains(int base_left, int base_right,
+                                                 int pan, bool center_unity) {
+  constexpr double kPi = 3.14159265358979323846;
+  pan = std::max(-500, std::min(500, pan));
+  double normalization = center_unity ? std::sqrt(2.0) : 1.0;
+  double left_factor = normalization * std::sin(double(500 - pan) * kPi / 2000.0);
+  double right_factor = normalization * std::sin(double(500 + pan) * kPi / 2000.0);
+  return {clamp_q15(int(std::round(double(base_left) * left_factor))),
+          clamp_q15(int(std::round(double(base_right) * right_factor)))};
 }
 
 inline int concave_attenuation_q15(int value) {

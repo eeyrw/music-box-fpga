@@ -230,6 +230,7 @@ test-cpp-unit:
 		sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
+	python3 tools/compare_reference_fluidsynth_test.py
 
 test-rtl-core:
 	mkdir -p $(BUILD_DIR)

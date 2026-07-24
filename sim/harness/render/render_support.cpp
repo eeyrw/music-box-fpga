@@ -85,7 +85,7 @@ const std::vector<Sf2Modulator>& fallback_default_modulators() {
       {kModSrcChannelPressure, kGenVibLfoToPitch, 50, kModSrcNone, kTransformLinear},
       {kModSrcCc1, kGenVibLfoToPitch, 50, kModSrcNone, kTransformLinear},
       {kModSrcCc7, kGenInitialAttenuation, 960, kModSrcNone, kTransformLinear},
-      {kModSrcCc10, kGenPan, 1000, kModSrcNone, kTransformLinear},
+      {kModSrcCc10, kGenPan, 500, kModSrcNone, kTransformLinear},
       {kModSrcCc11, kGenInitialAttenuation, 960, kModSrcNone, kTransformLinear},
       {kModSrcPitchWheel, 0, 12700, kModSrcPitchWheelSensitivity, kTransformLinear},
   };
@@ -883,9 +883,11 @@ std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceSta
       modulator_sum(region, voice, channel, kGenPan, false, true)))));
   int base_left = region.stereo ? region.base_gain_l : region.base_gain;
   int base_right = region.stereo ? region.base_gain_r : region.base_gain;
-  int left = int(std::round(double(base_left) * level * double(500 - total_pan) / 500.0));
-  int right = int(std::round(double(base_right) * level * double(500 + total_pan) / 500.0));
-  return {clamp_q15(left), clamp_q15(right)};
+  int scaled_left = clamp_q15(int(std::round(double(base_left) * level)));
+  int scaled_right = clamp_q15(int(std::round(double(base_right) * level)));
+  // Collapsed stereo regions are already hard-routed left/right, so normalize
+  // their centered balance to unity. Mono follows FluidSynth's pan law exactly.
+  return equal_power_pan_gains(scaled_left, scaled_right, total_pan, region.stereo);
 }
 
 double McuModel::modulator_sum(const Region& region, const VoiceState& voice,

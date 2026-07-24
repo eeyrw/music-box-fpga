@@ -45,6 +45,15 @@ struct RecordingSink : public render::VoiceCommandSink {
   void stop_voice(int) override { ++disable_count; }
 };
 
+int expected_pan_gain(int base_gain, int pan, bool left, bool center_unity = false) {
+  constexpr double kPi = 3.14159265358979323846;
+  int distance = left ? 500 - pan : 500 + pan;
+  double normalization = center_unity ? std::sqrt(2.0) : 1.0;
+  int gain = int(std::round(double(base_gain) * normalization *
+                            std::sin(double(distance) * kPi / 2000.0)));
+  return std::max(0, std::min(render::kQ15Full, gain));
+}
+
 void push_u16(std::vector<uint8_t>& out, uint16_t value) {
   out.push_back(uint8_t(value));
   out.push_back(uint8_t(value >> 8));
@@ -751,13 +760,17 @@ int main() {
     tremolo_note.phase_inc = render::kPhaseFracScale;
     tremolo_mcu.handle_event(tremolo_note);
     tremolo_mcu.control_tick();
-    int tremolo_gain = int(std::round(double(0x1000) * std::pow(10.0, 100.0 / 200.0)));
+    int tremolo_boosted_base = int(std::round(double(tremolo_region.base_gain) *
+                                              std::pow(10.0, 100.0 / 200.0)));
+    int tremolo_gain = expected_pan_gain(tremolo_boosted_base, 0, true);
     if (tremolo_sink.last_gain_l != tremolo_gain || tremolo_sink.last_gain_r != tremolo_gain) {
       throw std::runtime_error("modLfoToVolume did not boost runtime gain on positive LFO excursion");
     }
     tremolo_mcu.control_tick();
     tremolo_mcu.control_tick();
-    int tremolo_dip = int(std::round(double(0x1000) * std::pow(10.0, -100.0 / 200.0)));
+    int tremolo_attenuated_base = int(std::round(double(tremolo_region.base_gain) *
+                                                 std::pow(10.0, -100.0 / 200.0)));
+    int tremolo_dip = expected_pan_gain(tremolo_attenuated_base, 0, true);
     if (tremolo_sink.last_gain_l != tremolo_dip || tremolo_sink.last_gain_r != tremolo_dip) {
       throw std::runtime_error("modLfoToVolume did not attenuate runtime gain on negative LFO excursion");
     }
@@ -776,7 +789,9 @@ int main() {
     soft_on.value = 127;
     soft_mcu.handle_event(soft_on);
     soft_mcu.handle_event(tremolo_note);
-    int soft_gain = int(std::round(double(0x4000) * std::pow(10.0, -30.0 / 200.0)));
+    int soft_attenuated_base = int(std::round(double(pedal_region.base_gain) *
+                                              std::pow(10.0, -30.0 / 200.0)));
+    int soft_gain = expected_pan_gain(soft_attenuated_base, 0, true);
     if (soft_sink.last_gain_l != soft_gain || soft_sink.last_gain_r != soft_gain) {
       throw std::runtime_error("CC66 soft pedal did not attenuate runtime gain");
     }
@@ -841,7 +856,12 @@ int main() {
     nrpn.controller = 6;
     nrpn.value = 96;
     nrpn_mcu.handle_event(nrpn);
-    if (nrpn_sink.last_gain_l != 0 || nrpn_sink.last_gain_r != render::kQ15Full) {
+    int nrpn_data14 = nrpn.value << 7;
+    int nrpn_pan = int(std::round(double(nrpn_data14 - 0x2000) / 8192.0 * 1000.0));
+    int expected_nrpn_left = expected_pan_gain(pedal_region.base_gain, nrpn_pan, true);
+    int expected_nrpn_right = expected_pan_gain(pedal_region.base_gain, nrpn_pan, false);
+    if (nrpn_sink.last_gain_l != expected_nrpn_left ||
+        nrpn_sink.last_gain_r != expected_nrpn_right) {
       throw std::runtime_error("SF2 NRPN pan offset did not update runtime gain");
     }
 
@@ -881,16 +901,21 @@ int main() {
     pan_note.velocity = 127;
     pan_note.phase_inc = render::kPhaseFracScale;
     pan_mcu.handle_event(pan_note);
-    if (pan_sink.last_gain_l != 8192 || pan_sink.last_gain_r != 24576) {
-      throw std::runtime_error("SF2 pan did not set initial runtime balance");
+    int expected_pan_left = expected_pan_gain(pan_region.base_gain, pan_region.pan, true);
+    int expected_pan_right = expected_pan_gain(pan_region.base_gain, pan_region.pan, false);
+    if (pan_sink.last_gain_l != expected_pan_left || pan_sink.last_gain_r != expected_pan_right) {
+      throw std::runtime_error("SF2 pan did not use the equal-power runtime balance");
     }
     render::NoteEvent pan_cc = pan_note;
     pan_cc.type = render::NoteEvent::EVENT_CONTROL;
     pan_cc.controller = 10;
     pan_cc.value = 0;
     pan_mcu.handle_event(pan_cc);
-    if (pan_sink.last_gain_l != render::kQ15Full || pan_sink.last_gain_r != 0) {
-      throw std::runtime_error("CC10 pan did not add to SF2 pan before clamping");
+    int cc10_zero_pan = pan_region.pan - 500;
+    int expected_cc10_left = expected_pan_gain(pan_region.base_gain, cc10_zero_pan, true);
+    int expected_cc10_right = expected_pan_gain(pan_region.base_gain, cc10_zero_pan, false);
+    if (pan_sink.last_gain_l != expected_cc10_left || pan_sink.last_gain_r != expected_cc10_right) {
+      throw std::runtime_error("CC10 pan did not use the FluidSynth-compatible amount");
     }
 
     render::Region stereo_gain_region;

@@ -486,7 +486,9 @@ std::vector<Sf2Modulator> default_modulators() {
     {MOD_SRC_CHANNEL_PRESSURE, GEN_VIB_LFO_TO_PITCH, 50, MOD_SRC_NONE, MOD_TRANS_LINEAR},
     {MOD_SRC_CC1, GEN_VIB_LFO_TO_PITCH, 50, MOD_SRC_NONE, MOD_TRANS_LINEAR},
     {MOD_SRC_CC7, GEN_INITIAL_ATTENUATION, 960, MOD_SRC_NONE, MOD_TRANS_LINEAR},
-    {MOD_SRC_CC10, GEN_PAN, 1000, MOD_SRC_NONE, MOD_TRANS_LINEAR},
+    // The SF2 text says 1000, but its bipolar source already spans both pan
+    // halves. FluidSynth uses 500 so CC10 covers the legal -500..+500 range.
+    {MOD_SRC_CC10, GEN_PAN, 500, MOD_SRC_NONE, MOD_TRANS_LINEAR},
     {MOD_SRC_CC11, GEN_INITIAL_ATTENUATION, 960, MOD_SRC_NONE, MOD_TRANS_LINEAR},
     {MOD_SRC_PITCH_WHEEL, 0, 12700, MOD_SRC_PITCH_WHEEL_SENSITIVITY, MOD_TRANS_LINEAR},
   };
@@ -778,10 +780,9 @@ void gain_config(const Zone& zone, Region& region) {
   region.base_gain = zone_attenuation_gain(zone);
   region.base_gain_l = region.base_gain;
   region.base_gain_r = region.base_gain;
-  int left = int(std::round(double(region.base_gain) * double(500 - region.pan) / 500.0));
-  int right = int(std::round(double(region.base_gain) * double(500 + region.pan) / 500.0));
-  region.gain_l = std::max(0, std::min(0x7fff, left));
-  region.gain_r = std::max(0, std::min(0x7fff, right));
+  auto gains = equal_power_pan_gains(region.base_gain, region.base_gain, region.pan, false);
+  region.gain_l = gains.first;
+  region.gain_r = gains.second;
 }
 
 double timecents_to_seconds(int value, bool present, int default_timecents) {
