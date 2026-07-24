@@ -33,9 +33,6 @@ module voice_endpoint_fetch #(
 );
   import synth_pkg::*;
 
-  localparam int FETCH_QUEUE_DEPTH = 2;
-  localparam int FETCH_QUEUE_PTR_WIDTH = $clog2(FETCH_QUEUE_DEPTH);
-  localparam int FETCH_QUEUE_COUNT_WIDTH = $clog2(FETCH_QUEUE_DEPTH + 1);
   localparam int FETCH_SLOT_DEPTH = 4;
   localparam int FETCH_SLOT_PTR_WIDTH = $clog2(FETCH_SLOT_DEPTH);
   localparam int FETCH_SLOT_COUNT_WIDTH = $clog2(FETCH_SLOT_DEPTH + 1);
@@ -79,7 +76,6 @@ module voice_endpoint_fetch #(
   logic [PHASE_FRAME_WIDTH-1:0] enq_frame_r1;
   logic [FETCH_SLOT_PTR_WIDTH-1:0] enq_slot;
 
-  (* ram_style = "distributed" *) voice_dsp_context_t fetch_queue [FETCH_QUEUE_DEPTH];
   (* ram_style = "distributed" *) voice_dsp_context_t fetch_slot_context [FETCH_SLOT_DEPTH];
   (* ram_style = "distributed" *) pcm_t fetch_slot_raw_l0 [FETCH_SLOT_DEPTH];
   (* ram_style = "distributed" *) pcm_t fetch_slot_raw_l1 [FETCH_SLOT_DEPTH];
@@ -89,9 +85,6 @@ module voice_endpoint_fetch #(
   (* ram_style = "distributed" *) word_req_t word_req_queue [WORD_REQ_DEPTH];
   (* ram_style = "distributed" *) rsp_meta_t rsp_meta_queue [WORD_REQ_DEPTH];
 
-  logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_rd;
-  logic [FETCH_QUEUE_PTR_WIDTH-1:0] fetch_queue_wr;
-  logic [FETCH_QUEUE_COUNT_WIDTH-1:0] fetch_queue_count;
   logic [FETCH_SLOT_PTR_WIDTH-1:0] fetch_slot_wr;
   logic [FETCH_SLOT_COUNT_WIDTH-1:0] fetch_slot_count;
   logic [WORD_REQ_PTR_WIDTH-1:0] word_req_rd;
@@ -101,14 +94,12 @@ module voice_endpoint_fetch #(
   logic [WORD_REQ_PTR_WIDTH-1:0] rsp_meta_wr;
   logic [WORD_REQ_COUNT_WIDTH-1:0] rsp_meta_count;
 
-  logic fetch_queue_empty;
   logic fetch_slot_full;
   logic word_req_empty;
   logic word_req_full;
   logic rsp_meta_empty;
   logic rsp_meta_full;
   logic issue_accept;
-  logic context_pop;
   logic word_req_accept;
   logic rsp_meta_pop;
   logic enqueue_word_req;
@@ -116,7 +107,6 @@ module voice_endpoint_fetch #(
   rsp_meta_t rsp_meta_head;
   voice_dsp_context_t completed_fetch_context;
   logic fetch_context_push;
-  logic fetch_queue_store;
   logic fetch_slot_complete;
   logic issue_cross_line_pair;
   logic [ADDR_WIDTH-1:0] issue_addr_l0;
@@ -128,7 +118,6 @@ module voice_endpoint_fetch #(
   logic [ADDR_WIDTH-1:0] issue_line_r0;
   logic [ADDR_WIDTH-1:0] issue_line_r1;
 
-  assign fetch_queue_empty = (fetch_queue_count == '0);
   assign fetch_slot_full = (fetch_slot_count == FETCH_SLOT_COUNT_WIDTH'(FETCH_SLOT_DEPTH));
   assign word_req_empty = (word_req_count == '0);
   assign word_req_full = (word_req_count == WORD_REQ_COUNT_WIDTH'(WORD_REQ_DEPTH));
@@ -136,11 +125,8 @@ module voice_endpoint_fetch #(
   assign rsp_meta_full = (rsp_meta_count == WORD_REQ_COUNT_WIDTH'(WORD_REQ_DEPTH));
   assign issue_ready = (enq_state == ENQ_IDLE) && !fetch_slot_full;
   assign issue_accept = issue_valid && issue_ready;
-  assign context_valid = !fetch_queue_empty;
-  assign context_pop = context_valid;
-  assign context_o = fetch_queue[fetch_queue_rd];
   assign empty = (enq_state == ENQ_IDLE) && !issue_accept && !context_valid &&
-                 (fetch_slot_count == '0) && (fetch_queue_count == '0) &&
+                 !fetch_context_push && (fetch_slot_count == '0) &&
                  (word_req_count == '0) && (rsp_meta_count == '0);
   assign mem_req.valid = !word_req_empty && !rsp_meta_full;
   assign word_req_accept = !word_req_empty && !rsp_meta_full && mem_req_ready;
@@ -150,7 +136,7 @@ module voice_endpoint_fetch #(
   assign fetch_slot_occupancy = 3'(fetch_slot_count);
   assign word_req_occupancy = 5'(word_req_count);
   assign rsp_meta_occupancy = 5'(rsp_meta_count);
-  assign dsp_context_queue_occupancy = 3'(fetch_queue_count);
+  assign dsp_context_queue_occupancy = context_valid ? 3'd1 : 3'd0;
   assign issue_addr_l0 = issue_base_addr +
                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_0};
   assign issue_addr_l1 = issue_base_addr +
@@ -239,7 +225,6 @@ module voice_endpoint_fetch #(
 
     fetch_context_push = rsp_meta_pop &&
                          (fetch_slot_pending[rsp_meta_head.slot] == 3'd1);
-    fetch_queue_store = fetch_context_push;
     fetch_slot_complete = fetch_context_push;
   end
 
@@ -254,9 +239,8 @@ module voice_endpoint_fetch #(
       enq_frame_r0 <= '0;
       enq_frame_r1 <= '0;
       enq_slot <= '0;
-      fetch_queue_rd <= '0;
-      fetch_queue_wr <= '0;
-      fetch_queue_count <= '0;
+      context_valid <= 1'b0;
+      context_o <= '0;
       fetch_slot_wr <= '0;
       fetch_slot_count <= '0;
       for (int s = 0; s < FETCH_SLOT_DEPTH; s++)
@@ -272,6 +256,12 @@ module voice_endpoint_fetch #(
       rsp_meta_max_occupancy <= '0;
       dsp_context_queue_max_occupancy <= '0;
     end else begin
+      context_valid <= fetch_context_push;
+      if (fetch_context_push) begin
+        context_o <= completed_fetch_context;
+        dsp_context_queue_max_occupancy <= 3'd1;
+      end
+
       if (issue_accept) begin
         enq_state <= ENQ_L0;
         enq_stereo <= issue_stereo;
@@ -294,23 +284,6 @@ module voice_endpoint_fetch #(
           default: enq_state <= ENQ_IDLE;
         endcase
       end
-
-      if (context_pop)
-        fetch_queue_rd <= fetch_queue_rd + 1'b1;
-      if (fetch_queue_store) begin
-        fetch_queue[fetch_queue_wr] <= completed_fetch_context;
-        fetch_queue_wr <= fetch_queue_wr + 1'b1;
-      end
-      unique case ({fetch_queue_store, context_pop})
-        2'b10: begin
-          fetch_queue_count <= fetch_queue_count + 1'b1;
-          if ((fetch_queue_count + 1'b1) > dsp_context_queue_max_occupancy)
-            dsp_context_queue_max_occupancy <= 3'(fetch_queue_count + 1'b1);
-        end
-        2'b01: fetch_queue_count <= fetch_queue_count - 1'b1;
-        default: begin
-        end
-      endcase
 
       if (rsp_meta_pop) begin
         unique case (rsp_meta_head.endpoint)

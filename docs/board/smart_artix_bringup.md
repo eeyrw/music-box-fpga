@@ -372,7 +372,7 @@ Start with:
 - mono playback.
 - no loop.
 - filter bypassed.
-- envelope level `0x0000_7fff`.
+- envelope stage/flags `0x004c_0000` and attenuation `0x0000_0000`.
 - left and right gain around `0x2000` or lower for external audio safety.
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 

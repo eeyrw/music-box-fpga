@@ -53,6 +53,7 @@ module wavetable_render_core #(
   logic [31:0] current_render_sample;
   logic runtime_snapshot_prepare;
   logic [VOICE_INDEX_WIDTH-1:0] runtime_snapshot_voice;
+  logic runtime_snapshot_valid;
   synth_pkg::reg_bus_req_t bus_req;
   synth_pkg::reg_bus_rsp_t bus_rsp;
   synth_pkg::wave_word_req_t core_mem_req;
@@ -89,6 +90,7 @@ module wavetable_render_core #(
     .render_voice_index(voice_read_index),
     .runtime_snapshot_prepare,
     .runtime_snapshot_voice,
+    .runtime_snapshot_valid,
     .current_sample(current_render_sample),
     .render_config,
     .render_runtime,
@@ -104,6 +106,7 @@ module wavetable_render_core #(
     .voice_read_index,
     .runtime_snapshot_prepare,
     .runtime_snapshot_voice,
+    .runtime_snapshot_valid,
     .voice_config(render_config),
     .voice_runtime(render_runtime),
     .config_valid,

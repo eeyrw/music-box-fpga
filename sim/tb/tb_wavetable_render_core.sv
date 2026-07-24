@@ -468,9 +468,14 @@ module tb_wavetable_render_core;
         errors++;
       end
       bus_read_word(REG_DEBUG_VOICE_ENVELOPE, debug_data);
-      if (debug_data[15:0] != 16'h7fff || !debug_data[19] ||
+      if (debug_data[15:0] != 16'h0000 || !debug_data[19] ||
           debug_data[18:16] != ENV_SUSTAIN) begin
         $error("debug snapshot envelope mismatch: %h", debug_data);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_ENV_ATTENUATION, debug_data);
+      if (debug_data != 32'd0) begin
+        $error("debug snapshot attenuation mismatch: %h", debug_data);
         errors++;
       end
     end

@@ -99,7 +99,7 @@ The snapshot data registers are:
 | `0x90cc` | `DEBUG_VOICE_PHASE_INIT` | configured initial phase, unsigned Q24.8 |
 | `0x90d0` | `DEBUG_VOICE_PHASE_INC` | active phase increment, unsigned Q24.8 |
 | `0x90d4` | `DEBUG_VOICE_GAIN` | `{gain_r, gain_l}`, signed Q1.15 each |
-| `0x90d8` | `DEBUG_VOICE_ENVELOPE` | control flags, stage, and current Q1.15 envelope level |
+| `0x90d8` | `DEBUG_VOICE_ENVELOPE` | control flags and envelope stage; bits `15:0` are reserved zero |
 | `0x90dc` | `DEBUG_VOICE_FILTER_CONTROL` | bit 16 enable, bits `15:0` signed Q2.14 `a2` |
 | `0x90e0` | `DEBUG_VOICE_FILTER_B0_B1` | `{b1, b0}`, signed Q2.14 each |
 | `0x90e4` | `DEBUG_VOICE_FILTER_B2_A1` | `{a1, b2}`, signed Q2.14 each |
@@ -113,9 +113,11 @@ The snapshot data registers are:
 | `0x9104` | `DEBUG_ENV_ATTACK_LEVEL` | attack accumulator, unsigned Q0.32 |
 | `0x9108` | `DEBUG_ENV_ATTENUATION` | current attenuation, unsigned centibel Q12.20 |
 
-`DEBUG_VOICE_ENVELOPE` packs envelope level in bits `15:0`, stage in `18:16`,
-audible in bit 19, released in bit 20, stereo in bit 21, and loop mode in
-`23:22`.
+`DEBUG_VOICE_ENVELOPE` packs stage in bits `18:16`, audible in bit 19, released
+in bit 20, stereo in bit 21, and loop mode in `23:22`; bits `15:0` and `31:24`
+are reserved zero. Read `DEBUG_ENV_ATTACK_LEVEL` or `DEBUG_ENV_ATTENUATION` for
+the authoritative envelope value. Keeping the raw state avoids a second
+centibel-to-Q1.15 converter solely for debug.
 
 This aperture captures command/control-owned active state. `PHASE_INIT` is the
 configured restart position; it is not the renderer's advancing phase. Biquad

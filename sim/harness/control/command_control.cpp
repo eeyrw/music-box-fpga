@@ -14,7 +14,7 @@ constexpr uint8_t kRelease = 0x14;
 constexpr uint8_t kStop = 0x15;
 constexpr uint8_t kGainPhase = 0x16;
 constexpr uint8_t kFilter = 0x17;
-constexpr uint32_t kSilenceCbQ12_20 = 960u << 20;
+constexpr uint32_t kSilenceCbQ12_20 = 1000u << 20;
 
 uint32_t pack_pair(int high, int low) {
   return (uint32_t(uint16_t(high)) << 16) | uint32_t(uint16_t(low));
@@ -29,7 +29,7 @@ uint32_t q15_to_cb_q12_20(int level) {
   level = clamp_q15(level);
   if (level <= 0) return kSilenceCbQ12_20;
   double cb = -200.0 * std::log10(double(level) / double(kQ15Full));
-  return uint32_t(std::llround(std::clamp(cb, 0.0, 960.0) * double(1u << 20)));
+  return uint32_t(std::llround(std::clamp(cb, 0.0, 1000.0) * double(1u << 20)));
 }
 
 uint32_t ceil_step(uint64_t distance, uint32_t duration) {

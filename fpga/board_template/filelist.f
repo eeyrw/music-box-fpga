@@ -1,6 +1,7 @@
 # Generic synthesizable RTL. Keep this list aligned with RTL_SOURCES in ../../Makefile.
 ../../rtl/pkg/synth_pkg.sv
 ../../rtl/pkg/synth_register_pkg.sv
+../../rtl/generated/synth_envelope_lut_pkg.sv
 ../../rtl/control/voice_bram_1r1w.sv
 ../../rtl/control/control_word_fifo.sv
 ../../rtl/control/control_action_fifo.sv
@@ -9,6 +10,7 @@
 ../../rtl/control/transactional_control_plane.sv
 ../../rtl/control/synth_control_plane.sv
 ../../rtl/memory/wave_memory_subsystem.sv
+../../rtl/memory/voice_line_cache.sv
 ../../rtl/dsp/linear_interpolator.sv
 ../../rtl/dsp/gain_saturate.sv
 ../../rtl/dsp/voice_dsp_pipeline.sv

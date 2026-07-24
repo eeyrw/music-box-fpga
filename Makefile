@@ -111,6 +111,9 @@ VOICE_PHASE_SIM_SOURCES := \
 CONTROL_CMD_SIM_SOURCES := \
 	sim/tb/tb_control_cmd_parser.sv
 
+CONTROL_WORD_FIFO_SIM_SOURCES := \
+	sim/tb/tb_control_word_fifo.sv
+
 TRANSACTIONAL_CONTROL_SIM_SOURCES := \
 	sim/tb/tb_transactional_control_plane.sv
 
@@ -182,12 +185,11 @@ generate-envelope-lut:
 
 check-register-map:
 	python3 tools/gen_register_map.py
-	python3 tools/gen_envelope_lut.py
-	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h rtl/generated/synth_envelope_lut_pkg.sv sim/harness/generated/envelope_lut.h
+	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h
+	python3 tools/gen_envelope_lut.py --check
 
 check-envelope-lut:
-	python3 tools/gen_envelope_lut.py
-	git diff --exit-code -- rtl/generated/synth_envelope_lut_pkg.sv sim/harness/generated/envelope_lut.h
+	python3 tools/gen_envelope_lut.py --check
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
@@ -225,6 +227,10 @@ test-cpp-unit:
 
 test-rtl-core:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/control_word_fifo_obj_dir --top-module tb_control_word_fifo \
+		$(RTL_SOURCES) $(CONTROL_WORD_FIFO_SIM_SOURCES)
+	$(BUILD_DIR)/control_word_fifo_obj_dir/Vtb_control_word_fifo
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_phase_obj_dir --top-module tb_voice_phase_frame \
 		$(RTL_SOURCES) $(VOICE_PHASE_SIM_SOURCES)

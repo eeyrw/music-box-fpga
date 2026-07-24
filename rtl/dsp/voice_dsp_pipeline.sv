@@ -85,7 +85,19 @@ module voice_dsp_pipeline (
     logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
   } gain_stage_t;
 
-  logic [6:0] valid_pipe;
+  typedef struct packed {
+    logic [VOICE_ID_WIDTH-1:0] voice_index;
+    logic filter_enable;
+    logic signed [15:0] envelope_level;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_l;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_r;
+    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
+    logic signed [FILTER_SAMPLE_WIDTH+15:0] gain_product_l;
+    logic signed [FILTER_SAMPLE_WIDTH+15:0] gain_product_r;
+  } output_gain_stage_t;
+
+  logic [8:0] valid_pipe;
   pcm_t interp_l_out, interp_r_out;
   voice_dsp_context_t s0_context;
   interp_stage_t s0_interp;
@@ -93,6 +105,8 @@ module voice_dsp_pipeline (
   filter_y_stage_t s2_filter_y;
   filter_state_stage_t s3_filter_state;
   gain_stage_t s4_gain;
+  output_gain_stage_t s5_output_gain;
+  voice_dsp_result_t result_reg;
   logic signed [FILTER_RAW_WIDTH-1:0] y_q_l, y_q_r;
   logic signed [63:0] y_q_l_ext, y_q_r_ext;
   logic signed [FILTER_SAMPLE_WIDTH-1:0] y_filter_l, y_filter_r;
@@ -133,28 +147,25 @@ module voice_dsp_pipeline (
     end
   endfunction
 
-  function automatic pcm_t apply_output_gain(
-    input filter_sample_t sample,
-    input logic signed [15:0] gain,
+  function automatic pcm_t finish_output_gain(
+    input logic signed [FILTER_SAMPLE_WIDTH+15:0] gain_product,
     input logic signed [15:0] envelope_level
   );
-    logic signed [63:0] sample_ext;
-    logic signed [63:0] gain_ext;
-    logic signed [63:0] envelope_ext;
+    logic signed [FILTER_SAMPLE_WIDTH+31:0] envelope_product;
     logic signed [63:0] product;
     logic signed [63:0] scaled;
     begin
-      sample_ext = {{(64-FILTER_SAMPLE_WIDTH){sample[FILTER_SAMPLE_WIDTH-1]}}, sample};
-      gain_ext = {{48{gain[15]}}, gain};
-      envelope_ext = {{48{envelope_level[15]}}, envelope_level};
+      envelope_product = gain_product * envelope_level;
       if (envelope_level == 16'sh7fff) begin
-        product = sample_ext * gain_ext;
+        product = {{(64-(FILTER_SAMPLE_WIDTH+16)){gain_product[FILTER_SAMPLE_WIDTH+15]}},
+                   gain_product};
         scaled = product >>> 15;
       end else begin
-        product = sample_ext * gain_ext * envelope_ext;
+        product = {{(64-(FILTER_SAMPLE_WIDTH+32)){
+                   envelope_product[FILTER_SAMPLE_WIDTH+31]}}, envelope_product};
         scaled = product >>> 30;
       end
-      apply_output_gain = saturate_pcm(scaled);
+      finish_output_gain = saturate_pcm(scaled);
     end
   endfunction
 
@@ -199,17 +210,8 @@ module voice_dsp_pipeline (
                     $signed({{(FILTER_RAW_WIDTH-FILTER_FEEDBACK_PRODUCT_WIDTH){a2_y_r[FILTER_FEEDBACK_PRODUCT_WIDTH-1]}}, a2_y_r});
   end
 
-  assign valid_o = valid_pipe[6];
-  assign result_o.voice_index = s4_gain.base.voice_index;
-  assign result_o.filter_enable = s4_gain.base.filter_enable;
-  assign result_o.next_z1_l = s4_gain.next_z1_l;
-  assign result_o.next_z2_l = s4_gain.next_z2_l;
-  assign result_o.next_z1_r = s4_gain.next_z1_r;
-  assign result_o.next_z2_r = s4_gain.next_z2_r;
-  assign result_o.contribution_l = apply_output_gain(s4_gain.selected_l, s4_gain.base.gain_l,
-                                                     s4_gain.base.envelope_level);
-  assign result_o.contribution_r = apply_output_gain(s4_gain.selected_r, s4_gain.base.gain_r,
-                                                     s4_gain.base.envelope_level);
+  assign valid_o = valid_pipe[8];
+  assign result_o = result_reg;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -220,8 +222,10 @@ module voice_dsp_pipeline (
       s2_filter_y <= '0;
       s3_filter_state <= '0;
       s4_gain <= '0;
+      s5_output_gain <= '0;
+      result_reg <= '0;
     end else begin
-      valid_pipe <= {valid_pipe[5:0], valid_i};
+      valid_pipe <= {valid_pipe[7:0], valid_i};
 
       if (valid_i) begin
         s0_context <= context_i;
@@ -300,6 +304,33 @@ module voice_dsp_pipeline (
         s4_gain.next_z2_l <= saturate_filter_state(s3_filter_state.next_z2_raw_l);
         s4_gain.next_z1_r <= saturate_filter_state(s3_filter_state.next_z1_raw_r);
         s4_gain.next_z2_r <= saturate_filter_state(s3_filter_state.next_z2_raw_r);
+      end
+
+      if (valid_pipe[6]) begin
+        s5_output_gain.voice_index <= s4_gain.base.voice_index;
+        s5_output_gain.filter_enable <= s4_gain.base.filter_enable;
+        s5_output_gain.envelope_level <= s4_gain.base.envelope_level;
+        s5_output_gain.next_z1_l <= s4_gain.next_z1_l;
+        s5_output_gain.next_z2_l <= s4_gain.next_z2_l;
+        s5_output_gain.next_z1_r <= s4_gain.next_z1_r;
+        s5_output_gain.next_z2_r <= s4_gain.next_z2_r;
+        s5_output_gain.gain_product_l <=
+            $signed(s4_gain.selected_l) * $signed(s4_gain.base.gain_l);
+        s5_output_gain.gain_product_r <=
+            $signed(s4_gain.selected_r) * $signed(s4_gain.base.gain_r);
+      end
+
+      if (valid_pipe[7]) begin
+        result_reg.voice_index <= s5_output_gain.voice_index;
+        result_reg.filter_enable <= s5_output_gain.filter_enable;
+        result_reg.next_z1_l <= s5_output_gain.next_z1_l;
+        result_reg.next_z2_l <= s5_output_gain.next_z2_l;
+        result_reg.next_z1_r <= s5_output_gain.next_z1_r;
+        result_reg.next_z2_r <= s5_output_gain.next_z2_r;
+        result_reg.contribution_l <= finish_output_gain(
+            s5_output_gain.gain_product_l, s5_output_gain.envelope_level);
+        result_reg.contribution_r <= finish_output_gain(
+            s5_output_gain.gain_product_r, s5_output_gain.envelope_level);
       end
     end
   end

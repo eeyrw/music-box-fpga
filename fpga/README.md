@@ -95,6 +95,7 @@ The generic synthesizer core source list should match `RTL_SOURCES` in the root
 ```text
 rtl/pkg/synth_pkg.sv
 rtl/pkg/synth_register_pkg.sv
+rtl/generated/synth_envelope_lut_pkg.sv
 rtl/control/voice_bram_1r1w.sv
 rtl/control/control_word_fifo.sv
 rtl/control/control_action_fifo.sv
@@ -103,6 +104,7 @@ rtl/control/control_action_executor.sv
 rtl/control/transactional_control_plane.sv
 rtl/control/synth_control_plane.sv
 rtl/memory/wave_memory_subsystem.sv
+rtl/memory/voice_line_cache.sv
 rtl/dsp/linear_interpolator.sv
 rtl/dsp/gain_saturate.sv
 rtl/dsp/voice_dsp_pipeline.sv
@@ -120,6 +122,7 @@ Common board/peripheral adapters live under `fpga/common/rtl`:
 ```text
 fpga/common/rtl/fractional_tick_gen.sv
 fpga/common/rtl/spi_register_bridge.sv
+fpga/common/rtl/wavetable_register_fabric.sv
 fpga/common/rtl/wavetable_common_status_regs.sv
 fpga/common/rtl/i2s_tx.sv
 fpga/common/rtl/sd_native_block_reader.sv

@@ -13,6 +13,7 @@ module synth_control_plane (
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] render_voice_index,
   input  logic                       runtime_snapshot_prepare,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] runtime_snapshot_voice,
+  output logic                       runtime_snapshot_valid,
   input  logic [31:0]                current_sample,
   output synth_pkg::voice_config_t   render_config,
   output synth_pkg::voice_runtime_t  render_runtime,
@@ -50,7 +51,6 @@ module synth_control_plane (
   debug_state_t debug_state;
   logic [7:0] debug_prepared_seq;
   active_voice_t debug_active;
-  logic signed [15:0] debug_envelope_level;
   logic debug_snapshot_valid;
   logic debug_snapshot_prepared_valid;
   logic debug_snapshot_active_valid;
@@ -64,7 +64,6 @@ module synth_control_plane (
 
   function automatic logic [31:0] debug_word(
     input active_voice_t voice,
-    input logic signed [15:0] envelope_level,
     input logic [4:0] index
   );
     begin
@@ -82,7 +81,7 @@ module synth_control_plane (
         5'd10: debug_word = {voice.gain_r, voice.gain_l};
         5'd11: debug_word = {8'd0, voice.voice.loop_mode, voice.voice.stereo,
                              voice.released, voice.audible, voice.env_state.stage,
-                             envelope_level};
+                             16'd0};
         5'd12: debug_word = {15'd0, voice.filter_enable, voice.filter_a2};
         5'd13: debug_word = {voice.filter_b1, voice.filter_b0};
         5'd14: debug_word = {voice.filter_a1, voice.filter_b2};
@@ -148,11 +147,11 @@ module synth_control_plane (
     .render_voice_index,
     .snapshot_prepare(runtime_snapshot_prepare),
     .snapshot_voice(runtime_snapshot_voice),
+    .snapshot_valid(runtime_snapshot_valid),
     .debug_read_select,
     .debug_read_voice(debug_voice_index),
     .debug_prepared_seq,
     .debug_active,
-    .debug_envelope_level,
     .render_config,
     .render_runtime,
     .config_valid,
@@ -193,7 +192,7 @@ module synth_control_plane (
           end
           DEBUG_WRITE: begin
             debug_words[debug_word_index] <=
-                debug_word(debug_active, debug_envelope_level, debug_word_index);
+                debug_word(debug_active, debug_word_index);
             if (debug_word_index == 5'(DEBUG_WORDS-1)) begin
               debug_snapshot_prepared_valid <= prepared_valid[debug_voice_index];
               debug_snapshot_active_valid <= config_valid[debug_voice_index];

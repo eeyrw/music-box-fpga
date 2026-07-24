@@ -18,11 +18,11 @@ module transactional_control_plane #(
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] render_voice_index,
   input  logic snapshot_prepare,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] snapshot_voice,
+  output logic snapshot_valid,
   input  logic debug_read_select,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] debug_read_voice,
   output logic [7:0] debug_prepared_seq,
   output synth_pkg::active_voice_t debug_active,
-  output logic signed [15:0] debug_envelope_level,
   output synth_pkg::voice_config_t render_config,
   output synth_pkg::voice_runtime_t render_runtime,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
@@ -87,8 +87,8 @@ module transactional_control_plane #(
     .action_ready(executor_ready), .action(action_head), .action_done(executor_done),
     .stream_flush(executor_flush), .command_error_pulse(executor_error_pulse),
     .stale_seq_pulse, .render_voice_index, .snapshot_prepare, .snapshot_voice,
+    .snapshot_valid,
     .debug_read_select, .debug_read_voice, .debug_prepared_seq, .debug_active,
-    .debug_envelope_level,
     .render_config, .render_runtime, .config_valid, .commit_pulse, .prepared_valid
   );
 

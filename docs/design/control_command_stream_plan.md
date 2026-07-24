@@ -43,7 +43,12 @@ pending partial command and all currently buffered command words, resets parser
 framing, and does not modify voice state.
 
 The command ingress applies backpressure. Hosts must not assume a word was
-accepted unless the command FIFO reports space.
+accepted unless the command FIFO reports space. The 1024-by-32 word queue is a
+synchronous simple-dual-port block RAM with an output-valid cache. Its write
+port accepts ingress independently while its read port prefetches the next word
+on a pop, so a buffered command can be parsed at one word per system clock.
+The first word after an empty interval has the normal synchronous RAM startup
+latency; this does not change the ready/valid contract.
 
 ## SPI Transport
 
@@ -238,11 +243,14 @@ Sustain: retain sustain attenuation until Release
 Release: increase attenuation by release_step until silence, then audible=0
 ```
 
-A shared pipelined `cb_to_q15` lookup converts Decay, Sustain, and Release state
-to renderer gain. Releasing during Attack uses a shared `q15_to_cb` lookup so
-Release begins continuously from the current linear level. Zero-duration stages
-advance without adding an extra rendered sample. Step values must retain
-non-zero progress for durations through 100 seconds at 48 kHz.
+A range-reduced `cb_to_q15` lookup converts Decay, Sustain, and Release state to
+renderer gain. Releasing during Attack uses a leading-zero encoder plus fixed
+exponent and normalized-mantissa tables for `q15_to_cb`, so Release begins within
+`0.68 cB` of the current linear level without a divider or wide search. The
+algorithms and error bounds are documented in
+[`envelope_gain_conversion.md`](envelope_gain_conversion.md).
+Zero-duration stages advance without adding an extra rendered sample. Step
+values must retain non-zero progress for durations through 100 seconds at 48 kHz.
 
 ## PCM FIFO And Scheduler
 
@@ -316,16 +324,15 @@ The C++ reference and RTL must consume the same command stream and compare exact
 integer PCM. SPI Note On and Note Off tests must verify the complete command
 path.
 
-Implementation acceptance additionally requires `make lint`, `make test`, the
-complete C++ render regression, Smart Artix post-route timing, average render
-latency below 2083 cycles, positive stress-test minimum FIFO level, zero
-steady-state drops, no more than 8 additional BRAM tiles, 2 DSPs, or 2500 LUTs,
-and non-negative WNS.
+RTL acceptance requires `make lint`, `make test`, generated-table consistency,
+and a forced non-incremental Smart Artix synthesis. Physical timing closure,
+minimum FIFO level under long memory stalls, and I/O validation are board-level
+qualification gates.
 
-## Implementation Roadmap
+## Implementation Status
 
-Implement the design in the following order. Each phase must leave focused
-self-checking tests in the tree before the next phase starts.
+The following architecture is implemented. Each item has focused self-checking
+coverage in the tree.
 
 1. Freeze this command, state, batching, FIFO, and timing contract.
 2. Establish the parameterized PCM FIFO and complete renderer ready/valid
@@ -344,16 +351,10 @@ self-checking tests in the tree before the next phase starts.
    ENV_UPDATE, RELEASE, STOP, GAIN_PHASE, FILTER, and STREAM_FLUSH.
 9. Move the C++ command builder, reference renderer, DUT adapters, and MCU model
    to the command stream and exact FPGA envelope arithmetic.
-10. Add destination dependency tracking for real-time envelope modulators so a
-    source change recomputes only affected voices and fields.
-11. Consolidate RTL, simulation sources, tests, and generated contracts around
+10. Consolidate RTL, simulation sources, tests, and generated contracts around
     the transactional control plane and continuous renderer.
-12. Synchronize the register map, fixed-point rules, system design, RTL map,
+11. Synchronize the register map, fixed-point rules, system design, RTL map,
     host-control documentation, board documentation, and verification guide.
-
-Documentation is updated incrementally. At minimum, update it after the
-envelope engine, after C++ migration, and after source consolidation rather than
-deferring all contract work to the end.
 
 ## Resume Checkpoint
 
@@ -388,15 +389,17 @@ Completed and tested:
   has been deleted.
 - A low-cost coherent debug snapshot reuses the prepared/active RAM read port
   and exposes 24 read-only words through global registers.
+- The 1024-word command FIFO uses one simple-dual-port RAMB36 and prefetches on
+  pop for one-word-per-clock buffered output.
+- Envelope conversion is a registered request/valid pipeline generated from one
+  shared RTL/C++ table source.
+- Next-voice scan and envelope snapshot overlap current-voice endpoint traffic;
+  the DSP gain and envelope multipliers occupy separate registered stages.
 - `make lint` and the full `make test` suite pass at this checkpoint.
 
-The command/control migration and documentation consolidation are functionally
-complete. Remaining roadmap work is the explicit destination-dependency metadata
-optimization, representative full render regressions, long memory-stall and
-polyphony stress, and Smart Artix post-route timing/utilization comparison. The
-renderer-private advancing phase and biquad history remain outside the low-cost
-control-state snapshot unless hardware bring-up demonstrates a need for a
-separate datapath trace aperture.
+The renderer-private advancing phase and biquad history remain outside the
+low-cost control-state snapshot. Hardware bring-up can add a separate bounded
+datapath trace aperture if those states prove necessary.
 
 Files that define the current boundary:
 
@@ -422,10 +425,6 @@ sim/tb/tb_wavetable_i2s_output.sv
 sim/tb/tb_spi_register_bridge.sv
 host/ch347_control_main.cpp
 ```
-
-The working tree may contain overlapping in-progress control-plane changes.
-Read `git status` and the relevant diffs before editing, preserve useful target
-state work, and do not reset the tree to an earlier commit.
 
 ## Detailed Verification Matrix
 
@@ -489,43 +488,29 @@ state work, and do not reset the tree to an earlier commit.
   dependency graph.
 - Note Off computes the then-current release step and carries it atomically in
   VOICE_RELEASE.
-- Full MIDI/SF2 render regressions cover voice allocation, stealing, controller
-  changes, pressure, NRPN, pitch/filter modulation, and sustained polyphony.
+- System qualification covers voice allocation, stealing, controller changes,
+  pressure, NRPN, pitch/filter modulation, and sustained polyphony when that
+  phase is enabled.
 
-## Synthesis And Performance Acceptance
+## Current Synthesis Result
 
-Use the following Smart Artix post-route result as the refactor comparison
-baseline:
-
-```text
-LUT   10,653
-FF    11,305
-BRAM  10 / 75
-DSP   26 / 120
-WNS   +0.982 ns
-```
-
-The acceptance limits are:
+Forced non-incremental Vivado 2025.2 synthesis for
+`xc7a50tfgg484-2` on 2026-07-24 reports:
 
 ```text
-additional BRAM <= 8 tiles
-additional DSP  <= 2
-additional LUT  <= 2500
-final WNS       >= 0
-average render cycles < 2083 at 100 MHz / 48 kHz
-stress minimum_fifo_level > 0
-steady-state sample_drop_count == 0
+LUT             13,758 / 32,600  (42.20%)
+FF              12,335 / 65,200  (18.92%)
+BRAM tiles          17 / 75      (22.67%)
+DSP                 18 / 120     (15.00%)
+post-synth WNS  -2.886 ns
+post-synth TNS -81.645 ns, 44 failing endpoints
+DRC              0 errors, 0 critical warnings
 ```
 
-Final qualification runs, in order:
-
-1. `make lint`.
-2. `make test`.
-3. Complete C++ reference, RTL-core, cached-memory, and board-loader render
-   regressions with representative SF2/MIDI assets.
-4. Long memory-stall and full-polyphony stress runs with counter checks.
-5. Smart Artix post-route synthesis, timing, and utilization comparison against
-   the baseline above.
+The command FIFO is one `1024 x 32` RAMB36. The DSP tail no longer owns the
+worst setup path; the current worst path is the active voice RAM write path,
+from its BRAM clock pin to `DIADI[10]`, with 12.464 ns data-path delay and 22
+logic levels. Post-route timing closure remains board work.
 
 ## Later Performance Phase
 

@@ -6,6 +6,7 @@ module multi_voice_pipeline #(
   output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] voice_read_index,
   output logic                       runtime_snapshot_prepare,
   output logic [$clog2(synth_pkg::NUM_VOICES)-1:0] runtime_snapshot_voice,
+  input  logic                       runtime_snapshot_valid,
   input  synth_pkg::voice_config_t   voice_config,
   input  synth_pkg::voice_runtime_t  voice_runtime,
   input  logic [synth_pkg::NUM_VOICES-1:0] config_valid,
@@ -34,7 +35,8 @@ module multi_voice_pipeline #(
   import synth_pkg::*;
 
   typedef enum logic [3:0] {
-    IDLE, SCAN_VOICE, READ_VOICE, WAIT_VOICE, START_VOICE, PROCESS_VOICE, DSP_START, DRAIN, FINISH
+    IDLE, SCAN_VOICE, READ_VOICE, WAIT_VOICE, WAIT_SNAPSHOT, START_VOICE,
+    PROCESS_VOICE, DSP_START, DRAIN, FINISH
   } state_t;
 
   localparam int VOICE_INDEX_WIDTH = synth_pkg::VOICE_ID_WIDTH;
@@ -145,6 +147,9 @@ module multi_voice_pipeline #(
   logic [1:0] prefetch_wait;
   logic [VOICE_INDEX_WIDTH-1:0] prefetch_scan_index;
   logic [VOICE_INDEX_WIDTH-1:0] prefetch_index;
+  logic prefetch_snapshot_prepare;
+  logic prefetch_snapshot_requested;
+  logic prefetch_snapshot_valid;
 
   function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
     if (value > 64'sd32767)
@@ -156,9 +161,14 @@ module multi_voice_pipeline #(
   endfunction
 
   assign voice_read_index = render_index;
+  assign prefetch_snapshot_prepare = prefetch_ready && current_enable &&
+                                     current_config_valid && !voice_done &&
+                                     !prefetch_snapshot_requested &&
+                                     ((state == PROCESS_VOICE) ||
+                                      (state == DSP_START));
   assign runtime_snapshot_prepare = (state == WAIT_VOICE) ||
-                                    ((state == DSP_START) && prefetch_ready);
-  assign runtime_snapshot_voice = ((state == DSP_START) && prefetch_ready) ?
+                                    prefetch_snapshot_prepare;
+  assign runtime_snapshot_voice = prefetch_snapshot_prepare ?
                                   prefetch_index : voice_index;
   assign endpoint_issue_valid = (state == PROCESS_VOICE) && current_enable &&
                                 current_config_valid && !voice_done;
@@ -343,6 +353,8 @@ module multi_voice_pipeline #(
       prefetch_wait <= '0;
       prefetch_scan_index <= '0;
       prefetch_index <= '0;
+      prefetch_snapshot_requested <= 1'b0;
+      prefetch_snapshot_valid <= 1'b0;
       accum_l <= 32'sd0;
       accum_r <= 32'sd0;
       outstanding_count <= '0;
@@ -359,11 +371,19 @@ module multi_voice_pipeline #(
     end else begin
       sample_valid <= 1'b0;
 
-      if (runtime_snapshot_prepare) begin
+      if (runtime_snapshot_valid) begin
         snapshot_config <= voice_config;
         snapshot_runtime <= voice_runtime;
+        if (prefetch_snapshot_requested)
+          prefetch_snapshot_valid <= 1'b1;
+      end
+      if (runtime_snapshot_prepare) begin
         snapshot_config_valid <= config_valid[runtime_snapshot_voice];
         snapshot_commit <= frame_commit[runtime_snapshot_voice];
+      end
+      if (prefetch_snapshot_prepare) begin
+        prefetch_snapshot_requested <= 1'b1;
+        prefetch_ready <= 1'b0;
       end
 
       if (dsp_valid) begin
@@ -407,6 +427,8 @@ module multi_voice_pipeline #(
             prefetch_done <= 1'b0;
             prefetch_ready <= 1'b0;
             prefetch_wait <= '0;
+            prefetch_snapshot_requested <= 1'b0;
+            prefetch_snapshot_valid <= 1'b0;
             state <= SCAN_VOICE;
           end
         end
@@ -424,7 +446,11 @@ module multi_voice_pipeline #(
           state <= WAIT_VOICE;
         end
         WAIT_VOICE: begin
-          state <= START_VOICE;
+          state <= WAIT_SNAPSHOT;
+        end
+        WAIT_SNAPSHOT: begin
+          if (runtime_snapshot_valid || prefetch_snapshot_valid)
+            state <= START_VOICE;
         end
         START_VOICE: begin
           current_enable <= cfg_enable;
@@ -464,6 +490,8 @@ module multi_voice_pipeline #(
           prefetch_active <= (voice_index != LAST_VOICE);
           prefetch_scan_index <= voice_index + 1'b1;
           prefetch_wait <= '0;
+          prefetch_snapshot_requested <= 1'b0;
+          prefetch_snapshot_valid <= 1'b0;
           state <= PROCESS_VOICE;
         end
         PROCESS_VOICE: begin
@@ -472,6 +500,8 @@ module multi_voice_pipeline #(
             prefetch_done <= 1'b0;
             prefetch_ready <= 1'b0;
             prefetch_wait <= '0;
+            prefetch_snapshot_requested <= 1'b0;
+            prefetch_snapshot_valid <= 1'b0;
             if (scan_at_last_voice) begin
               state <= DRAIN;
             end else begin
@@ -488,13 +518,19 @@ module multi_voice_pipeline #(
         DSP_START: begin
           if (scan_at_last_voice)
             state <= DRAIN;
-          else if (prefetch_ready) begin
+          else if (prefetch_snapshot_valid) begin
             voice_index <= prefetch_index;
             prefetch_active <= 1'b0;
             prefetch_done <= 1'b0;
             prefetch_ready <= 1'b0;
             prefetch_wait <= '0;
             state <= START_VOICE;
+          end else if (prefetch_snapshot_requested || prefetch_ready) begin
+            voice_index <= prefetch_index;
+            prefetch_active <= 1'b0;
+            prefetch_done <= 1'b0;
+            prefetch_wait <= '0;
+            state <= WAIT_SNAPSHOT;
           end else if (prefetch_done) begin
             state <= DRAIN;
           end
@@ -504,6 +540,8 @@ module multi_voice_pipeline #(
             prefetch_done <= 1'b0;
             prefetch_ready <= 1'b0;
             prefetch_wait <= '0;
+            prefetch_snapshot_requested <= 1'b0;
+            prefetch_snapshot_valid <= 1'b0;
             state <= SCAN_VOICE;
           end
         end

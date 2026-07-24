@@ -49,7 +49,8 @@ register window and no compatibility register bank.
 
 The control plane contains:
 
-- a 1024-word command FIFO;
+- a 1024-word command FIFO implemented by one synchronous simple-dual-port
+  block RAM;
 - a parser that emits only complete, length-checked actions;
 - a 32-entry decoded action FIFO;
 - a bounded executor that applies at most 16 actions before releasing a waiting
@@ -102,8 +103,12 @@ or filter values through runtime commands.
 8. Retire contributions into signed 32-bit stereo accumulators.
 9. Emit one saturated signed 16-bit stereo frame after all work drains.
 
-The renderer overlaps later voice reads and endpoint traffic with earlier DSP
-work. Memory remains the main variable-latency boundary.
+The renderer overlaps the next valid-voice scan and envelope snapshot with the
+current voice's endpoint traffic. Four fetch slots plus independent 16-entry
+request and response-metadata queues keep several voices in flight while the
+fixed-latency DSP accepts one completed context per clock. Memory remains the
+main variable-latency and throughput boundary: the single word-request port
+needs at least two accepted cycles per mono voice and four per stereo voice.
 
 Detailed state and arithmetic ownership are documented in `voice_pipeline.md`.
 
@@ -154,16 +159,9 @@ Reusable board-facing RTL under `fpga/common/rtl` provides:
 The Smart Artix implementation additionally owns native SD loading, DDR3
 arbitration, MIG integration, DDR debug access, clocking, and constraints.
 
-## Remaining Work
+## Next Hardware Work
 
-The command/control migration is functionally complete. Remaining work is
-qualification and optimization, not compatibility restoration:
-
-- explicit destination-dependency metadata for cheaper host modulation updates;
-- representative full MIDI/SF2 render regressions;
-- long memory-stall and full-polyphony stress runs;
-- Smart Artix post-route timing and utilization comparison;
-- physical SPI and I2S timing validation on hardware.
-
-Do not restore the old voice register bank to solve observability or host-tool
-issues. Extend the command protocol or the bounded debug surface instead.
+The generic command/control and render architecture is complete. Board work now
+centers on post-route timing closure, long memory-stall/full-polyphony stress,
+and physical SPI/I2S validation. Voice observability should grow through bounded
+snapshot or trace apertures rather than a writable per-voice register window.

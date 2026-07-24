@@ -42,7 +42,8 @@ gain, phase-increment, envelope, and filter changes do not reload phase.
 | `IDLE` | Wait for a frame, clear accumulators, and latch activation pulses. |
 | `SCAN_VOICE` | Find the next set bit in `config_valid`. |
 | `READ_VOICE` | Present the selected synchronous RAM address. |
-| `WAIT_VOICE` | Allow active, phase, and filter-state reads to settle; advance the selected envelope. |
+| `WAIT_VOICE` | Allow active, phase, and filter-state reads to settle; request an envelope snapshot. |
+| `WAIT_SNAPSHOT` | Wait for the registered snapshot conversion result. |
 | `START_VOICE` | Capture one coherent render context and start prefetching the next valid voice. |
 | `PROCESS_VOICE` | Skip disabled/done voices or enqueue endpoint work and write next phase. |
 | `DSP_START` | Advance to the prefetched voice, resume scanning, or enter drain. |
@@ -60,13 +61,16 @@ therefore passes through `READ_VOICE`, `WAIT_VOICE`, and `START_VOICE` before it
 fields are consumed.
 
 During `WAIT_VOICE`, `runtime_snapshot_prepare` asks the executor to advance the
-selected volume envelope and write the new active record. The snapshot returned
-to the renderer contains the level for the current output frame. The read index
-remains stable throughout this sequence.
+selected volume envelope and write the new active record. A separate
+`runtime_snapshot_valid` marks the registered conversion result; the renderer
+does not assume combinational RAM or lookup-table output. The snapshot contains
+the level for the current output frame.
 
 The front end starts scanning the remaining bitmap while the current voice
-enters endpoint fetch. When the next record is ready, it can be captured from
-`DSP_START` without returning to the full initial sequence.
+enters endpoint fetch. As soon as that scan finds a valid record, its envelope
+snapshot request overlaps the current voice's memory wait. A completed prefetched
+snapshot advances directly to `START_VOICE`; cancellation clears the associated
+prefetch state so a late result cannot be applied to another voice.
 
 ## Phase And Looping
 
@@ -96,21 +100,27 @@ word reads:
 - stereo: left frame 0/1 and right frame 0/1.
 
 Accepted-request metadata is queued so ordered responses can be placed into the
-correct fetch slot. A completed slot becomes one `voice_dsp_context_t`. Internal
-queues allow memory requests, response assembly, and DSP execution to overlap.
+correct fetch slot. Four fetch slots, a 16-entry word-request queue, and a
+16-entry response-metadata queue allow memory latency from several voices to be
+overlapped. A completed slot is registered directly as one
+`voice_dsp_context_t`; a second full-width context FIFO is unnecessary because
+the ordered response port can complete at most one slot per clock and the DSP
+accepts one context per clock.
 
 The renderer does not assume asynchronous memory. All request and response
 movement follows ready/valid rules.
 
 ## DSP Pipeline
 
-`voice_dsp_pipeline` is fixed latency and accepts complete contexts. Its work is:
+`voice_dsp_pipeline` is fixed latency and can accept one complete context every
+clock. Different voices may occupy all stages concurrently. Its work is:
 
 1. Linear interpolation using the Q24.8 fraction.
 2. Optional transposed direct-form II biquad per channel.
 3. Filter state calculation and saturation.
-4. Independent left/right Q1.15 gain and shared Q1.15 envelope multiplication.
-5. Signed 16-bit per-voice contribution saturation.
+4. Register the independent left/right sample-by-channel-gain products.
+5. Apply the shared Q1.15 envelope in a separate multiplier stage.
+6. Register signed 16-bit per-voice contribution saturation.
 
 Mono samples are duplicated before channel gain. Stereo samples retain their
 independent channels. Results carry the voice index so filter history can be
@@ -142,9 +152,12 @@ audible voices, stereo/filter counts, cache behavior, and saturation metrics.
 
 For a frame, the fixed front-end cost includes bitmap scanning and synchronous
 read staging. Each contributing mono voice needs two PCM words; stereo needs
-four. Cache hits reduce external line traffic but not the logical endpoint
-count. The frame cannot complete until the slowest accepted endpoint response
-and all DSP results retire.
+four. With one accepted word request per clock, the ideal issue limits are one
+mono voice per two clocks and one stereo voice per four clocks. The DSP's
+one-context-per-clock initiation interval is therefore intentionally higher than
+the memory-side supply rate. Cache hits reduce external line traffic but not the
+logical endpoint count. The frame cannot complete until the slowest accepted
+endpoint response and all DSP results retire.
 
 The current design favors bounded area and simple ordering over maximum
 polyphony throughput. Optimize only from measured queue, memory-stall, FIFO, and

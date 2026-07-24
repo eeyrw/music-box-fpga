@@ -107,9 +107,30 @@ generated SoundFont amplitude curve:
 level_q15 ~= round(32767 * 10 ^ (-centibel / 200))
 ```
 
-The generated table covers `0..960 cB` at 4 cB intervals and the RTL linearly
-interpolates between adjacent entries using the Q8.8 fractional cB value. Values
-at or above `960 cB` clamp to zero. `tools/gen_envelope_lut.py` generates both
+The FPGA range-reduces this exponential conversion using the identity
+`60.205999 cB = 6.0205999 dB = one binary octave`. A threshold lookup selects
+the binary right-shift count, and a 121-entry table at 0.5 cB intervals converts
+the residual within one octave to a 24-bit linear mantissa. The shifted mantissa
+is rounded once to Q1.15. This removes interpolation multipliers while preserving
+the required nonlinear cB-to-linear-gain mapping. Generator validation over
+`0..1000 cB` at 1/256 cB intervals checks monotonicity and limits deviation from
+the directly evaluated Q1.15 curve to 100 integer units (the measured maximum is
+recorded in the generated-file header).
+
+Values at or above `1000 cB` clamp to zero. This matches the SoundFont
+volume-envelope definition: a full-scale Release reaches zero at 100 dB
+attenuation. The separate default MIDI volume and expression modulators retain
+their specified 960 cB excursion.
+
+Release may begin during the linear Attack stage, so the FPGA also approximates
+the inverse conversion from Q1.15 level to Q12.20 centibel attenuation. It counts
+leading zeroes to split the logarithm into a binary exponent and a normalized
+mantissa, then adds a 15-entry exponent table to a 64-entry mantissa table. This
+avoids a variable divider and a wide linear search. Exhaustive generator
+validation over all positive non-full-scale Q1.15 values limits maximum error to
+`0.68 cB`; the generated-file header records the actual maximum and mean error.
+
+`tools/gen_envelope_lut.py` generates both
 `rtl/generated/synth_envelope_lut_pkg.sv` and
 `sim/harness/generated/envelope_lut.h` so the FPGA action executor and C++ reference
 use the same integer table.

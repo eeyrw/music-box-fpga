@@ -16,11 +16,11 @@ module tb_transactional_control_plane;
   logic [VOICE_ID_WIDTH-1:0] render_voice_index;
   logic snapshot_prepare;
   logic [VOICE_ID_WIDTH-1:0] snapshot_voice;
+  logic snapshot_valid;
   logic debug_read_select;
   logic [VOICE_ID_WIDTH-1:0] debug_read_voice;
   logic [7:0] debug_prepared_seq;
   active_voice_t debug_active;
-  logic signed [15:0] debug_envelope_level;
   voice_config_t render_config;
   voice_runtime_t render_runtime;
   logic [NUM_VOICES-1:0] config_valid;
@@ -155,6 +155,7 @@ module tb_transactional_control_plane;
       snapshot_prepare = 1'b1;
       @(negedge clk);
       snapshot_prepare = 1'b0;
+      while (!snapshot_valid) @(negedge clk);
       @(negedge clk);
     end
   endtask
@@ -192,10 +193,10 @@ module tb_transactional_control_plane;
     wait_actions(1);
     request_frame();
     select_voice(3);
-    if (!config_valid[3] || !render_config.enable ||
-        render_config.base_addr != 32'h0010_0003 ||
-        render_runtime.phase_inc != 32'h0000_0180 ||
-        render_runtime.gain_l != 16'sh3000 || render_runtime.gain_r != 16'sh2000) begin
+    if (!config_valid[3] || !debug_active.audible ||
+        debug_active.voice.base_addr != 32'h0010_0003 ||
+        debug_active.phase_inc != 32'h0000_0180 ||
+        debug_active.gain_l != 16'sh3000 || debug_active.gain_r != 16'sh2000) begin
       $error("matching START did not atomically promote prepared state");
       errors++;
     end
@@ -227,8 +228,8 @@ module tb_transactional_control_plane;
     wait_actions(1);
     request_frame();
     select_voice(3);
-    if (render_runtime.gain_l != 16'sh2222 || render_runtime.gain_r != 16'sh1111 ||
-        render_runtime.phase_inc != 32'h0000_0240) begin
+    if (debug_active.gain_l != 16'sh2222 || debug_active.gain_r != 16'sh1111 ||
+        debug_active.phase_inc != 32'h0000_0240) begin
       $error("GAIN_PHASE update mismatch");
       errors++;
     end
@@ -237,6 +238,12 @@ module tb_transactional_control_plane;
     push_word(32'h3c00_0000);
     wait_actions(1);
     request_frame();
+    select_voice(3);
+    if (debug_active.env_state.attenuation_cb_q12_20 != 32'd62424477) begin
+      $error("attack-to-release attenuation mismatch: %0d",
+             debug_active.env_state.attenuation_cb_q12_20);
+      errors++;
+    end
     snapshot_voice_once();
     snapshot_voice_once();
     if (config_valid[3] || render_config.enable || render_runtime.envelope_level != 0) begin
@@ -264,12 +271,21 @@ module tb_transactional_control_plane;
       errors++;
     end
 
+    snapshot_voice_once();
+    snapshot_voice_once();
+    snapshot_voice_once();
+    if (render_runtime.envelope_level != 16'sh06bb) begin
+      $error("range-reduced 256 cB envelope gain mismatch: %h",
+             render_runtime.envelope_level);
+      errors++;
+    end
+
     push_word(header(VOICE_RELEASE, 8'd3, 8'h21, 8'd1));
     push_word(32'd0);
     wait_actions(1);
     request_frame();
     select_voice(3);
-    if (config_valid[3] || render_config.enable) begin
+    if (config_valid[3] || debug_active.audible) begin
       $error("zero-step RELEASE did not stop immediately");
       errors++;
     end

@@ -12,11 +12,11 @@ module control_action_executor (
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] render_voice_index,
   input  logic snapshot_prepare,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] snapshot_voice,
+  output logic snapshot_valid,
   input  logic debug_read_select,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0] debug_read_voice,
   output logic [7:0] debug_prepared_seq,
   output synth_pkg::active_voice_t debug_active,
-  output logic signed [15:0] debug_envelope_level,
   output synth_pkg::voice_config_t render_config,
   output synth_pkg::voice_runtime_t render_runtime,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
@@ -28,7 +28,6 @@ module control_action_executor (
 
   localparam int PREPARED_WIDTH = $bits(prepared_voice_t);
   localparam int ACTIVE_WIDTH = $bits(active_voice_t);
-  localparam logic [31:0] ENV_SILENCE_CB_Q12_20 = 32'(960 << 20);
 
   typedef enum logic [1:0] {EXEC_IDLE, EXEC_READ, EXEC_APPLY} exec_state_t;
   exec_state_t state;
@@ -48,6 +47,7 @@ module control_action_executor (
   logic prepared_write;
   logic active_action_write;
   logic active_envelope_write;
+  logic snapshot_accept;
   logic active_write;
   logic [VOICE_ID_WIDTH-1:0] active_write_voice;
   active_voice_t active_write_data;
@@ -56,6 +56,28 @@ module control_action_executor (
   logic action_seq_match;
   logic env_update_payload_valid;
   integer env_update_payload_index;
+  logic snapshot_stage0_valid;
+  logic [1:0] snapshot_stage0_kind;
+  logic signed [15:0] snapshot_stage0_direct_level;
+  logic [31:0] snapshot_stage0_attenuation;
+  logic snapshot_stage1_valid;
+  logic [1:0] snapshot_stage1_kind;
+  logic signed [15:0] snapshot_stage1_direct_level;
+  logic [4:0] snapshot_stage1_octave;
+  logic [6:0] snapshot_stage1_mantissa_index;
+  logic snapshot_stage2_valid;
+  logic [1:0] snapshot_stage2_kind;
+  logic signed [15:0] snapshot_stage2_direct_level;
+  logic [4:0] snapshot_stage2_octave;
+  logic [23:0] snapshot_stage2_mantissa;
+  logic [4:0] snapshot_octave_next;
+  logic [31:0] snapshot_residual_next;
+  logic [31:0] snapshot_rounded_residual_next;
+  logic [6:0] snapshot_mantissa_index_next;
+
+  localparam logic [1:0] SNAPSHOT_LEVEL_ZERO = 2'd0;
+  localparam logic [1:0] SNAPSHOT_LEVEL_DIRECT = 2'd1;
+  localparam logic [1:0] SNAPSHOT_LEVEL_CB = 2'd2;
 
   function automatic logic loop_valid(input voice_config_t cfg);
     logic left_valid;
@@ -70,66 +92,52 @@ module control_action_executor (
     end
   endfunction
 
-  function automatic logic signed [15:0] cb_to_q15(input logic [31:0] cb_q12_20);
-    logic [31:0] cb_q8_8;
-    logic [7:0] index;
-    logic [9:0] fraction;
-    logic [31:0] delta;
-    logic [31:0] interp;
+  function automatic logic signed [15:0] scaled_mantissa_to_q15(
+    input logic [23:0] mantissa,
+    input logic [4:0] octave_index
+  );
+    logic [23:0] scaled_mantissa;
+    logic [24:0] rounded_mantissa;
     begin
-      cb_q8_8 = cb_q12_20 >> 12;
-      if (cb_q12_20 >= ENV_SILENCE_CB_Q12_20) begin
-        cb_to_q15 = 16'sh0000;
-      end else begin
-        index = cb_q8_8[17:10];
-        fraction = cb_q8_8[9:0];
-        delta = 32'(CB_TO_Q15_LUT[index]) - 32'(CB_TO_Q15_LUT[index + 1'b1]);
-        interp = 32'(CB_TO_Q15_LUT[index]) - ((delta * fraction + 32'd512) >> 10);
-        cb_to_q15 = interp[15:0];
-      end
+      scaled_mantissa = mantissa >> octave_index;
+      rounded_mantissa = {1'b0, scaled_mantissa} +
+                         25'(1 << (CB_TO_Q15_GUARD_BITS - 1));
+      scaled_mantissa_to_q15 = $signed(rounded_mantissa[23:8]);
     end
   endfunction
 
   function automatic logic [31:0] q15_to_cb(input logic signed [15:0] level);
+    logic [14:0] magnitude;
+    logic [14:0] normalized;
+    logic [3:0] leading_zeros;
+    logic [Q15_TO_CB_MANTISSA_BITS-1:0] mantissa_index;
     logic found;
-    logic [31:0] base;
-    logic [31:0] delta;
-    logic [31:0] distance;
-    logic [63:0] fraction;
+    logic [32:0] approximation;
     begin
-      q15_to_cb = ENV_SILENCE_CB_Q12_20;
+      q15_to_cb = ENV_CB_SILENCE_Q12_20;
+      magnitude = level[14:0];
+      normalized = '0;
+      leading_zeros = '0;
+      mantissa_index = '0;
       found = 1'b0;
+      approximation = '0;
       if (level >= 16'sh7fff) begin
         q15_to_cb = 32'd0;
-        found = 1'b1;
       end else if (level > 0) begin
-        for (int index = 0; index < ENV_CB_LUT_LAST_INDEX; index++) begin
-          if (!found && (level <= CB_TO_Q15_LUT[index]) &&
-              (level > CB_TO_Q15_LUT[index+1])) begin
-            base = 32'(index * ENV_CB_LUT_STEP_CB) << 20;
-            delta = 32'(CB_TO_Q15_LUT[index]) - 32'(CB_TO_Q15_LUT[index+1]);
-            distance = 32'(CB_TO_Q15_LUT[index]) - 32'(level);
-            fraction = (64'(distance) * 64'(ENV_CB_LUT_STEP_CB) << 20) / 64'(delta);
-            q15_to_cb = base + fraction[31:0];
+        for (int bit_index = 14; bit_index >= 0; bit_index--) begin
+          if (!found && magnitude[bit_index]) begin
+            leading_zeros = 4'(14 - bit_index);
             found = 1'b1;
           end
         end
+        normalized = magnitude << leading_zeros;
+        mantissa_index = normalized[13 -: Q15_TO_CB_MANTISSA_BITS];
+        approximation =
+            {1'b0, CB_OCTAVE_Q12_20_LUT[5'(leading_zeros)]} +
+            {1'b0, Q15_TO_CB_MANTISSA_LUT[mantissa_index]};
+        if (approximation < {1'b0, ENV_CB_SILENCE_Q12_20})
+          q15_to_cb = approximation[31:0];
       end
-    end
-  endfunction
-
-  function automatic logic signed [15:0] envelope_level(input active_voice_t voice);
-    begin
-      if (!voice.audible)
-        envelope_level = 16'sh0000;
-      else if (voice.env_state.stage == ENV_DELAY)
-        envelope_level = 16'sh0000;
-      else if (voice.env_state.stage == ENV_ATTACK)
-        envelope_level = $signed({1'b0, voice.env_state.attack_level_q0_32[31:17]});
-      else if (voice.env_state.stage == ENV_HOLD)
-        envelope_level = 16'sh7fff;
-      else
-        envelope_level = cb_to_q15(voice.env_state.attenuation_cb_q12_20);
     end
   endfunction
 
@@ -228,8 +236,8 @@ module control_action_executor (
           ENV_RELEASE: begin
             cb_sum = {1'b0, in_voice.env_state.attenuation_cb_q12_20} +
                      {1'b0, in_voice.env_params.release_step_cb_q12_20};
-            if (cb_sum[32] || (cb_sum[31:0] >= ENV_SILENCE_CB_Q12_20)) begin
-              out_voice.env_state.attenuation_cb_q12_20 = ENV_SILENCE_CB_Q12_20;
+            if (cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
+              out_voice.env_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
               out_voice.audible = 1'b0;
             end else begin
               out_voice.env_state.attenuation_cb_q12_20 = cb_sum[31:0];
@@ -308,7 +316,6 @@ module control_action_executor (
     active_read_data = active_voice_t'(active_read_word);
     debug_prepared_seq = prepared_read_data.seq;
     debug_active = active_read_data;
-    debug_envelope_level = envelope_level(active_read_data);
     action_seq_match = active_valid[action_voice] &&
                        (active_read_data.seq == current_action.seq);
     action_semantic_valid = 1'b1;
@@ -399,9 +406,21 @@ module control_action_executor (
       end
       VOICE_RELEASE: begin
         action_next_data.env_params.release_step_cb_q12_20 = current_action.payload[0];
-        action_next_data.env_state.attenuation_cb_q12_20 =
-            (current_action.payload[0] == '0) ? ENV_SILENCE_CB_Q12_20 :
-            q15_to_cb(envelope_level(active_read_data));
+        if (current_action.payload[0] == '0) begin
+          action_next_data.env_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
+        end else begin
+          unique case (active_read_data.env_state.stage)
+            ENV_ATTACK: action_next_data.env_state.attenuation_cb_q12_20 =
+                q15_to_cb($signed({1'b0,
+                    active_read_data.env_state.attack_level_q0_32[31:17]}));
+            ENV_HOLD: action_next_data.env_state.attenuation_cb_q12_20 = '0;
+            ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE:
+                action_next_data.env_state.attenuation_cb_q12_20 =
+                    active_read_data.env_state.attenuation_cb_q12_20;
+            default: action_next_data.env_state.attenuation_cb_q12_20 =
+                ENV_CB_SILENCE_Q12_20;
+          endcase
+        end
         action_next_data.env_state.stage = ENV_RELEASE;
         action_next_data.env_state.elapsed = '0;
         action_next_data.released = 1'b1;
@@ -435,8 +454,8 @@ module control_action_executor (
                             prepared_valid[action_voice] &&
                             (prepared_read_data.seq == current_action.seq)) ||
                            ((current_action.opcode != VOICE_START) && action_seq_match));
-    active_envelope_write = snapshot_prepare && active_valid[snapshot_voice] &&
-                            (state == EXEC_IDLE);
+    snapshot_accept = snapshot_prepare && (state == EXEC_IDLE);
+    active_envelope_write = snapshot_accept && active_valid[snapshot_voice];
     active_write = active_action_write || active_envelope_write;
     active_write_voice = active_action_write ? action_voice : snapshot_voice;
     active_write_data = active_action_write ? action_next_data : envelope_next_data;
@@ -448,21 +467,28 @@ module control_action_executor (
                           ((state != EXEC_IDLE) ? action_voice : action.voice[VOICE_ID_WIDTH-1:0]) :
                           (debug_read_select ? debug_read_voice : render_voice_index);
 
-    render_config = active_read_data.voice;
-    render_config.enable = active_read_data.voice.enable && active_read_data.audible;
-    render_runtime = '0;
-    render_runtime.phase_inc = active_read_data.phase_inc;
-    render_runtime.gain_l = active_read_data.gain_l;
-    render_runtime.gain_r = active_read_data.gain_r;
-    render_runtime.envelope_level = snapshot_prepare ? envelope_level(envelope_next_data) :
-                                                       envelope_level(active_read_data);
-    render_runtime.released = active_read_data.released;
-    render_runtime.filter_enable = active_read_data.filter_enable;
-    render_runtime.filter_b0 = active_read_data.filter_b0;
-    render_runtime.filter_b1 = active_read_data.filter_b1;
-    render_runtime.filter_b2 = active_read_data.filter_b2;
-    render_runtime.filter_a1 = active_read_data.filter_a1;
-    render_runtime.filter_a2 = active_read_data.filter_a2;
+    snapshot_octave_next = '0;
+    if (snapshot_stage0_attenuation >= CB_OCTAVE_Q12_20_LUT[16]) begin
+      snapshot_octave_next = 5'd16;
+    end else begin
+      if (snapshot_stage0_attenuation >= CB_OCTAVE_Q12_20_LUT[8])
+        snapshot_octave_next = 5'd8;
+      if (snapshot_stage0_attenuation >=
+          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd4])
+        snapshot_octave_next = snapshot_octave_next + 5'd4;
+      if (snapshot_stage0_attenuation >=
+          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd2])
+        snapshot_octave_next = snapshot_octave_next + 5'd2;
+      if (snapshot_stage0_attenuation >=
+          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd1])
+        snapshot_octave_next = snapshot_octave_next + 5'd1;
+    end
+    snapshot_residual_next = snapshot_stage0_attenuation -
+                             CB_OCTAVE_Q12_20_LUT[snapshot_octave_next];
+    snapshot_rounded_residual_next = snapshot_residual_next +
+        32'(1 << (CB_TO_Q15_RESIDUAL_INDEX_SHIFT - 1));
+    snapshot_mantissa_index_next = 7'(
+        snapshot_rounded_residual_next >> CB_TO_Q15_RESIDUAL_INDEX_SHIFT);
     config_valid = active_valid;
   end
 
@@ -495,11 +521,93 @@ module control_action_executor (
       stream_flush <= 1'b0;
       command_error_pulse <= 1'b0;
       stale_seq_pulse <= 1'b0;
+      snapshot_valid <= 1'b0;
+      snapshot_stage0_valid <= 1'b0;
+      snapshot_stage0_kind <= SNAPSHOT_LEVEL_ZERO;
+      snapshot_stage0_direct_level <= '0;
+      snapshot_stage0_attenuation <= '0;
+      snapshot_stage1_valid <= 1'b0;
+      snapshot_stage1_kind <= SNAPSHOT_LEVEL_ZERO;
+      snapshot_stage1_direct_level <= '0;
+      snapshot_stage1_octave <= '0;
+      snapshot_stage1_mantissa_index <= '0;
+      snapshot_stage2_valid <= 1'b0;
+      snapshot_stage2_kind <= SNAPSHOT_LEVEL_ZERO;
+      snapshot_stage2_direct_level <= '0;
+      snapshot_stage2_octave <= '0;
+      snapshot_stage2_mantissa <= '0;
+      render_config <= '0;
+      render_runtime <= '0;
     end else begin
       action_done <= 1'b0;
       stream_flush <= 1'b0;
       command_error_pulse <= 1'b0;
       stale_seq_pulse <= 1'b0;
+      snapshot_valid <= snapshot_stage2_valid;
+      snapshot_stage0_valid <= snapshot_accept;
+      snapshot_stage1_valid <= snapshot_stage0_valid;
+      snapshot_stage2_valid <= snapshot_stage1_valid;
+
+      if (snapshot_accept) begin
+        render_config <= active_read_data.voice;
+        render_config.enable <= active_envelope_write &&
+                                active_read_data.voice.enable &&
+                                envelope_next_data.audible;
+        render_runtime.phase_inc <= active_read_data.phase_inc;
+        render_runtime.gain_l <= active_read_data.gain_l;
+        render_runtime.gain_r <= active_read_data.gain_r;
+        render_runtime.released <= active_read_data.released;
+        render_runtime.filter_enable <= active_read_data.filter_enable;
+        render_runtime.filter_b0 <= active_read_data.filter_b0;
+        render_runtime.filter_b1 <= active_read_data.filter_b1;
+        render_runtime.filter_b2 <= active_read_data.filter_b2;
+        render_runtime.filter_a1 <= active_read_data.filter_a1;
+        render_runtime.filter_a2 <= active_read_data.filter_a2;
+        snapshot_stage0_kind <= SNAPSHOT_LEVEL_ZERO;
+        snapshot_stage0_direct_level <= '0;
+        snapshot_stage0_attenuation <= envelope_next_data.env_state.attenuation_cb_q12_20;
+        if (active_envelope_write && envelope_next_data.audible &&
+            (envelope_next_data.env_state.stage == ENV_ATTACK)) begin
+          snapshot_stage0_kind <= SNAPSHOT_LEVEL_DIRECT;
+          snapshot_stage0_direct_level <= $signed(
+              {1'b0, envelope_next_data.env_state.attack_level_q0_32[31:17]});
+        end else if (active_envelope_write && envelope_next_data.audible &&
+                     (envelope_next_data.env_state.stage == ENV_HOLD)) begin
+          snapshot_stage0_kind <= SNAPSHOT_LEVEL_DIRECT;
+          snapshot_stage0_direct_level <= 16'sh7fff;
+        end else if (active_envelope_write && envelope_next_data.audible &&
+                     (envelope_next_data.env_state.stage != ENV_DELAY) &&
+                     (envelope_next_data.env_state.attenuation_cb_q12_20 <
+                      ENV_CB_SILENCE_Q12_20)) begin
+          snapshot_stage0_kind <= SNAPSHOT_LEVEL_CB;
+        end
+      end
+
+      if (snapshot_stage0_valid) begin
+        snapshot_stage1_kind <= snapshot_stage0_kind;
+        snapshot_stage1_direct_level <= snapshot_stage0_direct_level;
+        snapshot_stage1_octave <= snapshot_octave_next;
+        snapshot_stage1_mantissa_index <= snapshot_mantissa_index_next;
+      end
+
+      if (snapshot_stage1_valid) begin
+        snapshot_stage2_kind <= snapshot_stage1_kind;
+        snapshot_stage2_direct_level <= snapshot_stage1_direct_level;
+        snapshot_stage2_octave <= snapshot_stage1_octave;
+        snapshot_stage2_mantissa <=
+            CB_TO_Q15_MANTISSA_LUT[snapshot_stage1_mantissa_index];
+      end
+
+      if (snapshot_stage2_valid) begin
+        unique case (snapshot_stage2_kind)
+          SNAPSHOT_LEVEL_DIRECT:
+              render_runtime.envelope_level <= snapshot_stage2_direct_level;
+          SNAPSHOT_LEVEL_CB:
+              render_runtime.envelope_level <= scaled_mantissa_to_q15(
+                  snapshot_stage2_mantissa, snapshot_stage2_octave);
+          default: render_runtime.envelope_level <= 16'sh0000;
+        endcase
+      end
       commit_pulse <= pending_commit;
       if (frame_start)
         pending_commit <= '0;

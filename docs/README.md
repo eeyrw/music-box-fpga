@@ -36,6 +36,9 @@ change.
   and instantiation tree.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
   synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
+- [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
+  SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
+  generated tables, error bounds, and synthesis history.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
   transactional command-stream and continuous-render contract.
 
