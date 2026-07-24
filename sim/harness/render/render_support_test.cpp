@@ -22,7 +22,6 @@ struct RecordingSink : public render::VoiceCommandSink {
   uint32_t last_phase_inc = 0;
   int gain_count = 0;
   int phase_count = 0;
-  int last_initial_envelope = -1;
   int last_commit_voice = -1;
   int filter_count = 0;
   render::FilterConfig last_filter;
@@ -37,11 +36,10 @@ struct RecordingSink : public render::VoiceCommandSink {
     ++filter_count;
     last_filter = filter;
   }
-  void start_voice(int voice, uint32_t phase_inc, const render::Region& region) override {
+  void start_voice(int voice, uint32_t phase_inc, const render::Region&) override {
     ++commit_count;
     last_commit_voice = voice;
     last_phase_inc = phase_inc;
-    last_initial_envelope = region.initial_envelope;
   }
   void release_voice(int, uint32_t) override { ++release_count; }
   void stop_voice(int) override { ++disable_count; }
@@ -317,7 +315,7 @@ int main() {
     if (summary_text.find("\"sf2_loader\": {\"mono_regions\": 2") == std::string::npos ||
         summary_text.find("\"stereo_source\": \"mono\"") == std::string::npos ||
         summary_text.find("\"gain\": {\"pan\":") == std::string::npos ||
-        summary_text.find("\"volume_envelope\": {\"delay_ticks\":") == std::string::npos ||
+        summary_text.find("\"volume_envelope\": {\"delay_samples\":") == std::string::npos ||
         summary_text.find("\"filter\": {\"enable\":") == std::string::npos ||
         summary_text.find("\"loop_mode\":") == std::string::npos ||
         summary_text.find("\"modulation\": {\"generators\":") == std::string::npos ||
@@ -335,6 +333,7 @@ int main() {
     }
     std::vector<int16_t> hot_memory{32767, 32767, 32767, 32767};
     render::RenderDiagnostics hot_diag;
+    hot_diag.detailed_enabled = true;
     render::ReferenceSynth hot_synth(hot_memory, &hot_diag);
     render::Region hot_region;
     hot_region.length = 4;
@@ -342,7 +341,6 @@ int main() {
     hot_region.phase_inc = render::kPhaseFracScale;
     hot_region.gain_l = render::kQ15Full;
     hot_region.gain_r = render::kQ15Full;
-    hot_region.attack_sub_tick = true;
     render::CommandVoiceControl hot_control(hot_synth);
     hot_control.start_voice(0, hot_region.phase_inc, hot_region);
     hot_control.start_voice(1, hot_region.phase_inc, hot_region);
@@ -351,11 +349,18 @@ int main() {
         hot_diag.max_abs_mix_input_r <= 32767) {
       throw std::runtime_error("saturation diagnostics did not record pre-saturation maxima");
     }
+    render::RenderDiagnostics fast_diag;
+    render::ReferenceSynth fast_synth(hot_memory, &fast_diag);
+    render::CommandVoiceControl fast_control(fast_synth);
+    fast_control.start_voice(0, hot_region.phase_inc, hot_region);
+    fast_synth.render_sample();
+    if (fast_diag.frames != 1 || fast_diag.max_abs_mix_input_l != 0 ||
+        fast_diag.audible_envelope_updates != 0) {
+      throw std::runtime_error("default diagnostics performed detailed sample-loop collection");
+    }
     render::ReferenceSynth envelope_synth(hot_memory);
     render::Region envelope_region = hot_region;
-    envelope_region.attack_sub_tick = false;
-    envelope_region.attack_ticks = 4;
-    envelope_region.envelope_tick_samples = 1;
+    envelope_region.volume_envelope.attack_samples = 4;
     render::CommandVoiceControl envelope_control(envelope_synth);
     envelope_control.start_voice(0, envelope_region.phase_inc, envelope_region);
     envelope_synth.write_command_words({0x13000102u, 0x00000002u, 0x80000000u});
@@ -365,32 +370,45 @@ int main() {
     envelope_synth.write_command_words({0x14000101u, 0x00000000u});
     if (envelope_synth.render_sample().first != 0)
       throw std::runtime_error("reference zero-step RELEASE did not stop immediately");
+
+    render::ReferenceSynth reverse_decay_synth(hot_memory);
+    render::Region reverse_decay_region = hot_region;
+    reverse_decay_region.volume_envelope.decay_samples = 1;
+    reverse_decay_region.volume_envelope.sustain_cb_q12_20 = 60u << 20;
+    render::CommandVoiceControl reverse_decay_control(reverse_decay_synth);
+    reverse_decay_control.start_voice(0, reverse_decay_region.phase_inc, reverse_decay_region);
+    reverse_decay_synth.render_sample();
+    reverse_decay_synth.write_command_words(
+        {0x13000103u, 0x00000018u, 10u << 20, 20u << 20});
+    int reverse_decay_first = reverse_decay_synth.render_sample().first;
+    int reverse_decay_second = reverse_decay_synth.render_sample().first;
+    if (reverse_decay_second <= reverse_decay_first) {
+      throw std::runtime_error("reference ENV_UPDATE did not decay downward toward lower attenuation");
+    }
     std::string diagnostics_text = render::diagnostics_json_fields(hot_diag);
     if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_voice_steal_score") == std::string::npos ||
-        diagnostics_text.find("diagnostics_runtime_envelope_updates") == std::string::npos ||
-        diagnostics_text.find("diagnostics_max_runtime_envelope_jump_tick") == std::string::npos) {
+        diagnostics_text.find("diagnostics_max_audible_envelope_jump_frame") == std::string::npos) {
       throw std::runtime_error("diagnostics JSON did not include pre-saturation maxima");
     }
     render::Args input_args;
     input_args.sf2 = "/tmp/example.sf2";
     input_args.midi = "/tmp/example.mid";
     input_args.instrument = "Piano";
-    input_args.key = 64;
     input_args.start_seconds = 144.0;
     input_args.seconds = 12.5;
-    input_args.adsr_tick_ms = 1.0;
+    input_args.control_tick_ms = 1.0;
     std::string input_json = render::render_input_json_fields(input_args, 48);
     if (input_json.find("\"sf2_path\": \"/tmp/example.sf2\"") == std::string::npos ||
         input_json.find("\"midi_path\": \"/tmp/example.mid\"") == std::string::npos ||
         input_json.find("\"uses_default_melody\": false") == std::string::npos ||
         input_json.find("\"instrument_override\": \"Piano\"") == std::string::npos ||
         input_json.find("\"start_seconds\": 144") == std::string::npos ||
-        input_json.find("\"envelope_mode\": \"control_tick\"") == std::string::npos ||
-        input_json.find("\"adsr_tick_ms_ignored\": false") == std::string::npos ||
-        input_json.find("\"adsr_tick_samples\": 48") == std::string::npos ||
+        input_json.find("\"control_update_mode\": \"periodic\"") == std::string::npos ||
+        input_json.find("\"control_tick_ms_ignored\": false") == std::string::npos ||
+        input_json.find("\"control_tick_samples\": 48") == std::string::npos ||
         input_json.find("\"render_num_voices\": ") == std::string::npos) {
       throw std::runtime_error("input JSON fields did not include render provenance");
     }
@@ -400,22 +418,59 @@ int main() {
     if (render::memory_profile_json_field(input_args).find("\"memory_profile\": \"ddr\"") == std::string::npos) {
       throw std::runtime_error("memory profile JSON field did not record memory profile");
     }
-    if (render::envelope_tick_samples(input_args) != 48) {
-      throw std::runtime_error("control-tick envelope sample count was not derived from ADSR ms");
+    if (render::control_tick_samples(input_args) != 48) {
+      throw std::runtime_error("control tick sample count was not derived from control tick ms");
     }
-    input_args.sample_accurate_envelope = true;
-    if (render::envelope_tick_samples(input_args) != 1) {
-      throw std::runtime_error("sample-accurate envelope mode did not force one-sample ticks");
+    render::RenderInputs move_inputs;
+    move_inputs.sf2.file_words = {1, 2, 3, 4};
+    const int16_t* original_wave_data = move_inputs.sf2.file_words.data();
+    std::vector<int16_t> moved_wave = render::take_sf2_wave_memory(move_inputs);
+    if (!move_inputs.sf2.file_words.empty() || moved_wave.data() != original_wave_data) {
+      throw std::runtime_error("SF2 wave memory was copied instead of transferred");
+    }
+
+    render::Region timeline_region;
+    timeline_region.length = 4;
+    timeline_region.loop_end = 4;
+    timeline_region.phase_inc = render::kPhaseFracScale;
+    std::vector<render::Region> timeline_regions{timeline_region};
+    RecordingSink timeline_sink;
+    render::McuModel timeline_mcu(timeline_sink, timeline_regions);
+    render::NoteEvent timeline_on;
+    timeline_on.sample = 2;
+    timeline_on.on = true;
+    timeline_on.velocity = 100;
+    timeline_on.phase_inc = timeline_region.phase_inc;
+    render::NoteEvent timeline_off = timeline_on;
+    timeline_off.sample = 3;
+    timeline_off.on = false;
+    std::vector<render::NoteEvent> timeline_events{timeline_on, timeline_off};
+    render::RenderTimeline timeline(timeline_events, 4, timeline_mcu);
+    timeline.advance_to(1);
+    if (timeline_sink.commit_count != 0) {
+      throw std::runtime_error("render timeline dispatched an event early");
+    }
+    timeline.advance_to(2);
+    if (timeline_sink.commit_count != 1) {
+      throw std::runtime_error("render timeline missed note-on sample");
+    }
+    timeline.advance_to(3);
+    if (timeline_sink.release_count != 1) {
+      throw std::runtime_error("render timeline missed note-off sample");
+    }
+    input_args.sample_accurate_control = true;
+    if (render::control_tick_samples(input_args) != 1) {
+      throw std::runtime_error("sample-accurate control mode did not force one-sample ticks");
     }
     input_json = render::render_input_json_fields(input_args, 1);
-    if (input_json.find("\"envelope_mode\": \"sample_accurate\"") == std::string::npos ||
-        input_json.find("\"adsr_tick_ms_ignored\": true") == std::string::npos ||
-        input_json.find("\"adsr_tick_samples\": 1") == std::string::npos) {
-      throw std::runtime_error("input JSON fields did not record sample-accurate envelope mode");
+    if (input_json.find("\"control_update_mode\": \"sample_accurate\"") == std::string::npos ||
+        input_json.find("\"control_tick_ms_ignored\": true") == std::string::npos ||
+        input_json.find("\"control_tick_samples\": 1") == std::string::npos) {
+      throw std::runtime_error("input JSON fields did not record sample-accurate control mode");
     }
     input_args.midi.clear();
     input_args.instrument.clear();
-    input_args.sample_accurate_envelope = false;
+    input_args.sample_accurate_control = false;
     input_json = render::render_input_json_fields(input_args, 240);
     if (input_json.find("\"midi_path\": null") == std::string::npos ||
         input_json.find("\"uses_default_melody\": true") == std::string::npos ||
@@ -423,12 +478,12 @@ int main() {
       throw std::runtime_error("input JSON fields did not mark default inputs");
     }
     const char* sample_accurate_argv[] = {"render", "--sample-rate", "48000",
-                                          "--adsr-tick-ms", "123",
-                                          "--sample-accurate-envelope"};
+                                          "--control-tick-ms", "123",
+                                          "--sample-accurate-control"};
     render::Args parsed_sample_accurate = render::parse_args(6, const_cast<char**>(sample_accurate_argv));
-    if (!parsed_sample_accurate.sample_accurate_envelope ||
-        render::envelope_tick_samples(parsed_sample_accurate) != 1) {
-      throw std::runtime_error("sample-accurate envelope argument did not ignore ADSR tick ms");
+    if (!parsed_sample_accurate.sample_accurate_control ||
+        render::control_tick_samples(parsed_sample_accurate) != 1) {
+      throw std::runtime_error("sample-accurate control argument did not ignore control tick ms");
     }
     const char* start_seconds_argv[] = {"render", "--start-seconds", "144", "--seconds", "30"};
     render::Args parsed_start = render::parse_args(5, const_cast<char**>(start_seconds_argv));
@@ -499,7 +554,7 @@ int main() {
     if (mod_sink.last_phase_inc != mod_region.phase_inc) {
       throw std::runtime_error("mod LFO did not start its ramp at zero excursion");
     }
-    mod_mcu.envelope_tick();
+    mod_mcu.control_tick();
     if (mod_sink.last_phase_inc <= mod_region.phase_inc) {
       throw std::runtime_error("mod LFO pitch generator did not raise runtime phase increment on the next tick");
     }
@@ -543,6 +598,7 @@ int main() {
     std::vector<render::Region> steady_filter_regions{steady_filter_region};
     RecordingSink steady_filter_sink;
     render::RenderDiagnostics steady_filter_diag;
+    steady_filter_diag.detailed_enabled = true;
     render::McuModel steady_filter_mcu(steady_filter_sink, steady_filter_regions, &steady_filter_diag);
     render::NoteEvent steady_filter_note;
     steady_filter_note.on = true;
@@ -550,8 +606,8 @@ int main() {
     steady_filter_note.phase_inc = steady_filter_region.phase_inc;
     steady_filter_mcu.handle_event(steady_filter_note);
     int steady_filter_writes = steady_filter_sink.filter_count;
-    steady_filter_mcu.envelope_tick();
-    steady_filter_mcu.envelope_tick();
+    steady_filter_mcu.control_tick();
+    steady_filter_mcu.control_tick();
     if (steady_filter_sink.filter_count != steady_filter_writes) {
       throw std::runtime_error("unchanged runtime filter coefficients were written again");
     }
@@ -569,6 +625,7 @@ int main() {
     std::vector<render::Region> steady_runtime_regions{steady_runtime_region};
     RecordingSink steady_runtime_sink;
     render::RenderDiagnostics steady_runtime_diag;
+    steady_runtime_diag.detailed_enabled = true;
     render::McuModel steady_runtime_mcu(steady_runtime_sink, steady_runtime_regions, &steady_runtime_diag);
     render::NoteEvent steady_runtime_note;
     steady_runtime_note.on = true;
@@ -578,8 +635,8 @@ int main() {
     int steady_gain_writes = steady_runtime_sink.gain_count;
     int steady_phase_writes = steady_runtime_sink.phase_count;
     int steady_filter_runtime_writes = steady_runtime_sink.filter_count;
-    steady_runtime_mcu.envelope_tick();
-    steady_runtime_mcu.envelope_tick();
+    steady_runtime_mcu.control_tick();
+    steady_runtime_mcu.control_tick();
     if (steady_runtime_sink.gain_count != steady_gain_writes ||
         steady_runtime_sink.phase_count != steady_phase_writes ||
         steady_runtime_sink.filter_count != steady_filter_runtime_writes) {
@@ -651,7 +708,7 @@ int main() {
     if (default_vibrato_sink.last_phase_inc != render::kPhaseFracScale) {
       throw std::runtime_error("default vibrato LFO did not start at zero excursion");
     }
-    default_vibrato_mcu.envelope_tick();
+    default_vibrato_mcu.control_tick();
     if (default_vibrato_sink.last_phase_inc <= render::kPhaseFracScale) {
       throw std::runtime_error("CC1 default modulator did not add vibrato pitch depth");
     }
@@ -670,7 +727,7 @@ int main() {
     custom_mod_mcu.handle_event(mod_wheel);
     render::NoteEvent custom_mod_note = default_vibrato_note;
     custom_mod_mcu.handle_event(custom_mod_note);
-    custom_mod_mcu.envelope_tick();
+    custom_mod_mcu.control_tick();
     double custom_mod_cents = 200.0 * (127.0 / 128.0);
     uint32_t custom_mod_phase = uint32_t(std::round(double(render::kPhaseFracScale) *
                                                     std::pow(2.0, custom_mod_cents / 1200.0)));
@@ -693,13 +750,13 @@ int main() {
     tremolo_note.velocity = 127;
     tremolo_note.phase_inc = render::kPhaseFracScale;
     tremolo_mcu.handle_event(tremolo_note);
-    tremolo_mcu.envelope_tick();
+    tremolo_mcu.control_tick();
     int tremolo_gain = int(std::round(double(0x1000) * std::pow(10.0, 100.0 / 200.0)));
     if (tremolo_sink.last_gain_l != tremolo_gain || tremolo_sink.last_gain_r != tremolo_gain) {
       throw std::runtime_error("modLfoToVolume did not boost runtime gain on positive LFO excursion");
     }
-    tremolo_mcu.envelope_tick();
-    tremolo_mcu.envelope_tick();
+    tremolo_mcu.control_tick();
+    tremolo_mcu.control_tick();
     int tremolo_dip = int(std::round(double(0x1000) * std::pow(10.0, -100.0 / 200.0)));
     if (tremolo_sink.last_gain_l != tremolo_dip || tremolo_sink.last_gain_r != tremolo_dip) {
       throw std::runtime_error("modLfoToVolume did not attenuate runtime gain on negative LFO excursion");
@@ -788,44 +845,10 @@ int main() {
       throw std::runtime_error("SF2 NRPN pan offset did not update runtime gain");
     }
 
-    render::Region folded_attack_region;
-    folded_attack_region.length = 4;
-    folded_attack_region.loop_end = 4;
-    folded_attack_region.attack_ticks = 1;
-    folded_attack_region.attack_sub_tick = true;
-    folded_attack_region.gain_l = 0x4000;
-    folded_attack_region.gain_r = 0x4000;
-    std::vector<render::Region> folded_attack_regions{folded_attack_region};
-    RecordingSink folded_attack_sink;
-    render::McuModel folded_attack_mcu(folded_attack_sink, folded_attack_regions);
     render::NoteEvent folded_attack_note;
     folded_attack_note.on = true;
     folded_attack_note.velocity = 127;
     folded_attack_note.phase_inc = render::kPhaseFracScale;
-    folded_attack_mcu.handle_event(folded_attack_note);
-    if (folded_attack_sink.last_initial_envelope != render::kQ15Full) {
-      throw std::runtime_error("sub-tick volume attack was not folded into Note On initial envelope");
-    }
-
-    render::Region one_tick_attack_region = folded_attack_region;
-    one_tick_attack_region.attack_sub_tick = false;
-    std::vector<render::Region> one_tick_attack_regions{one_tick_attack_region};
-    RecordingSink one_tick_attack_sink;
-    render::McuModel one_tick_attack_mcu(one_tick_attack_sink, one_tick_attack_regions);
-    one_tick_attack_mcu.handle_event(folded_attack_note);
-    if (one_tick_attack_sink.last_initial_envelope != 0) {
-      throw std::runtime_error("one-tick non-sub-tick volume attack was folded into Note On initial envelope");
-    }
-
-    render::Region delayed_attack_region = folded_attack_region;
-    delayed_attack_region.delay_ticks = 1;
-    std::vector<render::Region> delayed_attack_regions{delayed_attack_region};
-    RecordingSink delayed_attack_sink;
-    render::McuModel delayed_attack_mcu(delayed_attack_sink, delayed_attack_regions);
-    delayed_attack_mcu.handle_event(folded_attack_note);
-    if (delayed_attack_sink.last_initial_envelope != 0) {
-      throw std::runtime_error("delayed volume attack was folded before the delay phase");
-    }
 
     render::Region folded_mod_attack_region;
     folded_mod_attack_region.length = 4;
@@ -964,7 +987,7 @@ int main() {
       audible_note.region = (i == render::kNumVoices - 1) ? 1 : 0;
       audible_steal_mcu.handle_event(audible_note);
     }
-    audible_steal_mcu.envelope_tick();
+    audible_steal_mcu.control_tick();
     audible_note.note = 100;
     audible_note.region = 0;
     audible_steal_mcu.handle_event(audible_note);

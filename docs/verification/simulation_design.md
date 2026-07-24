@@ -79,8 +79,14 @@ Common overrides include:
 ```bash
 make render-rtl-core MIDI=assets/midi/example.mid SECONDS=10
 make render-memory MIDI=assets/midi/example.mid START_SECONDS=30 SECONDS=10
-make render-reference SF2=assets/soundfonts/example.sf2 INSTRUMENT=0 KEY=60
+make render-reference SF2=assets/soundfonts/example.sf2 INSTRUMENT=0
 ```
+
+`CONTROL_TICK_MS` sets the periodic MCU control-update interval used for
+modulation envelopes, LFOs, and dynamic gain, pitch, and filter commands. Set
+`SAMPLE_ACCURATE_CONTROL=1` to update that control model once per output sample;
+in that mode `CONTROL_TICK_MS` is ignored. The reference synthesizer's volume
+envelope itself always advances once per output sample in both modes.
 
 `render-reference` uses only the C++ integer synthesizer. `render-rtl-core`
 fans identical command words to RTL and the reference and compares every output
@@ -97,12 +103,48 @@ The host side owns:
 
 - MIDI parsing, tempo, programs, banks, controllers, pressure, and pitch bend;
 - SF2 preset/instrument/zone selection and sample-address calculation;
+- FluidSynth-compatible `0.4` scaling for every file-defined
+  `initialAttenuation` generator, matching the EMU8k/10k behavior expected by
+  existing SoundFonts; MIDI/runtime attenuation modulators retain standard
+  centibel units;
 - voice allocation, layering, exclusive class, sustain, and stealing;
 - fixed and real-time SF2 modulator evaluation;
 - conversion of durations, gains, pitch, and filter coefficients to FPGA fields.
 
 The FPGA owns prepared/active lifecycle, sample-rate volume-envelope progression,
 phase, filtering, mixing, and audio scheduling.
+
+### File Attenuation Compatibility
+
+The SoundFont 2.04 specification defines `initialAttenuation` generator 48 in
+literal centibels: `60 cB` means `6 dB`, and matching preset- and
+instrument-level value generators add before reaching the synthesis parameter.
+It also defines the default velocity, CC7 volume, and CC11 expression
+modulators as independent `960 cB` excursions.
+
+The EMU8k/10k hardware does not apply the literal generator-48 scale. It applies
+`0.4 dB` of attenuation for each `1 dB` stored in a preset or instrument zone.
+Existing SoundFonts commonly target that hardware behavior. FluidSynth therefore
+multiplies every file-defined `GEN_ATTENUATION` value by `0.4` while importing the
+SoundFont, before instrument/preset generator precedence and addition. This is
+unconditional: FluidSynth does not branch on `isng`, SoundFont version, or a
+runtime setting. Its default and file-defined modulators are not scaled by this
+compatibility factor.
+
+The harness follows that FluidSynth behavior. `sf2_loader.cpp` applies `0.4` only
+when converting file-defined generator 48 into a region base gain. Standard
+centibel conversion remains `10^(-cB/200)`, and the following inputs do not use
+the `0.4` factor:
+
+- velocity-to-attenuation modulators;
+- MIDI CC7 volume and CC11 expression modulators;
+- modulation-LFO-to-volume and runtime generator offsets;
+- volume-envelope sustain and release attenuation.
+
+This is a deliberate compatibility policy rather than the literal generator-48
+scale in the SF2 specification. It matches FluidSynth's
+`EMU_ATTENUATION_FACTOR` loader behavior and prevents EMU-authored banks from
+rendering some presets tens of decibels quieter than intended.
 
 On Note On, the MCU model sends DEFINE followed by START with a matching sequence.
 Mono START traffic is 21 total words and stereo START traffic is 25. START carries
@@ -119,6 +161,32 @@ sample per tick. In both modes the command builder converts the selected
 durations to sample counts/steps before START; the FPGA still advances the volume
 envelope once per rendered sample. Modulation envelopes and LFOs remain host
 control-rate policy and send only changed gain/phase or filter commands.
+
+### Volume-Envelope Execution Model
+
+There are three distinct volume-envelope representations in the render flow:
+
+- `McuModel` maintains a control-rate shadow envelope using floating-point Q1.15
+  interpolation. It supports voice lifecycle and stealing policy and schedules
+  modulation updates, but it is not multiplied into the PCM output.
+- `CommandVoiceControl` converts the host-prepared durations and levels into the
+  integer START and RELEASE fields consumed by the synthesizer.
+- The FPGA owns the audible envelope. `ReferenceSynth` is its C++ integer model;
+  both advance the audible envelope once per output sample using Q0.32 linear
+  Attack, Q12.20 centibel Decay/Sustain/Release, and the same generated
+  centibel/Q1.15 lookup tables.
+
+The normal START through NOTE-OFF/RELEASE path is intended to be bit-exact
+between `ReferenceSynth` and RTL. RTL implements the calculation as a BRAM and
+lookup-table pipeline, while the reference evaluates it directly in the sample
+loop; those scheduling differences must not change the resulting PCM.
+
+Audible volume-envelope durations are prepared directly in output samples and
+do not depend on the MCU control interval. A nominal 1 ms Attack therefore lasts
+48 samples at 48 kHz in both periodic and sample-accurate control modes. The SF2
+default at `-12000` timecents is approximately 0.9766 ms and rounds to 47 samples.
+`SAMPLE_ACCURATE_CONTROL=1` only changes how often the host-side modulation
+envelopes, LFOs, and dynamic control commands are updated.
 
 ## Numeric Comparison
 
@@ -139,18 +207,25 @@ integer calculations.
 
 Render JSON records input provenance, voice count, render cycles, memory reads,
 active/audible/stereo/filtered voice counts, queue high-water marks, cache
-hits/misses, stalls, and saturation counts.
+hits/misses, stalls, and saturation counts. `render-reference` also reports
+steady-clock milliseconds for SF2 loading, event parsing, region preparation,
+the sample-render loop, and the total interval from SF2 loading through the last
+rendered sample. The same timing breakdown is printed to stdout so render modes
+can be compared without including C++ compilation time.
 
-MCU diagnostics include:
+Detailed per-voice diagnostics are disabled by default because collecting
+pre-saturation intermediates and jump maxima in the sample loop is expensive.
+Set `DETAILED_DIAGNOSTICS=1` to collect:
 
-- voice steals and the loudest stolen voice score;
-- effective runtime gain, phase-increment, filter, and envelope-policy updates;
+- audible envelope update counts and maximum sample-to-sample envelope jump;
+- effective runtime gain, phase-increment, and filter update counts;
 - maximum left/right gain jump;
-- maximum phase-increment and filter-coefficient jump.
+- maximum phase-increment and filter-coefficient jump;
+- filter, voice-contribution, and final-mix saturation counts and pre-saturation
+  maxima.
 
-Some historical JSON field names retain `runtime_envelope_updates`. They describe
-MCU envelope/modulation policy changes in the reference diagnostics, not writes
-to a removed `ENVELOPE_RUNTIME` register.
+The cheap frame count, voice-steal count, and loudest stolen-voice score remain
+available in normal runs.
 
 ## Memory Profiles
 

@@ -42,13 +42,12 @@ void test_stereo_start_and_runtime_actions() {
   r.filter_a1 = -0x0400;
   r.filter_a2 = 0x0200;
   r.loop_mode = 2;
-  r.envelope_tick_samples = 48;
-  r.delay_ticks = 2;
-  r.attack_ticks = 4;
-  r.hold_ticks = 3;
-  r.decay_ticks = 5;
-  r.release_ticks = 6;
-  r.sustain_level = 0x4000;
+  r.volume_envelope.delay_samples = 96;
+  r.volume_envelope.attack_samples = 192;
+  r.volume_envelope.hold_samples = 144;
+  r.volume_envelope.decay_samples = 240;
+  r.volume_envelope.sustain_cb_q12_20 = 60u << 20;
+  r.volume_envelope.release_samples = 288;
 
   control.start_voice(3, 0x00018000, r);
   control.update_gain_phase(3, 0x1111, 0x2222, 0x0001a000);
@@ -62,7 +61,8 @@ void test_stereo_start_and_runtime_actions() {
     throw std::runtime_error("stereo DEFINE framing mismatch");
   if (opcode(sink.commands[1]) != 0x12 || sink.commands[1].size() != 9)
     throw std::runtime_error("START framing mismatch");
-  if (sink.commands[1][3] != 96 || sink.commands[1][5] != 144)
+  if (sink.commands[1][3] != 96 || sink.commands[1][4] != 0x01555556u ||
+      sink.commands[1][5] != 144 || sink.commands[1][7] != (60u << 20))
     throw std::runtime_error("envelope duration conversion mismatch");
   if (opcode(sink.commands[2]) != 0x16 || sink.commands[2][1] != 0x22221111)
     throw std::runtime_error("GAIN_PHASE packing mismatch");
@@ -80,7 +80,6 @@ void test_mono_word_count_and_seq_generation() {
   Region r;
   r.length = 8;
   r.loop_end = 8;
-  r.attack_sub_tick = true;
   control.start_voice(0, 0x100, r);
   control.start_voice(0, 0x200, r);
   if (sink.commands.size() != 4 || sink.commands[0].size() != 12 ||

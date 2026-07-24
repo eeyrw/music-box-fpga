@@ -341,8 +341,10 @@ def analyze_run(render_dir, args):
     if not wav_path.exists():
         raise FileNotFoundError(f"missing {wav_path}")
     sample_rate, left, right = read_wav(wav_path)
-    tick_samples = int(summary.get("adsr_tick_samples") or
-                       round(sample_rate * float(summary.get("adsr_tick_ms", 0.0)) / 1000.0))
+    tick_samples = int(summary.get("control_tick_samples") or
+                       summary.get("adsr_tick_samples") or
+                       round(sample_rate * float(summary.get(
+                           "control_tick_ms", summary.get("adsr_tick_ms", 0.0))) / 1000.0))
     if tick_samples <= 0:
         tick_samples = 1
 
@@ -354,15 +356,11 @@ def analyze_run(render_dir, args):
         "sf2_path",
         "midi_path",
         "requested_seconds",
-        "adsr_tick_ms",
-        "adsr_tick_samples",
+        "control_tick_ms",
+        "control_tick_samples",
         "render_num_voices",
         "rtl_max_enabled_voices",
         "rtl_max_audible_voices",
-        "diagnostics_runtime_envelope_updates",
-        "diagnostics_max_runtime_envelope_jump",
-        "diagnostics_max_runtime_envelope_jump_voice",
-        "diagnostics_max_runtime_envelope_jump_tick",
         "diagnostics_max_runtime_gain_jump_l",
         "diagnostics_max_runtime_gain_jump_r",
         "diagnostics_mix_saturations",

@@ -27,12 +27,12 @@ struct Args {
   std::string instrument;
   std::string out_dir = "build/render_memory";
   std::string memory_profile = "ddr";
-  int key = 60;
   double start_seconds = 0.0;
   double seconds = 2.0;
   int sample_rate = 48000;
-  double adsr_tick_ms = 5.0;
-  bool sample_accurate_envelope = false;
+  double control_tick_ms = 5.0;
+  bool sample_accurate_control = false;
+  bool detailed_diagnostics = false;
 };
 
 struct NoteEvent {
@@ -68,6 +68,15 @@ struct Sf2Modulator {
   uint16_t transform = 0;
 };
 
+struct VolumeEnvelopeParams {
+  uint32_t delay_samples = 0;
+  uint32_t attack_samples = 0;
+  uint32_t hold_samples = 0;
+  uint32_t decay_samples = 0;
+  uint32_t sustain_cb_q12_20 = 0;
+  uint32_t release_samples = 0;
+};
+
 struct Region {
   int key = 0;
   int output_sample_rate = 48000;
@@ -94,7 +103,7 @@ struct Region {
   int base_gain_l = 0x4000;
   int base_gain_r = 0x4000;
   int pan = 0;
-  int initial_envelope = 0;
+  VolumeEnvelopeParams volume_envelope;
   bool filter_enable = false;
   int filter_b0 = int(regs::kFilterB0UnityQ214);
   int filter_b1 = 0;
@@ -110,11 +119,7 @@ struct Region {
   int attack_ticks = 1;
   int decay_ticks = 1;
   int release_ticks = 1;
-  bool attack_sub_tick = false;
-  int attack_step = kQ15Full;
-  int decay_step = kQ15Full;
-  int release_step = kQ15Full;
-  int envelope_tick_samples = 1;
+  int control_tick_samples = 1;
   int initial_filter_fc = 13500;
   int initial_filter_q = 0;
   int mod_lfo_delay_ticks = 0;
@@ -150,6 +155,7 @@ struct FilterConfig {
 };
 
 struct RenderDiagnostics {
+  bool detailed_enabled = false;
   uint64_t frames = 0;
   uint64_t filter_y_saturated_frames = 0;
   uint64_t filter_y_saturations = 0;
@@ -172,17 +178,17 @@ struct RenderDiagnostics {
   uint32_t max_voice_steal_gain_r = 0;
   int max_voice_steal_voice = -1;
   uint64_t max_voice_steal_tick = 0;
-  uint64_t runtime_envelope_updates = 0;
   uint64_t runtime_gain_updates = 0;
   uint64_t runtime_phase_updates = 0;
   uint64_t runtime_filter_updates = 0;
-  uint32_t max_runtime_envelope_jump = 0;
-  int max_runtime_envelope_jump_voice = -1;
-  uint64_t max_runtime_envelope_jump_tick = 0;
+  uint64_t audible_envelope_updates = 0;
   uint32_t max_runtime_gain_jump_l = 0;
   uint32_t max_runtime_gain_jump_r = 0;
   uint32_t max_runtime_phase_inc_jump = 0;
   uint32_t max_runtime_filter_coeff_jump = 0;
+  uint32_t max_audible_envelope_jump = 0;
+  int max_audible_envelope_jump_voice = -1;
+  uint64_t max_audible_envelope_jump_frame = 0;
 };
 
 class VoiceCommandSink {

@@ -213,7 +213,19 @@ make render-board-loader SECONDS=0.1
 make render-memory MIDI=song.mid SECONDS=20
 make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
+make render-reference SECONDS=1 CONTROL_TICK_MS=2
+make render-reference SECONDS=1 SAMPLE_ACCURATE_CONTROL=1
+make render-reference SECONDS=1 DETAILED_DIAGNOSTICS=1
 ```
+
+`CONTROL_TICK_MS` controls periodic MCU-side modulation and runtime-control
+updates. `SAMPLE_ACCURATE_CONTROL=1` instead performs those updates once per
+output sample and ignores `CONTROL_TICK_MS`; the synthesizer volume envelope
+already advances once per sample in either mode.
+
+`DETAILED_DIAGNOSTICS=1` enables per-voice envelope and runtime-control jumps,
+saturation events, and pre-saturation maxima. It is disabled by default because
+these checks execute in the sample loop.
 
 Build the PC-side CH347 USB-to-SPI control tool:
 

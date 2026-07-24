@@ -56,6 +56,10 @@ constexpr int GEN_STARTLOOP_ADDRS_COARSE_OFFSET = 45;
 constexpr int GEN_KEYNUM = 46;
 constexpr int GEN_VELOCITY = 47;
 constexpr int GEN_INITIAL_ATTENUATION = 48;
+// FluidSynth applies the EMU8k/10k 0.4 scale to file-defined attenuation for
+// every SoundFont because existing banks commonly target that hardware behavior.
+// Runtime modulators remain in their standard centibel units.
+constexpr double EMU_FILE_ATTENUATION_SCALE = 0.4;
 constexpr int GEN_ENDLOOP_ADDRS_COARSE_OFFSET = 50;
 constexpr int GEN_COARSE_TUNE = 51;
 constexpr int GEN_FINE_TUNE = 52;
@@ -759,10 +763,12 @@ void pitch_modulation_generators(const Zone& zone, Region& region) {
 }
 
 int zone_attenuation_gain(const Zone& zone) {
-  int atten = zone.count(GEN_INITIAL_ATTENUATION) ? signed_amount(zone.at(GEN_INITIAL_ATTENUATION)) : 0;
-  atten = std::max(0, std::min(1440, atten));
+  double atten = zone.count(GEN_INITIAL_ATTENUATION)
+                     ? double(signed_amount(zone.at(GEN_INITIAL_ATTENUATION))) * EMU_FILE_ATTENUATION_SCALE
+                     : 0.0;
+  atten = std::max(0.0, std::min(1440.0, atten));
   int gain = 0x4000;
-  if (atten) gain = int(std::round(double(gain) * std::pow(10.0, -double(atten) / 200.0)));
+  if (atten != 0.0) gain = int(std::round(double(gain) * std::pow(10.0, -atten / 200.0)));
   return std::max(0, std::min(0x7fff, gain));
 }
 
@@ -806,6 +812,12 @@ int envelope_step(double seconds, int tick_samples, int sample_rate) {
   // target in approximately that duration.
   int ticks = std::max(1, int(std::round(seconds * sample_rate / tick_samples)));
   return std::max(1, std::min(kQ15Full, int(std::round(double(kQ15Full) / ticks))));
+}
+
+uint32_t volume_envelope_samples(double seconds, int sample_rate) {
+  if (seconds <= 0.0) return 0;
+  double samples = std::round(seconds * double(sample_rate));
+  return uint32_t(std::max(1.0, std::min(double(0x00ffffffu), samples)));
 }
 
 int envelope_tick_count(double seconds, int tick_samples, int sample_rate) {
@@ -925,8 +937,8 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
 }
 
 void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
-  // Gather the SF2 volume-envelope generators currently modeled by the harness
-  // and convert their timecents values into coarse MCU control ticks.
+  // Audible envelope parameters are prepared directly in output-sample units.
+  // The tick counts below are only the MCU lifecycle shadow used for allocation.
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_VOL_ENV) ? zone.at(GEN_ATTACK_VOL_ENV) : 0,
                                   zone.count(GEN_ATTACK_VOL_ENV), -12000);
   int hold_tc = signed_amount(zone.count(GEN_HOLD_VOL_ENV) ? zone.at(GEN_HOLD_VOL_ENV) : 0);
@@ -948,10 +960,13 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
   region.decay_ticks = scaled_envelope_tick_count(d, double(std::min(1000, vol_sustain_cb)) / 1000.0,
                                                   tick_samples, sample_rate);
   region.release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
-  region.attack_sub_tick = envelope_time_is_sub_tick(a, tick_samples, sample_rate);
-  region.attack_step = envelope_step(a, tick_samples, sample_rate);
-  region.decay_step = envelope_step(d, tick_samples, sample_rate);
-  region.release_step = envelope_step(r, tick_samples, sample_rate);
+  region.volume_envelope.delay_samples = volume_envelope_samples(delay, sample_rate);
+  region.volume_envelope.attack_samples = volume_envelope_samples(a, sample_rate);
+  region.volume_envelope.hold_samples = volume_envelope_samples(h, sample_rate);
+  double decay_fraction = double(std::min(1000, vol_sustain_cb)) / 1000.0;
+  region.volume_envelope.decay_samples = volume_envelope_samples(d * decay_fraction, sample_rate);
+  region.volume_envelope.sustain_cb_q12_20 = uint32_t(std::min(1000, vol_sustain_cb)) << 20;
+  region.volume_envelope.release_samples = volume_envelope_samples(r, sample_rate);
 }
 
 Zone combine_preset_and_instrument_zones(const Zone& preset, const Zone& instrument) {

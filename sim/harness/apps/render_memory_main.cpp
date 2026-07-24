@@ -71,43 +71,31 @@ int main(int argc, char** argv) {
     render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
-    int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
-    int adsr_tick_samples = render::envelope_tick_samples(args);
-
-    render::Sf2Data sf2 = render::load_sf2(args.sf2);
-    std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
-                                                              : render::parse_midi(args.midi);
-    std::vector<int16_t> wave_memory = sf2.file_words;
+    render::RenderInputs inputs = render::load_render_inputs(args);
+    std::vector<int16_t> wave_memory = render::take_sf2_wave_memory(inputs);
     std::vector<render::Region> regions;
-    render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
+    render::prepare_render_regions(args, inputs, wave_memory, regions);
 
     std::string wav_path = args.out_dir + "/out.wav";
     render::write_summary(args.out_dir + "/midi_render_config.json", regions, args.sample_rate,
-                          sample_count, int(events.size()),
+                          inputs.sample_count, int(inputs.events.size()),
                           "  \"render_target\": \"render-memory\""
                           ",\n  \"rtl_top\": \"wavetable_cached_render_core\""
-                          ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
+                          ",\n" + render::render_input_json_fields(args, inputs.control_tick_samples) +
                           ",\n" + render::memory_profile_json_field(args));
 
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
     render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);
     rtl.reset();
     render::RenderDiagnostics diagnostics;
+    diagnostics.detailed_enabled = args.detailed_diagnostics;
     render::CommandVoiceControl control(rtl);
     render::McuModel mcu(control, regions, &diagnostics);
+    render::RenderTimeline timeline(inputs.events, inputs.control_tick_samples, mcu);
 
-    size_t event_index = 0;
-    int next_adsr_sample = 0;
     int produced = 0;
-    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
-      mcu.set_current_sample(uint32_t(produced));
-      while (event_index < events.size() && events[event_index].sample <= produced) {
-        mcu.handle_event(events[event_index++]);
-      }
-      while (produced >= next_adsr_sample) {
-        mcu.envelope_tick();
-        next_adsr_sample += adsr_tick_samples;
-      }
+    for (; produced < inputs.sample_count && !render::interrupt_requested(); ++produced) {
+      timeline.advance_to(produced);
       rtl.request_sample(produced);
     }
 
@@ -118,14 +106,14 @@ int main(int argc, char** argv) {
     render::MemoryStats stats = rtl.memory_stats();
     if (render::interrupt_requested()) {
       std::cout << "INTERRUPTED: C++ harness rendered " << produced << " of "
-                << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
+                << inputs.sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
       render::write_memory_stats(args.out_dir + "/memory_stats.json", stats, diagnostics);
       rtl.print_memory_stats();
       return 130;
     }
 
-    std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
-    std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
+    std::cout << "PASS: C++ harness rendered " << inputs.sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
+    std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << inputs.events.size()
               << " nonzero_output_words=" << rtl.nonzero_output_words() << "\n";
     render::write_memory_stats(args.out_dir + "/memory_stats.json", stats, diagnostics);
     rtl.print_memory_stats();

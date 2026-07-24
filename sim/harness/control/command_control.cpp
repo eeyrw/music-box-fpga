@@ -20,18 +20,6 @@ uint32_t pack_pair(int high, int low) {
   return (uint32_t(uint16_t(high)) << 16) | uint32_t(uint16_t(low));
 }
 
-uint32_t duration_samples(int ticks, int scale) {
-  uint64_t samples = uint64_t(std::max(0, ticks)) * uint64_t(std::max(1, scale));
-  return uint32_t(std::min<uint64_t>(samples, 0x00ffffffu));
-}
-
-uint32_t q15_to_cb_q12_20(int level) {
-  level = clamp_q15(level);
-  if (level <= 0) return kSilenceCbQ12_20;
-  double cb = -200.0 * std::log10(double(level) / double(kQ15Full));
-  return uint32_t(std::llround(std::clamp(cb, 0.0, 1000.0) * double(1u << 20)));
-}
-
 uint32_t ceil_step(uint64_t distance, uint32_t duration) {
   if (duration == 0) return 0;
   return uint32_t(std::min<uint64_t>(0xffffffffu, (distance + duration - 1u) / duration));
@@ -77,16 +65,13 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
           uint32_t(r.loop_mode & 3), filter0, filter1, filter2, 0, 0});
   }
 
-  const uint32_t delay = duration_samples(r.delay_ticks, r.envelope_tick_samples);
-  const uint32_t attack_duration = duration_samples(r.attack_ticks, r.envelope_tick_samples);
-  const uint32_t attack_step = r.attack_sub_tick ? 0 : ceil_step(0xffffffffu, attack_duration);
-  const uint32_t hold = duration_samples(r.hold_ticks, r.envelope_tick_samples);
-  const uint32_t sustain_cb = q15_to_cb_q12_20(r.sustain_level);
-  const uint32_t decay_duration = duration_samples(r.decay_ticks, r.envelope_tick_samples);
-  const uint32_t decay_step = ceil_step(sustain_cb, decay_duration);
+  const VolumeEnvelopeParams& env = r.volume_envelope;
+  const uint32_t attack_step = ceil_step(0xffffffffu, env.attack_samples);
+  const uint32_t decay_step = ceil_step(env.sustain_cb_q12_20, env.decay_samples);
   emit(kStart, voice, mirror.seq,
-       {pack_pair(r.gain_r, r.gain_l), phase_inc, delay, attack_step, hold,
-        decay_step, sustain_cb, envelope_release_step(r)});
+       {pack_pair(r.gain_r, r.gain_l), phase_inc, env.delay_samples, attack_step,
+        env.hold_samples, decay_step, env.sustain_cb_q12_20,
+        envelope_release_step(r)});
   mirror.active = true;
 }
 
@@ -121,9 +106,7 @@ void CommandVoiceControl::stop_voice(int voice) {
 }
 
 uint32_t envelope_release_step(const Region& region) {
-  const uint32_t duration = duration_samples(region.release_ticks,
-                                             region.envelope_tick_samples);
-  return ceil_step(kSilenceCbQ12_20, duration);
+  return ceil_step(kSilenceCbQ12_20, region.volume_envelope.release_samples);
 }
 
 }  // namespace render

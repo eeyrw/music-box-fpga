@@ -31,25 +31,20 @@ int main(int argc, char** argv) {
     render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
-    int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
-    int adsr_tick_samples = render::envelope_tick_samples(args);
-
-    render::Sf2Data sf2 = render::load_sf2(args.sf2);
-    std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
-                                                              : render::parse_midi(args.midi);
-    std::vector<int16_t> wave_memory = sf2.file_words;
+    render::RenderInputs inputs = render::load_render_inputs(args);
+    std::vector<int16_t> wave_memory = render::take_sf2_wave_memory(inputs);
     std::vector<render::Region> regions;
-    render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
+    render::prepare_render_regions(args, inputs, wave_memory, regions);
     render::RenderDiagnostics diagnostics;
+    diagnostics.detailed_enabled = args.detailed_diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
     render::CoreRtlHarness rtl(wave_memory);
     rtl.reset();
     render::CommandFanout command_stream(reference, rtl);
     render::CommandVoiceControl control(command_stream);
     render::McuModel mcu(control, regions, &diagnostics);
+    render::RenderTimeline timeline(inputs.events, inputs.control_tick_samples, mcu);
 
-    size_t event_index = 0;
-    int next_adsr_sample = 0;
     int mismatches = 0;
     int max_diff_l = 0;
     int max_diff_r = 0;
@@ -58,15 +53,8 @@ int main(int argc, char** argv) {
     render::WavWriter wav(wav_path, args.sample_rate);
 
     int produced = 0;
-    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
-      mcu.set_current_sample(uint32_t(produced));
-      while (event_index < events.size() && events[event_index].sample <= produced) {
-        mcu.handle_event(events[event_index++]);
-      }
-      while (produced >= next_adsr_sample) {
-        mcu.envelope_tick();
-        next_adsr_sample += adsr_tick_samples;
-      }
+    for (; produced < inputs.sample_count && !render::interrupt_requested(); ++produced) {
+      timeline.advance_to(produced);
 
       auto ref = reference.render_sample();
       auto got = rtl.request_sample(produced);
@@ -95,17 +83,17 @@ int main(int argc, char** argv) {
                                " max_diff_r=" + std::to_string(max_diff_r));
     }
 
-    double avg_render_cycles = sample_count == 0
+    double avg_render_cycles = inputs.sample_count == 0
                                    ? 0.0
-                                   : double(rtl.render_cycles_sum()) / double(sample_count);
-    auto avg = [sample_count](uint64_t value) {
-      return sample_count == 0 ? 0.0 : double(value) / double(sample_count);
+                                   : double(rtl.render_cycles_sum()) / double(inputs.sample_count);
+    auto avg = [&inputs](uint64_t value) {
+      return inputs.sample_count == 0 ? 0.0 : double(value) / double(inputs.sample_count);
     };
 
     std::ostringstream stats;
     stats << "  \"render_target\": \"render-rtl-core\""
           << ",\n  \"rtl_top\": \"wavetable_render_core\""
-          << ",\n" << render::render_input_json_fields(args, adsr_tick_samples)
+          << ",\n" << render::render_input_json_fields(args, inputs.control_tick_samples)
           << ",\n  \"rtl_total_cycles\": " << rtl.total_cycles()
           << ",\n  \"rtl_total_memory_reads\": " << rtl.total_memory_reads()
           << ",\n  \"rtl_render_cycles_sum\": " << rtl.render_cycles_sum()
@@ -126,19 +114,19 @@ int main(int argc, char** argv) {
           << ",\n  \"interrupted\": " << (render::interrupt_requested() ? "true" : "false")
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
-                          produced, int(events.size()), stats.str());
+                          produced, int(inputs.events.size()), stats.str());
 
     if (render::interrupt_requested()) {
       std::cout << "INTERRUPTED: RTL core/reference render wrote " << produced
-                << " of " << sample_count << " stereo samples to " << wav_path
+                << " of " << inputs.sample_count << " stereo samples to " << wav_path
                 << ", mismatches_seen=" << mismatches << "\n";
       return 130;
     }
 
-    std::cout << "PASS: RTL core/reference render matched " << sample_count
+    std::cout << "PASS: RTL core/reference render matched " << inputs.sample_count
               << " stereo samples, regions=" << regions.size()
               << " wave_words=" << wave_memory.size()
-              << " events=" << events.size()
+              << " events=" << inputs.events.size()
               << " nonzero_output_words=" << nonzero_words
               << " rtl_total_cycles=" << rtl.total_cycles()
               << " rtl_avg_render_cycles=" << avg_render_cycles

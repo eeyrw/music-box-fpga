@@ -25,8 +25,9 @@ KEY ?= 60
 START_SECONDS ?= 0
 SECONDS ?= 2
 SAMPLE_RATE ?= 48000
-ADSR_TICK_MS ?= 5
-SAMPLE_ACCURATE_ENVELOPE ?= 0
+CONTROL_TICK_MS ?= 5
+SAMPLE_ACCURATE_CONTROL ?= 0
+DETAILED_DIAGNOSTICS ?= 0
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -119,6 +120,9 @@ TRANSACTIONAL_CONTROL_SIM_SOURCES := \
 
 HARNESS_RENDER_COMMON_SRCS := \
 	$(abspath sim/harness/render/render_support.cpp) \
+	$(abspath sim/harness/render/render_args.cpp) \
+	$(abspath sim/harness/render/render_report.cpp) \
+	$(abspath sim/harness/render/render_session.cpp) \
 	$(abspath sim/harness/control/command_control.cpp) \
 	$(abspath sim/harness/formats/midi_parser.cpp) \
 	$(abspath sim/harness/formats/sf2_loader.cpp)
@@ -221,7 +225,9 @@ test-cpp-unit:
 		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \
 		sim/harness/render/reference_synth.cpp \
-		sim/harness/formats/midi_parser.cpp sim/harness/render/render_support_test.cpp \
+		sim/harness/formats/midi_parser.cpp sim/harness/render/render_args.cpp \
+		sim/harness/render/render_report.cpp sim/harness/render/render_session.cpp \
+		sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
 
@@ -347,7 +353,7 @@ render-instrument:
 render-reference:
 	# Build and run the pure C++ SF2/MIDI reference synthesizer.
 	mkdir -p $(RENDER_REFERENCE_OUT_DIR)
-	$(CXX) $(CXX_STD_FLAGS) \
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_GLOBAL) \
 		$(abspath sim/harness/apps/render_reference_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_WAV_SRC) \
@@ -357,9 +363,10 @@ render-reference:
 	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
-		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--adsr-tick-ms $(ADSR_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--control-tick-ms $(CONTROL_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
+		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:
@@ -380,9 +387,10 @@ render-rtl-core:
 	$(BUILD_DIR)/render_rtl_core_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
-		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--adsr-tick-ms $(ADSR_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--control-tick-ms $(CONTROL_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
+		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
 		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
 
 render-memory:
@@ -405,9 +413,10 @@ render-memory:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
-		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--adsr-tick-ms $(ADSR_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--control-tick-ms $(CONTROL_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
+		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
 
 render-board-loader:
@@ -431,9 +440,10 @@ render-board-loader:
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--memory-profile "$(MEMORY_PROFILE)" \
-		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--adsr-tick-ms $(ADSR_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
+		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--control-tick-ms $(CONTROL_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
+		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 vivado-summary:

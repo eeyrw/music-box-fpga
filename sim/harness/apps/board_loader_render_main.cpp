@@ -23,14 +23,11 @@ int main(int argc, char** argv) {
     render::install_interrupt_handler();
     Verilated::commandArgs(argc, argv);
     render::Args args = render::parse_args(argc, argv);
-    int sample_count = std::max(1, int(std::round(args.seconds * args.sample_rate)));
-    int adsr_tick_samples = render::envelope_tick_samples(args);
-
-    render::Sf2Data sf2 = render::load_sf2(args.sf2);
+    render::RenderInputs inputs = render::load_render_inputs(args);
+    inputs.sf2.file_words.clear();
+    inputs.sf2.file_words.shrink_to_fit();
     std::vector<uint8_t> sf2_bytes = render::read_file_bytes(args.sf2);
     std::vector<uint8_t> sd_image = render::make_raw_sd_image(sf2_bytes, 1);
-    std::vector<render::NoteEvent> events = args.midi.empty() ? render::default_melody()
-                                                              : render::parse_midi(args.midi);
 
     std::string wav_path = args.out_dir + "/out.wav";
     render::MemoryProfile memory_profile = render::parse_memory_profile(args.memory_profile);
@@ -55,27 +52,20 @@ int main(int argc, char** argv) {
     std::vector<int16_t> wave_memory = render::words_from_bytes(loaded, sf2_bytes.size());
 
     std::vector<render::Region> regions;
-    render::prepare_events_and_regions(args, sf2, sample_count, adsr_tick_samples, events, regions, wave_memory);
+    render::prepare_render_regions(args, inputs, wave_memory, regions);
     render::RenderDiagnostics diagnostics;
+    diagnostics.detailed_enabled = args.detailed_diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
     board.reset_core();
     render::CommandFanout command_stream(board, reference);
     render::CommandVoiceControl control(command_stream);
     render::McuModel mcu(control, regions, &diagnostics);
+    render::RenderTimeline timeline(inputs.events, inputs.control_tick_samples, mcu);
 
-    size_t event_index = 0;
-    int next_adsr_sample = 0;
     int mismatches = 0;
     int produced = 0;
-    for (; produced < sample_count && !render::interrupt_requested(); ++produced) {
-      mcu.set_current_sample(uint32_t(produced));
-      while (event_index < events.size() && events[event_index].sample <= produced) {
-        mcu.handle_event(events[event_index++]);
-      }
-      while (produced >= next_adsr_sample) {
-        mcu.envelope_tick();
-        next_adsr_sample += adsr_tick_samples;
-      }
+    for (; produced < inputs.sample_count && !render::interrupt_requested(); ++produced) {
+      timeline.advance_to(produced);
       auto ref = reference.render_sample();
       auto got = board.request_sample(produced);
       if (got != ref) {
@@ -98,7 +88,7 @@ int main(int argc, char** argv) {
 
     std::string extra = "  \"render_target\": \"render-board-loader\""
         ",\n  \"rtl_top\": \"board_loader_render_tops\""
-        ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
+        ",\n" + render::render_input_json_fields(args, inputs.control_tick_samples) +
         ",\n" + render::memory_profile_json_field(args) +
         ",\n  \"loader_cycles\": " + std::to_string(board.loader_cycles()) +
         ",\n  \"sd_image_bytes\": " + std::to_string(sd_image.size()) +
@@ -110,21 +100,21 @@ int main(int argc, char** argv) {
         ",\n" + render::diagnostics_json_fields(diagnostics) +
         ",\n  \"wav_path\": " + render::json_string(wav_path);
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,
-                          args.sample_rate, produced, int(events.size()), extra);
+                          args.sample_rate, produced, int(inputs.events.size()), extra);
 
     if (render::interrupt_requested()) {
       std::cout << "INTERRUPTED: board loader render wrote " << produced
-                << " of " << sample_count << " stereo samples to " << wav_path
+                << " of " << inputs.sample_count << " stereo samples to " << wav_path
                 << ", mismatches_seen=" << mismatches << "\n";
       return 130;
     }
 
     std::cout << "PASS: board loader render loaded " << sf2_bytes.size()
-              << " SF2 bytes from raw SD image, matched " << sample_count
+              << " SF2 bytes from raw SD image, matched " << inputs.sample_count
               << " RTL/reference stereo samples, wav=" << wav_path << "\n";
     std::cout << "loader_cycles=" << board.loader_cycles()
               << " regions=" << regions.size()
-              << " events=" << events.size()
+              << " events=" << inputs.events.size()
               << " nonzero_output_words=" << board.nonzero_output_words()
               << " memory_responses=" << board.memory_responses() << "\n";
     return 0;

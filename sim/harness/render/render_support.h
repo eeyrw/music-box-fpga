@@ -11,17 +11,36 @@
 
 namespace render {
 
+struct RenderPreparationTiming {
+  double sf2_load_ms = 0.0;
+  double event_parse_ms = 0.0;
+  double region_prepare_ms = 0.0;
+};
+
+struct RenderInputs {
+  int sample_count = 0;
+  int control_tick_samples = 1;
+  Sf2Data sf2;
+  std::vector<NoteEvent> events;
+};
+
 Args parse_args(int argc, char** argv);
-int envelope_tick_samples(const Args& args);
+int control_tick_samples(const Args& args);
+RenderInputs load_render_inputs(const Args& args, RenderPreparationTiming* timing = nullptr);
+std::vector<int16_t> take_sf2_wave_memory(RenderInputs& inputs);
+void prepare_render_regions(const Args& args, RenderInputs& inputs,
+                            std::vector<int16_t>& wave_memory,
+                            std::vector<Region>& regions,
+                            RenderPreparationTiming* timing = nullptr);
 std::string json_string(const std::string& value);
-std::string render_input_json_fields(const Args& args, int adsr_tick_samples);
+std::string render_input_json_fields(const Args& args, int control_tick_samples);
 std::string memory_profile_json_field(const Args& args);
 void write_summary(const std::string& path, const std::vector<Region>& regions,
                    int sample_rate, int samples, int events,
                    const std::string& extra_fields = "");
 std::string diagnostics_json_fields(const RenderDiagnostics& diagnostics);
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
-                                int adsr_tick_samples, std::vector<NoteEvent>& events,
+                                int control_tick_samples, std::vector<NoteEvent>& events,
                                 std::vector<Region>& regions,
                                 std::vector<int16_t>& wave_memory);
 
@@ -31,7 +50,7 @@ class McuModel {
            RenderDiagnostics* diagnostics = nullptr);
 
   void handle_event(const NoteEvent& event);
-  void envelope_tick();
+  void control_tick();
   void set_current_sample(uint32_t sample) { current_sample_ = sample; }
 
  private:
@@ -69,8 +88,6 @@ class McuModel {
   void release_deferred_pedal_voices(int channel);
   void apply_data_entry_msb(int channel, int value);
   void reset_controllers(int channel);
-  void prime_runtime_envelope_level(int voice, int level);
-  void record_runtime_envelope_update(int voice, int level);
   void record_runtime_gain_update(int voice, int gain_l, int gain_r);
   void record_runtime_phase_update(int voice, uint32_t phase_inc);
   void record_runtime_filter_update(int voice, const FilterConfig& filter);
@@ -92,8 +109,6 @@ class McuModel {
   int sample_rate_ = 48000;
   std::array<ChannelState, 16> channels_{};
   std::array<VoiceState, kNumVoices> voices_{};
-  std::array<bool, kNumVoices> runtime_envelope_valid_{};
-  std::array<int, kNumVoices> last_runtime_envelope_level_{};
   std::array<bool, kNumVoices> runtime_gain_valid_{};
   std::array<int, kNumVoices> last_runtime_gain_l_{};
   std::array<int, kNumVoices> last_runtime_gain_r_{};
@@ -103,8 +118,22 @@ class McuModel {
   std::array<FilterConfig, kNumVoices> last_runtime_filter_{};
   RenderDiagnostics* diagnostics_ = nullptr;
   int alloc_stamp_ = 0;
-  uint64_t envelope_tick_index_ = 0;
+  uint64_t control_tick_index_ = 0;
   uint32_t current_sample_ = 0;
+};
+
+class RenderTimeline {
+ public:
+  RenderTimeline(const std::vector<NoteEvent>& events, int control_tick_samples,
+                 McuModel& mcu);
+  void advance_to(int sample);
+
+ private:
+  const std::vector<NoteEvent>& events_;
+  McuModel& mcu_;
+  size_t event_index_ = 0;
+  int control_tick_samples_ = 1;
+  int next_control_sample_ = 0;
 };
 
 }  // namespace render

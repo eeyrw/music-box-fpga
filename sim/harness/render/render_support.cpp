@@ -7,10 +7,8 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <map>
-#include <sstream>
 #include <stdexcept>
 
 namespace render {
@@ -46,146 +44,6 @@ constexpr uint16_t kModSrcPitchWheelSensitivity = 0x0010;
 constexpr uint16_t kTransformLinear = 0;
 constexpr uint16_t kTransformAbsoluteValue = 2;
 
-std::string json_string_impl(const std::string& value) {
-  std::ostringstream out;
-  out << '"';
-  for (unsigned char c : value) {
-    switch (c) {
-      case '"': out << "\\\""; break;
-      case '\\': out << "\\\\"; break;
-      case '\b': out << "\\b"; break;
-      case '\f': out << "\\f"; break;
-      case '\n': out << "\\n"; break;
-      case '\r': out << "\\r"; break;
-      case '\t': out << "\\t"; break;
-      default:
-        if (c < 0x20) {
-          constexpr char hex[] = "0123456789abcdef";
-          out << "\\u00" << hex[c >> 4] << hex[c & 0x0f];
-        } else {
-          out << char(c);
-        }
-        break;
-    }
-  }
-  out << '"';
-  return out.str();
-}
-
-std::string hex16(uint16_t value) {
-  constexpr char hex[] = "0123456789abcdef";
-  std::string out = "0x0000";
-  for (int i = 0; i < 4; ++i) {
-    out[5 - i] = hex[value & 0x0f];
-    value >>= 4;
-  }
-  return out;
-}
-
-const char* generator_name(uint16_t dest) {
-  switch (dest) {
-    case 0: return "pitch";
-    case kGenModLfoToPitch: return "modLfoToPitch";
-    case kGenVibLfoToPitch: return "vibLfoToPitch";
-    case kGenModEnvToPitch: return "modEnvToPitch";
-    case kGenInitialFilterFc: return "initialFilterFc";
-    case kGenModLfoToFilterFc: return "modLfoToFilterFc";
-    case kGenModEnvToFilterFc: return "modEnvToFilterFc";
-    case kGenModLfoToVolume: return "modLfoToVolume";
-    case kGenChorusEffectsSend: return "chorusEffectsSend";
-    case kGenReverbEffectsSend: return "reverbEffectsSend";
-    case kGenPan: return "pan";
-    case kGenInitialAttenuation: return "initialAttenuation";
-    case kGenCoarseTune: return "coarseTune";
-    case kGenFineTune: return "fineTune";
-    default: return "unknown";
-  }
-}
-
-const char* modulator_source_name(uint16_t source) {
-  switch (source) {
-    case kModSrcNone: return "none";
-    case kModSrcNoteOnVelocity: return "noteOnVelocity";
-    case kModSrcNoteOnVelocityFilter: return "noteOnVelocityFilter";
-    case kModSrcChannelPressure: return "channelPressure";
-    case kModSrcCc1: return "cc1ModWheel";
-    case kModSrcCc7: return "cc7Volume";
-    case kModSrcCc10: return "cc10Pan";
-    case kModSrcCc11: return "cc11Expression";
-    case kModSrcCc91: return "cc91ReverbSend";
-    case kModSrcCc93: return "cc93ChorusSend";
-    case kModSrcPitchWheel: return "pitchWheel";
-    case kModSrcPitchWheelSensitivity: return "pitchWheelSensitivity";
-    case 0x000a: return "keyPressure";
-    default:
-      if ((source & 0x0080u) == 0u) {
-        int index = source & 0x007fu;
-        if (index == 2) return "noteOnVelocity";
-        if (index == 3) return "noteOnKey";
-      }
-      return "unknown";
-  }
-}
-
-const char* modulator_transform_name(uint16_t transform) {
-  switch (transform) {
-    case kTransformLinear: return "linear";
-    case kTransformAbsoluteValue: return "absoluteValue";
-    default: return "unknown";
-  }
-}
-
-void write_modulator_source_json(std::ostream& out, uint16_t source) {
-  out << "{\"raw\": " << source
-      << ", \"hex\": " << json_string_impl(hex16(source))
-      << ", \"name\": " << json_string_impl(modulator_source_name(source))
-      << ", \"cc\": " << ((source & 0x0080u) ? "true" : "false")
-      << ", \"index\": " << (source & 0x007fu)
-      << ", \"direction\": " << json_string_impl(((source >> 8) & 1u) ? "negative" : "positive")
-      << ", \"polarity\": " << json_string_impl(((source >> 9) & 1u) ? "bipolar" : "unipolar")
-      << ", \"type\": " << ((source >> 10) & 0x3fu)
-      << "}";
-}
-
-void write_modulation_json(std::ostream& out, const Region& r) {
-  out << "{\"generators\": {"
-      << "\"mod_lfo\": {\"delay_ticks\": " << r.mod_lfo_delay_ticks
-      << ", \"step\": " << r.mod_lfo_step
-      << ", \"to_pitch\": " << r.mod_lfo_to_pitch
-      << ", \"to_filter_fc\": " << r.mod_lfo_to_filter_fc
-      << ", \"to_volume\": " << r.mod_lfo_to_volume
-      << "}, \"vib_lfo\": {\"delay_ticks\": " << r.vib_lfo_delay_ticks
-      << ", \"step\": " << r.vib_lfo_step
-      << ", \"to_pitch\": " << r.vib_lfo_to_pitch
-      << "}, \"mod_env\": {\"delay_ticks\": " << r.mod_env_delay_ticks
-      << ", \"hold_ticks\": " << r.mod_env_hold_ticks
-      << ", \"sustain_level\": " << r.mod_env_sustain_level
-      << ", \"attack_ticks\": " << r.mod_env_attack_ticks
-      << ", \"decay_ticks\": " << r.mod_env_decay_ticks
-      << ", \"release_ticks\": " << r.mod_env_release_ticks
-      << ", \"attack_sub_tick\": " << (r.mod_env_attack_sub_tick ? "true" : "false")
-      << ", \"attack_step\": " << r.mod_env_attack_step
-      << ", \"decay_step\": " << r.mod_env_decay_step
-      << ", \"release_step\": " << r.mod_env_release_step
-      << ", \"to_pitch\": " << r.mod_env_to_pitch
-      << ", \"to_filter_fc\": " << r.mod_env_to_filter_fc
-      << "}}, \"modulators\": [";
-  for (size_t i = 0; i < r.modulators.size(); ++i) {
-    const auto& mod = r.modulators[i];
-    out << "{\"src\": ";
-    write_modulator_source_json(out, mod.src);
-    out << ", \"dest\": {\"raw\": " << mod.dest
-        << ", \"name\": " << json_string_impl(generator_name(mod.dest))
-        << "}, \"amount\": " << mod.amount
-        << ", \"amount_src\": ";
-    write_modulator_source_json(out, mod.amount_src);
-    out << ", \"transform\": {\"raw\": " << mod.transform
-        << ", \"name\": " << json_string_impl(modulator_transform_name(mod.transform))
-        << "}}";
-    if (i + 1 < r.modulators.size()) out << ", ";
-  }
-  out << "]}";
-}
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
 }
@@ -323,12 +181,6 @@ double shape_bipolar(double v, int type) {
   }
 }
 
-int attenuation_to_q15(double attenuation_cb) {
-  if (attenuation_cb <= 0.0) return kQ15Full;
-  int level = int(std::round(double(kQ15Full) * std::pow(10.0, -attenuation_cb / 200.0)));
-  return clamp_q15(level);
-}
-
 bool same_filter_config(const FilterConfig& a, const FilterConfig& b) {
   return a.enable == b.enable && a.b0 == b.b0 && a.b1 == b.b1 &&
          a.b2 == b.b2 && a.a1 == b.a1 && a.a2 == b.a2;
@@ -340,185 +192,8 @@ bool same_runtime_gain(int gain_l, int gain_r, int last_gain_l, int last_gain_r)
 
 }  // namespace
 
-std::string json_string(const std::string& value) {
-  return json_string_impl(value);
-}
-
-std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
-  std::ostringstream s;
-  s << "  \"sf2_path\": " << json_string_impl(args.sf2)
-    << ",\n  \"midi_path\": ";
-  if (args.midi.empty())
-    s << "null";
-  else
-    s << json_string_impl(args.midi);
-  s << ",\n  \"uses_default_melody\": " << (args.midi.empty() ? "true" : "false")
-    << ",\n  \"instrument_override\": ";
-  if (args.instrument.empty())
-    s << "null";
-  else
-    s << json_string_impl(args.instrument);
-  s << ",\n  \"key\": " << args.key
-    << ",\n  \"start_seconds\": " << args.start_seconds
-    << ",\n  \"requested_seconds\": " << args.seconds
-    << ",\n  \"envelope_mode\": "
-    << json_string_impl(args.sample_accurate_envelope ? "sample_accurate" : "control_tick")
-    << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
-    << ",\n  \"adsr_tick_ms_ignored\": "
-    << (args.sample_accurate_envelope ? "true" : "false")
-    << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
-    << ",\n  \"render_num_voices\": " << kNumVoices;
-  return s.str();
-}
-
-std::string memory_profile_json_field(const Args& args) {
-  return "  \"memory_profile\": " + json_string_impl(args.memory_profile);
-}
-
-int envelope_tick_samples(const Args& args) {
-  if (args.sample_accurate_envelope) return 1;
-  return std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
-}
-
-Args parse_args(int argc, char** argv) {
-  Args args;
-  for (int i = 1; i < argc; ++i) {
-    std::string a = argv[i];
-    auto need = [&](const char* name) -> std::string {
-      if (i + 1 >= argc) throw std::runtime_error(std::string("missing value for ") + name);
-      return argv[++i];
-    };
-    if (a == "--sf2") args.sf2 = need("--sf2");
-    else if (a == "--midi") args.midi = need("--midi");
-    else if (a == "--instrument") args.instrument = need("--instrument");
-    else if (a == "--key") args.key = std::stoi(need("--key"));
-    else if (a == "--start-seconds") args.start_seconds = std::stod(need("--start-seconds"));
-    else if (a == "--seconds") args.seconds = std::stod(need("--seconds"));
-    else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
-    else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
-    else if (a == "--sample-accurate-envelope") args.sample_accurate_envelope = true;
-    else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
-    else if (a == "--out-dir") args.out_dir = need("--out-dir");
-    else throw std::runtime_error("unknown argument: " + a);
-  }
-  return args;
-}
-
-void write_summary(const std::string& path, const std::vector<Region>& regions,
-                   int sample_rate, int samples, int events,
-                   const std::string& extra_fields) {
-  std::ofstream f(path);
-  if (!f) throw std::runtime_error("failed to open " + path);
-  int mono_regions = 0;
-  int linked_stereo_regions = 0;
-  int hard_pan_stereo_regions = 0;
-  for (const auto& r : regions) {
-    if (r.stereo_source == "linked_sample") ++linked_stereo_regions;
-    else if (r.stereo_source == "hard_pan_unlinked") ++hard_pan_stereo_regions;
-    else ++mono_regions;
-  }
-  f << "{\n  \"output_sample_rate\": " << sample_rate
-    << ",\n  \"output_samples\": " << samples
-    << ",\n  \"event_count\": " << events;
-  if (!extra_fields.empty()) f << ",\n" << extra_fields;
-  f << ",\n  \"sf2_loader\": {"
-    << "\"mono_regions\": " << mono_regions
-    << ", \"linked_stereo_regions\": " << linked_stereo_regions
-    << ", \"hard_pan_stereo_regions\": " << hard_pan_stereo_regions
-    << "}";
-  f << ",\n  \"regions\": [\n";
-  for (size_t i = 0; i < regions.size(); ++i) {
-    const auto& r = regions[i];
-    f << "    {\"key\": " << r.key
-      << ", \"program\": " << r.program
-      << ", \"bank\": " << r.bank
-      << ", \"preset\": " << json_string(r.preset)
-      << ", \"instrument\": " << json_string(r.instrument)
-      << ", \"stereo\": " << (r.stereo ? "true" : "false")
-      << ", \"stereo_source\": " << json_string(r.stereo_source)
-      << ", \"left\": {\"sample\": " << json_string(r.sample_left)
-      << ", \"base_addr\": " << r.base_addr
-      << ", \"length\": " << r.length
-      << ", \"loop_start\": " << r.loop_start
-      << ", \"loop_end\": " << r.loop_end
-      << "}, \"right\": {\"sample\": " << json_string(r.sample_right)
-      << ", \"base_addr\": " << r.base_addr_r
-      << ", \"length\": " << r.length_r
-      << ", \"loop_start\": " << r.loop_start_r
-      << ", \"loop_end\": " << r.loop_end_r
-      << "}, \"pitch\": {\"phase_inc\": " << r.phase_inc
-      << "}, \"gain\": {\"pan\": " << r.pan
-      << ", \"base_gain\": " << r.base_gain
-      << ", \"base_gain_l\": " << r.base_gain_l
-      << ", \"base_gain_r\": " << r.base_gain_r
-      << ", \"left\": " << r.gain_l
-      << ", \"right\": " << r.gain_r
-      << ", \"initial_envelope\": " << r.initial_envelope
-      << "}, \"volume_envelope\": {\"delay_ticks\": " << r.delay_ticks
-      << ", \"hold_ticks\": " << r.hold_ticks
-      << ", \"sustain_level\": " << r.sustain_level
-      << ", \"attack_ticks\": " << r.attack_ticks
-      << ", \"decay_ticks\": " << r.decay_ticks
-      << ", \"release_ticks\": " << r.release_ticks
-      << ", \"attack_sub_tick\": " << (r.attack_sub_tick ? "true" : "false")
-      << ", \"attack_step\": " << r.attack_step
-      << ", \"decay_step\": " << r.decay_step
-      << ", \"release_step\": " << r.release_step
-      << "}, \"filter\": {\"enable\": " << (r.filter_enable ? "true" : "false")
-      << ", \"b0\": " << r.filter_b0
-      << ", \"b1\": " << r.filter_b1
-      << ", \"b2\": " << r.filter_b2
-      << ", \"a1\": " << r.filter_a1
-      << ", \"a2\": " << r.filter_a2
-      << "}, \"loop_mode\": " << r.loop_mode
-      << ", \"modulation\": ";
-    write_modulation_json(f, r);
-    f << "}"
-      << (i + 1 < regions.size() ? "," : "") << "\n";
-  }
-  f << "  ]\n}\n";
-}
-
-std::string diagnostics_json_fields(const RenderDiagnostics& d) {
-  std::ostringstream s;
-  s << "  \"diagnostics_frames\": " << d.frames
-    << ",\n  \"diagnostics_filter_y_saturated_frames\": " << d.filter_y_saturated_frames
-    << ",\n  \"diagnostics_filter_y_saturations\": " << d.filter_y_saturations
-    << ",\n  \"diagnostics_filter_state_saturated_frames\": " << d.filter_state_saturated_frames
-    << ",\n  \"diagnostics_filter_state_saturations\": " << d.filter_state_saturations
-    << ",\n  \"diagnostics_contribution_saturated_frames\": " << d.contribution_saturated_frames
-    << ",\n  \"diagnostics_contribution_saturations\": " << d.contribution_saturations
-    << ",\n  \"diagnostics_mix_saturated_frames\": " << d.mix_saturated_frames
-    << ",\n  \"diagnostics_mix_saturations\": " << d.mix_saturations
-    << ",\n  \"diagnostics_max_abs_filter_y_input\": " << d.max_abs_filter_y_input
-    << ",\n  \"diagnostics_max_abs_filter_state_input\": " << d.max_abs_filter_state_input
-    << ",\n  \"diagnostics_max_abs_voice_contribution_input_l\": " << d.max_abs_voice_contribution_input_l
-    << ",\n  \"diagnostics_max_abs_voice_contribution_input_r\": " << d.max_abs_voice_contribution_input_r
-    << ",\n  \"diagnostics_max_abs_mix_input_l\": " << d.max_abs_mix_input_l
-    << ",\n  \"diagnostics_max_abs_mix_input_r\": " << d.max_abs_mix_input_r
-    << ",\n  \"diagnostics_voice_steals\": " << d.voice_steals
-    << ",\n  \"diagnostics_max_voice_steal_score\": " << d.max_voice_steal_score
-    << ",\n  \"diagnostics_max_voice_steal_level\": " << d.max_voice_steal_level
-    << ",\n  \"diagnostics_max_voice_steal_gain_l\": " << d.max_voice_steal_gain_l
-    << ",\n  \"diagnostics_max_voice_steal_gain_r\": " << d.max_voice_steal_gain_r
-    << ",\n  \"diagnostics_max_voice_steal_voice\": " << d.max_voice_steal_voice
-    << ",\n  \"diagnostics_max_voice_steal_tick\": " << d.max_voice_steal_tick
-    << ",\n  \"diagnostics_runtime_envelope_updates\": " << d.runtime_envelope_updates
-    << ",\n  \"diagnostics_runtime_gain_updates\": " << d.runtime_gain_updates
-    << ",\n  \"diagnostics_runtime_phase_updates\": " << d.runtime_phase_updates
-    << ",\n  \"diagnostics_runtime_filter_updates\": " << d.runtime_filter_updates
-    << ",\n  \"diagnostics_max_runtime_envelope_jump\": " << d.max_runtime_envelope_jump
-    << ",\n  \"diagnostics_max_runtime_envelope_jump_voice\": " << d.max_runtime_envelope_jump_voice
-    << ",\n  \"diagnostics_max_runtime_envelope_jump_tick\": " << d.max_runtime_envelope_jump_tick
-    << ",\n  \"diagnostics_max_runtime_gain_jump_l\": " << d.max_runtime_gain_jump_l
-    << ",\n  \"diagnostics_max_runtime_gain_jump_r\": " << d.max_runtime_gain_jump_r
-    << ",\n  \"diagnostics_max_runtime_phase_inc_jump\": " << d.max_runtime_phase_inc_jump
-    << ",\n  \"diagnostics_max_runtime_filter_coeff_jump\": " << d.max_runtime_filter_coeff_jump;
-  return s.str();
-}
-
 void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample_count,
-                                int adsr_tick_samples, std::vector<NoteEvent>& events,
+                                int control_tick_samples, std::vector<NoteEvent>& events,
                                 std::vector<Region>& regions,
                                 std::vector<int16_t>& wave_memory) {
   double render_seconds = double(sample_count) / double(args.sample_rate);
@@ -568,14 +243,14 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
       std::vector<Region> made;
       try {
         made = forced_inst >= 0
-          ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory)
-          : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, adsr_tick_samples, wave_memory);
+          ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, control_tick_samples, wave_memory)
+          : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, control_tick_samples, wave_memory);
       } catch (const std::runtime_error& ex) {
         if (!is_no_matching_zone_error(ex)) throw;
       }
       std::vector<int> indices;
       for (auto& r : made) {
-        r.envelope_tick_samples = adsr_tick_samples;
+        r.control_tick_samples = control_tick_samples;
         indices.push_back(int(regions.size()));
         regions.push_back(r);
       }
@@ -630,7 +305,7 @@ void McuModel::handle_event(const NoteEvent& event) {
   else if (event.type == NoteEvent::EVENT_NOTE) note_off(event.channel, event.note);
 }
 
-void McuModel::envelope_tick() {
+void McuModel::control_tick() {
   for (int v = 0; v < kNumVoices; ++v) {
     int next = voices_[v].level;
     if (voices_[v].state == ENV_DELAY) {
@@ -675,7 +350,7 @@ void McuModel::envelope_tick() {
       update_voice_modulation(v);
     }
   }
-  envelope_tick_index_ += 1;
+  control_tick_index_ += 1;
 }
 
 void McuModel::control_change(const NoteEvent& event) {
@@ -895,7 +570,7 @@ void McuModel::reset_controllers(int channel) {
 }
 
 void McuModel::record_runtime_gain_update(int voice, int gain_l, int gain_r) {
-  if (diagnostics_) {
+  if (diagnostics_ && diagnostics_->detailed_enabled) {
     diagnostics_->runtime_gain_updates += 1;
     if (runtime_gain_valid_[voice]) {
       auto diff = [](int a, int b) {
@@ -913,7 +588,7 @@ void McuModel::record_runtime_gain_update(int voice, int gain_l, int gain_r) {
 }
 
 void McuModel::record_runtime_phase_update(int voice, uint32_t phase_inc) {
-  if (diagnostics_) {
+  if (diagnostics_ && diagnostics_->detailed_enabled) {
     diagnostics_->runtime_phase_updates += 1;
     if (runtime_phase_valid_[voice]) {
       uint32_t jump = phase_inc >= last_runtime_phase_inc_[voice]
@@ -927,7 +602,7 @@ void McuModel::record_runtime_phase_update(int voice, uint32_t phase_inc) {
 }
 
 void McuModel::record_runtime_filter_update(int voice, const FilterConfig& filter) {
-  if (diagnostics_) {
+  if (diagnostics_ && diagnostics_->detailed_enabled) {
     diagnostics_->runtime_filter_updates += 1;
     if (runtime_filter_valid_[voice]) {
       const FilterConfig& last = last_runtime_filter_[voice];
@@ -1052,30 +727,6 @@ void McuModel::update_voice_modulation(int voice) {
   else state.vib_lfo_phase += r.vib_lfo_step;
 }
 
-void McuModel::prime_runtime_envelope_level(int voice, int level) {
-  runtime_envelope_valid_[voice] = true;
-  last_runtime_envelope_level_[voice] = clamp_q15(level);
-}
-
-void McuModel::record_runtime_envelope_update(int voice, int level) {
-  level = clamp_q15(level);
-  if (diagnostics_) {
-    diagnostics_->runtime_envelope_updates += 1;
-    if (runtime_envelope_valid_[voice]) {
-      uint32_t jump = level >= last_runtime_envelope_level_[voice]
-                          ? uint32_t(level - last_runtime_envelope_level_[voice])
-                          : uint32_t(last_runtime_envelope_level_[voice] - level);
-      if (jump > diagnostics_->max_runtime_envelope_jump) {
-        diagnostics_->max_runtime_envelope_jump = jump;
-        diagnostics_->max_runtime_envelope_jump_voice = voice;
-        diagnostics_->max_runtime_envelope_jump_tick = envelope_tick_index_;
-      }
-    }
-  }
-  runtime_envelope_valid_[voice] = true;
-  last_runtime_envelope_level_[voice] = level;
-}
-
 void McuModel::release_voice(int voice) {
   voices_[voice].state = ENV_RELEASE;
   voices_[voice].env_stage_tick = 0;
@@ -1126,7 +777,7 @@ void McuModel::note_on(const NoteEvent& event) {
       diagnostics_->max_voice_steal_gain_l = gain_l;
       diagnostics_->max_voice_steal_gain_r = gain_r;
       diagnostics_->max_voice_steal_voice = slot;
-      diagnostics_->max_voice_steal_tick = envelope_tick_index_;
+      diagnostics_->max_voice_steal_tick = control_tick_index_;
     }
   }
   alloc_stamp_ = (alloc_stamp_ + 1) & 0xff;
@@ -1143,7 +794,6 @@ void McuModel::note_on(const NoteEvent& event) {
     }
   }
   voices_[slot].note = event.note & 0x7f;
-  runtime_envelope_valid_[slot] = false;
   runtime_gain_valid_[slot] = false;
   runtime_phase_valid_[slot] = false;
   runtime_filter_valid_[slot] = false;
@@ -1151,7 +801,6 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].region = event.region;
   voices_[slot].state = r.delay_ticks > 0 ? ENV_DELAY : ENV_ATTACK;
   voices_[slot].level = 0;
-  r.initial_envelope = voices_[slot].level;
   voices_[slot].velocity = r.effective_velocity >= 0 ? r.effective_velocity : event.velocity;
   voices_[slot].stamp = alloc_stamp_;
   voices_[slot].ticks_remaining = r.delay_ticks;
@@ -1170,25 +819,16 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].mod_env_ticks_remaining = r.mod_env_delay_ticks;
   voices_[slot].mod_env_stage_tick = 0;
   voices_[slot].mod_env_release_start = 0;
-  double note_attenuation = modulator_sum(r, voices_[slot], channels_[event.channel & 0x0f],
-                                          kGenInitialAttenuation, true, false);
-  voices_[slot].target = attenuation_to_q15(note_attenuation);
-  voices_[slot].sustain = (voices_[slot].target * r.sustain_level) / kQ15Full;
-  if (r.delay_ticks == 0 && r.attack_sub_tick) {
-    voices_[slot].level = voices_[slot].target;
-    r.initial_envelope = voices_[slot].level;
-    voices_[slot].ticks_remaining = r.hold_ticks;
-    voices_[slot].env_stage_tick = 0;
-    voices_[slot].state = r.hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
-  }
+  // Note/velocity attenuation is already represented in runtime_gains(). Keep
+  // the policy envelope normalized so voice-steal scoring does not apply it twice.
+  voices_[slot].target = kQ15Full;
+  voices_[slot].sustain = r.sustain_level;
   if (r.mod_env_delay_ticks == 0 && r.mod_env_attack_sub_tick) {
     voices_[slot].mod_env_level = kQ15Full;
     voices_[slot].mod_env_ticks_remaining = r.mod_env_hold_ticks;
     voices_[slot].mod_env_stage_tick = 0;
     voices_[slot].mod_env_state = r.mod_env_hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
   }
-  prime_runtime_envelope_level(slot, r.initial_envelope);
-
   const ChannelState& channel = channels_[event.channel & 0x0f];
   uint32_t phase_inc = modulated_phase_inc(event.phase_inc,
       channel.generator_offsets[kGenFineTune] + channel.generator_offsets[kGenCoarseTune] +

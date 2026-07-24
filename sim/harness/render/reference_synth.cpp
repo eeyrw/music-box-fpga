@@ -250,12 +250,24 @@ void ReferenceSynth::advance_envelope(VoiceConfig& v, EnvelopeState& e) {
       }
       break;
     case EnvelopeState::kDecay: {
-      uint64_t next = uint64_t(e.attenuation_cb) + e.decay_step;
-      if (next >= e.sustain_cb) {
-        e.attenuation_cb = e.sustain_cb;
-        e.stage = EnvelopeState::kSustain;
+      if (e.attenuation_cb < e.sustain_cb) {
+        uint64_t next = uint64_t(e.attenuation_cb) + e.decay_step;
+        if (next >= e.sustain_cb) {
+          e.attenuation_cb = e.sustain_cb;
+          e.stage = EnvelopeState::kSustain;
+        } else {
+          e.attenuation_cb = uint32_t(next);
+        }
+      } else if (e.attenuation_cb > e.sustain_cb) {
+        uint32_t distance = e.attenuation_cb - e.sustain_cb;
+        if (distance <= e.decay_step) {
+          e.attenuation_cb = e.sustain_cb;
+          e.stage = EnvelopeState::kSustain;
+        } else {
+          e.attenuation_cb -= e.decay_step;
+        }
       } else {
-        e.attenuation_cb = uint32_t(next);
+        e.stage = EnvelopeState::kSustain;
       }
       break;
     }
@@ -279,6 +291,7 @@ void ReferenceSynth::advance_envelope(VoiceConfig& v, EnvelopeState& e) {
 std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
   int32_t accum_l = 0;
   int32_t accum_r = 0;
+  const bool detailed = diagnostics_ && diagnostics_->detailed_enabled;
   bool frame_filter_y_saturated = false;
   bool frame_filter_state_saturated = false;
   bool frame_contribution_saturated = false;
@@ -290,7 +303,17 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
   for (int voice = 0; voice < int(voices_.size()); ++voice) {
     VoiceConfig& v = voices_[voice];
+    int16_t envelope_before = detailed ? v.envelope : 0;
     if (v.enable) advance_envelope(v, envelopes_[voice]);
+    if (detailed && v.envelope != envelope_before) {
+      diagnostics_->audible_envelope_updates += 1;
+      uint32_t jump = uint32_t(std::abs(int(v.envelope) - int(envelope_before)));
+      if (jump > diagnostics_->max_audible_envelope_jump) {
+        diagnostics_->max_audible_envelope_jump = jump;
+        diagnostics_->max_audible_envelope_jump_voice = voice;
+        diagnostics_->max_audible_envelope_jump_frame = diagnostics_->frames;
+      }
+    }
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
     bool done_l = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
     bool done_r = !v.stereo || ((v.loop_mode == 0 || !loop_active) && ((v.phase_r >> kPhaseFracBits) >= v.length_r));
@@ -353,18 +376,24 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     uint64_t filter_l_state_input = 0;
     uint64_t filter_r_state_input = 0;
     int32_t filter_l = v.filter_enable ? biquad(interp_l, v.filter_z1_l, v.filter_z2_l, v,
-                                                &filter_l_y_saturated, &filter_l_state_saturated,
-                                                &filter_l_y_input, &filter_l_state_input) : interp_l;
+                                                detailed ? &filter_l_y_saturated : nullptr,
+                                                detailed ? &filter_l_state_saturated : nullptr,
+                                                detailed ? &filter_l_y_input : nullptr,
+                                                detailed ? &filter_l_state_input : nullptr) : interp_l;
     int32_t filter_r = v.filter_enable ? biquad(interp_r, v.filter_z1_r, v.filter_z2_r, v,
-                                                &filter_r_y_saturated, &filter_r_state_saturated,
-                                                &filter_r_y_input, &filter_r_state_input) : interp_r;
-    if (filter_l_y_saturated || filter_r_y_saturated) frame_filter_y_saturated = true;
-    if (filter_l_state_saturated || filter_r_state_saturated) frame_filter_state_saturated = true;
-    if (filter_l_y_saturated) filter_y_saturations += 1;
-    if (filter_r_y_saturated) filter_y_saturations += 1;
-    if (filter_l_state_saturated) filter_state_saturations += 1;
-    if (filter_r_state_saturated) filter_state_saturations += 1;
-    if (diagnostics_ && v.filter_enable) {
+                                                detailed ? &filter_r_y_saturated : nullptr,
+                                                detailed ? &filter_r_state_saturated : nullptr,
+                                                detailed ? &filter_r_y_input : nullptr,
+                                                detailed ? &filter_r_state_input : nullptr) : interp_r;
+    if (detailed) {
+      if (filter_l_y_saturated || filter_r_y_saturated) frame_filter_y_saturated = true;
+      if (filter_l_state_saturated || filter_r_state_saturated) frame_filter_state_saturated = true;
+      if (filter_l_y_saturated) filter_y_saturations += 1;
+      if (filter_r_y_saturated) filter_y_saturations += 1;
+      if (filter_l_state_saturated) filter_state_saturations += 1;
+      if (filter_r_state_saturated) filter_state_saturations += 1;
+    }
+    if (detailed && v.filter_enable) {
       update_max_abs(diagnostics_->max_abs_filter_y_input, filter_l_y_input);
       update_max_abs(diagnostics_->max_abs_filter_y_input, filter_r_y_input);
       update_max(diagnostics_->max_abs_filter_state_input, filter_l_state_input);
@@ -374,14 +403,16 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     bool contribution_r_saturated = false;
     int32_t contribution_l_input = 0;
     int32_t contribution_r_input = 0;
-    accum_l += apply_output_gain(filter_l, v.gain_l, v.envelope, &contribution_l_saturated,
-                                 &contribution_l_input);
-    accum_r += apply_output_gain(filter_r, v.gain_r, v.envelope, &contribution_r_saturated,
-                                 &contribution_r_input);
-    if (contribution_l_saturated || contribution_r_saturated) frame_contribution_saturated = true;
-    if (contribution_l_saturated) contribution_saturations += 1;
-    if (contribution_r_saturated) contribution_saturations += 1;
-    if (diagnostics_) {
+    accum_l += apply_output_gain(filter_l, v.gain_l, v.envelope,
+                                 detailed ? &contribution_l_saturated : nullptr,
+                                 detailed ? &contribution_l_input : nullptr);
+    accum_r += apply_output_gain(filter_r, v.gain_r, v.envelope,
+                                 detailed ? &contribution_r_saturated : nullptr,
+                                 detailed ? &contribution_r_input : nullptr);
+    if (detailed) {
+      if (contribution_l_saturated || contribution_r_saturated) frame_contribution_saturated = true;
+      if (contribution_l_saturated) contribution_saturations += 1;
+      if (contribution_r_saturated) contribution_saturations += 1;
       update_max_abs(diagnostics_->max_abs_voice_contribution_input_l, contribution_l_input);
       update_max_abs(diagnostics_->max_abs_voice_contribution_input_r, contribution_r_input);
     }
@@ -389,25 +420,30 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
 
   bool mix_l_saturated = false;
   bool mix_r_saturated = false;
-  if (diagnostics_) {
+  if (detailed) {
     update_max_abs(diagnostics_->max_abs_mix_input_l, accum_l);
     update_max_abs(diagnostics_->max_abs_mix_input_r, accum_r);
   }
-  auto out = std::make_pair(saturate(accum_l, &mix_l_saturated), saturate(accum_r, &mix_r_saturated));
-  if (mix_l_saturated || mix_r_saturated) frame_mix_saturated = true;
-  if (mix_l_saturated) mix_saturations += 1;
-  if (mix_r_saturated) mix_saturations += 1;
+  auto out = std::make_pair(saturate(accum_l, detailed ? &mix_l_saturated : nullptr),
+                            saturate(accum_r, detailed ? &mix_r_saturated : nullptr));
+  if (detailed) {
+    if (mix_l_saturated || mix_r_saturated) frame_mix_saturated = true;
+    if (mix_l_saturated) mix_saturations += 1;
+    if (mix_r_saturated) mix_saturations += 1;
+  }
 
   if (diagnostics_) {
     diagnostics_->frames += 1;
-    if (frame_filter_y_saturated) diagnostics_->filter_y_saturated_frames += 1;
-    diagnostics_->filter_y_saturations += filter_y_saturations;
-    if (frame_filter_state_saturated) diagnostics_->filter_state_saturated_frames += 1;
-    diagnostics_->filter_state_saturations += filter_state_saturations;
-    if (frame_contribution_saturated) diagnostics_->contribution_saturated_frames += 1;
-    diagnostics_->contribution_saturations += contribution_saturations;
-    if (frame_mix_saturated) diagnostics_->mix_saturated_frames += 1;
-    diagnostics_->mix_saturations += mix_saturations;
+    if (detailed) {
+      if (frame_filter_y_saturated) diagnostics_->filter_y_saturated_frames += 1;
+      diagnostics_->filter_y_saturations += filter_y_saturations;
+      if (frame_filter_state_saturated) diagnostics_->filter_state_saturated_frames += 1;
+      diagnostics_->filter_state_saturations += filter_state_saturations;
+      if (frame_contribution_saturated) diagnostics_->contribution_saturated_frames += 1;
+      diagnostics_->contribution_saturations += contribution_saturations;
+      if (frame_mix_saturated) diagnostics_->mix_saturated_frames += 1;
+      diagnostics_->mix_saturations += mix_saturations;
+    }
   }
   sample_counter_ += 1;
   return out;
@@ -485,16 +521,12 @@ int32_t ReferenceSynth::biquad(int16_t sample, int64_t& z1, int64_t& z2, const V
   int64_t y_q14 = int64_t(v.filter_b0) * int64_t(sample) + z1;
   int64_t y_shift = y_q14 >> 14;
   if (y_input) *y_input = y_shift;
-  bool local_y_saturated = false;
-  int32_t y = saturate_i20(y_shift, &local_y_saturated);
+  int32_t y = saturate_i20(y_shift, y_saturated);
   int64_t next_z1 = int64_t(v.filter_b1) * sample - int64_t(v.filter_a1) * y + z2;
   int64_t next_z2 = int64_t(v.filter_b2) * sample - int64_t(v.filter_a2) * y;
   if (state_input) *state_input = std::max(abs_magnitude(next_z1), abs_magnitude(next_z2));
-  bool local_state_saturated = false;
-  z1 = saturate_filter_state(next_z1, &local_state_saturated);
-  z2 = saturate_filter_state(next_z2, &local_state_saturated);
-  if (local_y_saturated && y_saturated) *y_saturated = true;
-  if (local_state_saturated && state_saturated) *state_saturated = true;
+  z1 = saturate_filter_state(next_z1, state_saturated);
+  z2 = saturate_filter_state(next_z2, state_saturated);
   return y;
 }
 

@@ -468,10 +468,15 @@ int main() {
     std::vector<int16_t> memory = sf2.file_words;
     render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
     int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * render::kPhaseFracScale));
-    int expected_gain = int(std::round(0x4000 * std::pow(10.0, -100.0 / 200.0)));
+    int expected_gain = int(std::round(0x4000 * std::pow(10.0, -40.0 / 200.0)));
     expect_equal(int(preset.phase_inc), expected_phase, "preset additive fineTune phase");
-    expect_equal(preset.gain_l, expected_gain, "preset additive pan left gain");
-    expect_equal(preset.gain_r, expected_gain, "preset additive pan right gain");
+    expect_equal(preset.gain_l, expected_gain, "EMU-scaled preset attenuation left gain");
+    expect_equal(preset.gain_r, expected_gain, "EMU-scaled preset attenuation right gain");
+    sf2.isng = "Non-EMU engine";
+    render::Region non_emu_preset =
+        render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
+    expect_equal(non_emu_preset.gain_l, expected_gain, "file attenuation does not depend on isng");
+    expect_equal(non_emu_preset.gain_r, expected_gain, "right file attenuation does not depend on isng");
     expect_equal(int(preset.length), 58, "sample address offsets length");
     expect_equal(int(preset.length_r), 58, "mono right length mirrors left length");
     expect_equal(int(preset.base_addr), int(sf2.smpl_word_offset + 2), "absolute smpl base address");
@@ -501,6 +506,8 @@ int main() {
     }
 
     render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);
+    expect_equal(int(inst.volume_envelope.attack_samples), 47,
+                 "default 0.9766 ms volume attack remains sample-accurate");
     expect_equal(inst.gain_l, 24576, "instrument pan left gain");
     expect_equal(inst.gain_r, 8192, "instrument pan right gain");
     render::Region clamped = render::make_region_for_instrument(sf2, 1, 60, 100, 48000, 480, memory);
@@ -583,7 +590,7 @@ int main() {
     if (!hp_linked.stereo) throw std::runtime_error("hard-panned linked pair was not marked stereo");
     expect_equal(hp_linked.sample_left == "HPLeft" ? 1 : 0, 1, "hard-panned linked left sample name");
     expect_equal(hp_linked.sample_right == "HPRight" ? 1 : 0, 1, "hard-panned linked right sample name");
-    int expected_right_base = int(std::round(double(0x4000) * std::pow(10.0, -100.0 / 200.0)));
+    int expected_right_base = int(std::round(double(0x4000) * std::pow(10.0, -40.0 / 200.0)));
     expect_equal(hp_linked.pan, 0, "hard-panned linked stereo neutralizes per-zone pan");
     expect_equal(hp_linked.base_gain_l, 0x4000, "linked stereo left base gain from left zone attenuation");
     expect_equal(hp_linked.base_gain_r, expected_right_base,
