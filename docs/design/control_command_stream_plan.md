@@ -70,6 +70,10 @@ discards the partial word.
 Register SPI transactions are used for status, diagnostics, asset loading, and
 board control only.
 
+The command-stream SCLK workload model, FIFO sizing rules, and separate
+register-versus-stream timing recommendations are documented in
+[`spi_command_stream_throughput.md`](spi_command_stream_throughput.md).
+
 ## Opcodes And Payloads
 
 The command opcodes are:

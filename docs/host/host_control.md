@@ -40,6 +40,17 @@ This interface is not used for voice configuration.
 - opcode `0xa5` followed by consecutive big-endian command words for voice
   control.
 
+The register and command-stream timing limits are intentionally separate. The
+current command-stream workload model selects `15 MHz` as the physical
+validation target and `7.5 MHz` as its fallback; register reads retain the
+conservative board bring-up sequence because MISO turnaround is more
+restrictive. See
+[`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md)
+for the derivation, FIFO-capacity rule, CH347 transaction limit, and required
+hardware stress test. Register transaction limits and wire throughput are
+analyzed separately in
+[`../design/spi_register_timing.md`](../design/spi_register_timing.md).
+
 Build the low-level tool with:
 
 ```bash

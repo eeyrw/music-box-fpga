@@ -7,6 +7,9 @@ external contracts live in:
 - `../memory_format.md`: PCM layout and memory handshakes.
 - `../register_map.md`: global registers, command ingress, and debug snapshot.
 - `control_command_stream_plan.md`: command words and voice lifecycle.
+- `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
+  sizing analysis.
+- `spi_register_timing.md`: SPI register read/write and burst timing analysis.
 - `../verification/simulation_design.md`: tests and render flows.
 
 ## Scope

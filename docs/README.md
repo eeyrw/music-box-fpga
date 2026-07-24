@@ -41,6 +41,12 @@ change.
   generated tables, error bounds, and synthesis history.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
   transactional command-stream and continuous-render contract.
+- [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):
+  command-stream workload model, renderer/control-plane throughput analysis,
+  SCLK target, FIFO limits, and board-qualification requirements.
+- [`design/spi_register_timing.md`](design/spi_register_timing.md): register
+  read/write timing paths, burst boundaries, wire throughput, separate SCLK
+  targets, and hardware-qualification requirements.
 
 ## Verification And Render Flows
 

@@ -198,6 +198,19 @@ fast master, so do not treat burst register frames as gapless high-speed streams
 After `1 MHz` smoke tests pass, try `2 MHz` and `5 MHz`; treat `10 MHz` as a
 board-measured target rather than a guaranteed setting.
 
+The detailed register-path analysis recommends separate profiles: validate
+writes through `15 MHz`, keep single reads at or below the `10 MHz` target, and
+use `5` to `7.5 MHz` for gapless burst reads until physical MISO timing is
+measured. See
+[`../design/spi_register_timing.md`](../design/spi_register_timing.md).
+
+That sequence applies to bidirectional register transactions. Dedicated
+opcode-`0xa5` command writes do not use MISO and have no per-word register-bus
+wait state. After register access is stable, qualify command-only streams
+separately at `7.5 MHz` and then the `15 MHz` target. The workload derivation
+and stress criteria are documented in
+[`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md).
+
 ```bash
 build/smart_artix_bringup --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80
