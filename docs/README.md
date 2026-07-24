@@ -39,6 +39,9 @@ change.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.
+- [`design/envelope_backlog.md`](design/envelope_backlog.md): SoundFont envelope
+  time ranges, Delay playback semantics, FluidSynth comparison, and open RTL
+  and host compatibility work.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
   transactional command-stream and continuous-render contract.
 - [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):
