@@ -1,7 +1,7 @@
 #pragma once
 
 #include "memory_profile.h"
-#include "register_control.h"
+#include "command_control.h"
 #include "wav_writer.h"
 
 #include <cstddef>
@@ -14,7 +14,7 @@ class Vboard_loader_render_tops;
 
 namespace render {
 
-class BoardLoaderRenderHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
+class BoardLoaderRenderHarness : public CommandWordSink {
  public:
   BoardLoaderRenderHarness(const std::vector<uint8_t>& sd_image, size_t sf2_size_bytes,
                            const std::string& wav_path, int sample_rate,
@@ -25,24 +25,16 @@ class BoardLoaderRenderHarness : public VoiceControlSink, public EnvelopeEventSi
   void reset_core();
   std::pair<int16_t, int16_t> request_sample(int produced);
 
-  void set_envelope(int voice, int level) override;
-  void set_gain(int voice, int gain_l, int gain_r) override;
-  void set_phase_inc(int voice, uint32_t phase_inc) override;
-  void set_filter(int voice, const FilterConfig& filter) override;
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) override;
-  void release_voice(int voice, const Region& r) override;
-  void push_envelope_event(const EnvelopeEvent& event) override;
+  void write_command_words(const std::vector<uint32_t>& words) override;
 
   const std::vector<uint8_t>& ddr_bytes() const { return ddr_bytes_; }
   uint64_t loader_cycles() const { return loader_cycles_; }
   int nonzero_output_words() const { return int(wav_.nonzero_words()); }
-  const RegisterWriteStats& register_write_stats() const { return register_write_stats_; }
   uint64_t memory_responses() const { return memory_responses_; }
 
  private:
   void reset_loader();
   void init_inputs();
-  void write_register(uint16_t address, uint32_t data) override;
   void tick();
   void drive_combinational_inputs();
   void observe_sequential_outputs();
@@ -54,12 +46,10 @@ class BoardLoaderRenderHarness : public VoiceControlSink, public EnvelopeEventSi
   uint16_t word_at(uint32_t word_addr) const;
 
   Vboard_loader_render_tops* top_ = nullptr;
-  RegisterVoiceControl voice_control_;
   const std::vector<uint8_t>& sd_image_;
   std::vector<uint8_t> ddr_bytes_;
   WavWriter wav_;
   MemoryProfile memory_profile_;
-  RegisterWriteStats register_write_stats_;
   int pending_rsp_cycles_ = 0;
   uint8_t pending_rsp_status_ = 0;
   uint64_t pending_rsp_data_ = 0;

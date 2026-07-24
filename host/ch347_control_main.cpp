@@ -1,10 +1,11 @@
 #include "host/ch347_transport.h"
 
-#include "sim/harness/control/register_control.h"
+#include "sim/harness/control/command_control.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <cctype>
+#include <array>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -25,19 +27,17 @@ struct RegisterRead {
   uint16_t address = 0;
 };
 
-struct SetEnvelope {
-  int voice = 0;
-  int level = 0;
-};
-
 struct ReleaseVoice {
   int voice = 0;
 };
 
-struct CommitVoice {
+struct SnapshotVoice {
   int voice = 0;
-  int enable = 1;
-  uint32_t phase_inc = 0x00010000;
+};
+
+struct StartVoice {
+  int voice = 0;
+  uint32_t phase_inc = 0x00000100;
   render::Region region;
 };
 
@@ -57,21 +57,22 @@ struct Action {
   enum Type {
     WriteRegisterAction,
     ReadRegisterAction,
-    SetEnvelopeAction,
     ReleaseAction,
-    CommitAction,
+    StopAction,
+    StartAction,
     DdrAccessWriteAction,
     DdrAccessReadAction,
     ReadLoadProgressAction,
+    SnapshotVoiceAction,
   } type = WriteRegisterAction;
 
   RegisterWrite write;
   RegisterRead read;
-  SetEnvelope envelope;
   ReleaseVoice release;
-  CommitVoice commit;
+  StartVoice start;
   DdrAccessWrite ddr_write;
   DdrAccessRead ddr_read;
+  SnapshotVoice snapshot;
 };
 
 struct Args {
@@ -95,7 +96,7 @@ constexpr uint32_t kDdrAccessStatusReady = render::regs::kDdrAccessStatusReadyMa
 constexpr uint32_t kDdrAccessStatusDone = render::regs::kDdrAccessStatusDoneMask;
 constexpr uint32_t kDdrAccessStatusError = render::regs::kDdrAccessStatusErrorMask;
 
-class DryRunTransport : public render::RegisterWriteSink {
+class DryRunTransport : public host::RegisterIo, public render::CommandWordSink {
  public:
   void write_register(uint16_t address, uint32_t data) override {
     std::cout << "write addr=0x" << std::hex << std::setw(4) << std::setfill('0') << address
@@ -131,12 +132,21 @@ class DryRunTransport : public render::RegisterWriteSink {
     std::cout << std::dec << std::setfill(' ') << "\n";
   }
 
-  void read_register(uint16_t address) {
+  uint32_t read_register(uint16_t address) override {
     std::cout << "read addr=0x" << std::hex << std::setw(4) << std::setfill('0') << address
               << std::dec << std::setfill(' ') << " frame=";
     uint8_t frame[7] = {0x00, uint8_t(address >> 8), uint8_t(address), 0x00, 0x00, 0x00, 0x00};
     for (uint8_t byte : frame) {
       std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << int(byte);
+    }
+    std::cout << std::dec << std::setfill(' ') << "\n";
+    return 0;
+  }
+
+  void write_command_words(const std::vector<uint32_t>& words) override {
+    std::cout << "command frame= a5";
+    for (uint32_t word : words) {
+      std::cout << ' ' << std::hex << std::setw(8) << std::setfill('0') << word;
     }
     std::cout << std::dec << std::setfill(' ') << "\n";
   }
@@ -187,8 +197,8 @@ void print_usage(const char* argv0) {
       << "  " << argv0 << " [transport options] --write ADDR DATA [--write ADDR DATA ...]\n"
       << "  " << argv0 << " [transport options] --read ADDR [--read ADDR ...]\n"
       << "  " << argv0 << " [transport options] --read-load-progress\n"
-      << "  " << argv0 << " [transport options] --set-envelope VOICE LEVEL\n"
-      << "  " << argv0 << " [transport options] --commit-voice VOICE [voice options]\n"
+      << "  " << argv0 << " [transport options] --start-voice VOICE [voice options]\n"
+      << "  " << argv0 << " [transport options] --snapshot-voice VOICE\n"
       << "\nTransport options:\n"
       << "  --lib PATH              CH347 shared library path, default third_party/ch347_linux/lib/x64/libch347.so\n"
       << "  --device PATH|N         CH347 device path, default /dev/ch34x_pis0; N maps to /dev/ch34x_pisN\n"
@@ -198,8 +208,7 @@ void print_usage(const char* argv0) {
       << "  --dry-run               Print register frames without opening CH347\n"
       << "  --ddr-byte-enable MASK  Byte-enable mask for later --ddr-write, default 0xffff\n"
       << "  --ddr-timeout N         Poll limit for later DDR register access commands, default 10000\n"
-      << "\nVoice options for --commit-voice:\n"
-      << "  --enable 0|1            Default 1\n"
+      << "\nVoice options for --start-voice:\n"
       << "  --stereo 0|1            Default 0\n"
       << "  --base ADDR             Left/mono wave-memory base word address\n"
       << "  --base-r ADDR           Right-channel wave-memory base word address\n"
@@ -210,12 +219,13 @@ void print_usage(const char* argv0) {
       << "  --loop-end FRAME        Default length\n"
       << "  --loop-end-r FRAME      Right-channel loop end, default length-r\n"
       << "  --loop-mode MODE        0 none, 1 continuous, 2 until release\n"
-      << "  --phase-inc Q16_16      Default 0x00010000\n"
+      << "  --phase-inc Q24_8       Default 0x00000100\n"
       << "  --gain-l Q1_15          Default 0x4000\n"
       << "  --gain-r Q1_15          Default 0x4000\n"
-      << "  --envelope Q1_15        Initial envelope copied on commit, default 0\n"
       << "\nOther operations:\n"
-      << "  --release VOICE         Set RELEASE_CONTROL.released\n"
+      << "  --release VOICE         Enter the command-stream release stage\n"
+      << "  --stop-voice VOICE      Stop a voice immediately\n"
+      << "  --snapshot-voice VOICE  Capture and print one voice's internal state\n"
       << "  --read-load-progress  Read SD asset bytes-loaded progress\n"
       << "  --ddr-write ADDR D0 D1 D2 D3\n"
       << "                          Write one 16-byte DDR beat through the platform register window\n"
@@ -224,27 +234,25 @@ void print_usage(const char* argv0) {
 
 Args parse_args(int argc, char** argv) {
   Args args;
-  CommitVoice current_commit;
-  bool have_commit = false;
-  bool commit_dirty = false;
-  current_commit.region.gain_l = 0x4000;
-  current_commit.region.gain_r = 0x4000;
+  StartVoice current_start;
+  bool have_start = false;
+  current_start.region.gain_l = 0x4000;
+  current_start.region.gain_r = 0x4000;
 
-  auto flush_commit = [&]() {
-    if (!have_commit) return;
-    if (current_commit.region.loop_end == 0) current_commit.region.loop_end = current_commit.region.length;
-    if (current_commit.region.length_r == 0) current_commit.region.length_r = current_commit.region.length;
-    if (current_commit.region.loop_start_r == 0) current_commit.region.loop_start_r = current_commit.region.loop_start;
-    if (current_commit.region.loop_end_r == 0) current_commit.region.loop_end_r = current_commit.region.length_r;
+  auto flush_start = [&]() {
+    if (!have_start) return;
+    if (current_start.region.loop_end == 0) current_start.region.loop_end = current_start.region.length;
+    if (current_start.region.length_r == 0) current_start.region.length_r = current_start.region.length;
+    if (current_start.region.loop_start_r == 0) current_start.region.loop_start_r = current_start.region.loop_start;
+    if (current_start.region.loop_end_r == 0) current_start.region.loop_end_r = current_start.region.length_r;
     Action action;
-    action.type = Action::CommitAction;
-    action.commit = current_commit;
+    action.type = Action::StartAction;
+    action.start = current_start;
     args.actions.push_back(action);
-    current_commit = CommitVoice{};
-    current_commit.region.gain_l = 0x4000;
-    current_commit.region.gain_r = 0x4000;
-    have_commit = false;
-    commit_dirty = false;
+    current_start = StartVoice{};
+    current_start.region.gain_l = 0x4000;
+    current_start.region.gain_r = 0x4000;
+    have_start = false;
   };
 
   for (int i = 1; i < argc; ++i) {
@@ -269,7 +277,7 @@ Args parse_args(int argc, char** argv) {
     } else if (a == "--ddr-timeout") {
       args.ddr_timeout_polls = parse_u32(need_arg(argc, argv, i, "--ddr-timeout"), "ddr-timeout");
     } else if (a == "--write") {
-      flush_commit();
+      flush_start();
       RegisterWrite write;
       write.address = parse_u16(need_arg(argc, argv, i, "--write address"), "address");
       write.data = parse_u32(need_arg(argc, argv, i, "--write data"), "data");
@@ -278,7 +286,7 @@ Args parse_args(int argc, char** argv) {
       action.write = write;
       args.actions.push_back(action);
     } else if (a == "--read") {
-      flush_commit();
+      flush_start();
       RegisterRead read;
       read.address = parse_u16(need_arg(argc, argv, i, "--read address"), "address");
       Action action;
@@ -286,12 +294,12 @@ Args parse_args(int argc, char** argv) {
       action.read = read;
       args.actions.push_back(action);
     } else if (a == "--read-load-progress") {
-      flush_commit();
+      flush_start();
       Action action;
       action.type = Action::ReadLoadProgressAction;
       args.actions.push_back(action);
     } else if (a == "--ddr-write") {
-      flush_commit();
+      flush_start();
       DdrAccessWrite write;
       write.byte_addr = parse_u32(need_arg(argc, argv, i, "--ddr-write address"), "ddr address");
       for (int word = 0; word < 4; ++word) {
@@ -306,7 +314,7 @@ Args parse_args(int argc, char** argv) {
       action.ddr_write = write;
       args.actions.push_back(action);
     } else if (a == "--ddr-read") {
-      flush_commit();
+      flush_start();
       DdrAccessRead read;
       read.byte_addr = parse_u32(need_arg(argc, argv, i, "--ddr-read address"), "ddr address");
       read.timeout_polls = args.ddr_timeout_polls;
@@ -314,78 +322,68 @@ Args parse_args(int argc, char** argv) {
       action.type = Action::DdrAccessReadAction;
       action.ddr_read = read;
       args.actions.push_back(action);
-    } else if (a == "--set-envelope") {
-      flush_commit();
-      SetEnvelope env;
-      env.voice = parse_int(need_arg(argc, argv, i, "--set-envelope voice"), "voice");
-      env.level = parse_int(need_arg(argc, argv, i, "--set-envelope level"), "level");
-      Action action;
-      action.type = Action::SetEnvelopeAction;
-      action.envelope = env;
-      args.actions.push_back(action);
-    } else if (a == "--release") {
-      flush_commit();
+    } else if (a == "--release" || a == "--stop-voice") {
+      flush_start();
       ReleaseVoice release;
-      release.voice = parse_int(need_arg(argc, argv, i, "--release voice"), "voice");
+      release.voice = parse_int(need_arg(argc, argv, i, a.c_str()), "voice");
       Action action;
-      action.type = Action::ReleaseAction;
+      action.type = a == "--release" ? Action::ReleaseAction : Action::StopAction;
       action.release = release;
       args.actions.push_back(action);
-    } else if (a == "--commit-voice") {
-      flush_commit();
-      have_commit = true;
-      commit_dirty = true;
-      current_commit.voice = parse_int(need_arg(argc, argv, i, "--commit-voice"), "voice");
-    } else if (a == "--enable") {
-      have_commit = true;
-      current_commit.enable = parse_int(need_arg(argc, argv, i, "--enable"), "enable");
+    } else if (a == "--snapshot-voice") {
+      flush_start();
+      Action action;
+      action.type = Action::SnapshotVoiceAction;
+      action.snapshot.voice = parse_int(need_arg(argc, argv, i, "--snapshot-voice"), "voice");
+      args.actions.push_back(action);
+    } else if (a == "--start-voice") {
+      flush_start();
+      have_start = true;
+      current_start.voice = parse_int(need_arg(argc, argv, i, "--start-voice"), "voice");
     } else if (a == "--stereo") {
-      have_commit = true;
-      current_commit.region.stereo = parse_int(need_arg(argc, argv, i, "--stereo"), "stereo") != 0;
+      have_start = true;
+      current_start.region.stereo = parse_int(need_arg(argc, argv, i, "--stereo"), "stereo") != 0;
     } else if (a == "--base") {
-      have_commit = true;
-      current_commit.region.base_addr = parse_u32(need_arg(argc, argv, i, "--base"), "base");
+      have_start = true;
+      current_start.region.base_addr = parse_u32(need_arg(argc, argv, i, "--base"), "base");
     } else if (a == "--base-r") {
-      have_commit = true;
-      current_commit.region.base_addr_r = parse_u32(need_arg(argc, argv, i, "--base-r"), "base-r");
+      have_start = true;
+      current_start.region.base_addr_r = parse_u32(need_arg(argc, argv, i, "--base-r"), "base-r");
     } else if (a == "--length") {
-      have_commit = true;
-      current_commit.region.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");
+      have_start = true;
+      current_start.region.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");
     } else if (a == "--length-r") {
-      have_commit = true;
-      current_commit.region.length_r = parse_u32(need_arg(argc, argv, i, "--length-r"), "length-r");
+      have_start = true;
+      current_start.region.length_r = parse_u32(need_arg(argc, argv, i, "--length-r"), "length-r");
     } else if (a == "--loop-start") {
-      have_commit = true;
-      current_commit.region.loop_start = parse_u32(need_arg(argc, argv, i, "--loop-start"), "loop-start");
+      have_start = true;
+      current_start.region.loop_start = parse_u32(need_arg(argc, argv, i, "--loop-start"), "loop-start");
     } else if (a == "--loop-start-r") {
-      have_commit = true;
-      current_commit.region.loop_start_r = parse_u32(need_arg(argc, argv, i, "--loop-start-r"), "loop-start-r");
+      have_start = true;
+      current_start.region.loop_start_r = parse_u32(need_arg(argc, argv, i, "--loop-start-r"), "loop-start-r");
     } else if (a == "--loop-end") {
-      have_commit = true;
-      current_commit.region.loop_end = parse_u32(need_arg(argc, argv, i, "--loop-end"), "loop-end");
+      have_start = true;
+      current_start.region.loop_end = parse_u32(need_arg(argc, argv, i, "--loop-end"), "loop-end");
     } else if (a == "--loop-end-r") {
-      have_commit = true;
-      current_commit.region.loop_end_r = parse_u32(need_arg(argc, argv, i, "--loop-end-r"), "loop-end-r");
+      have_start = true;
+      current_start.region.loop_end_r = parse_u32(need_arg(argc, argv, i, "--loop-end-r"), "loop-end-r");
     } else if (a == "--loop-mode") {
-      have_commit = true;
-      current_commit.region.loop_mode = parse_int(need_arg(argc, argv, i, "--loop-mode"), "loop-mode");
+      have_start = true;
+      current_start.region.loop_mode = parse_int(need_arg(argc, argv, i, "--loop-mode"), "loop-mode");
     } else if (a == "--phase-inc") {
-      have_commit = true;
-      current_commit.phase_inc = parse_u32(need_arg(argc, argv, i, "--phase-inc"), "phase-inc");
+      have_start = true;
+      current_start.phase_inc = parse_u32(need_arg(argc, argv, i, "--phase-inc"), "phase-inc");
     } else if (a == "--gain-l") {
-      have_commit = true;
-      current_commit.region.gain_l = parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
+      have_start = true;
+      current_start.region.gain_l = parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
     } else if (a == "--gain-r") {
-      have_commit = true;
-      current_commit.region.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
-    } else if (a == "--envelope") {
-      have_commit = true;
-      current_commit.region.initial_envelope = parse_int(need_arg(argc, argv, i, "--envelope"), "envelope");
+      have_start = true;
+      current_start.region.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
     } else {
       throw std::runtime_error("unknown argument: " + a);
     }
   }
-  if (commit_dirty || have_commit) flush_commit();
+  if (have_start) flush_start();
   return args;
 }
 
@@ -397,7 +395,7 @@ void validate_ddr_addr(uint32_t byte_addr) {
   if ((byte_addr & 0xfu) != 0) throw std::runtime_error("DDR register access address must be 16-byte aligned");
 }
 
-void write_access_register(render::RegisterWriteSink& sink, uint16_t address, uint32_t data) {
+void write_access_register(host::RegisterIo& sink, uint16_t address, uint32_t data) {
   sink.write_register(address, data);
 }
 
@@ -452,7 +450,7 @@ void execute_load_progress(host::Ch347RegisterTransport* transport, DryRunTransp
             << std::setfill(' ') << ")\n";
 }
 
-void execute_ddr_write(render::RegisterWriteSink& sink, host::Ch347RegisterTransport* transport,
+void execute_ddr_write(host::RegisterIo& sink, host::Ch347RegisterTransport* transport,
                        DryRunTransport& dry_run, bool dry_run_mode, const DdrAccessWrite& write) {
   validate_ddr_addr(write.byte_addr);
   if (write.byte_enable == 0) throw std::runtime_error("DDR register access write byte-enable mask must be nonzero");
@@ -477,7 +475,7 @@ void execute_ddr_write(render::RegisterWriteSink& sink, host::Ch347RegisterTrans
             << " status=0x" << std::setw(8) << status << std::dec << std::setfill(' ') << "\n";
 }
 
-void execute_ddr_read(render::RegisterWriteSink& sink, host::Ch347RegisterTransport* transport,
+void execute_ddr_read(host::RegisterIo& sink, host::Ch347RegisterTransport* transport,
                       DryRunTransport& dry_run, bool dry_run_mode, const DdrAccessRead& read) {
   validate_ddr_addr(read.byte_addr);
   if (dry_run_mode) {
@@ -502,6 +500,55 @@ void execute_ddr_read(render::RegisterWriteSink& sink, host::Ch347RegisterTransp
             << " status=0x" << std::setw(8) << status << std::dec << std::setfill(' ') << "\n";
 }
 
+void execute_voice_snapshot(host::RegisterIo& registers, int voice, bool dry_run) {
+  validate_voice(voice);
+  registers.write_register(render::regs::kDebugVoiceIndex, uint32_t(voice));
+  registers.write_register(render::regs::kDebugVoiceCapture, 1);
+
+  uint32_t status = registers.read_register(render::regs::kDebugVoiceStatus);
+  if (!dry_run) {
+    for (int poll = 0; (status & 1u) != 0 && poll < 10000; ++poll)
+      status = registers.read_register(render::regs::kDebugVoiceStatus);
+    if ((status & 1u) != 0) throw std::runtime_error("voice snapshot timed out");
+    if ((status & 2u) == 0) throw std::runtime_error("voice snapshot is not valid");
+  }
+
+  std::cout << "voice-snapshot voice=" << voice << " status=0x" << std::hex
+            << std::setw(8) << std::setfill('0') << status << "\n";
+  constexpr std::array<std::pair<const char*, uint16_t>, 24> fields{{
+      {"base_l", render::regs::kDebugVoiceBaseL},
+      {"base_r", render::regs::kDebugVoiceBaseR},
+      {"length_l", render::regs::kDebugVoiceLengthL},
+      {"length_r", render::regs::kDebugVoiceLengthR},
+      {"loop_start_l", render::regs::kDebugVoiceLoopStartL},
+      {"loop_start_r", render::regs::kDebugVoiceLoopStartR},
+      {"loop_end_l", render::regs::kDebugVoiceLoopEndL},
+      {"loop_end_r", render::regs::kDebugVoiceLoopEndR},
+      {"phase_init", render::regs::kDebugVoicePhaseInit},
+      {"phase_inc", render::regs::kDebugVoicePhaseInc},
+      {"gain", render::regs::kDebugVoiceGain},
+      {"envelope", render::regs::kDebugVoiceEnvelope},
+      {"filter_control", render::regs::kDebugVoiceFilterControl},
+      {"filter_b0_b1", render::regs::kDebugVoiceFilterB0B1},
+      {"filter_b2_a1", render::regs::kDebugVoiceFilterB2A1},
+      {"env_delay", render::regs::kDebugEnvDelay},
+      {"env_attack_step", render::regs::kDebugEnvAttackStep},
+      {"env_hold", render::regs::kDebugEnvHold},
+      {"env_decay_step", render::regs::kDebugEnvDecayStep},
+      {"env_sustain", render::regs::kDebugEnvSustain},
+      {"env_release_step", render::regs::kDebugEnvReleaseStep},
+      {"env_elapsed", render::regs::kDebugEnvElapsed},
+      {"env_attack_level", render::regs::kDebugEnvAttackLevel},
+      {"env_attenuation", render::regs::kDebugEnvAttenuation},
+  }};
+  for (const auto& field : fields) {
+    uint32_t value = registers.read_register(field.second);
+    std::cout << "  " << std::left << std::setw(20) << std::setfill(' ') << field.first
+              << " 0x" << std::right << std::setw(8) << std::setfill('0') << value << "\n";
+  }
+  std::cout << std::dec << std::setfill(' ');
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -519,13 +566,15 @@ int main(int argc, char** argv) {
     } else {
       transport.reset(new host::Ch347RegisterTransport(args.ch347));
     }
-    render::RegisterWriteSink& sink = args.dry_run ? static_cast<render::RegisterWriteSink&>(dry_run)
-                                                   : static_cast<render::RegisterWriteSink&>(*transport);
-    render::RegisterVoiceControl voice_control(sink);
+    host::RegisterIo& registers = args.dry_run ? static_cast<host::RegisterIo&>(dry_run)
+                                               : static_cast<host::RegisterIo&>(*transport);
+    render::CommandWordSink& commands = args.dry_run ? static_cast<render::CommandWordSink&>(dry_run)
+                                                      : static_cast<render::CommandWordSink&>(*transport);
+    render::CommandVoiceControl voice_control(commands);
 
     for (const Action& action : args.actions) {
       if (action.type == Action::WriteRegisterAction) {
-        sink.write_register(action.write.address, action.write.data);
+        registers.write_register(action.write.address, action.write.data);
       } else if (action.type == Action::ReadRegisterAction) {
         if (args.dry_run) {
           dry_run.read_register(action.read.address);
@@ -535,23 +584,24 @@ int main(int argc, char** argv) {
                     << action.read.address << " data=0x" << std::setw(8) << data
                     << std::dec << std::setfill(' ') << "\n";
         }
-      } else if (action.type == Action::SetEnvelopeAction) {
-        validate_voice(action.envelope.voice);
-        voice_control.set_envelope(action.envelope.voice, action.envelope.level);
-      } else if (action.type == Action::CommitAction) {
-        validate_voice(action.commit.voice);
-        voice_control.commit_voice(action.commit.voice, action.commit.enable,
-                                   action.commit.phase_inc, action.commit.region);
+      } else if (action.type == Action::StartAction) {
+        validate_voice(action.start.voice);
+        voice_control.start_voice(action.start.voice, action.start.phase_inc,
+                                  action.start.region);
       } else if (action.type == Action::ReleaseAction) {
         validate_voice(action.release.voice);
-        render::Region r;
-        voice_control.release_voice(action.release.voice, r);
+        voice_control.release_voice(action.release.voice, 960u << 20);
+      } else if (action.type == Action::StopAction) {
+        validate_voice(action.release.voice);
+        voice_control.stop_voice(action.release.voice);
       } else if (action.type == Action::DdrAccessWriteAction) {
-        execute_ddr_write(sink, transport.get(), dry_run, args.dry_run, action.ddr_write);
+        execute_ddr_write(registers, transport.get(), dry_run, args.dry_run, action.ddr_write);
       } else if (action.type == Action::DdrAccessReadAction) {
-        execute_ddr_read(sink, transport.get(), dry_run, args.dry_run, action.ddr_read);
+        execute_ddr_read(registers, transport.get(), dry_run, args.dry_run, action.ddr_read);
       } else if (action.type == Action::ReadLoadProgressAction) {
         execute_load_progress(transport.get(), dry_run, args.dry_run);
+      } else if (action.type == Action::SnapshotVoiceAction) {
+        execute_voice_snapshot(registers, action.snapshot.voice, args.dry_run);
       }
     }
   } catch (const std::exception& e) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "register_control.h"
+#include "command_control.h"
 
 #include <array>
 #include <cstdint>
@@ -11,19 +11,13 @@ class Vwavetable_render_core;
 
 namespace render {
 
-class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
+class CoreRtlHarness : public CommandWordSink {
  public:
   explicit CoreRtlHarness(const std::vector<int16_t>& memory);
   ~CoreRtlHarness();
 
   void reset();
-  void set_envelope(int voice, int level) override;
-  void set_gain(int voice, int gain_l, int gain_r) override;
-  void set_phase_inc(int voice, uint32_t phase_inc) override;
-  void set_filter(int voice, const FilterConfig& filter) override;
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
-  void release_voice(int voice, const Region& region) override;
-  void push_envelope_event(const EnvelopeEvent& event) override;
+  void write_command_words(const std::vector<uint32_t>& words) override;
   std::pair<int16_t, int16_t> request_sample(int produced);
   uint64_t total_cycles() const { return total_cycles_; }
   uint64_t total_memory_reads() const { return total_memory_reads_; }
@@ -39,7 +33,6 @@ class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, privat
   uint32_t max_filtered_voices() const { return max_filtered_voices_; }
   uint64_t stereo_voice_sum() const { return stereo_voice_sum_; }
   uint32_t max_stereo_voices() const { return max_stereo_voices_; }
-  const RegisterWriteStats& register_write_stats() const { return register_write_stats_; }
 
  private:
   struct VoiceMirror {
@@ -49,7 +42,6 @@ class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, privat
     int envelope_level = 0;
   };
 
-  void write_register(uint16_t address, uint32_t data) override;
   void tick();
   int16_t read_word(uint32_t address) const;
   uint32_t count_enabled_voices() const;
@@ -58,7 +50,6 @@ class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, privat
   uint32_t count_stereo_voices() const;
 
   Vwavetable_render_core* top_ = nullptr;
-  RegisterVoiceControl voice_control_;
   const std::vector<int16_t>& memory_;
   std::array<VoiceMirror, kNumVoices> voices_{};
   bool rsp_valid_ = false;
@@ -77,7 +68,6 @@ class CoreRtlHarness : public VoiceControlSink, public EnvelopeEventSink, privat
   uint32_t max_filtered_voices_ = 0;
   uint64_t stereo_voice_sum_ = 0;
   uint32_t max_stereo_voices_ = 0;
-  RegisterWriteStats register_write_stats_;
 };
 
 }  // namespace render

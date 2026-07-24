@@ -1,6 +1,6 @@
 #include "host/ch347_transport.h"
 
-#include "sim/harness/control/register_control.h"
+#include "sim/harness/control/command_control.h"
 
 #include <chrono>
 #include <cctype>
@@ -71,13 +71,12 @@ struct Args {
   uint32_t base_r = 0;
   uint32_t length = 0;
   uint32_t length_r = 0;
-  uint32_t phase_inc = 0x00010000;
+  uint32_t phase_inc = 0x00000100;
   int gain_l = 0x2000;
   int gain_r = 0x2000;
-  int initial_envelope = 0;
 };
 
-class DryRunTransport : public render::RegisterWriteSink {
+class DryRunTransport : public host::RegisterIo, public render::CommandWordSink {
  public:
   void write_register(uint16_t address, uint32_t data) override {
     std::cout << "dry-run write 0x" << std::hex << std::setw(4) << std::setfill('0')
@@ -96,10 +95,18 @@ class DryRunTransport : public render::RegisterWriteSink {
     }
   }
 
-  uint32_t read_register(uint16_t address) {
+  uint32_t read_register(uint16_t address) override {
     std::cout << "dry-run read  0x" << std::hex << std::setw(4) << std::setfill('0')
               << address << std::dec << std::setfill(' ') << "\n";
     return 0;
+  }
+
+  void write_command_words(const std::vector<uint32_t>& words) override {
+    std::cout << "dry-run command";
+    for (uint32_t word : words) {
+      std::cout << " 0x" << std::hex << std::setw(8) << std::setfill('0') << word;
+    }
+    std::cout << std::dec << std::setfill(' ') << "\n";
   }
 };
 
@@ -163,10 +170,10 @@ void print_usage(const char* argv0) {
       << "  --base-r ADDR           Right wave-memory word address, default --base\n"
       << "  --length FRAMES         Sample-frame length required by --voice-smoke\n"
       << "  --length-r FRAMES       Right-channel length, default --length\n"
-      << "  --phase-inc Q16_16      Playback increment, default 0x00010000\n"
+      << "  --phase-inc Q24_8       Playback increment, default 0x00000100\n"
       << "  --gain-l Q1_15          Default 0x2000\n"
       << "  --gain-r Q1_15          Default 0x2000\n"
-      << "  --envelope Q1_15        Initial envelope copied on commit, default 0\n";
+      ;
 }
 
 Args parse_args(int argc, char** argv) {
@@ -226,8 +233,6 @@ Args parse_args(int argc, char** argv) {
       args.gain_l = parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
     } else if (a == "--gain-r") {
       args.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
-    } else if (a == "--envelope") {
-      args.initial_envelope = parse_int(need_arg(argc, argv, i, "--envelope"), "envelope");
     } else {
       throw std::runtime_error("unknown argument: " + a);
     }
@@ -251,15 +256,17 @@ void print_reg(const char* name, uint16_t address, uint32_t value) {
             << " = 0x" << std::setw(8) << value << std::dec << std::setfill(' ') << "\n";
 }
 
-class BoardAccess : public render::RegisterWriteSink {
+class BoardAccess : public host::RegisterIo, public render::CommandWordSink {
  public:
   BoardAccess(host::Ch347RegisterTransport* hardware, DryRunTransport* dry_run)
       : hardware_(hardware), dry_run_(dry_run) {}
 
-  uint32_t read(uint16_t address) {
+  uint32_t read_register(uint16_t address) override {
     if (dry_run_) return dry_run_->read_register(address);
     return hardware_->read_register(address);
   }
+
+  uint32_t read(uint16_t address) { return read_register(address); }
 
   void write_register(uint16_t address, uint32_t data) override {
     if (dry_run_) {
@@ -274,6 +281,14 @@ class BoardAccess : public render::RegisterWriteSink {
       dry_run_->write_registers(start_address, data);
     } else {
       hardware_->write_registers(start_address, data);
+    }
+  }
+
+  void write_command_words(const std::vector<uint32_t>& words) override {
+    if (dry_run_) {
+      dry_run_->write_command_words(words);
+    } else {
+      hardware_->write_command_words(words);
     }
   }
 
@@ -477,13 +492,12 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
   region.loop_mode = 0;
   region.gain_l = args.gain_l;
   region.gain_r = args.gain_r;
-  region.initial_envelope = args.initial_envelope;
   region.filter_enable = false;
-  region.filter_b0 = 0x10000000;
+  region.filter_b0 = 0x4000;
 
-  render::RegisterVoiceControl voice_control(board);
-  voice_control.commit_voice(args.voice, 1, args.phase_inc, region);
-  print_result("PASS", "Voice configuration writes completed");
+  render::CommandVoiceControl voice_control(board);
+  voice_control.start_voice(args.voice, args.phase_inc, region);
+  print_result("PASS", "Voice command stream completed");
 
   if (!args.dry_run) std::this_thread::sleep_for(std::chrono::milliseconds(250));
   uint32_t events = board.read(kCommonEventFlags);

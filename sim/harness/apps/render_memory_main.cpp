@@ -1,3 +1,4 @@
+#include "command_control.h"
 #include "midi_parser.h"
 #include "render_interrupt.h"
 #include "render_support.h"
@@ -58,15 +59,6 @@ void write_memory_stats(const std::string& path, const MemoryStats& stats,
     << "  \"dsp_ready_no_context_cycles\": " << stats.dsp_ready_no_context_cycles << ",\n"
     << "  \"avg_response_latency_cycles\": " << avg_latency << ",\n"
     << "  \"max_response_latency_cycles\": " << stats.response_latency_max << ",\n"
-    << "  \"register_writes_total\": " << stats.register_writes.total << ",\n"
-    << "  \"register_writes_envelope\": " << stats.register_writes.envelope << ",\n"
-    << "  \"register_writes_gain_runtime\": " << stats.register_writes.gain_runtime << ",\n"
-    << "  \"register_writes_phase_inc_runtime\": " << stats.register_writes.phase_inc_runtime << ",\n"
-    << "  \"register_writes_filter\": " << stats.register_writes.filter << ",\n"
-    << "  \"register_writes_commit\": " << stats.register_writes.commit << ",\n"
-    << "  \"register_writes_release\": " << stats.register_writes.release << ",\n"
-    << "  \"register_writes_envelope_events\": " << stats.register_writes.envelope_events << ",\n"
-    << "  \"register_writes_config\": " << stats.register_writes.config << ",\n"
     << diagnostics_json_fields(diagnostics) << "\n"
     << "}\n";
 }
@@ -101,11 +93,8 @@ int main(int argc, char** argv) {
     render::RtlHarness rtl(wave_memory, wav_path, args.sample_rate, memory_profile);
     rtl.reset();
     render::RenderDiagnostics diagnostics;
-    render::McuModel mcu(rtl, regions, &diagnostics);
-    if (args.rtl_envelope_events) {
-      mcu.set_rtl_envelope_events(true);
-      mcu.set_envelope_event_sink(&rtl);
-    }
+    render::CommandVoiceControl control(rtl);
+    render::McuModel mcu(control, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -137,9 +126,7 @@ int main(int argc, char** argv) {
 
     std::cout << "PASS: C++ harness rendered " << sample_count << " MIDI-driven stereo samples to " << wav_path << "\n";
     std::cout << "regions=" << regions.size() << " wave_words=" << wave_memory.size() << " events=" << events.size()
-              << " nonzero_output_words=" << rtl.nonzero_output_words()
-              << " register_writes=" << stats.register_writes.total
-              << " filter_writes=" << stats.register_writes.filter << "\n";
+              << " nonzero_output_words=" << rtl.nonzero_output_words() << "\n";
     render::write_memory_stats(args.out_dir + "/memory_stats.json", stats, diagnostics);
     rtl.print_memory_stats();
     return 0;

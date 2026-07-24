@@ -7,34 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x00060000u;
-constexpr uint16_t kVoiceBase = 0x0100u;
-constexpr uint16_t kVoiceStride = 0x0080u;
-constexpr int kVoiceStrideShift = 7;
-constexpr int kMaxAddressableVoices = 286;
-
-constexpr uint16_t kOffBaseAddr = 0x0000u;
-constexpr uint16_t kOffBaseAddrR = 0x0004u;
-constexpr uint16_t kOffLength = 0x0008u;
-constexpr uint16_t kOffLengthR = 0x000cu;
-constexpr uint16_t kOffLoopStart = 0x0010u;
-constexpr uint16_t kOffLoopStartR = 0x0014u;
-constexpr uint16_t kOffLoopEnd = 0x0018u;
-constexpr uint16_t kOffLoopEndR = 0x001cu;
-constexpr uint16_t kOffPhaseInit = 0x0020u;
-constexpr uint16_t kOffPhaseInc = 0x0024u;
-constexpr uint16_t kOffGain = 0x0028u;
-constexpr uint16_t kOffEnvelope = 0x002cu;
-constexpr uint16_t kOffFilterControl = 0x0030u;
-constexpr uint16_t kOffFilterB0B1 = 0x0034u;
-constexpr uint16_t kOffFilterB2A1 = 0x0038u;
-constexpr uint16_t kOffFilterA2 = 0x003cu;
-constexpr uint16_t kOffVoiceControl = 0x0040u;
-constexpr uint16_t kOffPhaseIncRuntime = 0x0044u;
-constexpr uint16_t kOffGainRuntime = 0x0048u;
-constexpr uint16_t kOffEnvelopeRuntime = 0x004cu;
-constexpr uint16_t kOffReleaseControl = 0x0050u;
-constexpr uint16_t kOffStatus = 0x0054u;
+constexpr uint32_t kVersionValue = 0x00070000u;
 
 constexpr uint16_t kVersion = 0x9000u;
 constexpr uint16_t kSystemStatus = 0x9010u;
@@ -45,14 +18,39 @@ constexpr uint16_t kMemoryStatus = 0x9020u;
 constexpr uint16_t kUnderrunCount = 0x9024u;
 constexpr uint16_t kSampleDropCount = 0x9028u;
 constexpr uint16_t kRenderDeadlineMissCount = 0x902cu;
-constexpr uint16_t kEventTime = 0x9030u;
-constexpr uint16_t kEventFifoStatus = 0x9034u;
+constexpr uint16_t kCurrentSample = 0x9030u;
+constexpr uint16_t kCmdFifoStatus = 0x9034u;
 constexpr uint16_t kMemResponseCount = 0x9038u;
-constexpr uint16_t kEventFifoData0 = 0x9080u;
-constexpr uint16_t kEventFifoData1 = 0x9084u;
-constexpr uint16_t kEventFifoData2 = 0x9088u;
-constexpr uint16_t kEventFifoData3 = 0x908cu;
-constexpr uint16_t kEventFifoPush = 0x9090u;
+constexpr uint16_t kCmdFifoData = 0x903cu;
+constexpr uint16_t kCmdErrorStatus = 0x9094u;
+constexpr uint16_t kCmdActionStatus = 0x909cu;
+constexpr uint16_t kDebugVoiceIndex = 0x90a0u;
+constexpr uint16_t kDebugVoiceCapture = 0x90a4u;
+constexpr uint16_t kDebugVoiceStatus = 0x90a8u;
+constexpr uint16_t kDebugVoiceBaseL = 0x90acu;
+constexpr uint16_t kDebugVoiceBaseR = 0x90b0u;
+constexpr uint16_t kDebugVoiceLengthL = 0x90b4u;
+constexpr uint16_t kDebugVoiceLengthR = 0x90b8u;
+constexpr uint16_t kDebugVoiceLoopStartL = 0x90bcu;
+constexpr uint16_t kDebugVoiceLoopStartR = 0x90c0u;
+constexpr uint16_t kDebugVoiceLoopEndL = 0x90c4u;
+constexpr uint16_t kDebugVoiceLoopEndR = 0x90c8u;
+constexpr uint16_t kDebugVoicePhaseInit = 0x90ccu;
+constexpr uint16_t kDebugVoicePhaseInc = 0x90d0u;
+constexpr uint16_t kDebugVoiceGain = 0x90d4u;
+constexpr uint16_t kDebugVoiceEnvelope = 0x90d8u;
+constexpr uint16_t kDebugVoiceFilterControl = 0x90dcu;
+constexpr uint16_t kDebugVoiceFilterB0B1 = 0x90e0u;
+constexpr uint16_t kDebugVoiceFilterB2A1 = 0x90e4u;
+constexpr uint16_t kDebugEnvDelay = 0x90e8u;
+constexpr uint16_t kDebugEnvAttackStep = 0x90ecu;
+constexpr uint16_t kDebugEnvHold = 0x90f0u;
+constexpr uint16_t kDebugEnvDecayStep = 0x90f4u;
+constexpr uint16_t kDebugEnvSustain = 0x90f8u;
+constexpr uint16_t kDebugEnvReleaseStep = 0x90fcu;
+constexpr uint16_t kDebugEnvElapsed = 0x9100u;
+constexpr uint16_t kDebugEnvAttackLevel = 0x9104u;
+constexpr uint16_t kDebugEnvAttenuation = 0x9108u;
 constexpr uint16_t kPlatformStatus = 0x9040u;
 constexpr uint16_t kPlatformErrors = 0x9044u;
 constexpr uint16_t kPlatformBytesLoaded = 0x9048u;
@@ -68,14 +66,6 @@ constexpr uint16_t kDdrAccessData1 = 0x9074u;
 constexpr uint16_t kDdrAccessData2 = 0x9078u;
 constexpr uint16_t kDdrAccessData3 = 0x907cu;
 
-constexpr int kVoiceControlStereoBit = 0;
-constexpr int kVoiceControlLoopModeLsb = 1;
-constexpr int kVoiceControlLoopModeWidth = 2;
-constexpr uint32_t kVoiceControlEnableMask = 0x00000008u;
-constexpr uint32_t kVoiceControlApplyMask = 0x00000010u;
-constexpr uint32_t kVoiceControlMask = 0x0000000fu;
-constexpr uint32_t kFilterControlEnableMask = 0x00000001u;
-constexpr uint32_t kFilterA2ApplyMask = 0x00010000u;
 constexpr uint32_t kCommonEventFlagsUnderrunMask = 0x00000001u;
 constexpr uint32_t kCommonEventFlagsSampleDropMask = 0x00000002u;
 constexpr uint32_t kCommonEventFlagsRenderDeadlineMissMask = 0x00000004u;
@@ -96,9 +86,5 @@ constexpr uint32_t kDdrAccessStatusErrorMask = 0x00000010u;
 
 constexpr uint32_t kQ15Full = 0x00007fffu;
 constexpr uint32_t kFilterB0UnityQ214 = 0x00004000u;
-
-constexpr uint16_t voice_addr(int voice, uint16_t offset) {
-  return uint16_t(kVoiceBase + voice * kVoiceStride + offset);
-}
 
 }  // namespace render::regs

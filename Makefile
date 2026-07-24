@@ -27,7 +27,6 @@ SECONDS ?= 2
 SAMPLE_RATE ?= 48000
 ADSR_TICK_MS ?= 5
 SAMPLE_ACCURATE_ENVELOPE ?= 0
-RTL_ENVELOPE_EVENTS ?= 0
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -45,22 +44,20 @@ RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
 	rtl/pkg/synth_register_pkg.sv \
 	rtl/generated/synth_envelope_lut_pkg.sv \
-	rtl/control/voice_active_store.sv \
 	rtl/control/voice_bram_1r1w.sv \
-	rtl/control/voice_bram_1w2r.sv \
-	rtl/control/control_event_fifo.sv \
-	rtl/control/envelope_state_store.sv \
-	rtl/control/envelope_event_engine.sv \
-	rtl/control/voice_commit_engine.sv \
-	rtl/control/voice_descriptor_store.sv \
-	rtl/control/voice_runtime_store.sv \
-	rtl/control/voice_register_bank.sv \
+	rtl/control/control_word_fifo.sv \
+	rtl/control/control_action_fifo.sv \
+	rtl/control/control_action_parser.sv \
+	rtl/control/control_action_executor.sv \
+	rtl/control/transactional_control_plane.sv \
+	rtl/control/synth_control_plane.sv \
 	rtl/memory/wave_memory_subsystem.sv \
 	rtl/memory/voice_line_cache.sv \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/dsp/voice_dsp_pipeline.sv \
 	rtl/audio/output_sample_fifo.sv \
+	rtl/audio/render_credit_scheduler.sv \
 	rtl/voice/voice_phase_frame.sv \
 	rtl/voice/voice_endpoint_fetch.sv \
 	rtl/voice/multi_voice_pipeline.sv \
@@ -99,18 +96,27 @@ CACHED_RENDER_COUNTER_SIM_SOURCES := \
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
 
+I2S_OUTPUT_SIM_SOURCES := \
+	sim/tb/tb_wavetable_i2s_output.sv
+
+RENDER_SCHEDULER_SIM_SOURCES := \
+	sim/tb/tb_render_credit_scheduler.sv
+
 COMMON_STATUS_SIM_SOURCES := \
 	sim/tb/tb_wavetable_demo_common_status.sv
 
 VOICE_PHASE_SIM_SOURCES := \
 	sim/tb/tb_voice_phase_frame.sv
 
-ENV_EVENT_SIM_SOURCES := \
-	sim/tb/tb_envelope_event_engine.sv
+CONTROL_CMD_SIM_SOURCES := \
+	sim/tb/tb_control_cmd_parser.sv
+
+TRANSACTIONAL_CONTROL_SIM_SOURCES := \
+	sim/tb/tb_transactional_control_plane.sv
 
 HARNESS_RENDER_COMMON_SRCS := \
 	$(abspath sim/harness/render/render_support.cpp) \
-	$(abspath sim/harness/control/register_control.cpp) \
+	$(abspath sim/harness/control/command_control.cpp) \
 	$(abspath sim/harness/formats/midi_parser.cpp) \
 	$(abspath sim/harness/formats/sf2_loader.cpp)
 
@@ -202,15 +208,16 @@ test-cpp-unit:
 		-o $(BUILD_DIR)/midi_parser_test
 	$(BUILD_DIR)/midi_parser_test
 	$(CXX) $(CXX_STD_FLAGS) \
-		sim/harness/control/register_control.cpp sim/harness/control/register_control_test.cpp \
-		-o $(BUILD_DIR)/register_control_test
-	$(BUILD_DIR)/register_control_test
+		sim/harness/control/command_control.cpp sim/harness/control/command_control_test.cpp \
+		-o $(BUILD_DIR)/command_control_test
+	$(BUILD_DIR)/command_control_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
 	$(CXX) $(CXX_STD_FLAGS) \
-		sim/harness/render/render_support.cpp sim/harness/formats/sf2_loader.cpp \
+		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
+		sim/harness/formats/sf2_loader.cpp \
 		sim/harness/render/reference_synth.cpp \
 		sim/harness/formats/midi_parser.cpp sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
@@ -223,9 +230,13 @@ test-rtl-core:
 		$(RTL_SOURCES) $(VOICE_PHASE_SIM_SOURCES)
 	$(BUILD_DIR)/voice_phase_obj_dir/Vtb_voice_phase_frame
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/env_event_obj_dir --top-module tb_envelope_event_engine \
-		$(RTL_SOURCES) $(ENV_EVENT_SIM_SOURCES)
-	$(BUILD_DIR)/env_event_obj_dir/Vtb_envelope_event_engine
+		--Mdir $(BUILD_DIR)/control_cmd_obj_dir --top-module tb_control_cmd_parser \
+		$(RTL_SOURCES) $(CONTROL_CMD_SIM_SOURCES)
+	$(BUILD_DIR)/control_cmd_obj_dir/Vtb_control_cmd_parser
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/transactional_control_obj_dir --top-module tb_transactional_control_plane \
+		$(RTL_SOURCES) $(TRANSACTIONAL_CONTROL_SIM_SOURCES)
+	$(BUILD_DIR)/transactional_control_obj_dir/Vtb_transactional_control_plane
 	# Build and run the self-checking synthetic-data regression.
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
@@ -246,6 +257,16 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_scheduler_obj_dir --top-module tb_render_credit_scheduler \
+		rtl/audio/render_credit_scheduler.sv $(RENDER_SCHEDULER_SIM_SOURCES)
+	$(BUILD_DIR)/render_scheduler_obj_dir/Vtb_render_credit_scheduler
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/i2s_output_obj_dir --top-module tb_wavetable_i2s_output \
+		rtl/pkg/synth_pkg.sv rtl/audio/output_sample_fifo.sv \
+		fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv \
+		fpga/common/rtl/wavetable_i2s_output.sv $(I2S_OUTPUT_SIM_SOURCES)
+	$(BUILD_DIR)/i2s_output_obj_dir/Vtb_wavetable_i2s_output
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/spi_obj_dir --top-module tb_spi_register_bridge \
 		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(SPI_SIM_SOURCES)
@@ -273,14 +294,14 @@ host-ch347:
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
-		sim/harness/control/register_control.cpp \
+		sim/harness/control/command_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
 
 host-smart-artix-bringup:
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/smart_artix_bringup_main.cpp host/ch347_transport.cpp \
-		sim/harness/control/register_control.cpp \
+		sim/harness/control/command_control.cpp \
 		-o $(BUILD_DIR)/smart_artix_bringup -ldl
 
 list-instruments:
@@ -333,7 +354,6 @@ render-reference:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
-		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:
@@ -357,7 +377,6 @@ render-rtl-core:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
-		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
 
 render-memory:
@@ -383,7 +402,6 @@ render-memory:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
-		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_MEMORY_OUT_DIR)
 
 render-board-loader:
@@ -410,7 +428,6 @@ render-board-loader:
 		--key $(KEY) --start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--adsr-tick-ms $(ADSR_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_ENVELOPE)),--sample-accurate-envelope,) \
-		$(if $(filter 1 true yes,$(RTL_ENVELOPE_EVENTS)),--rtl-envelope-events,) \
 		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
 
 vivado-summary:

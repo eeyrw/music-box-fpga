@@ -12,14 +12,14 @@ filtering, and saturated mixing.
 ## Implemented
 
 - Synthesizable single-clock SystemVerilog RTL
-- Per-voice shadow and active registers with atomic commit
-- Unsigned Q16.16 playback phase and fractional phase increments
+- Transactional command FIFO with prepared/active voice state and atomic START
+- Unsigned Q24.8 playback phase and fractional phase increments
 - Runtime phase-increment updates for pitch control without phase reload
 - Variable wave length, exclusive loop boundaries, and no-loop/loop/release-loop modes
 - Mono PCM duplication to left and right channels
 - Interleaved stereo PCM playback
 - Per-channel signed Q1.15 gain
-- Per-voice current envelope level supplied through registers
+- FPGA-owned six-stage per-voice volume envelope
 - Per-voice biquad IIR filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
 - Shared multi-voice rendering pipeline and saturated stereo mixer
@@ -60,7 +60,7 @@ Board wrappers connect the register bus to a physical control transport such as
 SPI, UART, or a soft-core bus, generate `sample_tick`, attach memory controllers,
 and serialize PCM to board audio pins when needed.
 
-PCM data is signed 16-bit. Playback phase uses unsigned Q16.16 sample-frame
+PCM data is signed 16-bit. Playback phase uses unsigned Q24.8 sample-frame
 units, and channel gains use signed Q1.15. Mono waves contain one word per frame;
 stereo waves use independent absolute left/right base addresses and sample-window
 metadata. Detailed contracts are documented in [`docs/`](docs/).
@@ -70,7 +70,7 @@ metadata. Detailed contracts are documented in [`docs/`](docs/).
 ```text
 rtl/                    Generic synthesizable SystemVerilog core
   pkg/                  Shared types and constants
-  control/              Shadow, active, and runtime voice register storage
+  control/              Command parsing, action execution, and voice state
   memory/               Abstract line-cache memory subsystem
   voice/                Multi-voice phase, fetch, and render sequencing
   dsp/                  Interpolation, filters, gain, envelope, and mixing
@@ -215,13 +215,13 @@ make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30
 make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 ```
 
-Build the PC-side CH347 USB-to-SPI register-control tool:
+Build the PC-side CH347 USB-to-SPI control tool:
 
 ```bash
 make host-ch347
 ```
 
-It reuses the same C++ register-control sequence as the simulation harnesses and
+It sends the same transactional command words as the simulation harnesses and
 loads the CH347 vendor library at runtime. See
 [`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
 
@@ -247,8 +247,8 @@ model. It also writes `build/render_rtl_core/out.wav` for quick listening after
 the exact comparison passes.
 
 `make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
-runtime, models MCU-side note allocation and Q1.15 ADSR envelope writes, and
-drives `wavetable_cached_render_core` through the register interface. Wave reads pass
+runtime, models MCU-side note allocation and modulation policy, and drives
+`wavetable_cached_render_core` through the command stream. Wave reads pass
 through the line-cache memory subsystem before the C++ external line-memory model
 responds. The output WAV is `build/render_memory/out.wav`, and memory
 hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
@@ -289,19 +289,17 @@ status registers.
 Representative MIDI smoke-test inputs live under `assets/midi/`. The older
 Python-generated SystemVerilog MIDI render flow has been removed.
 
-## Current Register Interface
+## Current Control Interfaces
 
 The core bus is a single-beat 32-bit register interface with `valid`, `write`,
-`address`, `wdata`, `rdata`, `ready`, and `error` signals. Configuration writes
-modify shadow state for one voice slot. Writing that slot's commit register
-atomically replaces the active voice configuration. Runtime writes such as
-envelope, gain, pitch, and release do not require commit and are sampled at
-output-frame render boundaries. `fpga/common/rtl/spi_register_bridge.sv`
-provides one simple SPI transport for this bus using an 8-bit command, 16-bit
-byte address, and 32-bit data phase; future UART or bus adapters should target
-the same abstract register-bus contract.
+`address`, `wdata`, `rdata`, `ready`, and `error` signals. It exposes global
+status, command FIFO ingress, and the read-only coherent voice snapshot. Voice
+definition, START, gain/phase/filter updates, release, and stop use a separate
+32-bit transactional command stream. `fpga/common/rtl/spi_register_bridge.sv`
+provides register transactions plus dedicated command opcode `0xa5`.
 
-See [the register map](docs/register_map.md) for addresses and validation rules.
+See [the register map](docs/register_map.md) and
+[command-stream contract](docs/design/control_command_stream_plan.md).
 
 ## Roadmap
 

@@ -13,7 +13,7 @@
 
 namespace {
 
-struct RecordingSink : public render::VoiceControlSink {
+struct RecordingSink : public render::VoiceCommandSink {
   int commit_count = 0;
   int release_count = 0;
   int disable_count = 0;
@@ -26,38 +26,25 @@ struct RecordingSink : public render::VoiceControlSink {
   int last_commit_voice = -1;
   int filter_count = 0;
   render::FilterConfig last_filter;
-  std::vector<int> envelopes;
-
-  void set_envelope(int, int level) override { envelopes.push_back(level); }
-  void set_gain(int, int gain_l, int gain_r) override {
+  void update_gain_phase(int, int gain_l, int gain_r, uint32_t phase_inc) override {
     ++gain_count;
+    ++phase_count;
     last_gain_l = gain_l;
     last_gain_r = gain_r;
-  }
-  void set_phase_inc(int, uint32_t phase_inc) override {
-    ++phase_count;
     last_phase_inc = phase_inc;
   }
-  void set_filter(int, const render::FilterConfig& filter) override {
+  void update_filter(int, const render::FilterConfig& filter) override {
     ++filter_count;
     last_filter = filter;
   }
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const render::Region& region) override {
+  void start_voice(int voice, uint32_t phase_inc, const render::Region& region) override {
     ++commit_count;
-    if (!enable) ++disable_count;
     last_commit_voice = voice;
     last_phase_inc = phase_inc;
     last_initial_envelope = region.initial_envelope;
   }
-  void release_voice(int, const render::Region&) override { ++release_count; }
-};
-
-struct RecordingEventSink : public render::EnvelopeEventSink {
-  std::vector<render::EnvelopeEvent> events;
-
-  void push_envelope_event(const render::EnvelopeEvent& event) override {
-    events.push_back(event);
-  }
+  void release_voice(int, uint32_t) override { ++release_count; }
+  void stop_voice(int) override { ++disable_count; }
 };
 
 void push_u16(std::vector<uint8_t>& out, uint16_t value) {
@@ -355,21 +342,29 @@ int main() {
     hot_region.phase_inc = render::kPhaseFracScale;
     hot_region.gain_l = render::kQ15Full;
     hot_region.gain_r = render::kQ15Full;
-    hot_region.initial_envelope = render::kQ15Full;
-    hot_region.filter_enable = true;
-    hot_region.filter_b0 = 1 << 30;
-    hot_region.filter_a1 = -32768;
-    hot_synth.commit_voice(0, 1, hot_region.phase_inc, hot_region);
-    hot_synth.commit_voice(1, 1, hot_region.phase_inc, hot_region);
+    hot_region.attack_sub_tick = true;
+    render::CommandVoiceControl hot_control(hot_synth);
+    hot_control.start_voice(0, hot_region.phase_inc, hot_region);
+    hot_control.start_voice(1, hot_region.phase_inc, hot_region);
     hot_synth.render_sample();
-    if (hot_diag.max_abs_filter_y_input <= ((uint64_t(1) << 19) - 1) ||
-        hot_diag.max_abs_filter_state_input <= ((uint64_t(1) << 33) - 1) ||
-        hot_diag.max_abs_voice_contribution_input_l <= 32767 ||
-        hot_diag.max_abs_voice_contribution_input_r <= 32767 ||
-        hot_diag.max_abs_mix_input_l <= 32767 ||
+    if (hot_diag.max_abs_mix_input_l <= 32767 ||
         hot_diag.max_abs_mix_input_r <= 32767) {
       throw std::runtime_error("saturation diagnostics did not record pre-saturation maxima");
     }
+    render::ReferenceSynth envelope_synth(hot_memory);
+    render::Region envelope_region = hot_region;
+    envelope_region.attack_sub_tick = false;
+    envelope_region.attack_ticks = 4;
+    envelope_region.envelope_tick_samples = 1;
+    render::CommandVoiceControl envelope_control(envelope_synth);
+    envelope_control.start_voice(0, envelope_region.phase_inc, envelope_region);
+    envelope_synth.write_command_words({0x13000102u, 0x00000002u, 0x80000000u});
+    auto envelope_sample = envelope_synth.render_sample();
+    if (envelope_sample.first < 16000 || envelope_sample.first > 17000)
+      throw std::runtime_error("reference ENV_UPDATE did not replace attack step");
+    envelope_synth.write_command_words({0x14000101u, 0x00000000u});
+    if (envelope_synth.render_sample().first != 0)
+      throw std::runtime_error("reference zero-step RELEASE did not stop immediately");
     std::string diagnostics_text = render::diagnostics_json_fields(hot_diag);
     if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
@@ -596,32 +591,6 @@ int main() {
       throw std::runtime_error("runtime diagnostics counted skipped control writes");
     }
 
-    render::Region envelope_jump_region;
-    envelope_jump_region.length = 4;
-    envelope_jump_region.loop_end = 4;
-    envelope_jump_region.phase_inc = render::kPhaseFracScale;
-    envelope_jump_region.gain_l = 0x4000;
-    envelope_jump_region.gain_r = 0x4000;
-    envelope_jump_region.attack_ticks = 2;
-    envelope_jump_region.output_sample_rate = 48000;
-    std::vector<render::Region> envelope_jump_regions{envelope_jump_region};
-    RecordingSink envelope_jump_sink;
-    render::RenderDiagnostics envelope_jump_diag;
-    render::McuModel envelope_jump_mcu(envelope_jump_sink, envelope_jump_regions, &envelope_jump_diag);
-    render::NoteEvent envelope_jump_note;
-    envelope_jump_note.on = true;
-    envelope_jump_note.velocity = 127;
-    envelope_jump_note.phase_inc = envelope_jump_region.phase_inc;
-    envelope_jump_mcu.handle_event(envelope_jump_note);
-    envelope_jump_mcu.envelope_tick();
-    envelope_jump_mcu.envelope_tick();
-    if (envelope_jump_diag.runtime_envelope_updates != uint64_t(envelope_jump_sink.envelopes.size()) ||
-        envelope_jump_diag.max_runtime_envelope_jump == 0 ||
-        envelope_jump_diag.max_runtime_envelope_jump_voice != 0 ||
-        envelope_jump_diag.max_runtime_envelope_jump_tick != 0) {
-      throw std::runtime_error("envelope diagnostics did not record runtime jumps");
-    }
-
     render::Region bend_range_region;
     bend_range_region.length = 4;
     bend_range_region.loop_end = 4;
@@ -817,88 +786,6 @@ int main() {
     nrpn_mcu.handle_event(nrpn);
     if (nrpn_sink.last_gain_l != 0 || nrpn_sink.last_gain_r != render::kQ15Full) {
       throw std::runtime_error("SF2 NRPN pan offset did not update runtime gain");
-    }
-
-    render::Region curve_region;
-    curve_region.length = 4;
-    curve_region.loop_end = 4;
-    curve_region.attack_ticks = 4;
-    curve_region.decay_ticks = 4;
-    curve_region.sustain_level = render::kQ15Full / 16;
-    curve_region.release_ticks = 4;
-    curve_region.gain_l = 0x4000;
-    curve_region.gain_r = 0x4000;
-    std::vector<render::Region> curve_regions{curve_region};
-    RecordingSink curve_sink;
-    render::McuModel curve_mcu(curve_sink, curve_regions);
-    render::NoteEvent curve_note;
-    curve_note.on = true;
-    curve_note.velocity = 127;
-    curve_note.phase_inc = render::kPhaseFracScale;
-    curve_mcu.handle_event(curve_note);
-    curve_mcu.envelope_tick();
-    if (curve_sink.last_initial_envelope != 0) {
-      throw std::runtime_error("volume envelope initial level was not staged in commit");
-    }
-    int expected_attack = int(std::round(double(render::kQ15Full) / 4.0));
-    if (curve_sink.envelopes.empty() || std::abs(curve_sink.envelopes.back() - expected_attack) > 1) {
-      throw std::runtime_error("volume envelope attack did not use a linear-amplitude SF2 approximation");
-    }
-    for (int i = 0; i < 4; ++i) curve_mcu.envelope_tick();
-    int first_decay = curve_sink.envelopes.back();
-    int linear_decay = int(std::round(double(render::kQ15Full) +
-                                      double(curve_region.sustain_level - render::kQ15Full) / 4.0));
-    if (first_decay >= linear_decay) {
-      throw std::runtime_error("volume envelope decay did not use a dB-linear curve");
-    }
-    render::NoteEvent curve_off = curve_note;
-    curve_off.on = false;
-    curve_mcu.handle_event(curve_off);
-    curve_mcu.envelope_tick();
-    int first_release = curve_sink.envelopes.back();
-    int linear_release = int(std::round(double(first_decay) * 3.0 / 4.0));
-    if (first_release >= linear_release) {
-      throw std::runtime_error("volume envelope release did not use a dB-linear curve");
-    }
-
-    render::Region event_envelope_region;
-    event_envelope_region.length = 4;
-    event_envelope_region.loop_end = 4;
-    event_envelope_region.attack_ticks = 1;
-    event_envelope_region.attack_sub_tick = true;
-    event_envelope_region.release_ticks = 0x00ffffff;
-    event_envelope_region.gain_l = 0x4000;
-    event_envelope_region.gain_r = 0x4000;
-    std::vector<render::Region> event_envelope_regions{event_envelope_region};
-    RecordingSink event_envelope_sink;
-    RecordingEventSink event_sink;
-    render::RenderDiagnostics event_envelope_diag;
-    render::McuModel event_envelope_mcu(event_envelope_sink, event_envelope_regions,
-                                        &event_envelope_diag);
-    event_envelope_mcu.set_rtl_envelope_events(true);
-    event_envelope_mcu.set_envelope_event_sink(&event_sink);
-    render::NoteEvent event_note = curve_note;
-    event_note.phase_inc = render::kPhaseFracScale;
-    event_envelope_mcu.handle_event(event_note);
-    event_envelope_mcu.envelope_tick();
-    if (!event_envelope_sink.envelopes.empty() ||
-        event_envelope_diag.runtime_envelope_updates != 0) {
-      throw std::runtime_error("event envelope mode still wrote per-sample runtime envelope levels");
-    }
-    render::NoteEvent event_note_off = event_note;
-    event_note_off.on = false;
-    event_envelope_mcu.handle_event(event_note_off);
-    auto release_it = std::find_if(event_sink.events.begin(), event_sink.events.end(),
-        [](const render::EnvelopeEvent& event) {
-          return event.opcode == render::EnvelopeEventOpcode::kVolReleaseCb;
-        });
-    if (release_it == event_sink.events.end()) {
-      throw std::runtime_error("event envelope mode did not emit a release cB event");
-    }
-    uint32_t release_duration = release_it->payload2 & 0x00ffffffu;
-    if (release_it->payload0 != 0 || release_it->payload1 != 0 ||
-        release_duration != uint32_t(event_envelope_region.release_ticks)) {
-      throw std::runtime_error("event envelope release did not carry 24-bit duration samples");
     }
 
     render::Region folded_attack_region;

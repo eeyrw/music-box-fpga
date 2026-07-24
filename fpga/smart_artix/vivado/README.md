@@ -52,7 +52,7 @@ Each synthesis run writes these stable report files under
 - `post_synth_utilization.rpt`: flat device utilization summary.
 - `post_synth_utilization_hier.rpt`: full hierarchical utilization report.
 - `post_synth_utilization_hier_depth4.rpt`: compact hierarchy report deep enough
-  to compare `core_system`, `voice_register_bank`, `multi_voice_pipeline`, memory,
+  to compare `core_system`, `synth_control_plane`, `multi_voice_pipeline`, memory,
   and MIG resource ownership.
 - `post_synth_timing.rpt`: post-synthesis timing summary.
 - `post_synth_summary.json`: compact machine-readable summary generated inside

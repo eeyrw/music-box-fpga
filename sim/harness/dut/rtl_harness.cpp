@@ -9,12 +9,6 @@
 namespace render {
 namespace {
 
-std::string hex16(uint16_t v) {
-  char b[8];
-  std::snprintf(b, sizeof(b), "%04x", v);
-  return b;
-}
-
 int sample_timeout_cycles(const MemoryProfile& profile) {
   // The core renders voices serially. A worst-case stereo voice can issue four
   // word reads, and each word read may miss the line cache when many regions are
@@ -30,7 +24,7 @@ int sample_timeout_cycles(const MemoryProfile& profile) {
 
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
                        int sample_rate, const MemoryProfile& memory_profile)
-    : top_(new Vwavetable_cached_render_core), voice_control_(*this), memory_(memory),
+    : top_(new Vwavetable_cached_render_core), memory_(memory),
       memory_profile_(memory_profile), wav_(wav_path, sample_rate), sample_rate_(sample_rate) {
   top_->clk = 0;
   top_->rst = 1;
@@ -38,6 +32,8 @@ RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wa
   top_->bus_write = 0;
   top_->bus_address = 0;
   top_->bus_wdata = 0;
+  top_->cmd_stream_valid = 0;
+  top_->cmd_stream_data = 0;
   top_->sample_tick = 0;
   top_->ext_req_ready = 1;
   top_->ext_rsp_valid = 0;
@@ -56,54 +52,21 @@ void RtlHarness::reset() {
   tick();
 }
 
-void RtlHarness::write_register(uint16_t address, uint32_t data) {
-  constexpr int kBusTimeoutCycles = 1000;
-  note_register_write(register_write_stats_, address);
-  // Commit writes can hold ready low while the RTL reads shadow state into the
-  // active/runtime RAMs. Keep valid asserted until the register bank accepts it.
-  top_->bus_valid = 1;
-  top_->bus_write = 1;
-  top_->bus_address = address;
-  top_->bus_wdata = data;
-  int waited = 0;
-  while (!top_->bus_ready && waited < kBusTimeoutCycles) {
+void RtlHarness::write_command_words(const std::vector<uint32_t>& words) {
+  for (uint32_t word : words) {
+    int waited = 0;
+    while (!top_->cmd_stream_ready && waited < 1000) {
+      tick();
+      ++waited;
+    }
+    if (!top_->cmd_stream_ready)
+      throw std::runtime_error("command FIFO backpressure timeout");
+    top_->cmd_stream_data = word;
+    top_->cmd_stream_valid = 1;
     tick();
-    ++waited;
+    top_->cmd_stream_valid = 0;
   }
-  if (!top_->bus_ready || top_->bus_error) {
-    throw std::runtime_error("bus write failed at address 0x" + hex16(address));
-  }
-  top_->bus_valid = 0;
-  top_->bus_write = 0;
-  tick();
-}
-
-void RtlHarness::set_envelope(int voice, int level) {
-  voice_control_.set_envelope(voice, level);
-}
-
-void RtlHarness::set_gain(int voice, int gain_l, int gain_r) {
-  voice_control_.set_gain(voice, gain_l, gain_r);
-}
-
-void RtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
-  voice_control_.set_phase_inc(voice, phase_inc);
-}
-
-void RtlHarness::set_filter(int voice, const FilterConfig& filter) {
-  voice_control_.set_filter(voice, filter);
-}
-
-void RtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  voice_control_.commit_voice(voice, enable, phase_inc, r);
-}
-
-void RtlHarness::release_voice(int voice, const Region& r) {
-  voice_control_.release_voice(voice, r);
-}
-
-void RtlHarness::push_envelope_event(const EnvelopeEvent& event) {
-  voice_control_.push_envelope_event(event);
+  for (int i = 0; i < 3; ++i) tick();
 }
 
 void RtlHarness::request_sample(int produced) {
@@ -287,7 +250,6 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;
   stats.sequential_latency_cycles = memory_profile_.sequential_latency_cycles;
   stats.ready_gap_cycles = memory_profile_.ready_gap_cycles;
-  stats.register_writes = register_write_stats_;
   return stats;
 }
 

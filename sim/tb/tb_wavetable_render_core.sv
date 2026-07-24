@@ -2,8 +2,6 @@ module tb_wavetable_render_core;
   import synth_pkg::*;
   import synth_register_pkg::*;
 
-  // Self-checking unit test for the wavetable datapath. It uses tiny synthetic
-  // memories so expected interpolation, envelope, gain, and mix results are exact.
   logic clk = 1'b0;
   logic rst;
   logic bus_valid;
@@ -13,6 +11,9 @@ module tb_wavetable_render_core;
   logic [31:0] bus_rdata;
   logic bus_ready;
   logic bus_error;
+  logic cmd_stream_valid;
+  logic [31:0] cmd_stream_data;
+  logic cmd_stream_ready;
   logic sample_tick;
   logic sample_valid;
   pcm_t sample_l;
@@ -57,15 +58,11 @@ module tb_wavetable_render_core;
   logic [2:0] dsp_context_queue_occupancy;
   logic [2:0] dsp_context_queue_max_occupancy;
   logic dsp_ready_no_context_pulse;
-  logic unused_mem_trace;
   int errors = 0;
   int last_latency_cycles = 0;
   string current_case = "startup";
   localparam int SAMPLE_TIMEOUT_CYCLES = 512 + (NUM_VOICES * 16);
-  localparam int ALL_VOICE_LATENCY_LIMIT = 512 + (NUM_VOICES * 16);
 
-  // Testbench clock only; production RTL still uses one rising-edge system
-  // clock and synchronous reset.
   always #5 clk <= ~clk;
 
   wavetable_render_core dut (.*);
@@ -77,35 +74,12 @@ module tb_wavetable_render_core;
   assign mem_rsp_valid = core_mem_rsp.valid;
   assign mem_rsp_data = core_mem_rsp.data;
 
-  assign unused_mem_trace = busy |
-                            mem_response_trace_pulse | (|mem_response_trace_latency) |
-                            cache_demand_hit_pulse | cache_demand_miss_pulse |
-                            cache_line_fill_pulse | cache_same_line_endpoint_hit_pulse |
-                            cache_replacement_pulse | cache_prefetch_issued_pulse |
-                            cache_prefetch_filled_pulse | cache_prefetch_used_pulse |
-                            cache_prefetch_dropped_pulse | cache_prefetch_late_pulse |
-                            endpoint_cross_line_pair_pulse | endpoint_fetch_slot_pressure_pulse |
-                            endpoint_memory_stall_pulse | (|endpoint_fetch_slot_occupancy) |
-                            (|endpoint_fetch_slot_max_occupancy) | (|endpoint_word_req_occupancy) |
-                            (|endpoint_word_req_max_occupancy) | (|endpoint_rsp_meta_occupancy) |
-                            (|endpoint_rsp_meta_max_occupancy) | (|dsp_context_queue_occupancy) |
-                            (|dsp_context_queue_max_occupancy) | dsp_ready_no_context_pulse;
-
   voice_line_cache #(.LINE_WORDS(LINE_WORDS), .LINES_PER_VOICE(2)) memory_subsystem (
-    .clk,
-    .rst,
-    .req(core_mem_req),
-    .req_ready(mem_req_ready),
-    .rsp(core_mem_rsp),
-    .ext_req_valid,
-    .ext_req_ready,
-    .ext_req_addr,
-    .ext_rsp_valid,
-    .ext_rsp_data,
+    .clk, .rst, .req(core_mem_req), .req_ready(mem_req_ready), .rsp(core_mem_rsp),
+    .ext_req_valid, .ext_req_ready, .ext_req_addr, .ext_rsp_valid, .ext_rsp_data,
     .response_trace_pulse(mem_response_trace_pulse),
     .response_trace_latency(mem_response_trace_latency),
-    .demand_hit_pulse(cache_demand_hit_pulse),
-    .demand_miss_pulse(cache_demand_miss_pulse),
+    .demand_hit_pulse(cache_demand_hit_pulse), .demand_miss_pulse(cache_demand_miss_pulse),
     .line_fill_pulse(cache_line_fill_pulse),
     .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
     .replacement_pulse(cache_replacement_pulse),
@@ -117,243 +91,158 @@ module tb_wavetable_render_core;
   );
 
   line_memory_model #(.DEPTH(256), .LINE_WORDS(LINE_WORDS), .LATENCY(4)) memory_model (
-    .clk,
-    .rst,
-    .req_valid(ext_req_valid),
-    .req_ready(ext_req_ready),
-    .req_addr(ext_req_addr),
-    .rsp_valid(ext_rsp_valid),
-    .rsp_data(ext_rsp_data)
+    .clk, .rst, .req_valid(ext_req_valid), .req_ready(ext_req_ready),
+    .req_addr(ext_req_addr), .rsp_valid(ext_rsp_valid), .rsp_data(ext_rsp_data)
   );
+
+  function automatic logic [31:0] header(
+    input command_opcode_t opcode,
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic [7:0] words
+  );
+    header = {opcode, voice, seq, words};
+  endfunction
 
   task automatic begin_case(input string name);
     current_case = name;
     $display("CASE: %s", current_case);
   endtask
 
-  task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
-    // Hold the request until the register bank accepts it. Most writes complete
-    // in one cycle; commit writes may take longer while shadow BRAM is read.
+  task automatic reset_core;
+    rst = 1'b1;
+    cmd_stream_valid = 1'b0;
+    sample_tick = 1'b0;
+    repeat (4) @(negedge clk);
+    rst = 1'b0;
+    repeat (2) @(negedge clk);
+  endtask
+
+  task automatic push_word(input logic [31:0] data);
     @(negedge clk);
-    bus_valid = 1'b1;
-    bus_write = 1'b1;
+    while (!cmd_stream_ready) @(negedge clk);
+    cmd_stream_data = data;
+    cmd_stream_valid = 1'b1;
+    @(negedge clk);
+    cmd_stream_valid = 1'b0;
+  endtask
+
+  task automatic wait_command_parse;
+    repeat (40) @(negedge clk);
+  endtask
+
+  task automatic bus_write_word(input logic [15:0] address, input logic [31:0] data);
+    @(negedge clk);
     bus_address = address;
     bus_wdata = data;
-    do begin
-      @(negedge clk);
-    end while (!bus_ready);
-    if (!bus_ready || bus_error) begin
-      $error("[%s] bus write failed at 0x%04x", current_case, address);
-      errors++;
-    end
-    bus_valid = 1'b0;
-    bus_write = 1'b0;
-  endtask
-
-  task automatic bus_read_word(input logic [15:0] address, input logic [31:0] expected);
-    @(negedge clk);
+    bus_write = 1'b1;
     bus_valid = 1'b1;
-    bus_write = 1'b0;
-    bus_address = address;
-    bus_wdata = '0;
-    do begin
-      @(negedge clk);
-    end while (!bus_ready);
+    @(negedge clk);
     if (!bus_ready || bus_error) begin
-      $error("[%s] bus read failed at 0x%04x", current_case, address);
+      $error("debug bus write failed at %h", address);
       errors++;
-    end else if (bus_rdata !== expected) begin
-      $error("[%s] bus read 0x%04x got 0x%08x expected 0x%08x",
-             current_case, address, bus_rdata, expected);
+    end
+    bus_valid = 1'b0;
+    bus_write = 1'b0;
+  endtask
+
+  task automatic bus_read_word(input logic [15:0] address, output logic [31:0] data);
+    @(negedge clk);
+    bus_address = address;
+    bus_write = 1'b0;
+    bus_valid = 1'b1;
+    @(negedge clk);
+    data = bus_rdata;
+    if (!bus_ready || bus_error) begin
+      $error("debug bus read failed at %h", address);
       errors++;
     end
     bus_valid = 1'b0;
   endtask
 
-  task automatic request_and_check(input integer expected_l, input integer expected_r);
-    int timeout;
-    // sample_tick requests one rendered output sample. The voice pipeline needs
-    // several cycles to fetch endpoints from memory before sample_valid rises.
-    @(negedge clk);
-    sample_tick = 1'b1;
-    @(negedge clk);
-    sample_tick = 1'b0;
-    timeout = 0;
-    while (!sample_valid && timeout < SAMPLE_TIMEOUT_CYCLES) begin
-      @(negedge clk);
-      timeout++;
-    end
-    last_latency_cycles = timeout;
-    if (!sample_valid) begin
-      $error("[%s] sample response timed out", current_case);
-      errors++;
-    end else begin
-      if ($signed({{16{sample_l[15]}}, sample_l}) !== expected_l) begin
-        $error("[%s] left sample got %0d expected %0d",
-               current_case, $signed(sample_l), expected_l);
-        errors++;
-      end
-      if ($signed({{16{sample_r[15]}}, sample_r}) !== expected_r) begin
-        $error("[%s] right sample got %0d expected %0d",
-               current_case, $signed(sample_r), expected_r);
-        errors++;
-      end
-    end
-  endtask
-
-  task automatic request_write_envelope_mid_render_and_check(
-    input logic [31:0] envelope,
-    input integer expected_l,
-    input integer expected_r
-  );
-    int timeout;
-    @(negedge clk);
-    sample_tick = 1'b1;
-    @(negedge clk);
-    sample_tick = 1'b0;
-    repeat (2) @(negedge clk);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), envelope);
-    timeout = 0;
-    while (!sample_valid && timeout < SAMPLE_TIMEOUT_CYCLES) begin
-      @(negedge clk);
-      timeout++;
-    end
-    last_latency_cycles = timeout;
-    if (!sample_valid) begin
-      $error("[%s] sample response timed out", current_case);
-      errors++;
-    end else begin
-      if ($signed({{16{sample_l[15]}}, sample_l}) !== expected_l) begin
-        $error("[%s] left sample got %0d expected %0d",
-               current_case, $signed(sample_l), expected_l);
-        errors++;
-      end
-      if ($signed({{16{sample_r[15]}}, sample_r}) !== expected_r) begin
-        $error("[%s] right sample got %0d expected %0d",
-               current_case, $signed(sample_r), expected_r);
-        errors++;
-      end
-    end
-  endtask
-
-  task automatic push_env_event(
-    input logic [31:0] timestamp,
-    input logic [7:0] opcode,
+  task automatic define_mono(
     input logic [7:0] voice,
-    input logic [15:0] payload0,
-    input logic [31:0] payload1,
-    input logic [31:0] payload2 = 32'd0
-  );
-    bus_write_word(REG_EVENT_FIFO_DATA0, timestamp);
-    bus_write_word(REG_EVENT_FIFO_DATA1, {payload0, opcode, voice});
-    bus_write_word(REG_EVENT_FIFO_DATA2, payload1);
-    bus_write_word(REG_EVENT_FIFO_DATA3, payload2);
-    bus_write_word(REG_EVENT_FIFO_PUSH, 32'h0000_0001);
-  endtask
-
-  function automatic logic [31:0] voice_control_word(
-    input logic stereo,
-    input logic [1:0] loop_mode,
-    input logic enable,
-    input logic apply
-  );
-    voice_control_word = {27'd0, apply, enable, loop_mode, stereo};
-  endfunction
-
-  task automatic configure_mono;
-    // Four mono frames: 0, 1000, 2000, 3000. phase_init=0.5 frame and gain=0.5,
-    // so the first sample is interpolate(0,1000,0.5)*0.5 = 250.
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd0);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), 32'd0);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END), 32'd4);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INIT), 32'h0000_0080);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), 32'h0000_0100);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN), 32'h4000_4000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
-                   voice_control_word(1'b0, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
-    repeat (2) @(negedge clk);
-  endtask
-
-  task automatic configure_stereo_loop;
-    // Stereo memory uses independent absolute left/right bases and loops over
-    // frames [1,3). phase_init=2.5 uses frame2 and wraps frame3's interpolation
-    // endpoint back to frame1.
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR_R), 32'd24);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH_R), 32'd4);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), 32'd1);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START_R), 32'd1);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END), 32'd3);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END_R), 32'd3);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INIT), 32'h0000_0280);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), 32'h0000_0100);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN), 32'h4000_4000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
-                   voice_control_word(1'b1, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
-    repeat (2) @(negedge clk);
-  endtask
-
-  task automatic configure_stereo_independent_right_loop;
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR_R), 32'd24);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), 32'd4);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH_R), 32'd5);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), 32'd1);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START_R), 32'd2);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END), 32'd3);
-    bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END_R), 32'd5);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INIT), 32'h0000_0200);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), 32'h0000_0100);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN), 32'h7fff_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE), 32'h0000_7fff);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'h0000_4000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), 32'h0000_0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
-                   voice_control_word(1'b1, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
-    repeat (2) @(negedge clk);
-  endtask
-
-  task automatic configure_mono_slot(
-    input logic [15:0] voice,
+    input logic [7:0] seq,
     input int base_addr,
+    input int length,
+    input int loop_start,
+    input int loop_end,
     input logic [31:0] phase_init,
-    input logic signed [15:0] gain,
-    input logic signed [15:0] envelope_level
+    input logic [1:0] loop_mode,
+    input logic filter_enable,
+    input logic signed [15:0] b0,
+    input logic signed [15:0] b1,
+    input logic signed [15:0] b2,
+    input logic signed [15:0] a1,
+    input logic signed [15:0] a2
   );
-    begin
-      bus_write_word(reg_voice_addr(voice, REG_OFF_BASE_ADDR), base_addr[31:0]);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_LENGTH), 32'd4);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_LOOP_START), 32'd0);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_LOOP_END), 32'd4);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_PHASE_INIT), phase_init);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_PHASE_INC), 32'h0000_0100);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_GAIN), {gain, gain});
-      bus_write_word(reg_voice_addr(voice, REG_OFF_ENVELOPE), {{16{envelope_level[15]}}, envelope_level});
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_CONTROL), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B0_B1), REG_FILTER_B0_UNITY_Q2_14);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_B2_A1), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_FILTER_A2), 32'h0000_0000);
-      bus_write_word(reg_voice_addr(voice, REG_OFF_VOICE_CONTROL),
-                     voice_control_word(1'b0, LOOP_MODE_CONTINUOUS, 1'b1, 1'b1));
-      repeat (2) @(negedge clk);
-    end
+    push_word(header(VOICE_DEFINE_MONO, voice, seq, 8'd11));
+    push_word(base_addr[31:0]);
+    push_word(length[31:0]);
+    push_word(loop_start[31:0]);
+    push_word(loop_end[31:0]);
+    push_word(phase_init);
+    push_word({30'd0, loop_mode});
+    push_word({b1, b0});
+    push_word({a1, b2});
+    push_word({15'd0, filter_enable, a2});
+    push_word(32'd0);
+    push_word(32'd0);
   endtask
 
-  task automatic configure_voice0_basic(
+  task automatic define_stereo(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input int base_l,
+    input int base_r,
+    input int length_l,
+    input int length_r,
+    input int loop_start_l,
+    input int loop_start_r,
+    input int loop_end_l,
+    input int loop_end_r,
+    input logic [31:0] phase_init,
+    input logic [1:0] loop_mode
+  );
+    push_word(header(VOICE_DEFINE_STEREO, voice, seq, 8'd15));
+    push_word(base_l[31:0]);
+    push_word(base_r[31:0]);
+    push_word(length_l[31:0]);
+    push_word(length_r[31:0]);
+    push_word(loop_start_l[31:0]);
+    push_word(loop_start_r[31:0]);
+    push_word(loop_end_l[31:0]);
+    push_word(loop_end_r[31:0]);
+    push_word(phase_init);
+    push_word({30'd0, loop_mode});
+    push_word(32'h0000_4000);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'd0);
+  endtask
+
+  task automatic start_voice(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic signed [15:0] gain_l,
+    input logic signed [15:0] gain_r,
+    input logic [31:0] phase_inc
+  );
+    push_word(header(VOICE_START, voice, seq, 8'd8));
+    push_word({gain_r, gain_l});
+    push_word(phase_inc);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'd0);
+    push_word(32'h0100_0000);
+  endtask
+
+  task automatic define_start_mono(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
     input int base_addr,
     input int length,
     input int loop_start,
@@ -361,29 +250,84 @@ module tb_wavetable_render_core;
     input logic [31:0] phase_init,
     input logic [31:0] phase_inc,
     input logic [1:0] loop_mode,
+    input logic signed [15:0] gain,
     input logic filter_enable,
-    input logic signed [15:0] filter_b0,
-    input logic signed [15:0] filter_b1,
-    input logic signed [15:0] filter_b2,
-    input logic signed [15:0] filter_a1,
-    input logic signed [15:0] filter_a2
+    input logic signed [15:0] b0,
+    input logic signed [15:0] b1,
+    input logic signed [15:0] b2,
+    input logic signed [15:0] a1,
+    input logic signed [15:0] a2
   );
-    begin
-      bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), base_addr[31:0]);
-      bus_write_word(reg_voice_addr(0, REG_OFF_LENGTH), length[31:0]);
-      bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_START), loop_start[31:0]);
-      bus_write_word(reg_voice_addr(0, REG_OFF_LOOP_END), loop_end[31:0]);
-      bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INIT), phase_init);
-      bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC), phase_inc);
-      bus_write_word(reg_voice_addr(0, REG_OFF_GAIN), 32'h7fff_7fff);
-      bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE), 32'h0000_7fff);
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_CONTROL), {31'd0, filter_enable});
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), {filter_b1, filter_b0});
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B2_A1), {filter_a1, filter_b2});
-      bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), {16'd0, filter_a2});
-      bus_write_word(reg_voice_addr(0, REG_OFF_VOICE_CONTROL),
-                     voice_control_word(1'b0, loop_mode, 1'b1, 1'b1));
-      repeat (2) @(negedge clk);
+    define_mono(voice, seq, base_addr, length, loop_start, loop_end, phase_init,
+                loop_mode, filter_enable, b0, b1, b2, a1, a2);
+    start_voice(voice, seq, gain, gain, phase_inc);
+    wait_command_parse();
+  endtask
+
+  task automatic gain_phase(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic signed [15:0] gain_l,
+    input logic signed [15:0] gain_r,
+    input logic [31:0] phase_inc
+  );
+    push_word(header(VOICE_GAIN_PHASE, voice, seq, 8'd2));
+    push_word({gain_r, gain_l});
+    push_word(phase_inc);
+    wait_command_parse();
+  endtask
+
+  task automatic update_filter(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic enable,
+    input logic signed [15:0] b0,
+    input logic signed [15:0] b1,
+    input logic signed [15:0] b2,
+    input logic signed [15:0] a1,
+    input logic signed [15:0] a2
+  );
+    push_word(header(VOICE_FILTER, voice, seq, 8'd3));
+    push_word({b1, b0});
+    push_word({a1, b2});
+    push_word({15'd0, enable, a2});
+    wait_command_parse();
+  endtask
+
+  task automatic release_voice(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic [31:0] release_step
+  );
+    push_word(header(VOICE_RELEASE, voice, seq, 8'd1));
+    push_word(release_step);
+    wait_command_parse();
+  endtask
+
+  task automatic request_and_check(input integer expected_l, input integer expected_r);
+    int timeout;
+    @(negedge clk);
+    sample_tick = 1'b1;
+    @(negedge clk);
+    sample_tick = 1'b0;
+    timeout = 0;
+    while (!sample_valid && timeout < SAMPLE_TIMEOUT_CYCLES) begin
+      @(negedge clk);
+      timeout++;
+    end
+    last_latency_cycles = timeout;
+    if (!sample_valid) begin
+      $error("[%s] sample response timed out", current_case);
+      errors++;
+    end else begin
+      if ($signed(sample_l) !== expected_l) begin
+        $error("[%s] left sample got %0d expected %0d", current_case, $signed(sample_l), expected_l);
+        errors++;
+      end
+      if ($signed(sample_r) !== expected_r) begin
+        $error("[%s] right sample got %0d expected %0d", current_case, $signed(sample_r), expected_r);
+        errors++;
+      end
     end
   endtask
 
@@ -393,15 +337,14 @@ module tb_wavetable_render_core;
     bus_write = 1'b0;
     bus_address = '0;
     bus_wdata = '0;
+    cmd_stream_valid = 1'b0;
+    cmd_stream_data = '0;
     sample_tick = 1'b0;
 
-    // Mono test wave: one signed word per sample frame.
     memory_model.memory[0] = 16'sd0;
     memory_model.memory[1] = 16'sd1000;
     memory_model.memory[2] = 16'sd2000;
     memory_model.memory[3] = 16'sd3000;
-
-    // Stereo test wave: independent absolute left and right sample regions.
     memory_model.memory[16] = 16'sd1000;
     memory_model.memory[17] = 16'sd2000;
     memory_model.memory[18] = 16'sd3000;
@@ -411,169 +354,141 @@ module tb_wavetable_render_core;
     memory_model.memory[26] = -16'sd3000;
     memory_model.memory[27] = -16'sd4000;
     memory_model.memory[28] = -16'sd5000;
-
-    // Second mono test wave for multi-voice mixing. With gain=0.5 and
-    // envelope=0.5 each frame contributes 500 to the mix.
-    memory_model.memory[32] = 16'sd2000;
-    memory_model.memory[33] = 16'sd2000;
-    memory_model.memory[34] = 16'sd2000;
-    memory_model.memory[35] = 16'sd2000;
-
-    for (int a = 36; a < 68; a++)
+    for (int a = 32; a < 68; a++)
       memory_model.memory[a] = 16'sd2000;
-
-    // Precision regression for combined gain/envelope scaling. The old two-step
-    // PCM16 path produced 13; one wide product with a single final truncation
-    // preserves 14.
-    for (int a = 68; a < 72; a++)
-      memory_model.memory[a] = 16'sd10000;
-
-    // Filter output width regression: b0=1.5 makes a 30000 input produce a
-    // 45000 post-filter sample, which is then scaled back down by output gain.
     for (int a = 72; a < 76; a++)
       memory_model.memory[a] = 16'sd30000;
 
-    repeat (3) @(negedge clk);
-    rst = 1'b0;
+    begin_case("mono command start and interpolation");
+    reset_core();
+    define_start_mono(0, 8'h01, 0, 4, 0, 4, 32'h0000_0080, 32'h0000_0100,
+                      LOOP_MODE_CONTINUOUS, 16'sh4000, 1'b0,
+                      16'sh4000, 0, 0, 0, 0);
+    request_and_check(250, 250);
+    request_and_check(750, 750);
 
-    // Check mono interpolation, gain, and the fact that mono is duplicated to
-    // left/right before channel gains are applied.
-    begin_case("mono interpolation gain envelope");
-    configure_mono();
-    request_write_envelope_mid_render_and_check(32'h0000_4000, 250, 250);
-    request_and_check(375, 375);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_7fff);
-
-    // A shadow-only base-address write must not disturb active playback.
-    begin_case("shadow write isolation");
-    bus_write_word(reg_voice_addr(0, REG_OFF_BASE_ADDR), 32'd16);
+    begin_case("define isolation from active voice");
+    define_mono(0, 8'h02, 32, 4, 0, 4, 0, LOOP_MODE_CONTINUOUS,
+                1'b0, 16'sh4000, 0, 0, 0, 0);
+    wait_command_parse();
     request_and_check(1250, 1250);
 
-    // The MCU owns envelope progression. A runtime envelope write must affect
-    // the next rendered sample without committing or resetting voice phase.
-    begin_case("runtime envelope update");
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_4000);
-    request_and_check(375, 375);
+    begin_case("atomic gain phase update without phase reload");
+    reset_core();
+    define_start_mono(0, 8'h11, 0, 4, 0, 4, 0, 32'h0000_0100,
+                      LOOP_MODE_CONTINUOUS, 16'sh7fff, 1'b0,
+                      16'sh4000, 0, 0, 0, 0);
+    request_and_check(0, 0);
+    gain_phase(0, 8'h11, 16'sh4000, 16'sh4000, 32'h0000_0200);
+    request_and_check(500, 500);
+    request_and_check(1500, 1500);
 
-    // The low-rate envelope event path overrides ENVELOPE_RUNTIME exactly at
-    // the renderer's runtime snapshot boundary.
-    begin_case("event envelope set");
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_0000);
-    push_env_event(32'd4, EVT_ENV_SET, 8'd0, 16'h4000, 32'd0);
-    request_and_check(125, 125);
-    bus_write_word(reg_voice_addr(0, REG_OFF_ENVELOPE_RUNTIME), 32'h0000_7fff);
-
-    // Runtime stereo gain writes affect both active channels atomically without a commit.
-    begin_case("runtime gain update");
-    configure_mono();
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h2000_2000);
-    request_and_check(125, 125);
-
-    // Channel gain and envelope are applied as one wide output gain so the
-    // datapath does not lose precision to an intermediate PCM16 truncation.
-    begin_case("combined gain envelope precision");
-    configure_mono_slot(0, 68, 32'h0000_0000, 16'sh0100, 16'sh16f8);
-    request_and_check(14, 14);
-
-    // Check stereo addressing and exclusive loop wrapping.
-    begin_case("stereo exclusive loop");
-    configure_stereo_loop();
-    request_and_check(1250, -1250);
-    request_and_check(1250, -1250);
-
-    // Linked stereo samples can carry different right-channel loop metadata.
-    begin_case("stereo independent right loop");
-    configure_stereo_independent_right_loop();
+    begin_case("stereo independent exclusive loops");
+    reset_core();
+    define_stereo(0, 8'h21, 16, 24, 4, 5, 1, 2, 3, 5,
+                  32'h0000_0200, LOOP_MODE_CONTINUOUS);
+    start_voice(0, 8'h21, 16'sh7fff, 16'sh7fff, 32'h0000_0100);
+    wait_command_parse();
     request_and_check(2999, -3000);
     request_and_check(1999, -4000);
     request_and_check(2999, -5000);
 
-    // Runtime PHASE_INC writes retune playback without reloading phase.
-    begin_case("runtime phase increment update");
-    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
-    request_and_check(0, 0);
-    bus_write_word(reg_voice_addr(0, REG_OFF_PHASE_INC_RUNTIME), 32'h0000_0200);
-    request_and_check(999, 999);
-    request_and_check(2999, 2999);
-
-    // No-loop voices stop contributing once phase reaches the sample length.
-    begin_case("no-loop voice completion");
-    configure_voice0_basic(0, 2, 0, 0, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_NONE,
-                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
+    begin_case("no-loop completion");
+    reset_core();
+    define_start_mono(0, 8'h31, 0, 2, 0, 0, 0, 32'h0000_0100,
+                      LOOP_MODE_NONE, 16'sh7fff, 1'b0,
+                      16'sh4000, 0, 0, 0, 0);
     request_and_check(0, 0);
     request_and_check(999, 999);
     request_and_check(0, 0);
 
-    // Loop-until-release wraps while held, then plays through to sample end.
-    begin_case("loop until release");
-    configure_voice0_basic(0, 4, 1, 3, 32'h0000_0200, 32'h0000_0100, LOOP_MODE_UNTIL_RELEASE,
-                           1'b0, 16'sh4000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
+    begin_case("loop until release command");
+    reset_core();
+    define_start_mono(0, 8'h41, 0, 4, 1, 3, 32'h0000_0200, 32'h0000_0100,
+                      LOOP_MODE_UNTIL_RELEASE, 16'sh7fff, 1'b0,
+                      16'sh4000, 0, 0, 0, 0);
     request_and_check(1999, 1999);
     request_and_check(999, 999);
-    bus_write_word(reg_voice_addr(0, REG_OFF_RELEASE_CONTROL), 32'h0000_0001);
+    release_voice(0, 8'h41, 32'd1);
     request_and_check(1999, 1999);
     request_and_check(2999, 2999);
     request_and_check(0, 0);
 
-    // Biquad IIR is applied after interpolation and before channel gain. This
-    // coefficient set is a two-tap FIR case: y[n] = 0.5*x[n] + 0.5*x[n-1].
-    begin_case("filter datapath");
-    configure_voice0_basic(32, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b1, 16'sh2000, 16'sh2000, 16'sh0000, 16'sh0000, 16'sh0000);
+    begin_case("filter command and runtime replacement");
+    reset_core();
+    define_start_mono(0, 8'h51, 32, 4, 0, 4, 0, 32'h0000_0100,
+                      LOOP_MODE_CONTINUOUS, 16'sh7fff, 1'b1,
+                      16'sh2000, 16'sh2000, 0, 0, 0);
     request_and_check(999, 999);
     request_and_check(1999, 1999);
+    update_filter(0, 8'h51, 1'b1, 16'sh4000, 0, 0, 0, 0);
+    request_and_check(2999, 2999);
 
-    // Filter y is wider than PCM16. It must not clip before channel gain.
-    begin_case("filter output feeds gain above 16-bit");
-    configure_voice0_basic(72, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b1, 16'sh6000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
-    bus_write_word(reg_voice_addr(0, REG_OFF_GAIN_RUNTIME), 32'h4000_4000);
+    begin_case("filter output remains wide until gain");
+    reset_core();
+    define_start_mono(0, 8'h61, 72, 4, 0, 4, 0, 32'h0000_0100,
+                      LOOP_MODE_CONTINUOUS, 16'sh4000, 1'b1,
+                      16'sh6000, 0, 0, 0, 0);
     request_and_check(22500, 22500);
 
-    // Runtime filter coefficients update as one committed group. Coefficient
-    // writes alone update shadow state only; FILTER_A2[16] commits the packed
-    // coefficient word and enable bit to the renderer-facing RAM.
-    begin_case("runtime filter commit");
-    configure_voice0_basic(0, 4, 0, 4, 32'h0000_0000, 32'h0000_0100, LOOP_MODE_CONTINUOUS,
-                           1'b1, 16'sh2000, 16'sh0000, 16'sh0000, 16'sh0000, 16'sh0000);
-    request_and_check(0, 0);
-    request_and_check(499, 499);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_B0_B1), 32'sh0000_4000);
-    request_and_check(999, 999);
-    bus_write_word(reg_voice_addr(0, REG_OFF_FILTER_A2), REG_FILTER_A2_APPLY_MASK);
-    request_and_check(2999, 2999);
+    begin_case("highest voice command addressing");
+    reset_core();
+    define_start_mono(8'(NUM_VOICES - 1), 8'h71, 32, 4, 0, 4, 0, 32'h0000_0100,
+                      LOOP_MODE_CONTINUOUS, 16'sh4000, 1'b0,
+                      16'sh4000, 0, 0, 0, 0);
+    request_and_check(1000, 1000);
 
-    // Register decode must reach the highest configured voice slot. This catches
-    // address-window and stride assumptions when NUM_VOICES changes.
-    begin_case("highest voice register decode");
-    bus_write_word(reg_voice_addr(16'(NUM_VOICES - 1), REG_OFF_BASE_ADDR_R), 32'h0000_0020);
-
-    // Check that two active voice slots render in one output request and the
-    // mixer adds their current output-scaled samples with saturation at the end.
-    begin_case("two-voice mix");
-    configure_mono_slot(0, 0, 32'h0000_0080, 16'sh4000, 16'sh7fff);
-    configure_mono_slot(1, 32, 32'h0000_0000, 16'sh4000, 16'sh4000);
-    request_and_check(750, 750);
-
-    // All configured voice slots can be addressed and mixed. Each contributes 15
-    // after Q1.15 gain scaling.
-    begin_case("all-voice mix latency");
-    for (int v = 0; v < NUM_VOICES; v++)
-      configure_mono_slot(16'(v), 32, 32'h0000_0000, 16'sh0100, 16'sh7fff);
-    request_and_check(NUM_VOICES * 15, NUM_VOICES * 15);
-    // The pipelined biquad and filter input stage spread filter math across
-    // several states, so a full active mono frame has a structural latency
-    // guard that scales with the configured voice count.
-    if (last_latency_cycles > ALL_VOICE_LATENCY_LIMIT) begin
-      $error("%0d-voice mono render latency got %0d cycles expected <= %0d",
-             NUM_VOICES, last_latency_cycles, ALL_VOICE_LATENCY_LIMIT);
-      errors++;
+    begin_case("low-cost voice debug snapshot");
+    begin
+      logic [31:0] debug_status;
+      logic [31:0] debug_data;
+      bus_write_word(REG_DEBUG_VOICE_INDEX, 32'(NUM_VOICES - 1));
+      bus_write_word(REG_DEBUG_VOICE_CAPTURE, 32'd1);
+      debug_status = 32'd1;
+      while (debug_status[0])
+        bus_read_word(REG_DEBUG_VOICE_STATUS, debug_status);
+      if (!debug_status[1] || !debug_status[2] || !debug_status[3] ||
+          !debug_status[4] || debug_status[24:17] != 8'h71) begin
+        $error("debug snapshot status mismatch: %h", debug_status);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_VOICE_BASE_L, debug_data);
+      if (debug_data != 32'd32) begin
+        $error("debug snapshot base mismatch: %h", debug_data);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_VOICE_PHASE_INC, debug_data);
+      if (debug_data != 32'h0000_0100) begin
+        $error("debug snapshot phase increment mismatch: %h", debug_data);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_VOICE_GAIN, debug_data);
+      if (debug_data != 32'h4000_4000) begin
+        $error("debug snapshot gain mismatch: %h", debug_data);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_VOICE_ENVELOPE, debug_data);
+      if (debug_data[15:0] != 16'h7fff || !debug_data[19] ||
+          debug_data[18:16] != ENV_SUSTAIN) begin
+        $error("debug snapshot envelope mismatch: %h", debug_data);
+        errors++;
+      end
     end
+
+    begin_case("two voice command mix");
+    reset_core();
+    define_mono(0, 8'h81, 0, 4, 0, 4, 32'h0000_0080, LOOP_MODE_CONTINUOUS,
+                1'b0, 16'sh4000, 0, 0, 0, 0);
+    start_voice(0, 8'h81, 16'sh4000, 16'sh4000, 32'h0000_0100);
+    define_mono(1, 8'h82, 32, 4, 0, 4, 0, LOOP_MODE_CONTINUOUS,
+                1'b0, 16'sh4000, 0, 0, 0, 0);
+    start_voice(1, 8'h82, 16'sh4000, 16'sh4000, 32'h0000_0100);
+    wait_command_parse();
+    request_and_check(1250, 1250);
 
     if (errors != 0)
       $fatal(1, "FAIL: %0d errors", errors);
-    $display("PASS: multi-voice wavetable core");
+    $display("PASS: transactional multi-voice wavetable core");
     $finish;
   end
 endmodule

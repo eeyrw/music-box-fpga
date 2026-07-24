@@ -1,5 +1,5 @@
 module output_sample_fifo #(
-  parameter int DEPTH = 8
+  parameter int DEPTH = 64
 ) (
   input  logic            clk,
   input  logic            rst,

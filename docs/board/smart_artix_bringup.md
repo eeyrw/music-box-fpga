@@ -30,7 +30,7 @@ host, MCU, or later soft-processor responsibilities.
 - `wavetable_demo_system`, clocked by MIG `ui_clk`.
 - native 4-bit SD asset loading into DDR3.
 - DDR3 read/write arbitration between asset-loader writes and wavetable reads.
-- SPI register control and common status registers.
+- SPI global-register access, transactional voice commands, and common status.
 - fixed-rate 48 kHz I2S transmit output.
 - status LED outputs for SPI errors, audio underrun/drop/deadline events, asset
   load completion, and loader errors.
@@ -376,11 +376,14 @@ Start with:
 - left and right gain around `0x2000` or lower for external audio safety.
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
-The minimal write order is documented in `../register_map.md` under `Note On`.
-For board register inspection, read the normal per-voice register addresses to verify shadow
-configuration and live runtime scalar state.
+The command payload and ordering are documented in
+`../design/control_command_stream_plan.md`. For board inspection, run
+`build/ch347_control --snapshot-voice 0`; it captures one coherent copy of the
+selected voice's active configuration, runtime controls, and envelope state.
+The low-cost snapshot does not expose the renderer's advancing phase or biquad
+history.
 
-If audio is silent after the voice commit:
+If audio is silent after `VOICE_START`:
 
 - Read `AUDIO_STATUS`, `RENDER_STATUS`, and `MEMORY_STATUS`.
 - Check whether `MEMORY_STATUS` shows line-memory requests and memory responses.

@@ -12,19 +12,25 @@ module spi_register_bridge (
   output logic [31:0] bus_wdata,
   input  logic [31:0] bus_rdata,
   input  logic        bus_ready,
-  input  logic        bus_error
+  input  logic        bus_error,
+  output logic        cmd_valid,
+  output logic [31:0] cmd_data,
+  input  logic        cmd_ready
 );
   // Synchronous SPI-to-register bridge. The external SPI pins are sampled by
   // clk; board-specific timing constraints and CDC hardening belong with the
   // eventual FPGA integration wrapper.
-  typedef enum logic [2:0] {
+  localparam logic [7:0] COMMAND_STREAM_OPCODE = 8'ha5;
+
+  typedef enum logic [3:0] {
     STATE_IDLE,
     STATE_COMMAND,
     STATE_ADDRESS,
     STATE_WRITE_DATA,
     STATE_WRITE_WAIT,
     STATE_READ_WAIT,
-    STATE_READ_DATA
+    STATE_READ_DATA,
+    STATE_STREAM_DATA
   } state_t;
 
   state_t state;
@@ -37,6 +43,7 @@ module spi_register_bridge (
   logic [5:0] bit_count;
   logic command_write;
   logic command_burst;
+  logic [6:0] command_shift;
   logic read_sample_seen;
   logic sclk_rise;
   logic sclk_fall;
@@ -69,6 +76,7 @@ module spi_register_bridge (
       bit_count <= '0;
       command_write <= 1'b0;
       command_burst <= 1'b0;
+      command_shift <= '0;
       read_sample_seen <= 1'b0;
       spi_miso <= 1'b0;
       spi_error <= 1'b0;
@@ -76,8 +84,11 @@ module spi_register_bridge (
       bus_write <= 1'b0;
       bus_address <= '0;
       bus_wdata <= '0;
+      cmd_valid <= 1'b0;
+      cmd_data <= '0;
     end else begin
       bus_valid <= 1'b0;
+      cmd_valid <= 1'b0;
 
       if (!cs_active) begin
         state <= STATE_IDLE;
@@ -91,6 +102,7 @@ module spi_register_bridge (
         bit_count <= '0;
         command_write <= 1'b0;
         command_burst <= 1'b0;
+        command_shift <= '0;
         read_sample_seen <= 1'b0;
         spi_miso <= 1'b0;
         spi_error <= 1'b0;
@@ -101,13 +113,17 @@ module spi_register_bridge (
 
           STATE_COMMAND: begin
             if (sclk_rise) begin
+              command_shift <= {command_shift[5:0], mosi_sync[1]};
               if (bit_count == 6'd0)
                 command_write <= mosi_sync[1];
               if (bit_count == 6'd1)
                 command_burst <= mosi_sync[1];
               if (bit_count == 6'd7) begin
                 bit_count <= '0;
-                state <= STATE_ADDRESS;
+                if ({command_shift[6:0], mosi_sync[1]} == COMMAND_STREAM_OPCODE)
+                  state <= STATE_STREAM_DATA;
+                else
+                  state <= STATE_ADDRESS;
               end else begin
                 bit_count <= bit_count + 6'd1;
               end
@@ -195,6 +211,23 @@ module spi_register_bridge (
               end else begin
                 spi_miso <= tx_shift[31];
                 tx_shift <= {tx_shift[30:0], 1'b0};
+                bit_count <= bit_count + 6'd1;
+              end
+            end
+          end
+
+          STATE_STREAM_DATA: begin
+            if (sclk_rise) begin
+              data_shift <= {data_shift[29:0], mosi_sync[1]};
+              if (bit_count == 6'd31) begin
+                bit_count <= '0;
+                cmd_data <= {data_shift[30:0], mosi_sync[1]};
+                if (cmd_ready) begin
+                  cmd_valid <= 1'b1;
+                end else begin
+                  spi_error <= 1'b1;
+                end
+              end else begin
                 bit_count <= bit_count + 6'd1;
               end
             end

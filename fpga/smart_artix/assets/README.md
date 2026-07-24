@@ -11,5 +11,5 @@ SF2/MIDI preprocessing
   -> wave image and metadata
   -> SD card, host transfer, or MCU storage
   -> DDR3 load before playback
-  -> SPI register control during playback
+  -> SPI transactional voice commands during playback
 ```

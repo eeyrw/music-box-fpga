@@ -44,6 +44,10 @@ module multi_voice_pipeline #(
   logic [VOICE_INDEX_WIDTH-1:0] voice_index;
   logic [VOICE_INDEX_WIDTH-1:0] render_index;
   logic [NUM_VOICES-1:0] frame_commit;
+  voice_config_t snapshot_config;
+  voice_runtime_t snapshot_runtime;
+  logic snapshot_config_valid;
+  logic snapshot_commit;
   (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0] phase [NUM_VOICES];
   (* ram_style = "distributed" *) logic [PHASE_WIDTH-1:0] phase_r [NUM_VOICES];
   logic [NUM_VOICES-1:0] phase_valid;
@@ -161,28 +165,28 @@ module multi_voice_pipeline #(
   assign phase_write_en = endpoint_issue_valid && endpoint_issue_ready;
   assign dsp_issue_valid = endpoint_context_valid;
   assign dsp_ready_no_context_pulse = (state != IDLE) && !endpoint_context_valid;
-  assign cfg_enable = voice_config.enable;
-  assign cfg_stereo = voice_config.stereo;
-  assign cfg_base_addr = voice_config.base_addr;
-  assign cfg_base_addr_r = voice_config.base_addr_r;
-  assign cfg_length = voice_config.length;
-  assign cfg_length_r = voice_config.length_r;
-  assign cfg_loop_start = voice_config.loop_start;
-  assign cfg_loop_start_r = voice_config.loop_start_r;
-  assign cfg_loop_end = voice_config.loop_end;
-  assign cfg_loop_end_r = voice_config.loop_end_r;
-  assign cfg_phase_inc = voice_runtime.phase_inc;
-  assign cfg_gain_l = voice_runtime.gain_l;
-  assign cfg_gain_r = voice_runtime.gain_r;
-  assign cfg_envelope_level = voice_runtime.envelope_level;
-  assign cfg_loop_mode = voice_config.loop_mode;
-  assign cfg_released = voice_runtime.released;
-  assign cfg_filter_enable = voice_runtime.filter_enable;
-  assign cfg_filter_b0 = voice_runtime.filter_b0;
-  assign cfg_filter_b1 = voice_runtime.filter_b1;
-  assign cfg_filter_b2 = voice_runtime.filter_b2;
-  assign cfg_filter_a1 = voice_runtime.filter_a1;
-  assign cfg_filter_a2 = voice_runtime.filter_a2;
+  assign cfg_enable = snapshot_config.enable;
+  assign cfg_stereo = snapshot_config.stereo;
+  assign cfg_base_addr = snapshot_config.base_addr;
+  assign cfg_base_addr_r = snapshot_config.base_addr_r;
+  assign cfg_length = snapshot_config.length;
+  assign cfg_length_r = snapshot_config.length_r;
+  assign cfg_loop_start = snapshot_config.loop_start;
+  assign cfg_loop_start_r = snapshot_config.loop_start_r;
+  assign cfg_loop_end = snapshot_config.loop_end;
+  assign cfg_loop_end_r = snapshot_config.loop_end_r;
+  assign cfg_phase_inc = snapshot_runtime.phase_inc;
+  assign cfg_gain_l = snapshot_runtime.gain_l;
+  assign cfg_gain_r = snapshot_runtime.gain_r;
+  assign cfg_envelope_level = snapshot_runtime.envelope_level;
+  assign cfg_loop_mode = snapshot_config.loop_mode;
+  assign cfg_released = snapshot_runtime.released;
+  assign cfg_filter_enable = snapshot_runtime.filter_enable;
+  assign cfg_filter_b0 = snapshot_runtime.filter_b0;
+  assign cfg_filter_b1 = snapshot_runtime.filter_b1;
+  assign cfg_filter_b2 = snapshot_runtime.filter_b2;
+  assign cfg_filter_a1 = snapshot_runtime.filter_a1;
+  assign cfg_filter_a2 = snapshot_runtime.filter_a2;
 
   voice_phase_frame phase_frame (
     .stereo(current_stereo),
@@ -293,6 +297,7 @@ module multi_voice_pipeline #(
       filter_z1_r[dsp_result.voice_index] <= dsp_result.next_z1_r;
       filter_z2_r[dsp_result.voice_index] <= dsp_result.next_z2_r;
     end
+
   end
 
   assign busy = (state != IDLE);
@@ -345,10 +350,21 @@ module multi_voice_pipeline #(
       sample_l <= '0;
       sample_r <= '0;
       frame_commit <= '0;
+      snapshot_config <= '0;
+      snapshot_runtime <= '0;
+      snapshot_config_valid <= 1'b0;
+      snapshot_commit <= 1'b0;
       phase_valid <= '0;
       filter_state_valid <= '0;
     end else begin
       sample_valid <= 1'b0;
+
+      if (runtime_snapshot_prepare) begin
+        snapshot_config <= voice_config;
+        snapshot_runtime <= voice_runtime;
+        snapshot_config_valid <= config_valid[runtime_snapshot_voice];
+        snapshot_commit <= frame_commit[runtime_snapshot_voice];
+      end
 
       if (dsp_valid) begin
         if (dsp_result.filter_enable)
@@ -412,8 +428,8 @@ module multi_voice_pipeline #(
         end
         START_VOICE: begin
           current_enable <= cfg_enable;
-          current_config_valid <= config_valid[voice_index];
-          current_commit <= frame_commit[voice_index];
+          current_config_valid <= snapshot_config_valid;
+          current_commit <= snapshot_commit;
           current_stereo <= cfg_stereo;
           current_base_addr <= cfg_base_addr;
           current_base_addr_r <= cfg_base_addr_r;
@@ -423,9 +439,9 @@ module multi_voice_pipeline #(
           current_loop_start_r <= cfg_loop_start_r;
           current_loop_end <= cfg_loop_end;
           current_loop_end_r <= cfg_loop_end_r;
-          current_phase <= frame_commit[voice_index] ? voice_config.phase_init :
+          current_phase <= snapshot_commit ? snapshot_config.phase_init :
                            (phase_valid[voice_index] ? phase_read : '0);
-          current_phase_r <= frame_commit[voice_index] ? voice_config.phase_init :
+          current_phase_r <= snapshot_commit ? snapshot_config.phase_init :
                              (phase_valid[voice_index] ? phase_r_read : '0);
           current_phase_inc <= cfg_phase_inc;
           current_gain_l <= cfg_gain_l;

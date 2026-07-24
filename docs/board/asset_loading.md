@@ -14,7 +14,7 @@ to know when playback can start.
 
 The existing wave-memory contract is preserved: word address zero is the first
 16-bit word of the complete SF2 file image in DDR3, and voice `BASE_ADDR` values
-include the `smpl` chunk payload offset. Software writes voice registers using
+include the `smpl` chunk payload offset. Software sends voice commands using
 metadata produced by a host-side SF2 parser or preprocessing tool.
 
 ```text
@@ -26,7 +26,7 @@ SD raw image
 
 MCU / host control
   -> SF2 or preprocessed metadata
-  -> voice register writes over SPI/control bus
+  -> transactional voice commands over SPI
   -> wavetable_render_core reads PCM from DDR3
 ```
 

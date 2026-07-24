@@ -7,64 +7,11 @@
     "width": 32,
     "peripherals": [
       {
-        "name": "VOICE",
-        "description": "Repeated per-voice control window.",
-        "baseAddress": "0x0100",
-        "dim": 256,
-        "dimIncrement": "0x0080",
-        "registers": [
-          {"name": "BASE_ADDR", "addressOffset": "0x0000"},
-          {"name": "BASE_ADDR_R", "addressOffset": "0x0004"},
-          {"name": "LENGTH", "addressOffset": "0x0008"},
-          {"name": "LENGTH_R", "addressOffset": "0x000c"},
-          {"name": "LOOP_START", "addressOffset": "0x0010"},
-          {"name": "LOOP_START_R", "addressOffset": "0x0014"},
-          {"name": "LOOP_END", "addressOffset": "0x0018"},
-          {"name": "LOOP_END_R", "addressOffset": "0x001c"},
-          {"name": "PHASE_INIT", "addressOffset": "0x0020"},
-          {"name": "PHASE_INC", "addressOffset": "0x0024"},
-          {"name": "GAIN", "addressOffset": "0x0028"},
-          {"name": "ENVELOPE", "addressOffset": "0x002c"},
-          {
-            "name": "FILTER_CONTROL",
-            "addressOffset": "0x0030",
-            "fields": [
-              {"name": "ENABLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
-            ]
-          },
-          {"name": "FILTER_B0_B1", "addressOffset": "0x0034"},
-          {"name": "FILTER_B2_A1", "addressOffset": "0x0038"},
-          {
-            "name": "FILTER_A2",
-            "addressOffset": "0x003c",
-            "fields": [
-              {"name": "APPLY", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
-            ]
-          },
-          {
-            "name": "VOICE_CONTROL",
-            "addressOffset": "0x0040",
-            "fields": [
-              {"name": "STEREO", "bitOffset": 0, "bitWidth": 1},
-              {"name": "LOOP_MODE", "bitOffset": 1, "bitWidth": 2},
-              {"name": "ENABLE", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
-              {"name": "APPLY", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
-              {"name": "MASK", "value": "0x0000000f"}
-            ]
-          },
-          {"name": "PHASE_INC_RUNTIME", "addressOffset": "0x0044"},
-          {"name": "GAIN_RUNTIME", "addressOffset": "0x0048"},
-          {"name": "ENVELOPE_RUNTIME", "addressOffset": "0x004c"},
-          {"name": "RELEASE_CONTROL", "addressOffset": "0x0050"},
-          {"name": "STATUS", "addressOffset": "0x0054"}
-        ]
-      },
-      {
         "name": "SYSTEM",
         "description": "Common and board platform register window.",
         "baseAddress": "0x9000",
         "registers": [
-          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00060000"},
+          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00070000"},
           {"name": "SYSTEM_STATUS", "addressOffset": "0x0010"},
           {
             "name": "COMMON_EVENT_FLAGS",
@@ -82,14 +29,39 @@
           {"name": "UNDERRUN_COUNT", "addressOffset": "0x0024"},
           {"name": "SAMPLE_DROP_COUNT", "addressOffset": "0x0028"},
           {"name": "RENDER_DEADLINE_MISS_COUNT", "addressOffset": "0x002c"},
-          {"name": "EVENT_TIME", "addressOffset": "0x0030"},
-          {"name": "EVENT_FIFO_STATUS", "addressOffset": "0x0034"},
+          {"name": "CURRENT_SAMPLE", "addressOffset": "0x0030"},
+          {"name": "CMD_FIFO_STATUS", "addressOffset": "0x0034"},
           {"name": "MEM_RESPONSE_COUNT", "addressOffset": "0x0038"},
-          {"name": "EVENT_FIFO_DATA0", "addressOffset": "0x0080"},
-          {"name": "EVENT_FIFO_DATA1", "addressOffset": "0x0084"},
-          {"name": "EVENT_FIFO_DATA2", "addressOffset": "0x0088"},
-          {"name": "EVENT_FIFO_DATA3", "addressOffset": "0x008c"},
-          {"name": "EVENT_FIFO_PUSH", "addressOffset": "0x0090"},
+          {"name": "CMD_FIFO_DATA", "addressOffset": "0x003c"},
+          {"name": "CMD_ERROR_STATUS", "addressOffset": "0x0094"},
+          {"name": "CMD_ACTION_STATUS", "addressOffset": "0x009c"},
+          {"name": "DEBUG_VOICE_INDEX", "addressOffset": "0x00a0"},
+          {"name": "DEBUG_VOICE_CAPTURE", "addressOffset": "0x00a4"},
+          {"name": "DEBUG_VOICE_STATUS", "addressOffset": "0x00a8"},
+          {"name": "DEBUG_VOICE_BASE_L", "addressOffset": "0x00ac"},
+          {"name": "DEBUG_VOICE_BASE_R", "addressOffset": "0x00b0"},
+          {"name": "DEBUG_VOICE_LENGTH_L", "addressOffset": "0x00b4"},
+          {"name": "DEBUG_VOICE_LENGTH_R", "addressOffset": "0x00b8"},
+          {"name": "DEBUG_VOICE_LOOP_START_L", "addressOffset": "0x00bc"},
+          {"name": "DEBUG_VOICE_LOOP_START_R", "addressOffset": "0x00c0"},
+          {"name": "DEBUG_VOICE_LOOP_END_L", "addressOffset": "0x00c4"},
+          {"name": "DEBUG_VOICE_LOOP_END_R", "addressOffset": "0x00c8"},
+          {"name": "DEBUG_VOICE_PHASE_INIT", "addressOffset": "0x00cc"},
+          {"name": "DEBUG_VOICE_PHASE_INC", "addressOffset": "0x00d0"},
+          {"name": "DEBUG_VOICE_GAIN", "addressOffset": "0x00d4"},
+          {"name": "DEBUG_VOICE_ENVELOPE", "addressOffset": "0x00d8"},
+          {"name": "DEBUG_VOICE_FILTER_CONTROL", "addressOffset": "0x00dc"},
+          {"name": "DEBUG_VOICE_FILTER_B0_B1", "addressOffset": "0x00e0"},
+          {"name": "DEBUG_VOICE_FILTER_B2_A1", "addressOffset": "0x00e4"},
+          {"name": "DEBUG_ENV_DELAY", "addressOffset": "0x00e8"},
+          {"name": "DEBUG_ENV_ATTACK_STEP", "addressOffset": "0x00ec"},
+          {"name": "DEBUG_ENV_HOLD", "addressOffset": "0x00f0"},
+          {"name": "DEBUG_ENV_DECAY_STEP", "addressOffset": "0x00f4"},
+          {"name": "DEBUG_ENV_SUSTAIN", "addressOffset": "0x00f8"},
+          {"name": "DEBUG_ENV_RELEASE_STEP", "addressOffset": "0x00fc"},
+          {"name": "DEBUG_ENV_ELAPSED", "addressOffset": "0x0100"},
+          {"name": "DEBUG_ENV_ATTACK_LEVEL", "addressOffset": "0x0104"},
+          {"name": "DEBUG_ENV_ATTENUATION", "addressOffset": "0x0108"},
           {
             "name": "PLATFORM_STATUS",
             "addressOffset": "0x0040",

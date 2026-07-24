@@ -21,32 +21,6 @@ constexpr int kPhaseFracBits = 8;
 constexpr uint32_t kPhaseFracScale = 1u << kPhaseFracBits;
 constexpr uint32_t kPhaseFracMask = kPhaseFracScale - 1u;
 constexpr uint32_t kPhaseFrameMask = (1u << kPhaseFrameBits) - 1u;
-constexpr uint16_t kVoiceBase = regs::kVoiceBase;
-constexpr uint16_t kVoiceStride = regs::kVoiceStride;
-
-constexpr int kRegBaseAddr = regs::kOffBaseAddr;
-constexpr int kRegBaseAddrR = regs::kOffBaseAddrR;
-constexpr int kRegLength = regs::kOffLength;
-constexpr int kRegLengthR = regs::kOffLengthR;
-constexpr int kRegLoopStart = regs::kOffLoopStart;
-constexpr int kRegLoopStartR = regs::kOffLoopStartR;
-constexpr int kRegLoopEnd = regs::kOffLoopEnd;
-constexpr int kRegLoopEndR = regs::kOffLoopEndR;
-constexpr int kRegVoiceControl = regs::kOffVoiceControl;
-constexpr int kRegPhaseInit = regs::kOffPhaseInit;
-constexpr int kRegPhaseInc = regs::kOffPhaseInc;
-constexpr int kRegPhaseIncRuntime = regs::kOffPhaseIncRuntime;
-constexpr int kRegGain = regs::kOffGain;
-constexpr int kRegGainRuntime = regs::kOffGainRuntime;
-constexpr int kRegEnvelope = regs::kOffEnvelope;
-constexpr int kRegEnvelopeRuntime = regs::kOffEnvelopeRuntime;
-constexpr int kRegFilterControl = regs::kOffFilterControl;
-constexpr int kRegFilterB0B1 = regs::kOffFilterB0B1;
-constexpr int kRegFilterB2A1 = regs::kOffFilterB2A1;
-constexpr int kRegFilterA2 = regs::kOffFilterA2;
-constexpr int kRegReleaseControl = regs::kOffReleaseControl;
-constexpr int kRegStatus = regs::kOffStatus;
-
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
   std::string midi;
@@ -59,7 +33,6 @@ struct Args {
   int sample_rate = 48000;
   double adsr_tick_ms = 5.0;
   bool sample_accurate_envelope = false;
-  bool rtl_envelope_events = false;
 };
 
 struct NoteEvent {
@@ -141,6 +114,7 @@ struct Region {
   int attack_step = kQ15Full;
   int decay_step = kQ15Full;
   int release_step = kQ15Full;
+  int envelope_tick_samples = 1;
   int initial_filter_fc = 13500;
   int initial_filter_q = 0;
   int mod_lfo_delay_ticks = 0;
@@ -173,36 +147,6 @@ struct FilterConfig {
   int b2 = 0;
   int a1 = 0;
   int a2 = 0;
-};
-
-struct RegisterWriteStats {
-  uint64_t total = 0;
-  uint64_t envelope = 0;
-  uint64_t gain_runtime = 0;
-  uint64_t phase_inc_runtime = 0;
-  uint64_t filter = 0;
-  uint64_t commit = 0;
-  uint64_t release = 0;
-  uint64_t envelope_events = 0;
-  uint64_t config = 0;
-};
-
-enum class EnvelopeEventOpcode : uint8_t {
-  kEnvSet = 1,
-  kVolAttack = 2,
-  kVolDecayCb = 3,
-  kVolReleaseCb = 4,
-  kReleaseFlag = 5,
-  kStopVoice = 6,
-};
-
-struct EnvelopeEvent {
-  uint32_t timestamp = 0;
-  int voice = 0;
-  EnvelopeEventOpcode opcode = EnvelopeEventOpcode::kEnvSet;
-  uint16_t payload0 = 0;
-  uint32_t payload1 = 0;
-  uint32_t payload2 = 0;
 };
 
 struct RenderDiagnostics {
@@ -241,21 +185,15 @@ struct RenderDiagnostics {
   uint32_t max_runtime_filter_coeff_jump = 0;
 };
 
-class VoiceControlSink {
+class VoiceCommandSink {
  public:
-  virtual ~VoiceControlSink() = default;
-  virtual void set_envelope(int voice, int level) = 0;
-  virtual void set_gain(int voice, int gain_l, int gain_r) = 0;
-  virtual void set_phase_inc(int voice, uint32_t phase_inc) = 0;
-  virtual void set_filter(int voice, const FilterConfig& filter) = 0;
-  virtual void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) = 0;
-  virtual void release_voice(int voice, const Region& region) = 0;
-};
-
-class EnvelopeEventSink {
- public:
-  virtual ~EnvelopeEventSink() = default;
-  virtual void push_envelope_event(const EnvelopeEvent& event) = 0;
+  virtual ~VoiceCommandSink() = default;
+  virtual void start_voice(int voice, uint32_t phase_inc, const Region& region) = 0;
+  virtual void update_gain_phase(int voice, int gain_l, int gain_r,
+                                 uint32_t phase_inc) = 0;
+  virtual void update_filter(int voice, const FilterConfig& filter) = 0;
+  virtual void release_voice(int voice, uint32_t release_step_cb_q12_20) = 0;
+  virtual void stop_voice(int voice) = 0;
 };
 
 struct VoiceState {
@@ -320,48 +258,6 @@ inline int velocity_target(int velocity) {
   int vel = velocity < 0 ? 0 : (velocity > 127 ? 127 : velocity);
   if (vel == 0) return 0;
   return concave_attenuation_q15(vel);
-}
-
-inline uint16_t voice_addr(int voice, int offset) {
-  return regs::voice_addr(voice, uint16_t(offset));
-}
-
-inline void note_register_write(RegisterWriteStats& stats, uint16_t address) {
-  ++stats.total;
-  if (address == regs::kEventFifoData0 || address == regs::kEventFifoData1 ||
-      address == regs::kEventFifoData2 || address == regs::kEventFifoData3 ||
-      address == regs::kEventFifoPush) {
-    ++stats.envelope_events;
-    return;
-  }
-  if (address < kVoiceBase) return;
-  int offset = int((address - kVoiceBase) % kVoiceStride);
-  switch (offset) {
-    case kRegEnvelopeRuntime:
-      ++stats.envelope;
-      break;
-    case kRegGainRuntime:
-      ++stats.gain_runtime;
-      break;
-    case kRegPhaseIncRuntime:
-      ++stats.phase_inc_runtime;
-      break;
-    case kRegFilterControl:
-    case kRegFilterB0B1:
-    case kRegFilterB2A1:
-    case kRegFilterA2:
-      ++stats.filter;
-      break;
-    case kRegVoiceControl:
-      ++stats.commit;
-      break;
-    case kRegReleaseControl:
-      ++stats.release;
-      break;
-    default:
-      ++stats.config;
-      break;
-  }
 }
 
 }  // namespace render

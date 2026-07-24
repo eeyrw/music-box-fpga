@@ -31,11 +31,11 @@ pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 | --- | --- | --- | --- |
 | `rtl/pkg` | none | Shared packages, constants, packed structs, and generated register constants. Packages are imported, not instantiated. | Imported throughout `rtl/`, `fpga/common/rtl`, and simulation code. |
 | `rtl/top` | `wavetable_render_core`, `wavetable_cached_render_core` | Generic core composition modules. | Testbenches, C++ Verilator harnesses, and common board wrappers. |
-| `rtl/control` | `voice_register_bank` | Register decode, shadow descriptor storage, commit sequencing, active renderer snapshots, and runtime control storage. | `wavetable_render_core`. |
+| `rtl/control` | `synth_control_plane` | Global command/status decode, transactional parsing, bounded action batching, and packed prepared/active voice state. | `wavetable_render_core`. |
 | `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
 | `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
 | `rtl/memory` | `voice_line_cache`, `wave_memory_subsystem` | Adapters from the core's one-word PCM read interface to an external line-read interface. `voice_line_cache` is the current cached render path; `wave_memory_subsystem` is the older single-line baseline used by some common/board wrappers. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and render testbenches. |
-| `rtl/audio` | `output_sample_fifo` | Generic synchronous PCM frame FIFO for wrappers that decouple render output from audio serialization. | `fpga/common/rtl/wavetable_i2s_output.sv`; not used by the bare `rtl/top` cores. |
+| `rtl/audio` | `output_sample_fifo`, `render_credit_scheduler` | PCM buffering plus target-level render-credit generation for continuous output. | Common I2S/demo wrappers; not used by the bare `rtl/top` cores. |
 
 There is currently no `rtl/bus` source file. The generic register and memory
 ports are explicit ready/valid signals on module interfaces rather than a shared
@@ -47,17 +47,14 @@ The generic render core is composed like this:
 
 ```text
 wavetable_render_core
-+- voice_register_bank
-|  +- voice_active_store
-|  |  +- voice_bram_1r1w
-|  +- voice_runtime_store
-|  |  +- voice_bram_1w2r
-|  |  +- voice_bram_1w2r
-|  |  +- voice_bram_1w2r
-|  |  +- voice_bram_1r1w
-|  +- voice_commit_engine
-|  +- voice_descriptor_store
-|     +- voice_bram_1r1w
++- synth_control_plane
+|  +- transactional_control_plane
+|     +- control_word_fifo
+|     +- control_action_parser
+|     +- control_action_fifo
+|     +- control_action_executor
+|        +- voice_bram_1r1w (prepared)
+|        +- voice_bram_1r1w (active/runtime/envelope)
 +- multi_voice_pipeline
    +- voice_phase_frame
    +- voice_endpoint_fetch
@@ -66,12 +63,12 @@ wavetable_render_core
       +- linear_interpolator
 ```
 
-`wavetable_cached_render_core` wraps that tree and adds the memory adapter:
+`wavetable_cached_render_core` wraps that tree and adds the cached memory adapter:
 
 ```text
 wavetable_cached_render_core
 +- wavetable_render_core
-+- wave_memory_subsystem
++- voice_line_cache
 ```
 
 The reusable system core uses the same render and memory blocks directly while
@@ -100,6 +97,7 @@ wavetable_demo_system
 +- wavetable_common_status_regs
 +- spi_register_bridge
 +- fractional_tick_gen
++- render_credit_scheduler
 +- wavetable_system_core
 +- wavetable_i2s_output
 ```
@@ -132,15 +130,15 @@ smart_artix_top
 
 - PCM, phase, address, filter-state, and voice-count widths.
 - Loop-mode constants.
-- `voice_config_t`, the committed static renderer configuration.
-- `voice_shadow_t`, the software-visible shadow descriptor.
+- `voice_config_t`, the static renderer configuration inside prepared/active state.
+- `prepared_voice_t` and `active_voice_t`, the packed command-owned state.
 - `voice_runtime_t`, runtime controls sampled by the renderer.
 - `voice_dsp_context_t` and `voice_dsp_result_t`, the typed boundary between
   endpoint fetching, DSP, and result retirement.
 
 `rtl/pkg/synth_register_pkg.sv` is generated from `spec/register_map.json` and
-owns the register address constants, bit masks, default software constants, and
-`reg_voice_addr()`. Do not edit it by hand; run `make generate-register-map`
+owns global register address constants, bit masks, and numeric constants. Do
+not edit it by hand; run `make generate-register-map`
 after changing the JSON spec.
 
 Board-facing packages stay with their board integration code instead of the
@@ -151,28 +149,27 @@ structs, platform status, and DDR register access request/status structs used be
 
 ## Control Layer
 
-`voice_register_bank` is the top of `rtl/control`. It is the only generic RTL
+`synth_control_plane` is the top of `rtl/control`. It is the only generic RTL
 module that talks directly to the external register bus. It owns:
 
-- Voice address decoding and global `VERSION` reads.
-- Routing writes to shadow descriptor state or runtime state.
-- Starting voice commits and filter commits.
-- Multi-cycle synchronous readback from the per-voice stores.
-- Renderer-facing read ports for active configuration and runtime controls.
+- Global command/status address decoding and `VERSION` reads.
+- Accepting register-fed or dedicated-stream command words.
+- Bounded action execution at renderer frame boundaries.
+- Renderer-facing synchronous snapshots of packed active/runtime state.
+- Coherent read-only board-debug capture using the existing voice RAM read port.
 
 Internal control modules are split by ownership:
 
 | Module | Role |
 | --- | --- |
-| `voice_descriptor_store` | Stores software-written shadow voice descriptors and normalizes register fields into `voice_shadow_t`. |
-| `voice_commit_engine` | Reads a complete shadow descriptor and emits the sequenced writes needed for atomic active/runtime commit. |
-| `voice_active_store` | Stores committed static renderer configuration and per-voice valid bits. The renderer reads this through a synchronous RAM-style port. |
-| `voice_runtime_store` | Stores runtime phase increment, gains, envelope level, release state, filter enable, and coefficients. Runtime writes do not reload phase. |
+| `control_word_fifo` | Generic synchronous FIFO used by the 32-bit command ingress. |
+| `control_action_parser` | Decodes complete transactional command headers and payloads into packed actions. |
+| `control_action_fifo` | Buffers decoded actions until the next renderer frame boundary. |
+| `control_action_executor` | Applies all lifecycle/runtime actions, advances the six-stage volume envelope, and owns packed prepared/active voice RAM with seq validation. |
+| `transactional_control_plane` | Connects word parsing, action batching, lifecycle execution, and renderer frame release. |
 | `voice_bram_1r1w` | Small inferred synchronous RAM helper with one read and one write port. |
-| `voice_bram_1w2r` | Small inferred synchronous RAM helper with one write and two read ports. |
 
-`voice_bram_1r1w` and `voice_bram_1w2r` are local storage primitives for the
-control layer. They are not protocol tops.
+`voice_bram_1r1w` is a local storage primitive, not a protocol top.
 
 ## Voice Layer
 
@@ -180,8 +177,8 @@ control layer. They are not protocol tops.
 frame at a time:
 
 - Accepts `sample_tick` when idle.
-- Scans committed voice slots in index order.
-- Reads active configuration and runtime state through `voice_register_bank`.
+- Scans active voice slots in index order.
+- Reads active configuration and runtime state through `synth_control_plane`.
 - Maintains renderer-owned phase and filter history.
 - Uses `voice_phase_frame` to calculate frames, fraction, wrapping, done, and
   next phase.
@@ -240,10 +237,11 @@ of this adapter; phase-aware prefetch may need metadata from
 
 ## Audio Layer
 
-`output_sample_fifo` is the only module in `rtl/audio`. It is a synchronous
-stereo PCM FIFO with push/pop controls and level/empty/full status. The bare
-generic render tops do not instantiate it; the current SPI/I2S system wrapper
-uses it to decouple `sample_valid` from I2S sample consumption.
+`output_sample_fifo` is a synchronous stereo PCM FIFO with push/pop controls and
+level/empty/full status. `render_credit_scheduler` requests new frames until the
+FIFO plus any inflight frame reaches its target level. The bare generic render
+tops instantiate neither module; the common demo/I2S wrappers use them to
+decouple rendering from sample consumption.
 
 ## Source Order
 

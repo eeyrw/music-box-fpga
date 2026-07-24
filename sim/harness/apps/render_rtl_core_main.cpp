@@ -1,4 +1,4 @@
-#include "fanout_sink.h"
+#include "command_control.h"
 #include "midi_parser.h"
 #include "core_rtl_harness.h"
 #include "reference_synth.h"
@@ -44,12 +44,9 @@ int main(int argc, char** argv) {
     render::ReferenceSynth reference(wave_memory, &diagnostics);
     render::CoreRtlHarness rtl(wave_memory);
     rtl.reset();
-    render::FanoutSink control(reference, rtl);
+    render::CommandFanout command_stream(reference, rtl);
+    render::CommandVoiceControl control(command_stream);
     render::McuModel mcu(control, regions, &diagnostics);
-    if (args.rtl_envelope_events) {
-      mcu.set_rtl_envelope_events(true);
-      mcu.set_envelope_event_sink(&control);
-    }
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -106,7 +103,6 @@ int main(int argc, char** argv) {
     };
 
     std::ostringstream stats;
-    const auto& reg = rtl.register_write_stats();
     stats << "  \"render_target\": \"render-rtl-core\""
           << ",\n  \"rtl_top\": \"wavetable_render_core\""
           << ",\n" << render::render_input_json_fields(args, adsr_tick_samples)
@@ -128,15 +124,6 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices()
           << ",\n" << render::diagnostics_json_fields(diagnostics)
           << ",\n  \"interrupted\": " << (render::interrupt_requested() ? "true" : "false")
-          << ",\n  \"register_writes_total\": " << reg.total
-          << ",\n  \"register_writes_envelope\": " << reg.envelope
-          << ",\n  \"register_writes_gain_runtime\": " << reg.gain_runtime
-          << ",\n  \"register_writes_phase_inc_runtime\": " << reg.phase_inc_runtime
-          << ",\n  \"register_writes_filter\": " << reg.filter
-          << ",\n  \"register_writes_commit\": " << reg.commit
-          << ",\n  \"register_writes_release\": " << reg.release
-          << ",\n  \"register_writes_envelope_events\": " << reg.envelope_events
-          << ",\n  \"register_writes_config\": " << reg.config
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
                           produced, int(events.size()), stats.str());
@@ -160,9 +147,6 @@ int main(int argc, char** argv) {
               << " rtl_max_memory_reads=" << rtl.max_render_memory_reads()
               << " rtl_max_enabled_voices=" << rtl.max_enabled_voices()
               << " rtl_max_filtered_voices=" << rtl.max_filtered_voices()
-              << " register_writes=" << reg.total
-              << " envelope_event_writes=" << reg.envelope_events
-              << " filter_writes=" << reg.filter
               << " wav=" << wav_path << "\n";
     return 0;
   } catch (const std::exception& e) {

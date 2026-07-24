@@ -10,6 +10,9 @@ module wavetable_render_core #(
   output logic [31:0]              bus_rdata,
   output logic                     bus_ready,
   output logic                     bus_error,
+  input  logic                     cmd_stream_valid,
+  input  logic [31:0]              cmd_stream_data,
+  output logic                     cmd_stream_ready,
   input  logic                     sample_tick,
   output logic                     sample_valid,
   output synth_pkg::pcm_t          sample_l,
@@ -43,7 +46,9 @@ module wavetable_render_core #(
   logic [synth_pkg::NUM_VOICES-1:0] config_valid;
   logic [synth_pkg::NUM_VOICES-1:0] commit_pulse;
   logic voices_busy;
-  logic frame_boundary;
+  logic frame_request;
+  logic frame_start;
+  logic control_busy;
   logic [31:0] sample_counter;
   logic [31:0] current_render_sample;
   logic runtime_snapshot_prepare;
@@ -53,8 +58,8 @@ module wavetable_render_core #(
   synth_pkg::wave_word_req_t core_mem_req;
   synth_pkg::wave_word_rsp_t core_mem_rsp;
 
-  assign frame_boundary = sample_tick && !voices_busy;
-  assign busy = voices_busy;
+  assign frame_request = sample_tick && !voices_busy && !control_busy;
+  assign busy = voices_busy || control_busy;
   assign bus_req.valid = bus_valid;
   assign bus_req.write = bus_write;
   assign bus_req.address = bus_address;
@@ -69,11 +74,17 @@ module wavetable_render_core #(
   assign core_mem_rsp.valid = mem_rsp_valid;
   assign core_mem_rsp.data = mem_rsp_data;
 
-  voice_register_bank registers (
+  synth_control_plane control_plane (
     .clk,
     .rst,
     .bus_req,
-    .frame_boundary,
+    .cmd_stream_valid,
+    .cmd_stream_data,
+    .cmd_stream_ready,
+    .frame_request,
+    .renderer_busy(voices_busy),
+    .frame_start,
+    .control_busy,
     .bus_rsp,
     .render_voice_index(voice_read_index),
     .runtime_snapshot_prepare,
@@ -97,7 +108,7 @@ module wavetable_render_core #(
     .voice_runtime(render_runtime),
     .config_valid,
     .config_commit(commit_pulse),
-    .sample_tick,
+    .sample_tick(frame_start),
     .busy(voices_busy),
     .sample_valid,
     .sample_l,
@@ -123,7 +134,7 @@ module wavetable_render_core #(
     if (rst) begin
       sample_counter <= 32'd0;
       current_render_sample <= 32'd0;
-    end else if (frame_boundary) begin
+    end else if (frame_start) begin
       current_render_sample <= sample_counter;
       sample_counter <= sample_counter + 32'd1;
     end

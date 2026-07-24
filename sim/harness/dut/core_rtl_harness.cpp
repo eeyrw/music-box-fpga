@@ -10,12 +10,6 @@
 namespace render {
 namespace {
 
-std::string hex16(uint16_t v) {
-  char b[8];
-  std::snprintf(b, sizeof(b), "%04x", v);
-  return b;
-}
-
 int sample_timeout_cycles() {
   // The core render path uses an ideal word memory, but the renderer still walks
   // configured voices serially and a stereo voice can consume four word reads.
@@ -29,13 +23,15 @@ int sample_timeout_cycles() {
 }  // namespace
 
 CoreRtlHarness::CoreRtlHarness(const std::vector<int16_t>& memory)
-    : top_(new Vwavetable_render_core), voice_control_(*this), memory_(memory) {
+    : top_(new Vwavetable_render_core), memory_(memory) {
   top_->clk = 0;
   top_->rst = 1;
   top_->bus_valid = 0;
   top_->bus_write = 0;
   top_->bus_address = 0;
   top_->bus_wdata = 0;
+  top_->cmd_stream_valid = 0;
+  top_->cmd_stream_data = 0;
   top_->sample_tick = 0;
   top_->mem_req_ready = 1;
   top_->mem_rsp_valid = 0;
@@ -50,39 +46,6 @@ void CoreRtlHarness::reset() {
   for (int i = 0; i < 3; ++i) tick();
   top_->rst = 0;
   tick();
-}
-
-void CoreRtlHarness::set_envelope(int voice, int level) {
-  voices_.at(voice).envelope_level = level;
-  voice_control_.set_envelope(voice, level);
-}
-
-void CoreRtlHarness::set_gain(int voice, int gain_l, int gain_r) {
-  voice_control_.set_gain(voice, gain_l, gain_r);
-}
-
-void CoreRtlHarness::set_phase_inc(int voice, uint32_t phase_inc) {
-  voice_control_.set_phase_inc(voice, phase_inc);
-}
-
-void CoreRtlHarness::set_filter(int voice, const FilterConfig& filter) {
-  voices_.at(voice).filter_enable = filter.enable;
-  voice_control_.set_filter(voice, filter);
-}
-
-void CoreRtlHarness::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  voices_.at(voice).enabled = enable != 0;
-  voices_.at(voice).stereo = r.stereo;
-  voices_.at(voice).filter_enable = r.filter_enable;
-  voice_control_.commit_voice(voice, enable, phase_inc, r);
-}
-
-void CoreRtlHarness::release_voice(int voice, const Region& r) {
-  voice_control_.release_voice(voice, r);
-}
-
-void CoreRtlHarness::push_envelope_event(const EnvelopeEvent& event) {
-  voice_control_.push_envelope_event(event);
 }
 
 std::pair<int16_t, int16_t> CoreRtlHarness::request_sample(int produced) {
@@ -128,24 +91,43 @@ std::pair<int16_t, int16_t> CoreRtlHarness::request_sample(int produced) {
   return {int16_t(top_->sample_l), int16_t(top_->sample_r)};
 }
 
-void CoreRtlHarness::write_register(uint16_t address, uint32_t data) {
-  constexpr int kBusTimeoutCycles = 1000;
-  note_register_write(register_write_stats_, address);
-  top_->bus_valid = 1;
-  top_->bus_write = 1;
-  top_->bus_address = address;
-  top_->bus_wdata = data;
-  int waited = 0;
-  while (!top_->bus_ready && waited < kBusTimeoutCycles) {
+void CoreRtlHarness::write_command_words(const std::vector<uint32_t>& words) {
+  if (words.empty()) return;
+  const uint8_t opcode = uint8_t(words.front() >> 24);
+  const int voice = int((words.front() >> 16) & 0xffu);
+  if (voice >= 0 && voice < kNumVoices) {
+    if (opcode == 0x10 || opcode == 0x11) {
+      voices_[voice].stereo = opcode == 0x11;
+      const size_t filter_word = opcode == 0x11 ? 13 : 9;
+      voices_[voice].filter_enable = words.size() > filter_word &&
+                                     (words[filter_word] & 0x00010000u) != 0;
+    } else if (opcode == 0x12) {
+      voices_[voice].enabled = true;
+      voices_[voice].envelope_level = kQ15Full;
+    } else if (opcode == 0x15) {
+      voices_[voice].enabled = false;
+      voices_[voice].envelope_level = 0;
+    } else if (opcode == 0x17 && words.size() >= 4) {
+      voices_[voice].filter_enable = (words[3] & 0x00010000u) != 0;
+    }
+  }
+
+  for (uint32_t word : words) {
+    int waited = 0;
+    while (!top_->cmd_stream_ready && waited < 1000) {
+      tick();
+      ++waited;
+    }
+    if (!top_->cmd_stream_ready)
+      throw std::runtime_error("core RTL command FIFO backpressure timeout");
+    top_->cmd_stream_data = word;
+    top_->cmd_stream_valid = 1;
     tick();
-    ++waited;
+    top_->cmd_stream_valid = 0;
   }
-  if (!top_->bus_ready || top_->bus_error) {
-    throw std::runtime_error("core RTL bus write failed at address 0x" + hex16(address));
-  }
-  top_->bus_valid = 0;
-  top_->bus_write = 0;
-  tick();
+  // The stream handshake accepts words into the ingress FIFO. Let the parser
+  // publish this complete command before the caller can request a PCM frame.
+  for (int i = 0; i < 3; ++i) tick();
 }
 
 void CoreRtlHarness::tick() {

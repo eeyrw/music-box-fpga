@@ -38,7 +38,8 @@ module smart_artix_top (
   output logic led_loader_error
 );
   localparam int LINE_WORDS = 8;
-  localparam int OUTPUT_FIFO_DEPTH = 8;
+  localparam int OUTPUT_FIFO_DEPTH = 64;
+  localparam int OUTPUT_FIFO_TARGET_LEVEL = 48;
   localparam int SD_DIV_WIDTH = 16;
   localparam int SYS_CLK_HZ = 100_000_000;
   localparam int SAMPLE_RATE_HZ = 48_000;
@@ -185,6 +186,8 @@ module smart_artix_top (
   wavetable_demo_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
+    .TARGET_LEVEL(OUTPUT_FIFO_TARGET_LEVEL),
+    .START_LEVEL(OUTPUT_FIFO_TARGET_LEVEL),
     .SYS_CLK_HZ(SYS_CLK_HZ),
     .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ),
     .PLATFORM_REGS_PRESENT(1'b1)

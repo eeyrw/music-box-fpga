@@ -91,19 +91,17 @@ scaled by channel gain only with a wide signed product shifted right by 15.
 ## Envelope Level
 
 Each voice has a signed Q1.15 `envelope_level` folded into the per-channel output
-gain before mixing. Software may supply the current level directly through
-`ENVELOPE_RUNTIME`, or it may push low-rate envelope primitive events that the RTL
-envelope event engine converts into the renderer-facing level at each voice
-snapshot. The RTL event engine handles primitive attack and centibel decay/release
-curves only; SoundFont timecent, modulator, and region-policy calculations remain
-software-owned. Updating `envelope_level` does not reload playback phase.
+gain before mixing. The FPGA derives it once per rendered sample from the packed
+Delay, Attack, Hold, Decay, Sustain, and Release state installed by `VOICE_START`.
+SoundFont timecent, modulator, and region-policy calculations remain
+software-owned. `VOICE_ENV_UPDATE` changes envelope parameters without reloading
+playback phase.
 `0x7fff` means full level and is treated as a bypass to preserve exact samples
 from the channel-gain stage.
 
-Envelope event attack ramps linearly in Q1.15. Decay and release events carry
-integer cB endpoints and a 24-bit sample duration. The engine advances a Q0.32
-phase accumulator over that duration, maps phase progress to an internal Q8.8 cB
-value, then converts cB to Q1.15 with a generated SoundFont amplitude curve:
+Attack advances a Q0.32 linear-amplitude accumulator. Decay, Sustain, and
+Release store Q12.20 centibel attenuation and convert it to Q1.15 with a
+generated SoundFont amplitude curve:
 
 ```text
 level_q15 ~= round(32767 * 10 ^ (-centibel / 200))
@@ -113,17 +111,16 @@ The generated table covers `0..960 cB` at 4 cB intervals and the RTL linearly
 interpolates between adjacent entries using the Q8.8 fractional cB value. Values
 at or above `960 cB` clamp to zero. `tools/gen_envelope_lut.py` generates both
 `rtl/generated/synth_envelope_lut_pkg.sv` and
-`sim/harness/generated/envelope_lut.h` so the FPGA event engine and C++ reference
+`sim/harness/generated/envelope_lut.h` so the FPGA action executor and C++ reference
 use the same integer table.
 
 ## Biquad IIR Filter
 
 Each voice can enable a second-order IIR filter after interpolation and before
-channel gain. Coefficients are signed 16-bit Q2.14 values packed into
-`FILTER_B0_B1`, `FILTER_B2_A1`, and `FILTER_A2`. `0x4000` is unity, `0x2000` is
-0.5, and negative feedback coefficients use two's-complement signed values.
-`FILTER_A2[16]` is a write-only runtime commit strobe and is not part of the
-coefficient value.
+channel gain. Coefficients are signed 16-bit Q2.14 values. DEFINE and
+`VOICE_FILTER` pack `{b1,b0}`, `{a1,b2}`, and `{reserved,enable,a2}` into three
+command words. `0x4000` is unity, `0x2000` is 0.5, and negative feedback
+coefficients use two's-complement signed values.
 The implemented transposed direct-form II equation is:
 
 ```text
@@ -136,7 +133,7 @@ z2    = saturate_i34(b2 * x - a2 * y)
 Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
 the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
 stage. Filter state is signed 34-bit Q14 per voice and per channel, and is
-cleared on commit.
+cleared when `VOICE_START` activates a new generation.
 
 ### Biquad Range Analysis
 
@@ -194,11 +191,10 @@ the final mixed output sample.
 ## Current Voice Render Calculation
 
 At each accepted `sample_tick`, the renderer scans active voice slots in index
-order. Committed configuration is stored in renderer-facing active storage, while
-runtime registers remain live state. The renderer reads one voice snapshot at a
-time through the register bank's synchronous read path and samples runtime values
-when that voice is accepted for the current render. It accumulates each enabled,
-valid, not-completed voice into one stereo output.
+order. Command-owned configuration, runtime control, and envelope state are
+stored in packed active RAM. The renderer reads one indexed synchronous snapshot
+when that voice is accepted for the current frame and accumulates each enabled,
+valid, not-completed contribution into one stereo output.
 
 For each contributing voice:
 

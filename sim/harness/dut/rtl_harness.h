@@ -1,7 +1,7 @@
 #pragma once
 
 #include "memory_profile.h"
-#include "register_control.h"
+#include "command_control.h"
 #include "wav_writer.h"
 
 #include <cstdint>
@@ -48,27 +48,19 @@ struct MemoryStats {
   int random_latency_cycles = 0;
   int sequential_latency_cycles = 0;
   int ready_gap_cycles = 0;
-  RegisterWriteStats register_writes;
 };
 
 // Thin Verilator-side driver for wavetable_cached_render_core. It owns the top
 // module, models the external line-memory slave, writes the generated stereo PCM
-// stream as a WAV file, and exposes firmware-like helpers for voice register
-// writes.
-class RtlHarness : public VoiceControlSink, public EnvelopeEventSink, private RegisterWriteSink {
+// stream as a WAV file, and drives the transactional command stream.
+class RtlHarness : public CommandWordSink {
  public:
   RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
              int sample_rate, const MemoryProfile& memory_profile);
   ~RtlHarness();
 
   void reset();
-  void set_envelope(int voice, int level) override;
-  void set_gain(int voice, int gain_l, int gain_r) override;
-  void set_phase_inc(int voice, uint32_t phase_inc) override;
-  void set_filter(int voice, const FilterConfig& filter) override;
-  void commit_voice(int voice, int enable, uint32_t phase_inc, const Region& region) override;
-  void release_voice(int voice, const Region& region) override;
-  void push_envelope_event(const EnvelopeEvent& event) override;
+  void write_command_words(const std::vector<uint32_t>& words) override;
   void request_sample(int produced);
 
   int nonzero_output_words() const { return int(wav_.nonzero_words()); }
@@ -78,12 +70,10 @@ class RtlHarness : public VoiceControlSink, public EnvelopeEventSink, private Re
  private:
   static constexpr int kLineWords = 32;
 
-  void write_register(uint16_t address, uint32_t data) override;
   void tick();
   void service_external_memory();
 
   Vwavetable_cached_render_core* top_ = nullptr;
-  RegisterVoiceControl voice_control_;
   // Shared wave-memory image. For SF2-backed renders this is the complete file
   // image, with regions pointing at absolute sample words inside smpl.
   const std::vector<int16_t>& memory_;
@@ -115,7 +105,6 @@ class RtlHarness : public VoiceControlSink, public EnvelopeEventSink, private Re
   uint64_t endpoint_fetch_slot_pressure_cycles_ = 0;
   uint64_t endpoint_memory_stall_cycles_ = 0;
   uint64_t dsp_ready_no_context_cycles_ = 0;
-  RegisterWriteStats register_write_stats_;
 };
 
 }  // namespace render

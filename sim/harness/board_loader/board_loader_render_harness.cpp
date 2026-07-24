@@ -20,7 +20,7 @@ BoardLoaderRenderHarness::BoardLoaderRenderHarness(const std::vector<uint8_t>& s
                                                    const std::string& wav_path,
                                                    int sample_rate,
                                                    const MemoryProfile& memory_profile)
-    : top_(new Vboard_loader_render_tops), voice_control_(*this), sd_image_(sd_image),
+    : top_(new Vboard_loader_render_tops), sd_image_(sd_image),
       ddr_bytes_(sf2_size_bytes + kMigBeatBytes, 0), wav_(wav_path, sample_rate),
       memory_profile_(memory_profile) {
   init_inputs();
@@ -106,35 +106,6 @@ std::pair<int16_t, int16_t> BoardLoaderRenderHarness::request_sample(int produce
   return {l, r};
 }
 
-void BoardLoaderRenderHarness::set_envelope(int voice, int level) {
-  voice_control_.set_envelope(voice, level);
-}
-
-void BoardLoaderRenderHarness::set_gain(int voice, int gain_l, int gain_r) {
-  voice_control_.set_gain(voice, gain_l, gain_r);
-}
-
-void BoardLoaderRenderHarness::set_phase_inc(int voice, uint32_t phase_inc) {
-  voice_control_.set_phase_inc(voice, phase_inc);
-}
-
-void BoardLoaderRenderHarness::set_filter(int voice, const FilterConfig& filter) {
-  voice_control_.set_filter(voice, filter);
-}
-
-void BoardLoaderRenderHarness::commit_voice(int voice, int enable, uint32_t phase_inc,
-                                            const Region& r) {
-  voice_control_.commit_voice(voice, enable, phase_inc, r);
-}
-
-void BoardLoaderRenderHarness::release_voice(int voice, const Region& r) {
-  voice_control_.release_voice(voice, r);
-}
-
-void BoardLoaderRenderHarness::push_envelope_event(const EnvelopeEvent& event) {
-  voice_control_.push_envelope_event(event);
-}
-
 void BoardLoaderRenderHarness::init_inputs() {
   top_->clk = 0;
   top_->rst = 1;
@@ -155,30 +126,29 @@ void BoardLoaderRenderHarness::init_inputs() {
   top_->core_bus_write = 0;
   top_->core_bus_address = 0;
   top_->core_bus_wdata = 0;
+  top_->core_cmd_stream_valid = 0;
+  top_->core_cmd_stream_data = 0;
   top_->core_sample_tick = 0;
   top_->core_ext_req_ready = 1;
   top_->core_ext_rsp_valid = 0;
   for (int i = 0; i < kLineWords / 2; ++i) top_->core_ext_rsp_data[i] = 0;
 }
 
-void BoardLoaderRenderHarness::write_register(uint16_t address, uint32_t data) {
-  constexpr int kBusTimeoutCycles = 1000;
-  note_register_write(register_write_stats_, address);
-  top_->core_bus_valid = 1;
-  top_->core_bus_write = 1;
-  top_->core_bus_address = address;
-  top_->core_bus_wdata = data;
-  int waited = 0;
-  while (!top_->core_bus_ready && waited < kBusTimeoutCycles) {
+void BoardLoaderRenderHarness::write_command_words(const std::vector<uint32_t>& words) {
+  for (uint32_t word : words) {
+    int waited = 0;
+    while (!top_->core_cmd_stream_ready && waited < 1000) {
+      tick();
+      ++waited;
+    }
+    if (!top_->core_cmd_stream_ready)
+      throw std::runtime_error("core command FIFO backpressure timeout");
+    top_->core_cmd_stream_data = word;
+    top_->core_cmd_stream_valid = 1;
     tick();
-    ++waited;
+    top_->core_cmd_stream_valid = 0;
   }
-  if (!top_->core_bus_ready || top_->core_bus_error) {
-    throw std::runtime_error("core register write failed at 0x" + std::to_string(address));
-  }
-  top_->core_bus_valid = 0;
-  top_->core_bus_write = 0;
-  tick();
+  for (int i = 0; i < 3; ++i) tick();
 }
 
 void BoardLoaderRenderHarness::tick() {

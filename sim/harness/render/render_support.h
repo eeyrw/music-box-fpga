@@ -27,13 +27,11 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 
 class McuModel {
  public:
-  McuModel(VoiceControlSink& sink, const std::vector<Region>& regions,
+  McuModel(VoiceCommandSink& sink, const std::vector<Region>& regions,
            RenderDiagnostics* diagnostics = nullptr);
 
   void handle_event(const NoteEvent& event);
   void envelope_tick();
-  void set_envelope_event_sink(EnvelopeEventSink* sink) { envelope_events_ = sink; }
-  void set_rtl_envelope_events(bool enable) { rtl_envelope_events_ = enable; }
   void set_current_sample(uint32_t sample) { current_sample_ = sample; }
 
  private:
@@ -79,8 +77,6 @@ class McuModel {
   void release_voice(int voice);
   void note_off(int channel, int note);
   void note_on(const NoteEvent& event);
-  void schedule_note_on_envelope_events(int voice, const Region& region);
-  void schedule_release_envelope_events(int voice, const Region& region);
   int first_free_or_steal_slot() const;
   static std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
                                            const ChannelState& channel);
@@ -91,8 +87,7 @@ class McuModel {
   static uint32_t modulated_phase_inc(uint32_t base_phase_inc, double cents);
   static FilterConfig filter_for(int cutoff_cents, int resonance_cb, int sample_rate);
 
-  VoiceControlSink& sink_;
-  EnvelopeEventSink* envelope_events_ = nullptr;
+  VoiceCommandSink& sink_;
   const std::vector<Region>& regions_;
   int sample_rate_ = 48000;
   std::array<ChannelState, 16> channels_{};
@@ -110,7 +105,6 @@ class McuModel {
   int alloc_stamp_ = 0;
   uint64_t envelope_tick_index_ = 0;
   uint32_t current_sample_ = 0;
-  bool rtl_envelope_events_ = false;
 };
 
 }  // namespace render

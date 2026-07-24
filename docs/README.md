@@ -23,8 +23,9 @@ change.
 - [`fixed_point.md`](fixed_point.md): numeric formats and arithmetic rules.
 - [`memory_format.md`](memory_format.md): wave-memory layout, core memory
   handshake, line-memory adapter contract, and memory-profile assumptions.
-- [`register_map.md`](register_map.md): software-visible register addresses and
-  commit/runtime behavior. Register constants are generated from
+- [`register_map.md`](register_map.md): software-visible global registers,
+  command ingress, and the read-only voice debug snapshot. Register constants
+  are generated from
   [`../spec/register_map.json`](../spec/register_map.json).
 
 ## Architecture Notes
@@ -33,12 +34,10 @@ change.
   roadmap notes.
 - [`design/rtl_module_map.md`](design/rtl_module_map.md): concise RTL reading map
   and instantiation tree.
-- [`design/voice_pipeline.md`](design/voice_pipeline.md): detailed renderer
-  pipeline, latency/cycle accounting, limitations, and optimization notes.
+- [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
+  synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
-  proposed breaking redesign for a timestamp-block command stream control plane.
-- [`design/control_memory_refactor_plan.md`](design/control_memory_refactor_plan.md):
-  historical and remaining control-plane and wave-memory cleanup plan.
+  transactional command-stream and continuous-render contract.
 
 ## Verification And Render Flows
 

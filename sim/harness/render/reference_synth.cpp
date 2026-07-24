@@ -19,112 +19,147 @@ void update_max(uint64_t& maximum, uint64_t value) {
   maximum = std::max(maximum, value);
 }
 
-uint32_t duration24_or_one(uint32_t duration) {
-  uint32_t clipped = duration & 0x00ffffffu;
-  return clipped == 0 ? 1u : clipped;
-}
-
-uint32_t phase_inc_for_duration(uint32_t duration) {
-  duration = duration24_or_one(duration);
-  if (duration <= 1) return 0xffffffffu;
-  return uint32_t(((uint64_t(1) << 32) + duration - 1u) / duration);
-}
-
-uint32_t ramp_cb_q8_8(uint32_t start_cb_q8_8, uint32_t target_cb_q8_8, uint32_t phase_q0_32) {
-  if (target_cb_q8_8 <= start_cb_q8_8) return target_cb_q8_8;
-  uint64_t delta = uint64_t(target_cb_q8_8 - start_cb_q8_8);
-  return start_cb_q8_8 + uint32_t((delta * uint64_t(phase_q0_32)) >> 32);
-}
-
 }  // namespace
 
 ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics)
     : memory_(memory),
+      prepared_(kNumVoices),
+      prepared_seq_(kNumVoices),
+      prepared_valid_(kNumVoices),
       voices_(kNumVoices),
       envelopes_(kNumVoices),
-      envelope_events_(kNumVoices),
       diagnostics_(diagnostics) {}
 
-void ReferenceSynth::set_envelope(int voice, int level) {
-  voices_.at(voice).envelope = int16_t(clamp_q15(level));
-  envelopes_.at(voice) = EnvelopeState{};
-}
+void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
+  if (words.empty()) return;
+  const uint8_t opcode = uint8_t(words[0] >> 24);
+  const int voice = int((words[0] >> 16) & 0xffu);
+  const uint8_t seq = uint8_t(words[0] >> 8);
+  const size_t payload_words = size_t(words[0] & 0xffu);
+  if (voice < 0 || voice >= kNumVoices || words.size() != payload_words + 1) return;
 
-void ReferenceSynth::set_gain(int voice, int gain_l, int gain_r) {
-  VoiceConfig& v = voices_.at(voice);
-  v.gain_l = int16_t(clamp_q15(gain_l));
-  v.gain_r = int16_t(clamp_q15(gain_r));
-}
-
-void ReferenceSynth::set_phase_inc(int voice, uint32_t phase_inc) {
-  voices_.at(voice).phase_inc = phase_inc;
-}
-
-void ReferenceSynth::set_filter(int voice, const FilterConfig& filter) {
-  VoiceConfig& v = voices_.at(voice);
-  v.filter_enable = filter.enable;
-  v.filter_b0 = int32_t(filter.b0);
-  v.filter_b1 = int32_t(filter.b1);
-  v.filter_b2 = int32_t(filter.b2);
-  v.filter_a1 = int32_t(filter.a1);
-  v.filter_a2 = int32_t(filter.a2);
-}
-
-void ReferenceSynth::commit_voice(int voice, int enable, uint32_t phase_inc, const Region& r) {
-  VoiceConfig& v = voices_.at(voice);
-  v.enable = enable != 0;
-  v.valid = r.length != 0 && (!r.stereo || r.length_r != 0) &&
-            (r.loop_mode == 0 ||
-             ((r.loop_start < r.loop_end && r.loop_end <= r.length) &&
-              (!r.stereo || (r.loop_start_r < r.loop_end_r && r.loop_end_r <= r.length_r))));
-  v.stereo = r.stereo;
-  v.released = false;
-  v.base_addr = r.base_addr;
-  v.base_addr_r = r.base_addr_r;
-  v.length = r.length & kPhaseFrameMask;
-  v.length_r = r.length_r & kPhaseFrameMask;
-  v.loop_start = r.loop_start & kPhaseFrameMask;
-  v.loop_start_r = r.loop_start_r & kPhaseFrameMask;
-  v.loop_end = r.loop_end & kPhaseFrameMask;
-  v.loop_end_r = r.loop_end_r & kPhaseFrameMask;
-  v.phase = 0;
-  v.phase_r = 0;
-  v.phase_inc = phase_inc;
-  v.gain_l = int16_t(r.gain_l);
-  v.gain_r = int16_t(r.gain_r);
-  v.envelope = int16_t(clamp_q15(r.initial_envelope));
-  v.filter_enable = r.filter_enable;
-  v.filter_b0 = int32_t(r.filter_b0);
-  v.filter_b1 = int32_t(r.filter_b1);
-  v.filter_b2 = int32_t(r.filter_b2);
-  v.filter_a1 = int32_t(r.filter_a1);
-  v.filter_a2 = int32_t(r.filter_a2);
-  v.filter_z1_l = 0;
-  v.filter_z2_l = 0;
-  v.filter_z1_r = 0;
-  v.filter_z2_r = 0;
-  v.loop_mode = r.loop_mode;
-  envelopes_.at(voice) = EnvelopeState{};
-  envelope_events_.at(voice).clear();
-}
-
-void ReferenceSynth::release_voice(int voice, const Region& region) {
-  VoiceConfig& v = voices_.at(voice);
-  v.loop_mode = region.loop_mode;
-  v.released = true;
-}
-
-void ReferenceSynth::push_envelope_event(const EnvelopeEvent& event) {
-  int voice = std::max(0, std::min(kNumVoices - 1, event.voice));
-  if (event.opcode == EnvelopeEventOpcode::kEnvSet ||
-      event.opcode == EnvelopeEventOpcode::kReleaseFlag) {
-    envelope_events_.at(voice).clear();
+  if (opcode == 0x10 || opcode == 0x11) {
+    const bool stereo = opcode == 0x11;
+    VoiceConfig p{};
+    p.valid = true;
+    p.stereo = stereo;
+    p.base_addr = words[1];
+    size_t i = 2;
+    if (stereo) p.base_addr_r = words[i++];
+    p.length = words[i++] & kPhaseFrameMask;
+    if (stereo) p.length_r = words[i++] & kPhaseFrameMask;
+    p.loop_start = words[i++] & kPhaseFrameMask;
+    if (stereo) p.loop_start_r = words[i++] & kPhaseFrameMask;
+    p.loop_end = words[i++] & kPhaseFrameMask;
+    if (stereo) p.loop_end_r = words[i++] & kPhaseFrameMask;
+    p.phase = words[i++];
+    p.phase_r = p.phase;
+    p.loop_mode = int(words[i++] & 3u);
+    p.filter_b0 = int16_t(words[i] & 0xffffu);
+    p.filter_b1 = int16_t(words[i++] >> 16);
+    p.filter_b2 = int16_t(words[i] & 0xffffu);
+    p.filter_a1 = int16_t(words[i++] >> 16);
+    p.filter_a2 = int16_t(words[i] & 0xffffu);
+    p.filter_enable = (words[i] & 0x00010000u) != 0;
+    p.valid = p.length != 0 && (!stereo || p.length_r != 0) &&
+              (p.loop_mode == 0 ||
+               ((p.loop_start < p.loop_end && p.loop_end <= p.length) &&
+                (!stereo || (p.loop_start_r < p.loop_end_r && p.loop_end_r <= p.length_r))));
+    prepared_[voice] = p;
+    prepared_seq_[voice] = seq;
+    prepared_valid_[voice] = p.valid;
+    return;
   }
-  envelope_events_.at(voice).push_back(event);
+
+  if (opcode == 0x12) {
+    if (!prepared_valid_[voice] || prepared_seq_[voice] != seq) return;
+    VoiceConfig v = prepared_[voice];
+    v.enable = true;
+    v.released = false;
+    v.seq = seq;
+    v.phase_inc = words[2];
+    v.gain_l = int16_t(words[1] & 0xffffu);
+    v.gain_r = int16_t(words[1] >> 16);
+    v.envelope = 0;
+    voices_[voice] = v;
+    EnvelopeState e{};
+    e.delay_samples = words[3] & 0x00ffffffu;
+    e.attack_step = words[4];
+    e.hold_samples = words[5] & 0x00ffffffu;
+    e.decay_step = words[6];
+    e.sustain_cb = words[7];
+    e.release_step = words[8];
+    e.stage = e.delay_samples != 0 ? EnvelopeState::kDelay : EnvelopeState::kAttack;
+    if (e.delay_samples == 0 && e.attack_step == 0) {
+      e.attack_level = 0xffffffffu;
+      e.stage = e.hold_samples != 0 ? EnvelopeState::kHold :
+                ((e.sustain_cb != 0 && e.decay_step != 0) ?
+                 EnvelopeState::kDecay : EnvelopeState::kSustain);
+      if (e.stage == EnvelopeState::kSustain) e.attenuation_cb = e.sustain_cb;
+    }
+    envelopes_[voice] = e;
+    return;
+  }
+
+  VoiceConfig& v = voices_[voice];
+  if (!v.enable || v.seq != seq) return;
+  if (opcode == 0x13) {
+    EnvelopeState& e = envelopes_[voice];
+    const uint32_t mask = words[1];
+    size_t i = 2;
+    if (mask & (1u << 0)) {
+      e.delay_samples = words[i++] & 0x00ffffffu;
+      if (e.stage == EnvelopeState::kDelay && e.elapsed >= e.delay_samples)
+        e.stage = EnvelopeState::kAttack;
+    }
+    if (mask & (1u << 1)) e.attack_step = words[i++];
+    if (mask & (1u << 2)) {
+      e.hold_samples = words[i++] & 0x00ffffffu;
+      if (e.stage == EnvelopeState::kHold && e.elapsed >= e.hold_samples) {
+        e.stage = (e.sustain_cb != 0 && e.decay_step != 0) ?
+                  EnvelopeState::kDecay : EnvelopeState::kSustain;
+        if (e.stage == EnvelopeState::kSustain) e.attenuation_cb = e.sustain_cb;
+      }
+    }
+    if (mask & (1u << 3)) e.decay_step = words[i++];
+    if (mask & (1u << 4)) {
+      e.sustain_cb = words[i++];
+      if (e.stage == EnvelopeState::kSustain) {
+        if (e.decay_step != 0)
+          e.stage = EnvelopeState::kDecay;
+        else
+          e.attenuation_cb = e.sustain_cb;
+      }
+    }
+    if (mask & (1u << 5)) e.release_step = words[i++];
+  } else if (opcode == 0x14) {
+    EnvelopeState& e = envelopes_[voice];
+    e.release_step = words[1];
+    e.attenuation_cb = e.release_step == 0 ? (960u << 20) :
+                                               q15_to_cb(envelope_level(v, e));
+    e.elapsed = 0;
+    e.stage = EnvelopeState::kRelease;
+    v.released = true;
+    if (e.release_step == 0) v.enable = false;
+  } else if (opcode == 0x15) {
+    v.enable = false;
+  } else if (opcode == 0x16) {
+    v.gain_l = int16_t(words[1] & 0xffffu);
+    v.gain_r = int16_t(words[1] >> 16);
+    v.phase_inc = words[2];
+  } else if (opcode == 0x17) {
+    v.filter_b0 = int16_t(words[1] & 0xffffu);
+    v.filter_b1 = int16_t(words[1] >> 16);
+    v.filter_b2 = int16_t(words[2] & 0xffffu);
+    v.filter_a1 = int16_t(words[2] >> 16);
+    v.filter_a2 = int16_t(words[3] & 0xffffu);
+    v.filter_enable = (words[3] & 0x00010000u) != 0;
+  }
 }
 
-int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q8_8) {
-  if (cb_q8_8 >= envelope_lut::kCbSilenceQ8_8) return 0;
+int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q12_20) {
+  if (cb_q12_20 >= (960u << 20)) return 0;
+  uint32_t cb_q8_8 = cb_q12_20 >> 12;
   uint32_t index = cb_q8_8 >> 10;
   uint32_t fraction = cb_q8_8 & 0x3ffu;
   uint32_t low = uint16_t(envelope_lut::kCbToQ15.at(index));
@@ -134,124 +169,93 @@ int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q8_8) {
   return int16_t(interp);
 }
 
-void ReferenceSynth::apply_envelope_event(const EnvelopeEvent& event) {
-  int voice = std::max(0, std::min(kNumVoices - 1, event.voice));
-  VoiceConfig& v = voices_.at(voice);
-  EnvelopeState& e = envelopes_.at(voice);
-  switch (event.opcode) {
-    case EnvelopeEventOpcode::kEnvSet:
-      e = EnvelopeState{};
-      e.mode = 0;
-      e.gain_q23 = int32_t(uint32_t(event.payload0) << 8);
-      v.envelope = int16_t(event.payload0);
-      break;
-    case EnvelopeEventOpcode::kVolAttack:
-      e.active = true;
-      e.phase = 0;
-      e.mode = 1;
-      e.gain_q23 = 0;
-      e.target = event.payload0;
-      e.duration = duration24_or_one(event.payload1);
-      e.step = (uint32_t(event.payload0) << 8) / e.duration;
-      v.envelope = 0;
-      break;
-    case EnvelopeEventOpcode::kVolDecayCb:
-      e.active = true;
-      e.phase = 0;
-      e.mode = 2;
-      e.cb_q8_8 = uint32_t(event.payload0) << 8;
-      e.target = (event.payload1 & 0xffffu) << 8;
-      e.duration = duration24_or_one(event.payload2);
-      e.step = phase_inc_for_duration(e.duration);
-      v.envelope = cb_to_q15(e.cb_q8_8);
-      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
-      break;
-    case EnvelopeEventOpcode::kVolReleaseCb:
-      e.active = true;
-      e.phase = 0;
-      e.mode = 3;
-      e.cb_q8_8 = uint32_t(event.payload0) << 8;
-      e.target = envelope_lut::kCbSilenceQ8_8;
-      e.duration = duration24_or_one(event.payload2);
-      e.step = phase_inc_for_duration(e.duration);
-      v.envelope = cb_to_q15(e.cb_q8_8);
-      e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
-      break;
-    case EnvelopeEventOpcode::kReleaseFlag:
-      v.released = true;
-      break;
-    case EnvelopeEventOpcode::kStopVoice:
-      e.active = false;
-      e.mode = 0;
-      e.gain_q23 = 0;
-      v.envelope = 0;
-      break;
+uint32_t ReferenceSynth::q15_to_cb(int16_t level) {
+  if (level >= int16_t(0x7fff)) return 0;
+  if (level <= 0) return 960u << 20;
+  for (uint32_t index = 0; index + 1 < envelope_lut::kCbToQ15.size(); ++index) {
+    uint32_t high = uint16_t(envelope_lut::kCbToQ15[index]);
+    uint32_t low = uint16_t(envelope_lut::kCbToQ15[index + 1]);
+    if (uint16_t(level) <= high && uint16_t(level) > low) {
+      uint32_t delta = high - low;
+      uint32_t distance = high - uint16_t(level);
+      return (index * 4u << 20) +
+             uint32_t((uint64_t(distance) * (4u << 20)) / delta);
+    }
   }
+  return 960u << 20;
 }
 
-void ReferenceSynth::prepare_event_envelope(int voice) {
-  bool applied_event = false;
-  auto& queue = envelope_events_.at(voice);
-  while (!queue.empty() && queue.front().timestamp <= sample_counter_) {
-    EnvelopeEvent event = queue.front();
-    queue.pop_front();
-    apply_envelope_event(event);
-    applied_event = true;
-  }
-  if (applied_event) return;
+int16_t ReferenceSynth::envelope_level(const VoiceConfig& voice, const EnvelopeState& e) {
+  if (!voice.enable || e.stage == EnvelopeState::kDelay) return 0;
+  if (e.stage == EnvelopeState::kAttack)
+    return int16_t((e.attack_level >> 17) & 0x7fffu);
+  if (e.stage == EnvelopeState::kHold) return int16_t(0x7fff);
+  return cb_to_q15(e.attenuation_cb);
+}
 
-  EnvelopeState& e = envelopes_.at(voice);
-  VoiceConfig& v = voices_.at(voice);
-  if (!e.active) return;
-
-  switch (e.mode) {
-    case 1: {
-      int64_t next = int64_t(e.gain_q23) + int64_t(e.step & 0x7fffffu);
-      if ((e.phase + 1) >= e.duration || next >= int64_t(e.target << 8)) {
-        e.gain_q23 = int32_t(e.target << 8);
-        e.mode = 0;
-        e.phase = 0;
-        v.envelope = int16_t(e.target);
+void ReferenceSynth::advance_envelope(VoiceConfig& v, EnvelopeState& e) {
+  constexpr uint32_t kSilence = 960u << 20;
+  switch (e.stage) {
+    case EnvelopeState::kDelay:
+      if (++e.elapsed >= e.delay_samples) {
+        e.elapsed = 0;
+        e.stage = EnvelopeState::kAttack;
+        if (e.attack_step == 0) {
+          e.attack_level = 0xffffffffu;
+          e.stage = e.hold_samples != 0 ? EnvelopeState::kHold :
+                    ((e.sustain_cb != 0 && e.decay_step != 0) ?
+                     EnvelopeState::kDecay : EnvelopeState::kSustain);
+          if (e.stage == EnvelopeState::kSustain) e.attenuation_cb = e.sustain_cb;
+        }
+      }
+      break;
+    case EnvelopeState::kAttack: {
+      uint64_t next = uint64_t(e.attack_level) + e.attack_step;
+      if (next >= 0xffffffffu) {
+        e.attack_level = 0xffffffffu;
+        e.elapsed = 0;
+        e.stage = e.hold_samples != 0 ? EnvelopeState::kHold :
+                  ((e.sustain_cb != 0 && e.decay_step != 0) ?
+                   EnvelopeState::kDecay : EnvelopeState::kSustain);
+        if (e.stage == EnvelopeState::kSustain) e.attenuation_cb = e.sustain_cb;
       } else {
-        e.gain_q23 = int32_t(next);
-        e.phase += 1;
-        v.envelope = int16_t(clamp_q15(int(next >> 8)));
+        e.attack_level = uint32_t(next);
       }
       break;
     }
-    case 2: {
-      uint64_t phase_next = uint64_t(e.phase) + uint64_t(e.step);
-      if (phase_next >= (uint64_t(1) << 32)) {
-        e.mode = 0;
-        v.envelope = cb_to_q15(e.target);
-        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+    case EnvelopeState::kHold:
+      if (++e.elapsed >= e.hold_samples) {
+        e.elapsed = 0;
+        e.stage = (e.sustain_cb != 0 && e.decay_step != 0) ?
+                  EnvelopeState::kDecay : EnvelopeState::kSustain;
+        if (e.stage == EnvelopeState::kSustain) e.attenuation_cb = e.sustain_cb;
+      }
+      break;
+    case EnvelopeState::kDecay: {
+      uint64_t next = uint64_t(e.attenuation_cb) + e.decay_step;
+      if (next >= e.sustain_cb) {
+        e.attenuation_cb = e.sustain_cb;
+        e.stage = EnvelopeState::kSustain;
       } else {
-        e.phase = uint32_t(phase_next);
-        uint32_t cb_q8_8 = ramp_cb_q8_8(e.cb_q8_8, e.target, e.phase);
-        v.envelope = cb_to_q15(cb_q8_8);
-        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+        e.attenuation_cb = uint32_t(next);
       }
       break;
     }
-    case 3: {
-      uint64_t phase_next = uint64_t(e.phase) + uint64_t(e.step);
-      if (phase_next >= (uint64_t(1) << 32)) {
-        e.gain_q23 = 0;
-        e.active = false;
-        e.mode = 0;
-        v.envelope = 0;
+    case EnvelopeState::kSustain:
+      e.attenuation_cb = e.sustain_cb;
+      break;
+    case EnvelopeState::kRelease: {
+      uint64_t next = uint64_t(e.attenuation_cb) + e.release_step;
+      if (next >= kSilence) {
+        e.attenuation_cb = kSilence;
+        v.enable = false;
       } else {
-        e.phase = uint32_t(phase_next);
-        uint32_t cb_q8_8 = ramp_cb_q8_8(e.cb_q8_8, e.target, e.phase);
-        v.envelope = cb_to_q15(cb_q8_8);
-        e.gain_q23 = int32_t(uint32_t(uint16_t(v.envelope)) << 8);
+        e.attenuation_cb = uint32_t(next);
       }
       break;
     }
-    default:
-      v.envelope = int16_t(clamp_q15(e.gain_q23 >> 8));
-      break;
   }
+  v.envelope = envelope_level(v, e);
 }
 
 std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
@@ -267,8 +271,8 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
   uint64_t mix_saturations = 0;
 
   for (int voice = 0; voice < int(voices_.size()); ++voice) {
-    prepare_event_envelope(voice);
     VoiceConfig& v = voices_[voice];
+    if (v.enable) advance_envelope(v, envelopes_[voice]);
     bool loop_active = (v.loop_mode == 1) || ((v.loop_mode == 2) && !v.released);
     bool done_l = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
     bool done_r = !v.stereo || ((v.loop_mode == 0 || !loop_active) && ((v.phase_r >> kPhaseFracBits) >= v.length_r));

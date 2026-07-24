@@ -9,6 +9,7 @@ module i2s_tx #(
   input  synth_pkg::pcm_t sample_l,
   input  synth_pkg::pcm_t sample_r,
   output logic            underrun_pulse,
+  output logic            frame_pulse,
   output logic            i2s_bclk,
   output logic            i2s_lrclk,
   output logic            i2s_sdata
@@ -50,11 +51,13 @@ module i2s_tx #(
       pending_r <= '0;
       pending_valid <= 1'b0;
       underrun_pulse <= 1'b0;
+      frame_pulse <= 1'b0;
       i2s_bclk <= 1'b0;
       i2s_lrclk <= 1'b0;
       i2s_sdata <= 1'b0;
     end else begin
       underrun_pulse <= 1'b0;
+      frame_pulse <= 1'b0;
 
       if (sample_valid && sample_ready) begin
         pending_l <= sample_l;
@@ -76,6 +79,7 @@ module i2s_tx #(
             channel_right <= !channel_right;
 
             if (channel_right) begin
+              frame_pulse <= 1'b1;
               if (pending_valid) begin
                 current_l <= pending_l;
                 current_r <= pending_r;

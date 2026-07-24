@@ -1,6 +1,8 @@
 module wavetable_demo_system #(
   parameter int LINE_WORDS = 32,
-  parameter int OUTPUT_FIFO_DEPTH = 8,
+  parameter int OUTPUT_FIFO_DEPTH = 64,
+  parameter int TARGET_LEVEL = 48,
+  parameter int START_LEVEL = TARGET_LEVEL,
   parameter int SYS_CLK_HZ = 100_000_000,
   parameter int SAMPLE_RATE_HZ = 48_000,
   parameter bit PLATFORM_REGS_PRESENT = 1'b0
@@ -26,6 +28,12 @@ module wavetable_demo_system #(
   output logic                     mem_response_trace_pulse,
   output logic [15:0]              mem_response_trace_latency,
   output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
+  output logic                     playback_started,
+  output logic                     render_inflight,
+  output logic [31:0]              render_sample_counter,
+  output logic [31:0]              played_sample_counter,
+  output logic [31:0]              audio_lead,
+  output logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] minimum_fifo_level,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles,
   output logic                     platform_regs_bus_valid,
@@ -36,7 +44,7 @@ module wavetable_demo_system #(
   input  logic                     platform_regs_bus_ready,
   input  logic                     platform_regs_bus_error
 );
-  logic sample_tick;
+  logic render_start;
   logic spi_bus_valid;
   logic spi_bus_write;
   logic [15:0] spi_bus_address;
@@ -64,17 +72,27 @@ module wavetable_demo_system #(
   logic core_busy;
   logic i2s_sample_ready;
   logic fifo_sample_valid;
+  logic core_sample_ready;
+  logic render_credit;
   logic core_reset;
+  logic spi_cmd_valid;
+  logic [31:0] spi_cmd_data;
+  logic spi_cmd_ready;
 
   assign core_reset = rst || core_rst;
 
-  fractional_tick_gen #(
-    .SYS_CLK_HZ(SYS_CLK_HZ),
-    .TICK_HZ(SAMPLE_RATE_HZ)
-  ) sample_tick_gen (
+  render_credit_scheduler #(
+    .FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
+    .TARGET_LEVEL(TARGET_LEVEL)
+  ) scheduler (
     .clk,
     .rst(core_reset),
-    .tick(sample_tick)
+    .fifo_level(output_fifo_level),
+    .renderer_busy(core_busy || core_sample_valid),
+    .control_batch_complete(1'b1),
+    .render_inflight,
+    .render_credit,
+    .render_start
   );
 
   spi_register_bridge spi_bridge (
@@ -91,7 +109,10 @@ module wavetable_demo_system #(
     .bus_wdata(spi_bus_wdata),
     .bus_rdata(spi_bus_rdata),
     .bus_ready(spi_bus_ready),
-    .bus_error(spi_bus_error)
+    .bus_error(spi_bus_error),
+    .cmd_valid(spi_cmd_valid),
+    .cmd_data(spi_cmd_data),
+    .cmd_ready(spi_cmd_ready)
   );
 
   wavetable_register_fabric #(
@@ -141,7 +162,7 @@ module wavetable_demo_system #(
     .bus_rdata(common_status_bus_rdata),
     .bus_ready(common_status_bus_ready),
     .bus_error(common_status_bus_error),
-    .sample_tick,
+    .sample_tick(1'b0),
     .core_sample_valid,
     .core_busy,
     .ext_req_valid,
@@ -168,8 +189,12 @@ module wavetable_demo_system #(
     .bus_rdata(core_bus_rdata),
     .bus_ready(core_bus_ready),
     .bus_error(core_bus_error),
-    .sample_tick,
+    .cmd_stream_valid(spi_cmd_valid),
+    .cmd_stream_data(spi_cmd_data),
+    .cmd_stream_ready(spi_cmd_ready),
+    .sample_tick(render_start),
     .sample_valid(core_sample_valid),
+    .sample_ready(core_sample_ready),
     .sample_l(core_sample_l),
     .sample_r(core_sample_r),
     .busy(core_busy),
@@ -184,12 +209,14 @@ module wavetable_demo_system #(
 
   wavetable_i2s_output #(
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
+    .START_LEVEL(START_LEVEL),
     .SYS_CLK_HZ(SYS_CLK_HZ),
     .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ)
   ) audio_output (
     .clk,
     .rst(core_reset),
     .sample_valid(core_sample_valid),
+    .sample_ready(core_sample_ready),
     .sample_l(core_sample_l),
     .sample_r(core_sample_r),
     .i2s_sample_ready,
@@ -197,8 +224,18 @@ module wavetable_demo_system #(
     .underrun_pulse,
     .sample_drop_pulse,
     .output_fifo_level,
+    .playback_started,
+    .render_sample_counter,
+    .played_sample_counter,
+    .audio_lead,
+    .minimum_fifo_level,
     .i2s_bclk,
     .i2s_lrclk,
     .i2s_sdata
   );
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_render_credit;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_render_credit = render_credit;
 endmodule

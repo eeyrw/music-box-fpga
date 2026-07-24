@@ -1,472 +1,553 @@
-# Timestamped Control Command Stream Plan
+# Transactional Control And Continuous Render Plan
 
-This document records the proposed next-generation control plane. It is a
-planning document, not the current hardware contract. The goal is to replace the
-normal per-voice register-write control path with a timestamped command stream
-that is robust to real SPI latency and keeps Note On, envelope, runtime gain,
-pitch, and filter changes coherent at the renderer snapshot boundary.
+This document is the frozen control-plane and audio-scheduling contract.
 
-## Goals
+## Ownership
 
-- Keep MIDI, SF2, voice allocation, modulators, timecents, and policy in host
-  software.
-- Make FPGA control changes deterministic in sample time.
-- Ensure a voice never becomes audible before its envelope initial state and
-  runtime controls are installed.
-- Move runtime gain, phase increment, filter, release, stop, and envelope changes
-  under one timestamped protocol.
-- Preserve renderer timing: the audio pipeline must not wait for SPI or host
-  command delivery.
-- Keep register access for status, debug, and bring-up fallback, but remove it
-  from the normal render-control path.
+The host owns MIDI and SF2 parsing, voice allocation, the modulation envelope,
+LFOs, the modulator graph, and conversion of pitch, filter, and envelope timing
+to fixed-point values. The FPGA owns prepared and active voice state, the SF2
+volume envelope, continuous rendering, the PCM FIFO, and fixed-rate I2S output.
 
-## Non-Goals
-
-- FPGA voice allocation.
-- FPGA SoundFont parsing, timecent exponentiation, or modulator evaluation.
-- FPGA command sorting.
-- A single large Note On command that writes every state field atomically.
-- Renderer stalls while waiting for a command FIFO.
-
-## Target Architecture
+There are no command timestamps. A complete, valid command becomes eligible at
+the next PCM frame whose rendering has not started. Audible latency is the
+current PCM lead, normally about 48 samples or 1 ms at 48 kHz.
 
 ```text
-Host/C++
-  MIDI/SF2 policy, voice allocation, controller state, modulation
-  -> timestamp block command stream
-
-SPI bridge
-  -> control_cmd_fifo
-  -> control_cmd_parser
-  -> prepare writer and timed event scheduler
-  -> voice/config/runtime/envelope/filter stores
-  -> renderer snapshot
+host SF2/MIDI/modulators
+  -> 32-bit command word FIFO
+  -> parser and decoded action FIFO
+  -> prepared/active voice state and volume envelope
+  -> credit-driven renderer
+  -> configurable-depth stereo PCM FIFO
+  -> fixed-rate 48 kHz I2S
 ```
 
-The command processor owns the main write path into voice state. The renderer
-continues to read stable active/runtime/envelope state and never observes a
-partially prepared Note On.
+## Command Framing
 
-## Voice Lifecycle
-
-Separate "configuration is ready" from "voice is audible":
+Each command starts with one 32-bit header followed by exactly `payload_words`
+32-bit words.
 
 ```text
-staging[voice]       software/command-prepared region and static fields
-prepared[voice]      copied configuration ready for a future enable
-audible[voice]       renderer includes this voice in the scan
-active_seq[voice]    generation token for stale-command rejection
+header[31:24] opcode
+header[23:16] voice
+header[15:8]  seq
+header[7:0]   payload_words
 ```
 
-`VOICE_ENABLE_AT` is the only normal command that makes a prepared voice audible.
-It must be timestamped and executed at the same voice snapshot boundary as the
-initial envelope and runtime controls.
+The parser does not emit an action until the complete command is present and
+validated. Unknown opcodes, invalid voice ids, and incorrect payload lengths
+increment `command_error_count`; their declared payload is consumed. A partial
+command remains pending without changing voice state. `STREAM_FLUSH` discards a
+pending partial command and all currently buffered command words, resets parser
+framing, and does not modify voice state.
 
-## Command Word Format
+The command ingress applies backpressure. Hosts must not assume a word was
+accepted unless the command FIFO reports space.
 
-Use a 32-bit word stream. A timestamp block supplies a time for subsequent
-commands until the next timestamp command.
+## SPI Transport
+
+SPI command traffic uses a dedicated stream transaction. With chip select low,
+the host sends opcode `0xa5` followed immediately by any whole number of 32-bit
+command words, most-significant byte first:
 
 ```text
-Header word:
-  [31:24] opcode
-  [23:16] voice
-  [15:8]  seq
-  [7:0]   argc_words
-
-Payload:
-  argc_words 32-bit words
+CS low -> 0xa5 -> word0 -> word1 -> ... -> wordN -> CS high
 ```
 
-Special timestamp commands:
+There is no register address between the opcode and data and no address or
+opcode overhead between words. The host reads command FIFO free capacity before
+the transaction and sends no more words than that capacity. If capacity is
+exhausted during a transaction, the bridge sets the SPI error flag and discards
+each word that cannot be accepted. Ending a transaction with a partial word
+discards the partial word.
+
+Register SPI transactions are used for status, diagnostics, asset loading, and
+board control only.
+
+## Opcodes And Payloads
+
+The command opcodes are:
+
+| Value | Command | Payload words |
+| --- | --- | ---: |
+| `0x10` | `VOICE_DEFINE_MONO` | 11 |
+| `0x11` | `VOICE_DEFINE_STEREO` | 15 |
+| `0x12` | `VOICE_START` | 8 |
+| `0x13` | `VOICE_ENV_UPDATE` | 1 to 7 |
+| `0x14` | `VOICE_RELEASE` | 1 |
+| `0x15` | `VOICE_STOP` | 0 |
+| `0x16` | `VOICE_GAIN_PHASE` | 2 |
+| `0x17` | `VOICE_FILTER` | 3 |
+| `0x7f` | `STREAM_FLUSH` | 0 |
+
+All reserved bits must be zero. Samples and coefficients use the formats in
+`docs/fixed_point.md`. Loop ends are exclusive.
+
+### VOICE_DEFINE_MONO
 
 ```text
-TIME_ABS
-  argc = 1
-  payload0 = timestamp[31:0]
-
-TIME_DELTA
-  argc = 1
-  payload0 = delta_samples[31:0]
+word 0  base_addr_l
+word 1  length_l
+word 2  loop_start_l
+word 3  loop_end_l
+word 4  phase_init_q24_8
+word 5  flags: [1:0] loop_mode, all other bits zero
+word 6  filter: {b1_q2_14, b0_q2_14}
+word 7  filter: {a1_q2_14, b2_q2_14}
+word 8  filter: {15'b0, enable, a2_q2_14}
+word 9  reserved, zero
+word 10 reserved, zero
 ```
 
-All following commands inherit `block_time` until the next `TIME_ABS` or
-`TIME_DELTA`.
+Mono duplicates the left stream before independent left and right gain. The two
+reserved words keep DEFINE size fixed while leaving room for future mono storage
+fields.
 
-## Command Classes
-
-Commands have one of three execution classes:
-
-| Class | Meaning |
-| --- | --- |
-| `PREPARE` | May execute before `block_time`; writes staging/prepared state and does not affect audio. |
-| `TIMED` | Must become visible at `block_time`, aligned to the target voice snapshot. |
-| `IMMEDIATE` | Debug, reset, and status actions that are not part of musical timing. |
-
-The parser may consume and execute `PREPARE` commands early. `TIMED` commands are
-queued or scheduled so they apply at `runtime_snapshot_prepare` for the matching
-voice.
-
-## Initial Command Set
+### VOICE_DEFINE_STEREO
 
 ```text
-TIME_ABS
-TIME_DELTA
-
-VOICE_BEGIN          clears staging for voice, records seq
-VOICE_REGION0        payload0=base_l, payload1=base_r
-VOICE_REGION1        payload0=length_l, payload1=length_r
-VOICE_LOOP0          payload0=loop_start_l, payload1=loop_start_r
-VOICE_LOOP1          payload0=loop_end_l, payload1=loop_end_r
-VOICE_PLAYBACK       payload0=phase_inc, payload1=phase_init
-VOICE_MIX            payload0={gain_r,gain_l}, payload1=initial_envelope
-VOICE_FLAGS          payload0=stereo/loop_mode/valid flags
-VOICE_FILTER0        payload0={b1,b0}, payload1={a1,b2}
-VOICE_FILTER1        payload0=a2, payload1=filter_enable
-VOICE_PREPARE        copy staging to prepared, audible remains false
-
-VOICE_ENABLE_AT      timed audible=1, clears released, installs active seq
-VOICE_DISABLE_AT     timed audible=0
-
-RUNTIME_GAIN_AT      timed payload0={gain_r,gain_l}
-RUNTIME_PHASE_AT     timed payload0=phase_inc
-RUNTIME_FILTER0_AT   timed payload0={b1,b0}, payload1={a1,b2}
-RUNTIME_FILTER1_AT   timed payload0=a2, payload1=filter_enable
-
-ENV_SET_AT           timed payload0=value_q15
-ENV_ATTACK_AT        timed payload0=target_q15, payload1=duration_samples[23:0]
-ENV_DECAY_CB_AT      timed payload0={target_cb,start_cb}, payload1=duration_samples[23:0]
-ENV_RELEASE_CB_AT    timed payload0=start_cb, payload1=duration_samples[23:0]
-RELEASE_FLAG_AT      timed set loop-until-release flag
-STOP_VOICE_AT        timed envelope=0 and audible=0
+word 0  base_addr_l
+word 1  base_addr_r
+word 2  length_l
+word 3  length_r
+word 4  loop_start_l
+word 5  loop_start_r
+word 6  loop_end_l
+word 7  loop_end_r
+word 8  phase_init_q24_8
+word 9  flags: [1:0] loop_mode, all other bits zero
+word 10 filter: {b1_q2_14, b0_q2_14}
+word 11 filter: {a1_q2_14, b2_q2_14}
+word 12 filter: {15'b0, enable, a2_q2_14}
+word 13 reserved, zero
+word 14 reserved, zero
 ```
 
-This can be compressed later, but the first version should favor explicit
-commands and simple RTL decoding.
-
-## Note On Sequence
-
-Host chooses `voice` and increments `seq` before emitting commands.
+### VOICE_START
 
 ```text
-TIME_ABS T_prepare
-VOICE_BEGIN voice, seq
-VOICE_REGION0
-VOICE_REGION1
-VOICE_LOOP0
-VOICE_LOOP1
-VOICE_PLAYBACK
-VOICE_MIX
-VOICE_FLAGS
-VOICE_FILTER0
-VOICE_FILTER1
-VOICE_PREPARE
-
-TIME_ABS T_note
-ENV_SET_AT 0
-ENV_ATTACK_AT target, duration              if delay == 0 and attack is needed
-RUNTIME_GAIN_AT initial_runtime_gain        if not already in prepared state
-RUNTIME_PHASE_AT initial_phase_inc          if not already in prepared state
-VOICE_ENABLE_AT enable=1
-
-TIME_ABS T_note + delay
-ENV_ATTACK_AT target, duration              if delay > 0
-
-TIME_ABS T_note + delay + attack + hold
-ENV_DECAY_CB_AT start_cb, sustain_cb, duration
+word 0 {gain_r_q1_15, gain_l_q1_15}
+word 1 runtime_phase_inc_q24_8
+word 2 {8'b0, delay_samples[23:0]}
+word 3 attack_step_q0_32
+word 4 {8'b0, hold_samples[23:0]}
+word 5 decay_step_cb_q12_20
+word 6 sustain_cb_q12_20
+word 7 release_step_cb_q12_20
 ```
 
-For the first audible sample, commands at `T_note` must be ordered so envelope
-and runtime state are installed before `VOICE_ENABLE_AT`.
+`VOICE_START` is accepted only when `seq == prepared_seq[voice]`. It atomically
+copies prepared configuration to active configuration, installs active seq,
+gain, phase increment, and a fresh volume envelope, reloads phase from
+`phase_init`, clears released state, and makes the voice audible. A mismatch is
+consumed and increments `stale_seq_count`.
 
-## Note Off Sequence
+### VOICE_ENV_UPDATE
+
+Word 0 is a field mask. Selected values follow in ascending mask-bit order.
+`payload_words` must equal one plus the mask population count.
+
+| Mask bit | Following value |
+| ---: | --- |
+| 0 | `delay_samples` in bits 23:0 |
+| 1 | `attack_step_q0_32` |
+| 2 | `hold_samples` in bits 23:0 |
+| 3 | `decay_step_cb_q12_20` |
+| 4 | `sustain_cb_q12_20` |
+| 5 | `release_step_cb_q12_20` |
+
+Bits 31:6 are zero. An empty mask is invalid. Future stages use replacement
+values. A currently running Attack, Decay, or Release preserves its current
+level and uses the new step on the next sample. Delay and Hold preserve elapsed
+time and advance immediately if the new duration has already expired. A
+Sustain target change moves continuously using the decay step.
+
+### Runtime Actions
 
 ```text
-TIME_ABS T_off
-RELEASE_FLAG_AT
-ENV_RELEASE_CB_AT start_cb, duration
-
-TIME_ABS T_off + release_duration
-STOP_VOICE_AT
+VOICE_RELEASE word 0: release_step_cb_q12_20
+VOICE_GAIN_PHASE word 0: {gain_r_q1_15, gain_l_q1_15}
+                 word 1: phase_inc_q24_8
+VOICE_FILTER word 0: {b1_q2_14, b0_q2_14}
+             word 1: {a1_q2_14, b2_q2_14}
+             word 2: {15'b0, enable, a2_q2_14}
 ```
 
-Late release/stop commands should execute immediately and set a diagnostic flag.
+`VOICE_RELEASE` atomically installs the supplied release step, sets released,
+and enters Release from the current envelope level. `VOICE_STOP` immediately
+clears audible state. Gain/phase and filter commands replace the complete named
+runtime group in one action. Every runtime action must match `active_seq`; a
+mismatch has no state effect and increments `stale_seq_count`.
 
-## Runtime Control Updates
+## Prepared And Active State
 
-All runtime changes that are currently direct register writes should move into
-the command stream:
-
-| Source | Command |
-| --- | --- |
-| CC volume/expression/pan | `RUNTIME_GAIN_AT` |
-| Tremolo | `RUNTIME_GAIN_AT` |
-| Pitch bend | `RUNTIME_PHASE_AT` |
-| Vibrato | `RUNTIME_PHASE_AT` |
-| Modulation envelope to pitch | `RUNTIME_PHASE_AT` |
-| Filter cutoff/resonance/modulation | `RUNTIME_FILTER*_AT` |
-
-This makes controller, LFO, modulation-envelope, and envelope updates share one
-timestamp model.
-
-## Snapshot-Time Atomicity
-
-Timed per-voice commands must be applied at:
+Each of 256 voice slots has:
 
 ```text
-runtime_snapshot_prepare && runtime_snapshot_voice == command.voice
-```
-
-The event engine must process same-voice, same-timestamp commands in FIFO order
-before the renderer snapshots that voice for `START_VOICE`.
-
-Required Note On ordering:
-
-```text
-ENV_SET_AT 0
-optional ENV_ATTACK_AT
-RUNTIME_GAIN_AT
-RUNTIME_PHASE_AT
-VOICE_ENABLE_AT
-```
-
-`VOICE_ENABLE_AT` must be last for the same voice/timestamp so the first audible
-sample cannot observe missing envelope or stale runtime state.
-
-## SPI Latency Model
-
-The renderer must not wait for SPI. Host software provides a future timestamp:
-
-```text
-T_note = CMD_TIME + safety_offset_samples
-```
-
-`safety_offset_samples` must cover:
-
-- SPI burst time for command words.
-- Parser and prepare command execution.
-- Any `VOICE_PREPARE` copying latency.
-- At least one renderer voice-scan margin.
-
-At 48 kHz, 1 ms is 48 samples and 5 ms is 240 samples. Simulation may use zero
-offset; board software should use a positive offset and monitor late diagnostics.
-
-## Late Command Policy
-
-Recommended defaults:
-
-| Command | Late Behavior |
-| --- | --- |
-| `VOICE_ENABLE_AT` | Drop the Note On and set `dropped_note`/`late_enable`. |
-| `RUNTIME_*_AT` | Execute immediately and set `late`. |
-| `ENV_*_AT` | Execute immediately if `seq` is valid; set `late`. |
-| `RELEASE_FLAG_AT` | Execute immediately; set `late`. |
-| `STOP_VOICE_AT` | Execute immediately; set `late`. |
-
-Dropping late Note On is preferable to starting a note on the wrong musical beat
-or with stale state.
-
-## Generation Tokens
-
-Each voice has an 8-bit generation token:
-
-```text
+prepared_config[voice]
 prepared_seq[voice]
+prepared_valid[voice]
+active_config[voice]
 active_seq[voice]
+audible[voice]
+runtime_gain[voice]
+runtime_phase_inc[voice]
+volume_envelope_parameter_and_state[voice]
 ```
 
-Rules:
+DEFINE validates and writes only prepared state. It never changes an active
+voice, including when redefining a slot that is still audible. START is the only
+command that promotes prepared configuration and reloads phase. Runtime actions
+never reload phase. STOP does not invalidate prepared state.
 
-- Host increments `seq` every time it allocates or steals a voice.
-- `VOICE_BEGIN` records the new staging `seq`.
-- `VOICE_ENABLE_AT` installs `active_seq`.
-- Timed commands must match the expected prepared or active sequence.
-- Mismatches are dropped and set `stale_seq`.
+Packed voice and envelope records use synchronous inferred RAM. Reset clears
+only valid/audible generation bitmaps and queue state; it must not loop over RAM
+entries.
 
-This prevents old release, stop, runtime, or envelope commands from affecting a
-new note that reused the same voice id.
+## Frame Boundary And Action Batching
 
-## FIFO And Scheduler
+Decoded actions enter a FIFO while rendering continues. A new frame may start
+only after the renderer is idle and a bounded action batch has completed.
 
-Suggested first implementation:
+When idle, the controller snapshots:
 
 ```text
-control_cmd_fifo: 32-bit wide, depth 1024
-timed_event_fifo: compact per-voice timed events, depth 128 or 256
+batch_count = min(action_fifo_level, 16)
 ```
 
-Expected resource order:
+It executes exactly those actions in FIFO order. Actions decoded after the
+snapshot remain for the next frame. After at most 16 actions, the scheduler must
+render one frame when it has PCM credit even if more actions are queued. This
+prevents a continuous control stream from starving audio and gives every voice
+in one renderer scan the same control boundary.
 
-- `control_cmd_fifo`: about 2 BRAM18 at 1024 words.
-- `timed_event_fifo`: about 1 to 2 BRAM18 depending on event width and depth.
-- Sequence store: 256 * 8 bits, distributed RAM or small BRAM.
-- Parser/decoder FSM: hundreds to low-thousands of LUTs depending on diagnostics
-  and arbitration.
+## Volume Envelope
 
-Avoid sorting in FPGA. Host must emit timestamp blocks in ascending order and,
-within a timestamp, preferably voices in ascending order.
-
-## Write Arbitration
-
-Command writes must not block renderer reads. If a write RAM port conflicts,
-stall the command decoder and report max stall/late diagnostics.
-
-Priority guideline:
+The FPGA implements Delay, Attack, Hold, Decay, Sustain, and Release at one
+update per rendered sample. Attack uses unsigned Q0.32 linear amplitude. Decay
+and Release use Q12.20 centibel attenuation. Values at or above the documented
+silence attenuation clamp to Q1.15 zero.
 
 ```text
-1. reset
-2. renderer snapshot-timed state transitions
-3. command decoder prepare/runtime writes
-4. legacy/debug bus writes
+Delay:   retain zero until elapsed reaches delay_samples
+Attack:  add attack_step; clamp at full scale, then enter Hold
+Hold:    retain full scale until elapsed reaches hold_samples
+Decay:   increase attenuation by decay_step until sustain_cb
+Sustain: retain sustain attenuation until Release
+Release: increase attenuation by release_step until silence, then audible=0
 ```
 
-The decoder may stall. The renderer should not.
+A shared pipelined `cb_to_q15` lookup converts Decay, Sustain, and Release state
+to renderer gain. Releasing during Attack uses a shared `q15_to_cb` lookup so
+Release begins continuously from the current linear level. Zero-duration stages
+advance without adding an extra rendered sample. Step values must retain
+non-zero progress for durations through 100 seconds at 48 kHz.
 
-## Register Map Direction
+## PCM FIFO And Scheduler
 
-The main control surface should shrink toward:
+The default parameters are:
 
 ```text
-VERSION
-STATUS
-CMD_TIME
-CMD_FIFO_DATA
-CMD_FIFO_STATUS
-CMD_CONTROL
-COMMON_EVENT_FLAGS
-DEBUG_SELECT
-DEBUG_READ_DATA
+OUTPUT_FIFO_DEPTH = 64
+TARGET_LEVEL      = 48
+START_LEVEL       = 48
+MAX_ACTION_BATCH  = 16
 ```
 
-The current `VOICE.*` and `EVENT_FIFO_DATA*` write paths may be retained under a
-legacy/debug build option during migration, but the normal render path should use
-only the command FIFO.
+`OUTPUT_FIFO_DEPTH`, `TARGET_LEVEL`, and `START_LEVEL` are elaboration
+parameters. `START_LEVEL` defaults to `TARGET_LEVEL`; both must be within the
+configured FIFO depth.
 
-## Diagnostics
-
-Expose sticky flags and counters for:
+Exactly one renderer frame may be in flight. The scheduling equations are:
 
 ```text
-cmd_fifo_overflow
-cmd_late
-cmd_late_enable
-cmd_dropped_note
-cmd_order_error
-cmd_stale_seq
-cmd_bad_len
-cmd_unknown_opcode
-cmd_prepare_stall
-cmd_max_prepare_stall
-timed_event_fifo_full
+render_inflight = renderer_busy or completed output waiting for FIFO ready
+occupancy       = fifo_level + render_inflight
+render_credit   = occupancy < TARGET_LEVEL
+render_start    = core_idle and render_credit and control_batch_complete
 ```
 
-Render diagnostics JSON should include command write counts, runtime register
-write counts, late counts, stale drops, and dropped notes.
+The renderer output is ready/valid and retains a completed PCM frame until the
+FIFO accepts it. Overflow/drop is not a normal backpressure mechanism.
 
-## C++ Harness Plan
+After reset, I2S clocks run and data is zero. FIFO data is not offered to I2S
+until the level first reaches exactly `START_LEVEL`; this sets
+`playback_started`. Startup silence does not increment `underrun_count`. Once
+started, every missing frame at an I2S consume boundary is a real underrun and
+outputs zero. A consumption below `TARGET_LEVEL` immediately creates one render
+credit. After a memory stall, the renderer runs continuously until occupancy
+returns to `TARGET_LEVEL`.
 
-Add:
+## Counters And Diagnostics
 
-```cpp
-class ControlCommandSink {
- public:
-  virtual ~ControlCommandSink() = default;
-  virtual void push_command_word(uint32_t word) = 0;
-};
-
-class CommandStreamBuilder {
-  void time_abs(uint32_t timestamp);
-  void voice_begin(int voice, uint8_t seq);
-  void voice_region(...);
-  void voice_prepare(...);
-  void env_set_at(...);
-  void runtime_gain_at(...);
-  void voice_enable_at(...);
-};
-```
-
-`McuModel` should gain a command-stream mode that emits command words instead of
-legacy direct register writes.
-
-Suggested modes:
+The new status surface provides:
 
 ```text
---control-commands
---legacy-register-control
---sample-accurate-envelope
+render_sample_counter  accepted renderer outputs
+played_sample_counter  I2S frame boundaries after playback_started
+audio_lead             render_sample_counter - played_sample_counter
+minimum_fifo_level     minimum post-start level observed at consume boundaries
+render_inflight
+playback_started
+stale_seq_count
+command_error_count
+underrun_count
 ```
 
-Reference rendering should consume the same command stream through a C++ command
-decoder. That makes the reference and FPGA share the same control protocol.
+Counters saturate rather than wrap unless their register description explicitly
+says otherwise. `render_sample_counter` is the command-effect timeline.
+`played_sample_counter` is the audible timeline.
 
-## Verification Plan
+## Register Access
 
-1. C++ builder tests
-   - Note On command order.
-   - Note Off release/stop order.
-   - Runtime gain/phase/filter command emission.
-   - Sequence increment on voice reuse.
-   - 24-bit duration clamp.
+Register access is limited to global status, diagnostics, asset loading, and
+explicit bring-up/debug functions. Voice operation uses the command stream.
 
-2. RTL parser tests
-   - `TIME_ABS` and `TIME_DELTA`.
-   - Header payload count.
-   - Unknown opcode and bad length flags.
-   - FIFO overflow.
+## Verification Gates
 
-3. RTL prepare tests
-   - `VOICE_BEGIN` clears staging.
-   - `VOICE_*` writes staging.
-   - `VOICE_PREPARE` copies to prepared while audible remains false.
+Self-checking tests must cover exact `START_LEVEL` prefill, startup silence without
+underrun, one-credit refill, memory-stall catch-up, true steady-state underrun,
+DEFINE isolation, atomic START first-sample state, stale-seq rejection, all six
+envelope stages and boundaries, Note Off from every pre-release stage,
+continuous current-stage updates, 100-second steps, and 256-voice isolation.
 
-4. RTL timed engine tests
-   - `ENV_SET_AT` + `VOICE_ENABLE_AT` same timestamp gives correct first sample.
-   - `RUNTIME_GAIN_AT` + enable same timestamp gives correct first sample.
-   - Release and stop apply at timestamp.
-   - Stale seq commands drop.
-   - Late enable drops note.
-   - Same timestamp order errors are detected.
+The C++ reference and RTL must consume the same command stream and compare exact
+integer PCM. SPI Note On and Note Off tests must verify the complete command
+path.
 
-5. Core tests
-   - Full command Note On renders exact first sample.
-   - Runtime gain/phase/filter commands affect exact expected samples.
-   - Normal Note On uses no legacy voice register writes.
+Implementation acceptance additionally requires `make lint`, `make test`, the
+complete C++ render regression, Smart Artix post-route timing, average render
+latency below 2083 cycles, positive stress-test minimum FIFO level, zero
+steady-state drops, no more than 8 additional BRAM tiles, 2 DSPs, or 2500 LUTs,
+and non-negative WNS.
 
-6. Render harness tests
-   - `--control-commands` reference vs legacy sample-accurate output.
-   - Long 100s decay is not truncated.
-   - Diagnostics show runtime register writes near zero.
+## Implementation Roadmap
 
-## Migration Plan
+Implement the design in the following order. Each phase must leave focused
+self-checking tests in the tree before the next phase starts.
 
-1. Define command opcodes, docs, and C++ builder tests.
-2. Add `control_cmd_fifo` and parser for `TIME_*`, `ENV_*`, and
-   `VOICE_ENABLE_AT`.
-3. Use command path to fix Note On first-sample envelope synchronization.
-4. Add `VOICE_*` prepare commands and move Note On config out of direct register
-   commits.
-5. Move Note Off release/stop to commands.
-6. Move runtime gain/phase/filter to commands.
-7. Add C++ reference command decoder and make `render-reference
-   --control-commands` use it.
-8. Deprecate or remove legacy event FIFO and per-voice write path for normal
-   rendering.
+1. Freeze this command, state, batching, FIFO, and timing contract.
+2. Establish the parameterized PCM FIFO and complete renderer ready/valid
+   output boundary.
+3. Add credit-driven continuous rendering, parameterized startup prefill, and
+   the I2S startup gate.
+4. Expose render/played counters, audio lead, FIFO minimum, inflight state, and
+   playback-start state through the global status surface.
+5. Connect the command word FIFO to the transactional parser and decoded action
+   FIFO, including parser recovery and error counting.
+6. Implement packed synchronous prepared configuration RAM, prepared/active seq
+   state, atomic START promotion, and audible/generation bitmaps.
+7. Implement packed volume-envelope parameter/state RAM, the six-stage engine,
+   shared conversion pipelines, and exact fixed-point boundary behavior.
+8. Implement every action executor and stale-seq path: DEFINE, START,
+   ENV_UPDATE, RELEASE, STOP, GAIN_PHASE, FILTER, and STREAM_FLUSH.
+9. Move the C++ command builder, reference renderer, DUT adapters, and MCU model
+   to the command stream and exact FPGA envelope arithmetic.
+10. Add destination dependency tracking for real-time envelope modulators so a
+    source change recomputes only affected voices and fields.
+11. Consolidate RTL, simulation sources, tests, and generated contracts around
+    the transactional control plane and continuous renderer.
+12. Synchronize the register map, fixed-point rules, system design, RTL map,
+    host-control documentation, board documentation, and verification guide.
 
-## Final Shape
+Documentation is updated incrementally. At minimum, update it after the
+envelope engine, after C++ migration, and after source consolidation rather than
+deferring all contract work to the end.
+
+## Resume Checkpoint
+
+Checkpoint date: 2026-07-24.
+
+Completed and tested:
+
+- This target-state protocol and scheduling contract.
+- Parameterized `OUTPUT_FIFO_DEPTH`, `TARGET_LEVEL`, and `START_LEVEL`, with
+  defaults 64, 48, and `TARGET_LEVEL` respectively.
+- Renderer completion holding at the system-core ready/valid boundary.
+- Credit scheduler using FIFO level plus one possible inflight frame.
+- I2S startup gating, startup-underrun suppression, and render/played/lead/FIFO
+  minimum signals.
+- Dedicated SPI command-stream opcode `0xa5`, accepting consecutive 32-bit
+  words without register addresses.
+- New command enum, packed decoded action, transactional parser, and action FIFO
+  modules.
+- The transactional parser and action FIFO now exclusively consume the command
+  word FIFO; the timestamp-block parser, prepare engine, and timed event FIFOs
+  have been removed.
+- Frame requests snapshot and execute at most 16 decoded actions before the
+  renderer starts, so continuous command traffic cannot starve PCM production.
+- Packed synchronous prepared voice RAM, prepared/active validity and seq state,
+  DEFINE isolation, matching START promotion, and stale START rejection.
+- Focused scheduler, startup gate, SPI stream, and parser tests.
+- Focused transactional lifecycle and 16+1 action-batch tests.
+- Packed active envelope parameter/state, all six stages, runtime envelope
+  updates, release/stop, gain/phase, filter, and stale-sequence handling.
+- C++ command construction, reference synthesis, DUT adapters, MCU policy, and
+  host tools use the command stream directly; the compatibility register path
+  has been deleted.
+- A low-cost coherent debug snapshot reuses the prepared/active RAM read port
+  and exposes 24 read-only words through global registers.
+- `make lint` and the full `make test` suite pass at this checkpoint.
+
+The command/control migration and documentation consolidation are functionally
+complete. Remaining roadmap work is the explicit destination-dependency metadata
+optimization, representative full render regressions, long memory-stall and
+polyphony stress, and Smart Artix post-route timing/utilization comparison. The
+renderer-private advancing phase and biquad history remain outside the low-cost
+control-state snapshot unless hardware bring-up demonstrates a need for a
+separate datapath trace aperture.
+
+Files that define the current boundary:
 
 ```text
-Host:
-  fully scheduled primitive command stream
-
-FPGA:
-  deterministic command application
-  timestamped audible enable/runtime/env changes
-  renderer sees coherent state at each voice snapshot
-
-Registers:
-  FIFO ingress, status, diagnostics, debug/readback
+docs/design/control_command_stream_plan.md
+rtl/pkg/synth_pkg.sv
+rtl/control/control_action_parser.sv
+rtl/control/control_action_fifo.sv
+rtl/control/control_action_executor.sv
+rtl/control/transactional_control_plane.sv
+rtl/control/synth_control_plane.sv
+rtl/audio/render_credit_scheduler.sv
+rtl/audio/output_sample_fifo.sv
+fpga/common/rtl/spi_register_bridge.sv
+fpga/common/rtl/wavetable_system_core.sv
+fpga/common/rtl/wavetable_i2s_output.sv
+fpga/common/rtl/wavetable_demo_system.sv
+sim/tb/tb_control_cmd_parser.sv
+sim/tb/tb_transactional_control_plane.sv
+sim/tb/tb_wavetable_render_core.sv
+sim/tb/tb_render_credit_scheduler.sv
+sim/tb/tb_wavetable_i2s_output.sv
+sim/tb/tb_spi_register_bridge.sv
+host/ch347_control_main.cpp
 ```
 
-This is a breaking change to the current register-control model, but it directly
-addresses the real hardware race where a voice can become audible before its
-envelope initial state arrives.
+The working tree may contain overlapping in-progress control-plane changes.
+Read `git status` and the relevant diffs before editing, preserve useful target
+state work, and do not reset the tree to an earlier commit.
+
+## Detailed Verification Matrix
+
+### FIFO And Scheduling
+
+- Prefill reaches exactly `START_LEVEL` before playback starts.
+- Startup clocks and zero output do not increment underrun diagnostics.
+- Every new credit below `TARGET_LEVEL` starts a refill as soon as the renderer
+  and control batch permit it.
+- A memory stall lowers the level and rendering automatically catches up to the
+  configured target after the stall clears.
+- A long-term average render time above the sample period produces real
+  underruns rather than sample drops or hidden deadline events.
+- Renderer output remains stable while valid and not ready.
+- Continuous control traffic cannot prevent a frame after
+  `MAX_ACTION_BATCH` actions.
+
+### Voice Lifecycle And Commands
+
+- DEFINE updates prepared state without changing the active audible voice.
+- START with matching seq atomically installs configuration, gain, phase
+  increment, initial phase, filter, and fresh envelope state.
+- The first rendered and first audible sample after START use the complete new
+  state.
+- START with a mismatched prepared seq and every runtime action with a
+  mismatched active seq are consumed without state changes and increment
+  `stale_seq_count`.
+- STOP immediately excludes the voice without invalidating its prepared state.
+- Mono and stereo DEFINE payloads validate reserved bits, bounds, loop rules,
+  and exact word counts.
+- STREAM_FLUSH recovers parser framing and queues without modifying voice RAM.
+- SPI Note On and Note Off traverse the dedicated command transaction through
+  the same action stream used by simulation.
+
+### Volume Envelope
+
+- Delay, Attack, Hold, Decay, Sustain, and Release cover zero, one-sample, and
+  multi-sample boundaries.
+- Note Off is tested during Delay, Attack, Hold, Decay, and Sustain.
+- Attack reaches full scale without wrap; Decay and Release reach their targets
+  without overshoot.
+- Releasing during Attack starts continuously from the current Q1.15 level.
+- Updating the current Attack, Decay, or Release step changes the next sample
+  without a level discontinuity.
+- Delay and Hold duration changes preserve elapsed time and advance immediately
+  when the updated duration has already elapsed.
+- Sustain changes move using the decay step and do not jump.
+- 100-second Attack, Decay, and Release conversions retain non-zero progress
+  and complete without accumulator overflow.
+- All 256 voice slots retain independent parameters, stage, elapsed count, and
+  level under interleaved updates.
+
+### Host And Reference
+
+- C++ and RTL consume identical command words and compare exact integer output,
+  including rounding, lookup interpolation, and saturation.
+- A mono Note On emits 21 total words, a stereo Note On emits 25, and Note Off
+  emits 2.
+- Fixed modulator sources are folded into START parameters.
+- Real-time source changes update only voices and destinations recorded in the
+  dependency graph.
+- Note Off computes the then-current release step and carries it atomically in
+  VOICE_RELEASE.
+- Full MIDI/SF2 render regressions cover voice allocation, stealing, controller
+  changes, pressure, NRPN, pitch/filter modulation, and sustained polyphony.
+
+## Synthesis And Performance Acceptance
+
+Use the following Smart Artix post-route result as the refactor comparison
+baseline:
+
+```text
+LUT   10,653
+FF    11,305
+BRAM  10 / 75
+DSP   26 / 120
+WNS   +0.982 ns
+```
+
+The acceptance limits are:
+
+```text
+additional BRAM <= 8 tiles
+additional DSP  <= 2
+additional LUT  <= 2500
+final WNS       >= 0
+average render cycles < 2083 at 100 MHz / 48 kHz
+stress minimum_fifo_level > 0
+steady-state sample_drop_count == 0
+```
+
+Final qualification runs, in order:
+
+1. `make lint`.
+2. `make test`.
+3. Complete C++ reference, RTL-core, cached-memory, and board-loader render
+   regressions with representative SF2/MIDI assets.
+4. Long memory-stall and full-polyphony stress runs with counter checks.
+5. Smart Artix post-route synthesis, timing, and utilization comparison against
+   the baseline above.
+
+## Later Performance Phase
+
+Keep the single-frame renderer for this control-plane and producer/consumer
+refactor. First measure its steady-state render cycles, FIFO minimum, memory
+request pattern, and recovery after stalls.
+
+Only if those measurements show that per-frame descriptor scans and discrete
+memory requests remain the bottleneck, implement a separate 48-frame
+voice-major block renderer:
+
+```text
+for each active voice:
+  read its configuration once
+  calculate 48 phase/envelope/sample results consecutively
+  accumulate into a 48-entry stereo accumulator RAM
+after all voices:
+  write the 48 completed frames to the PCM FIFO
+```
+
+That phase owns descriptor-read reduction and memory burst improvement. It must
+not be combined with the transactional command, prepared/active state, volume
+envelope, or FIFO scheduling implementation. The stable ready/valid and credit
+interfaces in this document are the prerequisite and measurement boundary for
+the block renderer.

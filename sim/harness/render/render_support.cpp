@@ -1,5 +1,6 @@
 #include "render_support.h"
 
+#include "command_control.h"
 #include "midi_parser.h"
 
 #include <algorithm>
@@ -215,17 +216,6 @@ int db_release(int start, int tick, int ticks) {
   return clamp_q15(int(std::round(double(start) * std::pow(1.0 / double(std::max(1, start)), x))));
 }
 
-uint16_t q15_to_cb(int level) {
-  int q15 = clamp_q15(level);
-  if (q15 <= 0) return 960;
-  double cb = -200.0 * std::log10(double(q15) / double(kQ15Full));
-  return uint16_t(std::max(0.0, std::min(960.0, std::round(cb))));
-}
-
-uint32_t clamp_env_duration24(uint32_t samples) {
-  return std::max(1u, std::min(samples, 0x00ff'ffffu));
-}
-
 int linear_release(int start, int tick, int ticks) {
   return linear_ramp(start, 0, tick, ticks);
 }
@@ -372,11 +362,10 @@ std::string render_input_json_fields(const Args& args, int adsr_tick_samples) {
     << ",\n  \"start_seconds\": " << args.start_seconds
     << ",\n  \"requested_seconds\": " << args.seconds
     << ",\n  \"envelope_mode\": "
-    << json_string_impl(args.rtl_envelope_events ? "rtl_events" :
-                        (args.sample_accurate_envelope ? "sample_accurate" : "control_tick"))
+    << json_string_impl(args.sample_accurate_envelope ? "sample_accurate" : "control_tick")
     << ",\n  \"adsr_tick_ms\": " << args.adsr_tick_ms
     << ",\n  \"adsr_tick_ms_ignored\": "
-    << ((args.sample_accurate_envelope || args.rtl_envelope_events) ? "true" : "false")
+    << (args.sample_accurate_envelope ? "true" : "false")
     << ",\n  \"adsr_tick_samples\": " << adsr_tick_samples
     << ",\n  \"render_num_voices\": " << kNumVoices;
   return s.str();
@@ -387,7 +376,7 @@ std::string memory_profile_json_field(const Args& args) {
 }
 
 int envelope_tick_samples(const Args& args) {
-  if (args.sample_accurate_envelope || args.rtl_envelope_events) return 1;
+  if (args.sample_accurate_envelope) return 1;
   return std::max(1, int(std::round(args.adsr_tick_ms * args.sample_rate / 1000.0)));
 }
 
@@ -408,10 +397,6 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--sample-rate") args.sample_rate = std::stoi(need("--sample-rate"));
     else if (a == "--adsr-tick-ms") args.adsr_tick_ms = std::stod(need("--adsr-tick-ms"));
     else if (a == "--sample-accurate-envelope") args.sample_accurate_envelope = true;
-    else if (a == "--rtl-envelope-events") {
-      args.rtl_envelope_events = true;
-      args.sample_accurate_envelope = true;
-    }
     else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);
@@ -590,6 +575,7 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
       }
       std::vector<int> indices;
       for (auto& r : made) {
+        r.envelope_tick_samples = adsr_tick_samples;
         indices.push_back(int(regions.size()));
         regions.push_back(r);
       }
@@ -631,7 +617,7 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
   });
 }
 
-McuModel::McuModel(VoiceControlSink& sink, const std::vector<Region>& regions,
+McuModel::McuModel(VoiceCommandSink& sink, const std::vector<Region>& regions,
                    RenderDiagnostics* diagnostics)
     : sink_(sink), regions_(regions), diagnostics_(diagnostics) {}
 
@@ -681,16 +667,11 @@ void McuModel::envelope_tick() {
         voices_[v].state = ENV_SILENT;
         voices_[v].sustain_held = false;
         voices_[v].mod_env_state = ENV_SILENT;
-        sink_.commit_voice(v, 0, 0, regions_.front());
       }
     }
 
     if (voices_[v].state != ENV_SILENT || voices_[v].level != 0) {
       voices_[v].level = clamp_q15(next);
-      if (!rtl_envelope_events_) {
-        record_runtime_envelope_update(v, voices_[v].level);
-        sink_.set_envelope(v, voices_[v].level);
-      }
       update_voice_modulation(v);
     }
   }
@@ -781,9 +762,7 @@ void McuModel::control_change(const NoteEvent& event) {
           voices_[v].sustain_held = false;
           voices_[v].sostenuto_held = false;
           voices_[v].mod_env_state = ENV_SILENT;
-          record_runtime_envelope_update(v, 0);
-          sink_.set_envelope(v, 0);
-          sink_.commit_voice(v, 0, 0, regions_.front());
+          sink_.stop_voice(v);
         }
       }
       break;
@@ -977,15 +956,6 @@ void McuModel::update_channel_controls(int channel) {
 }
 
 void McuModel::update_voice_controls(int voice) {
-  const VoiceState& state = voices_.at(voice);
-  const Region& r = regions_.at(state.region);
-  const ChannelState& c = channels_.at(state.channel & 0x0f);
-  auto gains = runtime_gains(r, state, c);
-  if (!runtime_gain_valid_[voice] ||
-      !same_runtime_gain(gains.first, gains.second, last_runtime_gain_l_[voice], last_runtime_gain_r_[voice])) {
-    record_runtime_gain_update(voice, gains.first, gains.second);
-    sink_.set_gain(voice, gains.first, gains.second);
-  }
   update_voice_modulation(voice);
 }
 
@@ -1046,10 +1016,8 @@ void McuModel::update_voice_modulation(int voice) {
   pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
   pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
   uint32_t phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
-  if (!runtime_phase_valid_[voice] || phase_inc != last_runtime_phase_inc_[voice]) {
-    record_runtime_phase_update(voice, phase_inc);
-    sink_.set_phase_inc(voice, phase_inc);
-  }
+  const bool phase_changed = !runtime_phase_valid_[voice] ||
+                             phase_inc != last_runtime_phase_inc_[voice];
 
   double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
                         modulator_sum(r, state, c, kGenInitialFilterFc) +
@@ -1062,16 +1030,20 @@ void McuModel::update_voice_modulation(int voice) {
   FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate);
   if (!runtime_filter_valid_[voice] || !same_filter_config(filter, last_runtime_filter_[voice])) {
     record_runtime_filter_update(voice, filter);
-    sink_.set_filter(voice, filter);
+    sink_.update_filter(voice, filter);
   }
   state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
                                             c.generator_offsets[kGenModLfoToVolume] +
                                             modulator_sum(r, state, c, kGenModLfoToVolume));
   auto gains = runtime_gains(r, state, c);
-  if (!runtime_gain_valid_[voice] ||
-      !same_runtime_gain(gains.first, gains.second, last_runtime_gain_l_[voice], last_runtime_gain_r_[voice])) {
+  const bool gain_changed = !runtime_gain_valid_[voice] ||
+      !same_runtime_gain(gains.first, gains.second,
+                         last_runtime_gain_l_[voice], last_runtime_gain_r_[voice]);
+  if (phase_changed || gain_changed) {
+    if (phase_changed) record_runtime_phase_update(voice, phase_inc);
+    if (gain_changed)
     record_runtime_gain_update(voice, gains.first, gains.second);
-    sink_.set_gain(voice, gains.first, gains.second);
+    sink_.update_gain_phase(voice, gains.first, gains.second, phase_inc);
   }
 
   if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
@@ -1112,11 +1084,8 @@ void McuModel::release_voice(int voice) {
   voices_[voice].mod_env_stage_tick = 0;
   voices_[voice].mod_env_release_start = voices_[voice].mod_env_level;
   voices_[voice].sustain_held = false;
-  if (rtl_envelope_events_ && envelope_events_) {
-    schedule_release_envelope_events(voice, regions_.at(voices_[voice].region));
-  } else {
-    sink_.release_voice(voice, regions_.at(voices_[voice].region));
-  }
+  const Region& region = regions_.at(voices_[voice].region);
+  sink_.release_voice(voice, envelope_release_step(region));
 }
 
 void McuModel::note_off(int channel, int note) {
@@ -1224,57 +1193,11 @@ void McuModel::note_on(const NoteEvent& event) {
   uint32_t phase_inc = modulated_phase_inc(event.phase_inc,
       channel.generator_offsets[kGenFineTune] + channel.generator_offsets[kGenCoarseTune] +
       modulator_sum(r, voices_[slot], channel, 0));
-  sink_.commit_voice(slot, 1, phase_inc, r);
-  if (rtl_envelope_events_ && envelope_events_) {
-    schedule_note_on_envelope_events(slot, r);
-  }
+  auto initial_gains = runtime_gains(r, voices_[slot], channel);
+  r.gain_l = initial_gains.first;
+  r.gain_r = initial_gains.second;
+  sink_.start_voice(slot, phase_inc, r);
   update_voice_controls(slot);
-}
-
-void McuModel::schedule_note_on_envelope_events(int voice, const Region& r) {
-  if (!envelope_events_) return;
-  const uint32_t delay = uint32_t(std::max(0, r.delay_ticks));
-  const uint32_t attack = uint32_t(std::max(1, r.attack_ticks));
-  const uint32_t hold = uint32_t(std::max(0, r.hold_ticks));
-  const uint32_t decay = uint32_t(std::max(1, r.decay_ticks));
-  const int initial = clamp_q15(voices_[voice].level);
-  const int target = clamp_q15(voices_[voice].target);
-  const int sustain = clamp_q15(voices_[voice].sustain);
-  const uint16_t target_start_cb = q15_to_cb(target);
-  const uint16_t sustain_cb = q15_to_cb(sustain);
-  const uint32_t decay_duration = clamp_env_duration24(decay);
-  uint32_t decay_timestamp = current_sample_ + hold;
-
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kEnvSet,
-                    uint16_t(std::max(0, initial)), 0});
-  if (voices_[voice].state == ENV_DELAY || voices_[voice].state == ENV_ATTACK) {
-    envelope_events_->push_envelope_event(
-        EnvelopeEvent{current_sample_ + delay, voice, EnvelopeEventOpcode::kVolAttack,
-                      uint16_t(std::max(0, target)), clamp_env_duration24(attack)});
-    decay_timestamp = current_sample_ + delay + attack + hold;
-  }
-  if (sustain_cb > target_start_cb) {
-    envelope_events_->push_envelope_event(
-        EnvelopeEvent{decay_timestamp, voice, EnvelopeEventOpcode::kVolDecayCb,
-                      target_start_cb,
-                      sustain_cb,
-                      decay_duration});
-  }
-}
-
-void McuModel::schedule_release_envelope_events(int voice, const Region& r) {
-  if (!envelope_events_) return;
-  const uint32_t release = uint32_t(std::max(1, r.release_ticks));
-  const uint16_t start_cb = q15_to_cb(voices_[voice].release_start);
-  const uint32_t release_duration = clamp_env_duration24(release);
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kReleaseFlag, 0, 0});
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_, voice, EnvelopeEventOpcode::kVolReleaseCb, start_cb,
-                    0, release_duration});
-  envelope_events_->push_envelope_event(
-      EnvelopeEvent{current_sample_ + release_duration, voice, EnvelopeEventOpcode::kStopVoice, 0, 0});
 }
 
 int McuModel::first_free_or_steal_slot() const {

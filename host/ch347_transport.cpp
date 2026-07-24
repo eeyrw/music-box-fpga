@@ -104,6 +104,19 @@ void Ch347RegisterTransport::write_registers(uint16_t start_address, const std::
   write_spi(frame.data(), frame_size);
 }
 
+void Ch347RegisterTransport::write_command_words(const std::vector<uint32_t>& words) {
+  std::vector<uint8_t> bytes;
+  bytes.reserve(1 + words.size() * 4);
+  bytes.push_back(0xa5);
+  for (uint32_t word : words) {
+    bytes.push_back(uint8_t(word >> 24));
+    bytes.push_back(uint8_t(word >> 16));
+    bytes.push_back(uint8_t(word >> 8));
+    bytes.push_back(uint8_t(word));
+  }
+  write_spi(bytes.data(), bytes.size());
+}
+
 std::vector<uint32_t> Ch347RegisterTransport::read_registers(uint16_t start_address, size_t count) {
   if (count == 0) return {};
   const size_t frame_size = 3 + count * 4;

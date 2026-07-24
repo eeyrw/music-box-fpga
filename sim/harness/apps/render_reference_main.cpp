@@ -1,3 +1,4 @@
+#include "command_control.h"
 #include "midi_parser.h"
 #include "reference_synth.h"
 #include "render_interrupt.h"
@@ -28,11 +29,8 @@ int main(int argc, char** argv) {
 
     render::RenderDiagnostics diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
-    render::McuModel mcu(reference, regions, &diagnostics);
-    if (args.rtl_envelope_events) {
-      mcu.set_rtl_envelope_events(true);
-      mcu.set_envelope_event_sink(&reference);
-    }
+    render::CommandVoiceControl control(reference);
+    render::McuModel mcu(control, regions, &diagnostics);
 
     size_t event_index = 0;
     int next_adsr_sample = 0;

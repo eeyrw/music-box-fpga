@@ -10,8 +10,12 @@ module wavetable_system_core #(
   output logic [31:0]              bus_rdata,
   output logic                     bus_ready,
   output logic                     bus_error,
+  input  logic                     cmd_stream_valid,
+  input  logic [31:0]              cmd_stream_data,
+  output logic                     cmd_stream_ready,
   input  logic                     sample_tick,
   output logic                     sample_valid,
+  input  logic                     sample_ready,
   output synth_pkg::pcm_t          sample_l,
   output synth_pkg::pcm_t          sample_r,
   output logic                     busy,
@@ -45,6 +49,12 @@ module wavetable_system_core #(
   logic [2:0] dsp_context_queue_max_occupancy;
   logic dsp_ready_no_context_pulse;
   logic unused_render_diagnostics;
+  logic renderer_sample_valid;
+  logic renderer_busy;
+  synth_pkg::pcm_t renderer_sample_l;
+  synth_pkg::pcm_t renderer_sample_r;
+
+  assign busy = renderer_busy || sample_valid;
 
   assign mem_req.valid = mem_req_valid;
   assign mem_req.voice = mem_req_voice;
@@ -77,11 +87,14 @@ module wavetable_system_core #(
     .bus_rdata,
     .bus_ready,
     .bus_error,
+    .cmd_stream_valid,
+    .cmd_stream_data,
+    .cmd_stream_ready,
     .sample_tick,
-    .sample_valid,
-    .sample_l,
-    .sample_r,
-    .busy,
+    .sample_valid(renderer_sample_valid),
+    .sample_l(renderer_sample_l),
+    .sample_r(renderer_sample_r),
+    .busy(renderer_busy),
     .mem_req_valid,
     .mem_req_voice,
     .mem_req_stream_id,
@@ -102,6 +115,25 @@ module wavetable_system_core #(
     .dsp_context_queue_max_occupancy,
     .dsp_ready_no_context_pulse
   );
+
+  // The renderer emits a completion pulse. Hold that frame at the system-core
+  // boundary until the downstream PCM FIFO accepts it.
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      sample_valid <= 1'b0;
+      sample_l <= '0;
+      sample_r <= '0;
+    end else begin
+      if (sample_valid && sample_ready)
+        sample_valid <= 1'b0;
+
+      if (renderer_sample_valid) begin
+        sample_valid <= 1'b1;
+        sample_l <= renderer_sample_l;
+        sample_r <= renderer_sample_r;
+      end
+    end
+  end
 
   wave_memory_subsystem #(.LINE_WORDS(LINE_WORDS)) memory (
     .clk,

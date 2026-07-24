@@ -9,6 +9,7 @@ module tb_i2s_tx;
   pcm_t sample_l;
   pcm_t sample_r;
   logic underrun_pulse;
+  logic frame_pulse;
   logic i2s_bclk;
   logic i2s_lrclk;
   logic i2s_sdata;
@@ -36,6 +37,7 @@ module tb_i2s_tx;
     .sample_l,
     .sample_r,
     .underrun_pulse,
+    .frame_pulse,
     .i2s_bclk,
     .i2s_lrclk,
     .i2s_sdata
@@ -137,6 +139,10 @@ module tb_i2s_tx;
     end
     if (underruns == 0) begin
       $error("expected at least one underrun after input frames were exhausted");
+      errors++;
+    end
+    if (frame_pulse && rst) begin
+      $error("frame pulse asserted during reset");
       errors++;
     end
 

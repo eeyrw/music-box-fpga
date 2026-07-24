@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "sim/harness/control/register_control.h"
+#include "host/register_io.h"
+#include "sim/harness/control/command_control.h"
 #include "third_party/ch347_linux/ch347_lib.h"
 
 namespace host {
@@ -18,7 +19,7 @@ struct Ch347Options {
   int clock_hz = 1000000;
 };
 
-class Ch347RegisterTransport : public render::RegisterWriteSink {
+class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink {
  public:
   explicit Ch347RegisterTransport(const Ch347Options& options);
   ~Ch347RegisterTransport() override;
@@ -27,9 +28,10 @@ class Ch347RegisterTransport : public render::RegisterWriteSink {
   Ch347RegisterTransport& operator=(const Ch347RegisterTransport&) = delete;
 
   void write_register(uint16_t address, uint32_t data) override;
-  uint32_t read_register(uint16_t address);
+  uint32_t read_register(uint16_t address) override;
   void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override;
   std::vector<uint32_t> read_registers(uint16_t start_address, size_t count);
+  void write_command_words(const std::vector<uint32_t>& words) override;
 
  private:
   using SpiConfig = mSpiCfgS;

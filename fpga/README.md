@@ -75,12 +75,12 @@ fpga/<board-name>/
    Runtime SF2/MIDI parsing is simulation-only. The Smart Artix path currently
    expects a raw SD image with a `WTSF` header and copies the SF2 byte image into
    DDR before playback. A board flow still needs metadata tables that the host,
-   MCU, or soft core can use to program voice registers.
+   MCU, or soft core can use to build voice commands.
 
 9. Provide control firmware or host software.
    The RTL does not allocate voices or parse MIDI. A control-side implementation
-   must write the documented register map, commit voices, update envelopes, and
-   stop voices on note release.
+   must send the documented command stream for voice start, runtime updates,
+   release, and stop.
 
 10. Verify real-time timing.
     Measure render latency, memory miss latency, I2S underruns, and sample drops.
@@ -95,18 +95,19 @@ The generic synthesizer core source list should match `RTL_SOURCES` in the root
 ```text
 rtl/pkg/synth_pkg.sv
 rtl/pkg/synth_register_pkg.sv
-rtl/control/voice_active_store.sv
 rtl/control/voice_bram_1r1w.sv
-rtl/control/voice_bram_1w2r.sv
-rtl/control/voice_commit_engine.sv
-rtl/control/voice_descriptor_store.sv
-rtl/control/voice_runtime_store.sv
-rtl/control/voice_register_bank.sv
+rtl/control/control_word_fifo.sv
+rtl/control/control_action_fifo.sv
+rtl/control/control_action_parser.sv
+rtl/control/control_action_executor.sv
+rtl/control/transactional_control_plane.sv
+rtl/control/synth_control_plane.sv
 rtl/memory/wave_memory_subsystem.sv
 rtl/dsp/linear_interpolator.sv
 rtl/dsp/gain_saturate.sv
 rtl/dsp/voice_dsp_pipeline.sv
 rtl/audio/output_sample_fifo.sv
+rtl/audio/render_credit_scheduler.sv
 rtl/voice/voice_phase_frame.sv
 rtl/voice/voice_endpoint_fetch.sv
 rtl/voice/multi_voice_pipeline.sv

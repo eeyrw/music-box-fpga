@@ -69,8 +69,8 @@ wavetable_demo_system external line-read pins
 
 The raw-image asset format is documented in `../../docs/board/asset_loading.md`. Sector 0
 contains the `WTSF` header; the SF2 byte image is copied into DDR3 without byte
-repacking so software can keep using absolute SF2 `smpl` offsets when programming
-voice registers.
+repacking so software can keep using absolute SF2 `smpl` offsets in voice
+definition commands.
 
 The native 4-bit path is connected to `smart_artix_top`:
 
@@ -343,7 +343,7 @@ The synthesis script writes the flat utilization, hierarchical utilization, and
 timing reports under `../../build/fpga/smart_artix/vivado/reports/`. Use
 `post_synth_utilization_hier_depth4.rpt` first when checking resource ownership;
 it shows the major split between `core_system`, `multi_voice_pipeline`,
-`voice_register_bank`, memory, and the MIG wrapper without the full IP hierarchy
+`synth_control_plane`, memory, and the MIG wrapper without the full IP hierarchy
 noise. Use `post_synth_utilization_hier.rpt` when a deeper instance-level trace is
 needed.
 

@@ -1,6 +1,6 @@
 #include "board_loader_render_harness.h"
 #include "board_loader_render_utils.h"
-#include "fanout_sink.h"
+#include "command_control.h"
 #include "memory_profile.h"
 #include "midi_parser.h"
 #include "reference_synth.h"
@@ -59,12 +59,9 @@ int main(int argc, char** argv) {
     render::RenderDiagnostics diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
     board.reset_core();
-    render::FanoutSink control(board, reference);
+    render::CommandFanout command_stream(board, reference);
+    render::CommandVoiceControl control(command_stream);
     render::McuModel mcu(control, regions, &diagnostics);
-    if (args.rtl_envelope_events) {
-      mcu.set_rtl_envelope_events(true);
-      mcu.set_envelope_event_sink(&control);
-    }
 
     size_t event_index = 0;
     int next_adsr_sample = 0;
@@ -99,7 +96,6 @@ int main(int argc, char** argv) {
                                " RTL/reference mismatches");
     }
 
-    const auto& reg = board.register_write_stats();
     std::string extra = "  \"render_target\": \"render-board-loader\""
         ",\n  \"rtl_top\": \"board_loader_render_tops\""
         ",\n" + render::render_input_json_fields(args, adsr_tick_samples) +
@@ -111,8 +107,6 @@ int main(int argc, char** argv) {
         ",\n  \"interrupted\": " + std::string(render::interrupt_requested() ? "true" : "false") +
         ",\n  \"nonzero_output_words\": " + std::to_string(board.nonzero_output_words()) +
         ",\n  \"memory_responses\": " + std::to_string(board.memory_responses()) +
-        ",\n  \"register_writes_total\": " + std::to_string(reg.total) +
-        ",\n  \"register_writes_envelope_events\": " + std::to_string(reg.envelope_events) +
         ",\n" + render::diagnostics_json_fields(diagnostics) +
         ",\n  \"wav_path\": " + render::json_string(wav_path);
     render::write_summary(args.out_dir + "/board_loader_render_config.json", regions,
@@ -132,8 +126,7 @@ int main(int argc, char** argv) {
               << " regions=" << regions.size()
               << " events=" << events.size()
               << " nonzero_output_words=" << board.nonzero_output_words()
-              << " memory_responses=" << board.memory_responses()
-              << " register_writes=" << reg.total << "\n";
+              << " memory_responses=" << board.memory_responses() << "\n";
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "render-board-loader failed: " << e.what() << "\n";

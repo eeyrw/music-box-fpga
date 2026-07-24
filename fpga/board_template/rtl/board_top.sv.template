@@ -31,7 +31,7 @@ module board_top (
   logic [31:0] ext_req_addr;
   logic        ext_rsp_valid;
   logic [8*16-1:0] ext_rsp_data;
-  logic [3:0] output_fifo_level;
+  logic [$clog2(64+1)-1:0] output_fifo_level;
   logic render_deadline_miss_pulse;
   logic [15:0] render_latency_cycles;
 
@@ -41,6 +41,9 @@ module board_top (
 
   wavetable_demo_system #(
     .LINE_WORDS(8),
+    .OUTPUT_FIFO_DEPTH(64),
+    .TARGET_LEVEL(48),
+    .START_LEVEL(48),
     .SYS_CLK_HZ(49_152_000),
     .SAMPLE_RATE_HZ(48_000)
   ) core_system (

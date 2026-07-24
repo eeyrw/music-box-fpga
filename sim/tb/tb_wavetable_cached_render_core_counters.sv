@@ -15,6 +15,9 @@ module tb_wavetable_cached_render_core_counters;
   logic [31:0] bus_rdata;
   logic bus_ready;
   logic bus_error;
+  logic cmd_stream_valid;
+  logic [31:0] cmd_stream_data;
+  logic cmd_stream_ready;
   logic sample_tick;
   logic sample_valid;
   pcm_t sample_l;
@@ -97,6 +100,9 @@ module tb_wavetable_cached_render_core_counters;
     .bus_rdata,
     .bus_ready,
     .bus_error,
+    .cmd_stream_valid,
+    .cmd_stream_data,
+    .cmd_stream_ready,
     .sample_tick,
     .sample_valid,
     .sample_l,
@@ -179,6 +185,8 @@ module tb_wavetable_cached_render_core_counters;
     bus_write = 1'b0;
     bus_address = '0;
     bus_wdata = '0;
+    cmd_stream_valid = 1'b0;
+    cmd_stream_data = '0;
     sample_tick = 1'b0;
     ext_req_ready = 1'b1;
     ext_rsp_valid = 1'b0;

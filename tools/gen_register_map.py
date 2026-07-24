@@ -25,9 +25,6 @@ def macro_name(prefix, name):
 
 
 FIELD_GROUP_ORDER = [
-    "VOICE_CONTROL",
-    "FILTER_CONTROL",
-    "FILTER_A2",
     "COMMON_EVENT_FLAGS",
     "PLATFORM_STATUS",
     "DDR_ACCESS_CONTROL",
@@ -50,8 +47,6 @@ def normalize_spec(spec):
             "address_width": device["addressWidth"],
             "data_width": device["width"],
         },
-        "voice_window": {},
-        "voice_registers": [],
         "global_registers": [],
         "fields": {},
         "numeric_constants": {},
@@ -59,32 +54,19 @@ def normalize_spec(spec):
 
     for peripheral in device["peripherals"]:
         base = parse_int(peripheral["baseAddress"])
-        if peripheral["name"] == "VOICE":
-            normalized["voice_window"] = {
-                "base": peripheral["baseAddress"],
-                "stride": peripheral["dimIncrement"],
-                "count": peripheral.get("dim", 1),
-            }
-            for reg in peripheral["registers"]:
-                normalized["voice_registers"].append({
-                    "name": reg["name"],
-                    "offset": reg["addressOffset"],
-                })
-                normalize_fields(normalized["fields"], reg)
-        else:
-            for reg in peripheral["registers"]:
-                address = base + parse_int(reg["addressOffset"])
-                normalized["global_registers"].append({
+        for reg in peripheral["registers"]:
+            address = base + parse_int(reg["addressOffset"])
+            normalized["global_registers"].append({
+                "name": reg["name"],
+                "address": address,
+            })
+            if reg["name"] == "VERSION":
+                normalized["version"] = {
                     "name": reg["name"],
                     "address": address,
-                })
-                if reg["name"] == "VERSION":
-                    normalized["version"] = {
-                        "name": reg["name"],
-                        "address": address,
-                        "value": reg["resetValue"],
-                    }
-                normalize_fields(normalized["fields"], reg)
+                    "value": reg["resetValue"],
+                }
+            normalize_fields(normalized["fields"], reg)
 
     for constant in spec.get("constants", []):
         normalized["numeric_constants"][constant["name"]] = constant["value"]
@@ -130,16 +112,6 @@ def render_sv(spec):
     addr_width = parse_int(spec["bus"]["address_width"])
     data_width = parse_int(spec["bus"]["data_width"])
     version_value = parse_int(spec["version"]["value"])
-    voice_base = parse_int(spec["voice_window"]["base"])
-    voice_stride = parse_int(spec["voice_window"]["stride"])
-    voice_count = parse_int(spec["voice_window"]["count"])
-    first_global = min(parse_int(reg["address"]) for reg in spec["global_registers"])
-    max_addressable_voices = (first_global - voice_base) // voice_stride
-    voice_stride_shift = (voice_stride.bit_length() - 1)
-    if voice_stride <= 0 or (voice_stride & (voice_stride - 1)) != 0:
-        raise ValueError("VOICE dimIncrement must be a positive power of two")
-    if voice_count > max_addressable_voices:
-        raise ValueError("VOICE dim exceeds the address space before the first global register")
 
     lines = [
         "// Generated from spec/register_map.json by tools/gen_register_map.py.",
@@ -150,19 +122,9 @@ def render_sv(spec):
         f"  localparam int REG_BUS_ADDR_WIDTH = {addr_width};",
         f"  localparam int REG_BUS_DATA_WIDTH = {data_width};",
         f"  localparam logic [31:0] REG_VERSION_VALUE = {sv_hex(version_value, 32)};",
-        f"  localparam logic [15:0] REG_VOICE_BASE = {sv_hex(voice_base, 16)};",
-        f"  localparam logic [15:0] REG_VOICE_STRIDE = {sv_hex(voice_stride, 16)};",
-        f"  localparam int REG_VOICE_STRIDE_SHIFT = {voice_stride_shift};",
-        f"  localparam int REG_MAX_ADDRESSABLE_VOICES = {max_addressable_voices};",
         "",
     ]
 
-    for reg in spec["voice_registers"]:
-        name = reg["name"]
-        offset = parse_int(reg["offset"])
-        lines.append(f"  localparam logic [15:0] REG_OFF_{name} = {sv_hex(offset, 16)};")
-
-    lines.append("")
     for reg in spec["global_registers"]:
         name = reg["name"]
         address = parse_int(reg["address"])
@@ -183,9 +145,6 @@ def render_sv(spec):
 
     lines.extend([
         "",
-        "  function automatic logic [15:0] reg_voice_addr(input logic [15:0] voice, input logic [15:0] offset);",
-        "    reg_voice_addr = REG_VOICE_BASE + (voice * REG_VOICE_STRIDE) + offset;",
-        "  endfunction",
         "endpackage",
         "/* verilator lint_on UNUSEDSIGNAL */",
         "/* verilator lint_on UNUSEDPARAM */",
@@ -199,16 +158,6 @@ def render_cpp(spec):
     addr_width = parse_int(spec["bus"]["address_width"])
     data_width = parse_int(spec["bus"]["data_width"])
     version_value = parse_int(spec["version"]["value"])
-    voice_base = parse_int(spec["voice_window"]["base"])
-    voice_stride = parse_int(spec["voice_window"]["stride"])
-    voice_count = parse_int(spec["voice_window"]["count"])
-    first_global = min(parse_int(reg["address"]) for reg in spec["global_registers"])
-    max_addressable_voices = (first_global - voice_base) // voice_stride
-    voice_stride_shift = (voice_stride.bit_length() - 1)
-    if voice_stride <= 0 or (voice_stride & (voice_stride - 1)) != 0:
-        raise ValueError("VOICE dimIncrement must be a positive power of two")
-    if voice_count > max_addressable_voices:
-        raise ValueError("VOICE dim exceeds the address space before the first global register")
 
     lines = [
         "// Generated from spec/register_map.json by tools/gen_register_map.py.",
@@ -221,19 +170,9 @@ def render_cpp(spec):
         f"constexpr int kBusAddrWidth = {addr_width};",
         f"constexpr int kBusDataWidth = {data_width};",
         f"constexpr uint32_t kVersionValue = {cpp_hex(version_value, 32)}u;",
-        f"constexpr uint16_t kVoiceBase = {cpp_hex(voice_base, 16)}u;",
-        f"constexpr uint16_t kVoiceStride = {cpp_hex(voice_stride, 16)}u;",
-        f"constexpr int kVoiceStrideShift = {voice_stride_shift};",
-        f"constexpr int kMaxAddressableVoices = {max_addressable_voices};",
         "",
     ]
 
-    for reg in spec["voice_registers"]:
-        name = reg["name"]
-        offset = parse_int(reg["offset"])
-        lines.append(f"constexpr uint16_t kOff{name.title().replace('_', '')} = {cpp_hex(offset, 16)}u;")
-
-    lines.append("")
     for reg in spec["global_registers"]:
         name = reg["name"]
         address = parse_int(reg["address"])
@@ -255,10 +194,6 @@ def render_cpp(spec):
         lines.append(f"constexpr uint32_t k{name.title().replace('_', '')} = {cpp_hex(parse_int(value), 32)}u;")
 
     lines.extend([
-        "",
-        "constexpr uint16_t voice_addr(int voice, uint16_t offset) {",
-        "  return uint16_t(kVoiceBase + voice * kVoiceStride + offset);",
-        "}",
         "",
         "}  // namespace render::regs",
         "",

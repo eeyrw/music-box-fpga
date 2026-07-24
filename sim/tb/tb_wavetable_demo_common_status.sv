@@ -25,6 +25,12 @@ module tb_wavetable_demo_common_status;
   logic [3:0] output_fifo_level;
   logic render_deadline_miss_pulse;
   logic [15:0] render_latency_cycles;
+  logic playback_started;
+  logic render_inflight;
+  logic [31:0] render_sample_counter;
+  logic [31:0] played_sample_counter;
+  logic [31:0] audio_lead;
+  logic [3:0] minimum_fifo_level;
   logic platform_regs_bus_valid;
   logic platform_regs_bus_write;
   logic [15:0] platform_regs_bus_address;
@@ -36,6 +42,8 @@ module tb_wavetable_demo_common_status;
   wavetable_demo_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(8),
+    .TARGET_LEVEL(6),
+    .START_LEVEL(6),
     .SYS_CLK_HZ(1_000_000),
     .SAMPLE_RATE_HZ(1)
   ) dut (
@@ -62,6 +70,12 @@ module tb_wavetable_demo_common_status;
     .output_fifo_level,
     .render_deadline_miss_pulse,
     .render_latency_cycles,
+    .playback_started,
+    .render_inflight,
+    .render_sample_counter,
+    .played_sample_counter,
+    .audio_lead,
+    .minimum_fifo_level,
     .platform_regs_bus_valid,
     .platform_regs_bus_write,
     .platform_regs_bus_address,
@@ -134,6 +148,17 @@ module tb_wavetable_demo_common_status;
     end
   endtask
 
+  task automatic expect_read_success(input logic [15:0] address);
+    logic [31:0] actual;
+    begin
+      spi_read_word(address, actual);
+      if (spi_error || (^actual === 1'bx)) begin
+        $error("common status SPI read 0x%04x unexpectedly reported error", address);
+        errors++;
+      end
+    end
+  endtask
+
   initial begin
     rst = 1'b1;
     spi_sclk = 1'b0;
@@ -159,9 +184,9 @@ module tb_wavetable_demo_common_status;
     repeat (2) @(negedge clk);
 
     expect_read(REG_VERSION, REG_VERSION_VALUE);
-    expect_read(REG_SYSTEM_STATUS, 32'h0000_0050);
+    expect_read_success(REG_SYSTEM_STATUS);
     expect_read(REG_COMMON_EVENT_FLAGS, 32'h0000_0000);
-    expect_read(REG_AUDIO_STATUS, 32'h0000_0000);
+    expect_read_success(REG_AUDIO_STATUS);
     expect_read(REG_UNDERRUN_COUNT, 32'h0000_0000);
     spi_write_word(REG_COMMON_EVENT_FLAGS,
                    REG_COMMON_EVENT_FLAGS_UNDERRUN_MASK |
@@ -188,5 +213,7 @@ module tb_wavetable_demo_common_status;
       underrun_pulse | sample_drop_pulse |
       mem_response_trace_pulse | (|mem_response_trace_latency) | (|output_fifo_level) |
       render_deadline_miss_pulse | (|render_latency_cycles) | platform_regs_bus_valid |
-      platform_regs_bus_write | (|platform_regs_bus_address) | (|platform_regs_bus_wdata);
+      platform_regs_bus_write | (|platform_regs_bus_address) | (|platform_regs_bus_wdata) |
+      playback_started | render_inflight | (|render_sample_counter) |
+      (|played_sample_counter) | (|audio_lead) | (|minimum_fifo_level);
 endmodule

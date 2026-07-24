@@ -1,18 +1,19 @@
 # Generic synthesizable RTL. Keep this list aligned with RTL_SOURCES in ../../Makefile.
 ../../rtl/pkg/synth_pkg.sv
 ../../rtl/pkg/synth_register_pkg.sv
-../../rtl/control/voice_active_store.sv
 ../../rtl/control/voice_bram_1r1w.sv
-../../rtl/control/voice_bram_1w2r.sv
-../../rtl/control/voice_commit_engine.sv
-../../rtl/control/voice_descriptor_store.sv
-../../rtl/control/voice_runtime_store.sv
-../../rtl/control/voice_register_bank.sv
+../../rtl/control/control_word_fifo.sv
+../../rtl/control/control_action_fifo.sv
+../../rtl/control/control_action_parser.sv
+../../rtl/control/control_action_executor.sv
+../../rtl/control/transactional_control_plane.sv
+../../rtl/control/synth_control_plane.sv
 ../../rtl/memory/wave_memory_subsystem.sv
 ../../rtl/dsp/linear_interpolator.sv
 ../../rtl/dsp/gain_saturate.sv
 ../../rtl/dsp/voice_dsp_pipeline.sv
 ../../rtl/audio/output_sample_fifo.sv
+../../rtl/audio/render_credit_scheduler.sv
 ../../rtl/voice/voice_phase_frame.sv
 ../../rtl/voice/voice_endpoint_fetch.sv
 ../../rtl/voice/multi_voice_pipeline.sv
