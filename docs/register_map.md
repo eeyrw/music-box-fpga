@@ -80,7 +80,14 @@ empty, full, and level fields in bits `0`, `1`, and `15:2`.
 
 The current detector peak, target, and applied reduction are published together
 after one accepted input frame is analyzed. Maximum values and counters clear on
-core reset. Input/output/compressed counters count stereo frames;
+core reset. `COMPRESSOR_DETECTOR_PEAK` and its maximum register contain the raw
+unsigned `max(abs(mix_l), abs(mix_r))` magnitude from the pre-compressor signed
+24-bit mix. Interpret magnitude `32768` as `0 dBFS`; for a nonzero value `A`,
+`level_dBFS = 20 * log10(A / 32768)`. Values above `32768` therefore represent
+positive dBFS before final PCM16 saturation. These registers do not report RMS
+or post-master output level.
+
+Input/output/compressed counters count stereo frames;
 `COMPRESSOR_SATURATION_COUNT` counts channels, so a frame clipping both left and
 right increments it by two. All counters stop at `0xffffffff`.
 

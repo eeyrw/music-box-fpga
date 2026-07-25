@@ -230,10 +230,43 @@ The multi-voice renderer accumulates signed 16-bit voice outputs in a signed
 path therefore narrows the accumulator exactly to a signed 24-bit stereo mix
 and stores 48 such frames in the compressor delay line.
 
-The detector uses the current undelayed stereo peak while gain is applied to the
-sample leaving that fixed delay. Threshold, gain reduction, and attack/release
-steps are unsigned cB Q12.20; the ratio field is the unsigned Q0.16 slope
-`1 - 1/ratio`. Left and right always receive the same compressor gain.
+### Compressor dBFS Reference
+
+The compressor uses the PCM16 numerical full scale as its dBFS reference even
+though its input and delay line are signed 24-bit. For each undelayed stereo mix
+frame it computes the instantaneous linked peak
+
+```text
+A = max(abs(mix_l), abs(mix_r))
+level_dBFS = 20 * log10(A / 32768)
+level_cBFS = 200 * log10(A / 32768)
+```
+
+Thus magnitude `32768` is exactly `0 dBFS`, `16384` is approximately
+`-6.0206 dBFS`, and `65536` is approximately `+6.0206 dBFS`. Signed PCM16's
+positive maximum `32767` is approximately `-0.00027 dBFS`; its negative maximum
+`-32768` has magnitude `32768` and is exactly `0 dBFS`. The signed 24-bit mix may
+legitimately exceed PCM16 full scale, up to approximately `+48.16 dBFS`, so the
+detector can measure overload before final saturation. It is not referenced to
+24-bit full scale.
+
+This is a per-frame sample-peak detector, not RMS, LUFS, or a windowed energy
+measurement. There is no detector averaging. Attack and release smooth the gain
+reduction after the current peak has been converted to level. The detector is
+before compressor gain, master volume, and PCM16 saturation, so changing master
+volume does not change whether compression is triggered.
+
+The LZC plus normalized-mantissa table approximates the formula above in signed
+cB Q12.20. A configured threshold is stored as positive attenuation `T`; the
+compressor is above threshold when `level_cBFS + T > 0`. For example, `T = 20 cB`
+means `-2 dBFS`, corresponding to magnitude approximately `26029`. With a 4:1
+ratio the target reduction is `(level_cBFS + T) * (1 - 1/4)`. As a concrete
+check, magnitude `26603` is approximately `-1.81 dBFS`; it is about `0.19 dB`
+above that threshold and produces approximately `0.14 dB` target reduction.
+
+Threshold, gain reduction, and attack/release steps are unsigned cB Q12.20; the
+ratio field is the unsigned Q0.16 slope `1 - 1/ratio`. Gain is applied to the
+sample leaving the fixed delay, and left and right always receive the same gain.
 
 Master volume is a nonnegative signed Q1.15 gain applied after compressor gain.
 The two gain products use explicit wide signed intermediates and are shifted

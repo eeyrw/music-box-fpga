@@ -156,6 +156,13 @@ current approximately 1 ms output FIFO remains after the compressor and retains
 its renderer/I2S decoupling and underrun-protection role; it is not the
 look-ahead delay line.
 
+Detector dBFS is referenced to PCM16 magnitude `32768`, not to the wider 24-bit
+container. It measures `max(abs(left), abs(right))` on each pre-compressor frame,
+so a wide mix above the PCM16 range produces positive dBFS. It is an
+instantaneous sample-peak detector rather than RMS or LUFS. Post-compressor
+master-volume changes therefore do not affect threshold crossing. The exact
+numeric contract and threshold conversion are in `docs/fixed_point.md`.
+
 The delay line never drains its stored frames as a burst. With the default
 48-frame look-ahead, input frames 0 through 47 only prime the delay. Accepting
 input frame 48 detects that future frame and releases delayed frame 0; each
