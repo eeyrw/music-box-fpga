@@ -214,6 +214,33 @@ while the parser and word FIFO provide ample clock-rate margin. This is the
 intended balance: audio rendering must remain bounded even if the host sends a
 continuous command stream.
 
+### Burst behavior and the value 16
+
+The long-term rate above does not describe a simultaneous Note On burst. One
+MIDI note can select several SF2 regions, and each new voice normally needs a
+DEFINE and START action. Runtime GAIN_PHASE and FILTER actions are sent only
+when their fields differ from the values already carried by START. Coalescing
+those unchanged commands reduces pressure but does not guarantee that a layered
+chord fits in one 16-action boundary.
+
+When a burst is larger than 16 actions, the excess is intentionally deferred by
+whole audio frames. The current value is useful because it gives a finite bound
+on control work before rendering and therefore prevents audio starvation. It is
+not claimed to be the unique optimum. Raising it to 32 would reduce the maximum
+start skew of large bursts, but would double the worst-case action-execution
+work admitted before a waiting frame. Such a change needs post-synthesis timing
+and a full-polyphony audio-deadline test; SPI bandwidth alone is not sufficient
+evidence.
+
+In the July 2026 real-song regression using SGM v2.01 and `我的舞台.mid`, the
+window beginning at 5.8 seconds reached 34 queued actions and required two
+deferred frame boundaries. Before the reference modeled action batching, its
+first mismatch appeared when the voices left their 47-sample envelope delay.
+With identical 16-action batching and unchanged-runtime command suppression,
+all 48,000 stereo samples in that one-second window matched exactly. The result
+demonstrates why the bound has observable musical timing semantics even though
+the delay is only tens of microseconds.
+
 ## SCLK Sampling Margin
 
 `spi_sclk`, `spi_cs_n`, and `spi_mosi` are sampled into the `100 MHz` system

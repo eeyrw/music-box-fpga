@@ -20,6 +20,30 @@ int sample_timeout_cycles() {
   return 64 + kNumVoices * kReadsPerStereoVoice * kPipelineSlackPerRead;
 }
 
+constexpr unsigned voice_id_width() {
+  unsigned width = 0;
+  unsigned remaining = unsigned(kNumVoices - 1);
+  while (remaining != 0) {
+    ++width;
+    remaining >>= 1;
+  }
+  return width;
+}
+
+constexpr unsigned kMemReqValidBit = 32 + 1 + voice_id_width();
+
+bool mem_req_valid(uint64_t request) {
+  return ((request >> kMemReqValidBit) & 1u) != 0;
+}
+
+uint32_t mem_req_addr(uint64_t request) {
+  return uint32_t(request);
+}
+
+uint32_t pack_mem_rsp(bool valid, int16_t data) {
+  return (uint32_t(valid) << 16) | uint16_t(data);
+}
+
 }  // namespace
 
 CoreRtlHarness::CoreRtlHarness(const std::vector<int16_t>& memory)
@@ -34,8 +58,7 @@ CoreRtlHarness::CoreRtlHarness(const std::vector<int16_t>& memory)
   top_->cmd_stream_data = 0;
   top_->sample_tick = 0;
   top_->mem_req_ready = 1;
-  top_->mem_rsp_valid = 0;
-  top_->mem_rsp_data = 0;
+  top_->mem_rsp = 0;
 }
 
 CoreRtlHarness::~CoreRtlHarness() {
@@ -71,9 +94,10 @@ std::pair<int16_t, int16_t> CoreRtlHarness::request_sample(int produced) {
                              std::to_string(produced) + " after " +
                              std::to_string(timeout_limit) + " cycles" +
                              " busy=" + std::to_string(int(top_->busy)) +
-                             " mem_req_valid=" + std::to_string(int(top_->mem_req_valid)) +
+                             " mem_req_valid=" +
+                             std::to_string(int(mem_req_valid(top_->mem_req))) +
                              " mem_req_ready=" + std::to_string(int(top_->mem_req_ready)) +
-                             " mem_rsp_valid=" + std::to_string(int(top_->mem_rsp_valid)));
+                             " mem_rsp_valid=" + std::to_string(int(rsp_valid_)));
   }
   render_cycles_sum_ += render_cycles;
   max_render_cycles_ = std::max(max_render_cycles_, render_cycles);
@@ -134,12 +158,12 @@ void CoreRtlHarness::tick() {
   ++total_cycles_;
   top_->clk = 0;
   top_->mem_req_ready = 1;
-  top_->mem_rsp_valid = rsp_valid_ ? 1 : 0;
-  top_->mem_rsp_data = rsp_data_;
+  top_->mem_rsp = pack_mem_rsp(rsp_valid_, rsp_data_);
   top_->eval();
 
-  bool next_rsp_valid = top_->mem_req_valid && top_->mem_req_ready;
-  int16_t next_rsp_data = next_rsp_valid ? read_word(top_->mem_req_addr) : 0;
+  const uint64_t request = top_->mem_req;
+  bool next_rsp_valid = mem_req_valid(request) && top_->mem_req_ready;
+  int16_t next_rsp_data = next_rsp_valid ? read_word(mem_req_addr(request)) : 0;
   if (next_rsp_valid) ++total_memory_reads_;
 
   top_->clk = 1;

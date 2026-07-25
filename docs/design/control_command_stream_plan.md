@@ -314,6 +314,25 @@ render one frame when it has PCM credit even if more actions are queued. This
 prevents a continuous control stream from starving audio and gives every voice
 in one renderer scan the same control boundary.
 
+The limit is an audio-scheduling fairness bound, not a parser throughput limit.
+If more than 16 actions are ready at one boundary, the first 16 affect that
+frame, the next 16 affect the following frame, and so on. START therefore also
+defines the voice envelope and phase origin at the frame where that START action
+is applied. A layered MIDI note may intentionally start over several adjacent
+frames when its command burst exceeds the bound.
+
+The exact RTL/reference comparison mirrors this rule with a queue of complete
+command vectors. The C++ comparison sink applies at most 16 vectors immediately
+before each reference sample. A STREAM_FLUSH vector is applied in FIFO order and
+then discards the remaining queued vectors, matching the transactional control
+plane. The standalone `render-reference` flow remains an MCU-policy and sound
+rendering tool and does not introduce this artificial FPGA scheduler queue.
+
+The C++ command builder also mirrors the active START fields. It does not emit
+an immediately following GAIN_PHASE or FILTER action when every corresponding
+field is unchanged. This is command coalescing only: a changed gain, phase
+increment, or filter configuration still emits a complete runtime action.
+
 ## Volume Envelope
 
 The FPGA implements Delay, Attack, Hold, Decay, Sustain, and Release at one
@@ -349,6 +368,13 @@ TARGET_LEVEL      = 48
 START_LEVEL       = 48
 MAX_ACTION_BATCH  = 16
 ```
+
+The RTL instantiation and exact-comparison C++ constant must remain equal.
+Changing this value requires the 16+1 batching regression to be updated, an
+exact real-song RTL/reference comparison, and evidence that the new worst-case
+control work still meets the audio-frame deadline. Removing the bound is not a
+valid optimization because a continuous command stream could then starve PCM
+rendering.
 
 `OUTPUT_FIFO_DEPTH`, `TARGET_LEVEL`, and `START_LEVEL` are elaboration
 parameters. `START_LEVEL` defaults to `TARGET_LEVEL`; both must be within the

@@ -3,7 +3,9 @@
 #include "render_types.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <initializer_list>
 #include <vector>
 
@@ -26,6 +28,39 @@ class CommandFanout : public CommandWordSink {
   CommandWordSink& second_;
 };
 
+constexpr std::size_t kMaxControlActionsPerFrame = 16;
+
+class FrameBatchedCommandSink : public CommandWordSink {
+ public:
+  explicit FrameBatchedCommandSink(
+      CommandWordSink& sink,
+      std::size_t max_actions_per_frame = kMaxControlActionsPerFrame);
+
+  void write_command_words(const std::vector<uint32_t>& words) override;
+  std::size_t apply_frame();
+
+  std::size_t pending_actions() const { return pending_.size(); }
+  std::size_t max_pending_actions() const { return max_pending_actions_; }
+  uint64_t total_enqueued_actions() const { return total_enqueued_actions_; }
+  uint64_t total_applied_actions() const { return total_applied_actions_; }
+  uint64_t max_deferred_frames() const { return max_deferred_frames_; }
+
+ private:
+  struct PendingCommand {
+    std::vector<uint32_t> words;
+    uint64_t enqueue_frame = 0;
+  };
+
+  CommandWordSink& sink_;
+  std::size_t max_actions_per_frame_;
+  std::deque<PendingCommand> pending_;
+  std::size_t max_pending_actions_ = 0;
+  uint64_t frame_index_ = 0;
+  uint64_t total_enqueued_actions_ = 0;
+  uint64_t total_applied_actions_ = 0;
+  uint64_t max_deferred_frames_ = 0;
+};
+
 class CommandVoiceControl : public VoiceCommandSink {
  public:
   explicit CommandVoiceControl(CommandWordSink& sink);
@@ -41,6 +76,10 @@ class CommandVoiceControl : public VoiceCommandSink {
   struct VoiceMirror {
     uint8_t seq = 0;
     bool active = false;
+    int gain_l = 0;
+    int gain_r = 0;
+    uint32_t phase_inc = 0;
+    FilterConfig filter;
   };
 
   void emit(uint8_t opcode, int voice, uint8_t seq,

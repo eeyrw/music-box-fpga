@@ -38,9 +38,10 @@ int main(int argc, char** argv) {
     render::RenderDiagnostics diagnostics;
     diagnostics.detailed_enabled = args.detailed_diagnostics;
     render::ReferenceSynth reference(wave_memory, &diagnostics);
+    render::FrameBatchedCommandSink reference_commands(reference);
     render::CoreRtlHarness rtl(wave_memory);
     rtl.reset();
-    render::CommandFanout command_stream(reference, rtl);
+    render::CommandFanout command_stream(reference_commands, rtl);
     render::CommandVoiceControl control(command_stream);
     render::McuModel mcu(control, regions, &diagnostics);
     render::RenderTimeline timeline(inputs.events, inputs.control_tick_samples, mcu);
@@ -48,6 +49,7 @@ int main(int argc, char** argv) {
     int mismatches = 0;
     int max_diff_l = 0;
     int max_diff_r = 0;
+    int first_mismatch_sample = -1;
     int nonzero_words = 0;
     std::string wav_path = args.out_dir + "/out.wav";
     render::WavWriter wav(wav_path, args.sample_rate);
@@ -56,6 +58,7 @@ int main(int argc, char** argv) {
     for (; produced < inputs.sample_count && !render::interrupt_requested(); ++produced) {
       timeline.advance_to(produced);
 
+      reference_commands.apply_frame();
       auto ref = reference.render_sample();
       auto got = rtl.request_sample(produced);
       wav.write_stereo(got.first, got.second);
@@ -63,6 +66,7 @@ int main(int argc, char** argv) {
       if (got.second != 0) ++nonzero_words;
 
       if (got != ref) {
+        if (first_mismatch_sample < 0) first_mismatch_sample = produced;
         ++mismatches;
         max_diff_l = std::max(max_diff_l, render::abs_diff(got.first, ref.first));
         max_diff_r = std::max(max_diff_r, render::abs_diff(got.second, ref.second));
@@ -72,15 +76,6 @@ int main(int argc, char** argv) {
                     << " R=" << ref.second << "\n";
         }
       }
-    }
-
-    if (!render::interrupt_requested() && nonzero_words == 0) {
-      throw std::runtime_error("RTL core render produced all-zero PCM; increase SECONDS or inspect event/region mapping");
-    }
-    if (!render::interrupt_requested() && mismatches != 0) {
-      throw std::runtime_error("RTL core render found " + std::to_string(mismatches) +
-                               " RTL/reference mismatches, max_diff_l=" + std::to_string(max_diff_l) +
-                               " max_diff_r=" + std::to_string(max_diff_r));
     }
 
     double avg_render_cycles = inputs.sample_count == 0
@@ -110,11 +105,39 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_max_filtered_voices\": " << rtl.max_filtered_voices()
           << ",\n  \"rtl_avg_stereo_voices\": " << avg(rtl.stereo_voice_sum())
           << ",\n  \"rtl_max_stereo_voices\": " << rtl.max_stereo_voices()
+          << ",\n  \"comparison_max_actions_per_frame\": "
+          << render::kMaxControlActionsPerFrame
+          << ",\n  \"comparison_reference_actions_enqueued\": "
+          << reference_commands.total_enqueued_actions()
+          << ",\n  \"comparison_reference_actions_applied\": "
+          << reference_commands.total_applied_actions()
+          << ",\n  \"comparison_reference_actions_pending\": "
+          << reference_commands.pending_actions()
+          << ",\n  \"comparison_reference_max_pending_actions\": "
+          << reference_commands.max_pending_actions()
+          << ",\n  \"comparison_reference_max_deferred_frames\": "
+          << reference_commands.max_deferred_frames()
+          << ",\n  \"comparison_mismatch_count\": " << mismatches
+          << ",\n  \"comparison_first_mismatch_sample\": " << first_mismatch_sample
+          << ",\n  \"comparison_max_diff_l\": " << max_diff_l
+          << ",\n  \"comparison_max_diff_r\": " << max_diff_r
           << ",\n" << render::diagnostics_json_fields(diagnostics)
           << ",\n  \"interrupted\": " << (render::interrupt_requested() ? "true" : "false")
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
     render::write_summary(args.out_dir + "/rtl_core_render_config.json", regions, args.sample_rate,
                           produced, int(inputs.events.size()), stats.str());
+
+    if (!render::interrupt_requested() && nonzero_words == 0) {
+      throw std::runtime_error(
+          "RTL core render produced all-zero PCM; increase SECONDS or inspect event/region mapping");
+    }
+    if (!render::interrupt_requested() && mismatches != 0) {
+      throw std::runtime_error("RTL core render found " + std::to_string(mismatches) +
+                               " RTL/reference mismatches, first_mismatch_sample=" +
+                               std::to_string(first_mismatch_sample) +
+                               " max_diff_l=" + std::to_string(max_diff_l) +
+                               " max_diff_r=" + std::to_string(max_diff_r));
+    }
 
     if (render::interrupt_requested()) {
       std::cout << "INTERRUPTED: RTL core/reference render wrote " << produced

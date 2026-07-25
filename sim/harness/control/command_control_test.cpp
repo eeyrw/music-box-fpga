@@ -110,6 +110,71 @@ void test_long_envelope_durations_produce_nonzero_steps() {
     throw std::runtime_error("long envelope duration did not use ceiling division");
 }
 
+void test_redundant_start_runtime_actions_are_suppressed() {
+  CaptureSink sink;
+  CommandVoiceControl control(sink);
+  Region r;
+  r.length = 8;
+  r.loop_end = 8;
+  r.gain_l = 0x1234;
+  r.gain_r = 0x2345;
+  r.filter_enable = true;
+  r.filter_b0 = 0x3000;
+  r.filter_b1 = 0x0100;
+  r.filter_b2 = -0x0200;
+  r.filter_a1 = -0x0300;
+  r.filter_a2 = 0x0400;
+  const uint32_t phase_inc = 0x180;
+
+  control.start_voice(0, phase_inc, r);
+  control.update_gain_phase(0, r.gain_l, r.gain_r, phase_inc);
+  control.update_filter(0, {r.filter_enable, r.filter_b0, r.filter_b1,
+                            r.filter_b2, r.filter_a1, r.filter_a2});
+  if (sink.commands.size() != 2) {
+    throw std::runtime_error("START-equivalent runtime commands were not suppressed");
+  }
+
+  control.update_gain_phase(0, r.gain_l + 1, r.gain_r, phase_inc);
+  FilterConfig changed{r.filter_enable, r.filter_b0 + 1, r.filter_b1,
+                       r.filter_b2, r.filter_a1, r.filter_a2};
+  control.update_filter(0, changed);
+  if (sink.commands.size() != 4 || opcode(sink.commands[2]) != 0x16 ||
+      opcode(sink.commands[3]) != 0x17) {
+    throw std::runtime_error("changed runtime commands were suppressed");
+  }
+}
+
+void test_frame_batched_command_sink() {
+  CaptureSink sink;
+  FrameBatchedCommandSink batched(sink);
+  for (uint32_t index = 0; index < 18; ++index) {
+    batched.write_command_words({0x15000000u | index});
+  }
+  if (batched.pending_actions() != 18 || batched.max_pending_actions() != 18 ||
+      batched.total_enqueued_actions() != 18) {
+    throw std::runtime_error("frame batch enqueue diagnostics mismatch");
+  }
+  if (batched.apply_frame() != 16 || sink.commands.size() != 16 ||
+      batched.pending_actions() != 2 || batched.max_deferred_frames() != 0) {
+    throw std::runtime_error("first frame did not apply exactly 16 actions");
+  }
+  if (batched.apply_frame() != 2 || sink.commands.size() != 18 ||
+      batched.pending_actions() != 0 || batched.max_deferred_frames() != 1 ||
+      batched.total_applied_actions() != 18) {
+    throw std::runtime_error("deferred action batch diagnostics mismatch");
+  }
+
+  CaptureSink flush_sink;
+  FrameBatchedCommandSink flush_batch(flush_sink);
+  flush_batch.write_command_words({0x15000000u});
+  flush_batch.write_command_words({0x7f000000u});
+  flush_batch.write_command_words({0x15000000u});
+  if (flush_batch.apply_frame() != 2 || flush_batch.pending_actions() != 0 ||
+      flush_sink.commands.size() != 2 || opcode(flush_sink.commands.back()) != 0x7f) {
+    throw std::runtime_error("STREAM_FLUSH did not discard deferred actions");
+  }
+}
+
 void test_global_audio_commands() {
   CaptureSink sink;
   CommandAudioControl control(sink);
@@ -170,6 +235,8 @@ int main() {
     render::test_stereo_start_and_runtime_actions();
     render::test_mono_word_count_and_seq_generation();
     render::test_long_envelope_durations_produce_nonzero_steps();
+    render::test_redundant_start_runtime_actions_are_suppressed();
+    render::test_frame_batched_command_sink();
     render::test_global_audio_commands();
   } catch (const std::exception& e) {
     std::cerr << "FAIL: " << e.what() << "\n";

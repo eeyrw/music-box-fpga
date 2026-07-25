@@ -37,6 +37,42 @@ void CommandFanout::write_command_words(const std::vector<uint32_t>& words) {
   second_.write_command_words(words);
 }
 
+FrameBatchedCommandSink::FrameBatchedCommandSink(
+    CommandWordSink& sink, std::size_t max_actions_per_frame)
+    : sink_(sink), max_actions_per_frame_(max_actions_per_frame) {
+  if (max_actions_per_frame_ == 0) {
+    throw std::invalid_argument("frame action batch must be nonzero");
+  }
+}
+
+void FrameBatchedCommandSink::write_command_words(
+    const std::vector<uint32_t>& words) {
+  if (words.empty()) return;
+  pending_.push_back({words, frame_index_});
+  ++total_enqueued_actions_;
+  max_pending_actions_ = std::max(max_pending_actions_, pending_.size());
+}
+
+std::size_t FrameBatchedCommandSink::apply_frame() {
+  std::size_t applied = 0;
+  while (applied < max_actions_per_frame_ && !pending_.empty()) {
+    PendingCommand command = std::move(pending_.front());
+    pending_.pop_front();
+    max_deferred_frames_ = std::max(
+        max_deferred_frames_, frame_index_ - command.enqueue_frame);
+    const bool flush = uint8_t(command.words.front() >> 24) == 0x7f;
+    sink_.write_command_words(command.words);
+    ++applied;
+    ++total_applied_actions_;
+    if (flush) {
+      pending_.clear();
+      break;
+    }
+  }
+  ++frame_index_;
+  return applied;
+}
+
 CommandVoiceControl::CommandVoiceControl(CommandWordSink& sink) : sink_(sink) {}
 
 void CommandVoiceControl::emit(uint8_t opcode, int voice, uint8_t seq,
@@ -78,22 +114,43 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
         env.hold_samples, decay_step, env.sustain_cb_q12_20,
         envelope_release_step(r)});
   mirror.active = true;
+  mirror.gain_l = r.gain_l;
+  mirror.gain_r = r.gain_r;
+  mirror.phase_inc = phase_inc;
+  mirror.filter = {r.filter_enable, r.filter_b0, r.filter_b1, r.filter_b2,
+                   r.filter_a1, r.filter_a2};
 }
 
 void CommandVoiceControl::update_gain_phase(int voice, int gain_l, int gain_r,
                                             uint32_t phase_inc) {
   const VoiceMirror& mirror = voices_.at(voice);
   if (!mirror.active) return;
+  const int next_gain_l = clamp_q15(gain_l);
+  const int next_gain_r = clamp_q15(gain_r);
+  if (next_gain_l == mirror.gain_l && next_gain_r == mirror.gain_r &&
+      phase_inc == mirror.phase_inc) {
+    return;
+  }
   emit(kGainPhase, voice, mirror.seq,
-       {pack_pair(clamp_q15(gain_r), clamp_q15(gain_l)), phase_inc});
+       {pack_pair(next_gain_r, next_gain_l), phase_inc});
+  VoiceMirror& updated = voices_.at(voice);
+  updated.gain_l = next_gain_l;
+  updated.gain_r = next_gain_r;
+  updated.phase_inc = phase_inc;
 }
 
 void CommandVoiceControl::update_filter(int voice, const FilterConfig& filter) {
-  const VoiceMirror& mirror = voices_.at(voice);
+  VoiceMirror& mirror = voices_.at(voice);
   if (!mirror.active) return;
+  if (filter.enable == mirror.filter.enable && filter.b0 == mirror.filter.b0 &&
+      filter.b1 == mirror.filter.b1 && filter.b2 == mirror.filter.b2 &&
+      filter.a1 == mirror.filter.a1 && filter.a2 == mirror.filter.a2) {
+    return;
+  }
   emit(kFilter, voice, mirror.seq,
        {pack_pair(filter.b1, filter.b0), pack_pair(filter.a1, filter.b2),
         uint32_t(uint16_t(filter.a2)) | (filter.enable ? 0x00010000u : 0u)});
+  mirror.filter = filter;
 }
 
 void CommandVoiceControl::release_voice(int voice, uint32_t release_step_cb_q12_20) {

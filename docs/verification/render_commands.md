@@ -243,6 +243,19 @@ make render-rtl-core \
   RENDER_RTL_CORE_OUT_DIR=build/song_rtl_core
 ```
 
+This comparison sends the same complete command vectors to both branches. The
+reference branch applies at most 16 actions before each output sample so that a
+large command burst observes the same frame-boundary batching as RTL. Inspect
+the comparison diagnostics with:
+
+```bash
+jq 'with_entries(select(.key | startswith("comparison_")))' \
+  build/song_rtl_core/rtl_core_render_config.json
+```
+
+The JSON file is retained on mismatch and includes the first mismatching sample
+and maximum channel differences, as well as action queue depth and deferral.
+
 Exercise the cached RTL memory path with a timing profile:
 
 ```bash
@@ -271,5 +284,8 @@ configured through the global command stream in integrated hardware flows.
 - `out.wav`: signed PCM16 stereo output at the selected sample rate.
 - `reference_render_config.json`: inputs, timing, output counts, synthesizer
   diagnostics, and compressor diagnostics.
+
+`render-rtl-core` produces `out.wav` and `rtl_core_render_config.json`, including
+the RTL cycle/memory statistics and the `comparison_*` fields described above.
 
 Generated render output belongs under `build/` and must not be committed.

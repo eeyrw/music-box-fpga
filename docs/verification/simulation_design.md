@@ -110,9 +110,21 @@ envelope itself always advances once per output sample in both modes.
 
 `render-reference` uses only the C++ integer synthesizer. `render-rtl-core`
 fans identical command words to RTL and the reference and compares every output
-sample exactly. `render-memory` uses the cached RTL path with a selectable
-external-memory timing profile. `render-board-loader` also exercises the raw SD
-image and board-loader path.
+sample exactly. Its reference branch queues complete commands and applies at
+most 16 actions before each sample, matching `MAX_ACTION_BATCH` in the RTL
+control plane. This distinction matters for simultaneous layered notes: actions
+beyond the snapshot limit take effect on later frame boundaries, including the
+START-defined envelope and phase origin. `render-memory` uses the cached RTL
+path with a selectable external-memory timing profile. `render-board-loader`
+also exercises the raw SD image and board-loader path.
+
+`rtl_core_render_config.json` is written even when comparison mismatches cause
+the executable to fail. Its `comparison_*` fields report the configured action
+limit, reference actions enqueued/applied/pending, maximum queue depth, maximum
+deferral in frames, mismatch count, first mismatch sample, and maximum absolute
+left/right differences. A successful uninterrupted run has zero pending actions
+and zero mismatches. These diagnostics separate control-boundary divergence
+from arithmetic divergence without relying on waveform inspection.
 
 The `render-reference` Make target enables transparent peak protection by
 default: -2 dBFS, 4:1, immediate attack, and a 5000 ms full-range release. Set
