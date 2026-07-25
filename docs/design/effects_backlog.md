@@ -237,6 +237,166 @@ injection/output signs, every delay pointer wrap, all Hadamard butterfly signs,
 damping extremes, feedback extremes, pre-delay, line warm-up, long decay,
 state clear, saturation, configuration updates, and arbitrary backpressure.
 
+## Reverb Spatial Extension Backlog
+
+The implemented FDN supplies a stable late reverberant tail, but it does not
+yet model explicit early reflections, input diffusion, runtime room size, or a
+separate wet-output tone control. These are suitable for FPGA implementation;
+they are deferred because they expand the command contract, state RAM,
+arithmetic schedule, preset policy, and verification surface.
+
+The target topology is not a single serial chain. Early reflections must remain
+a separately mixable branch so the diffuser does not erase their discrete
+arrival and stereo-position cues:
+
+```text
+signed-24 stereo input
+  -> pre-delay
+       +-> multi-tap early-reflection engine --------------------+
+       |                                                         |
+       +-> two to four input all-pass diffusers                   |
+             -> eight-line FDN                                   |
+                  -> in-loop frequency-dependent damping         |
+                  -> late wet output                             |
+                       -> optional wet-output high-shelf EQ ------+
+                                                                 |
+exact dry --------------------------------------------------------+
+                                                                 v
+            saturate24(dry + early_return + late_return) -> compressor
+```
+
+The early and late branches may use independent return gains. A configurable
+early-to-late send may inject some early-reflection energy into the diffuser or
+FDN, but early reflections must not be forced through the late path as their
+only audible route. The exact dry path remains unity and is still owned by the
+return mixer.
+
+### Early Reflections
+
+The preferred first extension is an 8-tap stereo early-reflection engine backed
+by one signed-24 stereo circular RAM. One tap is evaluated per system clock so
+the design does not require a separate RAM or multiplier for every reflection.
+Each tap needs a delay and independent signed left/right gains. Related fields
+should cross module boundaries as a packed SystemVerilog structure, for
+example:
+
+```systemverilog
+typedef struct packed {
+  logic [15:0]        delay_frames;
+  logic signed [15:0] gain_l_q1_15;
+  logic signed [15:0] gain_r_q1_15;
+} early_reflection_t;
+```
+
+The final field widths and array ownership must be frozen in the fixed-point and
+command contracts before RTL implementation. Tap delays must fit the allocated
+history capacity. Signed gains permit polarity changes as well as stereo
+placement. Wide accumulation must retain every tap product and saturate only
+once per output channel.
+
+The initial engine should use fixed tap count with preset-authored delays and
+gains. It does not need runtime geometric room modeling. Focused tests must
+cover exact tap arrival frames, left/right gains and signs, coincident-tap
+accumulation, uninitialized history, pointer wrap, clear, saturation,
+configuration replacement, and randomized backpressure.
+
+### Input Diffusers
+
+Two to four short Schroeder all-pass stages should precede the late FDN path:
+
+```text
+y[n]       = delayed[n] - g * x[n]
+delay_write = x[n] + g * y[n]
+```
+
+The exact algebraic form, rounding points, and sign convention must be selected
+once and used by both RTL and the independent C++ model. Each stage requires a
+short delay state, signed coefficient, validity age, and saturating arithmetic.
+Stages should be processed serially and may share a multiplier if the combined
+effect latency stays within the frame-cycle gate.
+
+Candidate delay lengths must be mutually non-harmonic, differ between left and
+right, and be swept in C++ before becoming generated constants. Four stages are
+a listening candidate, not an automatic requirement. Qualification must reject
+settings that create ringing, metallic coloration, excessive transient smear,
+or a fixed-point limit cycle. Early-reflection output must remain available
+before this diffusion path.
+
+### Size And Density
+
+Room `size` is a late-network property and must not be approximated by
+pre-delay alone. A first hardware implementation should provide discrete
+`small`, `medium`, and `large` line-length sets rather than a continuously
+moving size control. Each line may reserve its maximum RAM partition and use a
+configured effective ring length within that partition. Changing size must
+also regenerate all eight feedback gains to preserve the requested RT60.
+
+Changing a live delay length reinterprets existing history and can create a
+discontinuity. The first contract should therefore clear the reverb state, or
+perform a documented fade-out, clear, reconfigure, and fade-in sequence. A
+click-free continuous size sweep would require dual state or crossfaded taps
+and is outside the initial extension.
+
+`Density` is not initially a scalar register because its audible meaning
+combines line count, line lengths, diffuser stages, early taps, and output taps.
+The first density choices should be preset-level topology choices. Add a
+runtime density field only after impulse metrics and listening tests establish
+a stable mapping. Increasing the FDN from eight to sixteen lines is possible
+but is not the preferred first step because it approximately doubles line
+state and processing work; input diffusion and early taps should be evaluated
+first.
+
+### Damping And Output Tone
+
+Frequency-dependent decay belongs inside the FDN feedback loop. A filter in
+that loop causes high frequencies to lose additional energy on every round
+trip, permitting high-frequency RT60 to differ from low-frequency RT60. The
+existing per-line one-pole damping is already in-loop and must not be replaced
+by an output high shelf.
+
+An optional high-shelf after the FDN output may be added as `wet_output_tone`
+or equivalent. It changes the final wet spectrum but does not change the
+network's frequency-dependent decay. Documentation, register names, and UI
+labels must preserve this distinction:
+
+```text
+in-loop damping filter -> controls spectral decay over time
+post-FDN high shelf     -> controls static wet-output tone
+```
+
+If a biquad or shelf replaces the current one-pole in each feedback line, it
+must retain independent state per line even if arithmetic is time-multiplexed.
+Tests must measure low- and high-band decay separately and prove stability at
+all accepted coefficients. A post-FDN shelf needs independent exact-response,
+saturation, bypass, and clear/configuration tests but must not be reported as
+an RT60 damping control.
+
+### Extension Order And Gates
+
+The proposed implementation order is:
+
+1. Build an independent integer C++ 8-tap stereo early-reflection model and
+   add it as a separately controlled wet branch.
+2. Add two input all-pass diffusers in C++, then sweep two versus four stages,
+   delay sets, and coefficients using impulses and full-song listening.
+3. Freeze the chosen early-reflection and diffuser arithmetic, implement
+   focused RTL blocks, and integrate them before the existing FDN.
+4. Add discrete size presets with maximum-sized fixed RAM partitions and a
+   clear-on-change control contract.
+5. Evaluate an in-loop shelf or higher-order damping filter only if the current
+   one-pole cannot produce acceptable frequency-dependent tails.
+6. Add an optional post-FDN wet-output shelf only when a separate tone control
+   is justified by listening tests.
+7. Reconsider a density control or sixteen-line FDN only after the cheaper
+   diffusion and early-reflection options have been measured.
+
+The complete extended spatial chain must remain within the existing signed-24
+streaming and backpressure contract. Its initial target remains no more than
+128 system clocks per stereo frame for the combined effects path at 100 MHz,
+subject to revision only after synthesis data. Each added RAM and multiplier
+must be included in Smart Artix utilization, timing, full-polyphony render, and
+long-tail power/thermal qualification. No new block may access wavetable DDR.
+
 ## Control-Plane Backlog
 
 Effects use the existing transactional command stream. The global opcodes are:
@@ -359,6 +519,12 @@ compressor look-ahead plus output-FIFO lead.
 | Full-polyphony memory stress | Open | Representative long cached-memory renders are still required. |
 | FPGA resource and timing gates | Open | Vivado synthesis, implementation, utilization, and 100 MHz timing remain. |
 | Hardware/audio qualification | Open | Capture, sustained-tail, listening, RT60, and long-run tests remain. |
+| Early-reflection branch | Open | Define 8-tap C++ model, packed tap configuration, RTL, routing, and impulse tests. |
+| Input diffusion | Open | Sweep two versus four all-pass stages before freezing delay sets and arithmetic. |
+| Discrete room size | Open | Define maximum RAM partitions, derived RT60 gains, and clear-on-change semantics. |
+| Frequency-dependent damping | Partial | One-pole in-loop damping exists; band-decay qualification and any higher-order filter remain open. |
+| Wet-output tone shelf | Deferred | Optional post-FDN EQ must remain distinct from in-loop damping. |
+| Runtime density control | Deferred | Establish a measurable preset/topology mapping before adding a scalar field. |
 | Per-voice effect sends | Deferred | Explicitly outside the initial global-effects milestone. |
 
 ## Acceptance Criteria
