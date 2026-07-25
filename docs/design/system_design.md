@@ -8,6 +8,8 @@ external contracts live in:
 - `../register_map.md`: global registers, command ingress, and debug snapshot.
 - `control_command_stream_plan.md`: command words and voice lifecycle.
 - `envelope_backlog.md`: envelope timing and Delay compatibility backlog.
+- `effects_backlog.md`: implemented global chorus/reverb path, completion
+  matrix, remaining resource/verification gates, and deferred per-voice sends.
 - `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
   sizing analysis.
 - `spi_register_timing.md`: SPI register read/write and burst timing analysis.
@@ -136,6 +138,17 @@ in accepted-request order.
 complete DSP context. `voice_line_cache` converts word reads to external line
 reads and preserves per-voice/per-stream locality. Board-specific DDR control is
 outside the generic core.
+
+## RTL Interface Bundles
+
+Stable groups of related values are declared as packed structs in
+`rtl/pkg/synth_pkg.sv`. Register requests/responses and wave-word
+requests/responses therefore cross module boundaries as one typed payload.
+Global audio configuration and the audio, cache, voice-pipeline, and render
+timing diagnostic groups follow the same rule. Ready/valid control remains
+explicit where its direction differs from the payload, and physical board pins
+remain flat. This keeps field names visible without duplicating long port lists
+through every composition layer.
 
 ## Audio Scheduling
 

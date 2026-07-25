@@ -19,17 +19,7 @@ module voice_endpoint_fetch #(
   output synth_pkg::wave_word_req_t             mem_req,
   input  logic                                  mem_req_ready,
   input  synth_pkg::wave_word_rsp_t             mem_rsp,
-  output logic                                  cross_line_endpoint_pair_pulse,
-  output logic                                  fetch_slot_pressure_pulse,
-  output logic                                  memory_stall_pulse,
-  output logic [2:0]                            fetch_slot_occupancy,
-  output logic [2:0]                            fetch_slot_max_occupancy,
-  output logic [4:0]                            word_req_occupancy,
-  output logic [4:0]                            word_req_max_occupancy,
-  output logic [4:0]                            rsp_meta_occupancy,
-  output logic [4:0]                            rsp_meta_max_occupancy,
-  output logic [2:0]                            dsp_context_queue_occupancy,
-  output logic [2:0]                            dsp_context_queue_max_occupancy
+  output synth_pkg::voice_endpoint_diagnostics_t diagnostics_o
 );
   import synth_pkg::*;
 
@@ -117,6 +107,10 @@ module voice_endpoint_fetch #(
   logic [ADDR_WIDTH-1:0] issue_line_l1;
   logic [ADDR_WIDTH-1:0] issue_line_r0;
   logic [ADDR_WIDTH-1:0] issue_line_r1;
+  logic [2:0] fetch_slot_max_occupancy;
+  logic [4:0] word_req_max_occupancy;
+  logic [4:0] rsp_meta_max_occupancy;
+  logic [2:0] dsp_context_queue_max_occupancy;
 
   assign fetch_slot_full = (fetch_slot_count == FETCH_SLOT_COUNT_WIDTH'(FETCH_SLOT_DEPTH));
   assign word_req_empty = (word_req_count == '0);
@@ -131,12 +125,17 @@ module voice_endpoint_fetch #(
   assign mem_req.valid = !word_req_empty && !rsp_meta_full;
   assign word_req_accept = !word_req_empty && !rsp_meta_full && mem_req_ready;
   assign rsp_meta_pop = mem_rsp.valid && !rsp_meta_empty;
-  assign fetch_slot_pressure_pulse = issue_valid && !issue_ready;
-  assign memory_stall_pulse = mem_req.valid && !mem_req_ready;
-  assign fetch_slot_occupancy = 3'(fetch_slot_count);
-  assign word_req_occupancy = 5'(word_req_count);
-  assign rsp_meta_occupancy = 5'(rsp_meta_count);
-  assign dsp_context_queue_occupancy = context_valid ? 3'd1 : 3'd0;
+  assign diagnostics_o.fetch_slot_pressure_pulse = issue_valid && !issue_ready;
+  assign diagnostics_o.memory_stall_pulse = mem_req.valid && !mem_req_ready;
+  assign diagnostics_o.fetch_slot_occupancy = 3'(fetch_slot_count);
+  assign diagnostics_o.word_req_occupancy = 5'(word_req_count);
+  assign diagnostics_o.rsp_meta_occupancy = 5'(rsp_meta_count);
+  assign diagnostics_o.dsp_context_queue_occupancy = context_valid ? 3'd1 : 3'd0;
+  assign diagnostics_o.fetch_slot_max_occupancy = fetch_slot_max_occupancy;
+  assign diagnostics_o.word_req_max_occupancy = word_req_max_occupancy;
+  assign diagnostics_o.rsp_meta_max_occupancy = rsp_meta_max_occupancy;
+  assign diagnostics_o.dsp_context_queue_max_occupancy =
+      dsp_context_queue_max_occupancy;
   assign issue_addr_l0 = issue_base_addr +
                          {{(ADDR_WIDTH-PHASE_FRAME_WIDTH){1'b0}}, issue_frame_0};
   assign issue_addr_l1 = issue_base_addr +
@@ -151,7 +150,8 @@ module voice_endpoint_fetch #(
   assign issue_line_r1 = issue_addr_r1 / ADDR_WIDTH'(LINE_WORDS);
   assign issue_cross_line_pair = (issue_line_l0 != issue_line_l1) ||
                                  (issue_stereo && (issue_line_r0 != issue_line_r1));
-  assign cross_line_endpoint_pair_pulse = issue_accept && issue_cross_line_pair;
+  assign diagnostics_o.cross_line_endpoint_pair_pulse =
+      issue_accept && issue_cross_line_pair;
 
   always_comb begin
     mem_req.addr = 32'd0;
@@ -300,7 +300,8 @@ module voice_endpoint_fetch #(
       unique case ({issue_accept, fetch_slot_complete})
         2'b10: begin
           fetch_slot_count <= fetch_slot_count + 1'b1;
-          if ((fetch_slot_count + 1'b1) > fetch_slot_max_occupancy)
+          if ((fetch_slot_count + 1'b1) >
+              fetch_slot_max_occupancy)
             fetch_slot_max_occupancy <= 3'(fetch_slot_count + 1'b1);
         end
         2'b01: fetch_slot_count <= fetch_slot_count - 1'b1;

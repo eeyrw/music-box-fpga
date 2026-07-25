@@ -90,6 +90,30 @@ module tb_control_cmd_parser;
     end
     consume_action();
 
+    send_word(header(CHORUS_CONFIG, 8'd0, 8'd0, 8'd6));
+    send_word(32'h1000_0001);
+    send_word(32'd256);
+    send_word(32'd0);
+    send_word(32'h0102_0304);
+    send_word(32'h2000_4000);
+    send_word(32'h4000_0000);
+    wait (action_valid);
+    if (action.opcode != CHORUS_CONFIG || action.payload_words != 8'd6 ||
+        action.payload[5] != 32'h4000_0000) begin
+      $error("CHORUS_CONFIG decode mismatch");
+      errors++;
+    end
+    consume_action();
+
+    send_word(header(EFFECT_CLEAR, 8'd0, 8'd0, 8'd1));
+    send_word(32'd3);
+    wait (action_valid);
+    if (action.opcode != EFFECT_CLEAR || action.payload[0] != 32'd3) begin
+      $error("EFFECT_CLEAR decode mismatch");
+      errors++;
+    end
+    consume_action();
+
     send_word(header(VOICE_ENV_UPDATE, 8'd9, 8'h44, 8'd4));
     send_word(32'h0000_0025);
     send_word(32'h0000_0100);

@@ -35,11 +35,17 @@ pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 | `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
 | `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
 | `rtl/memory` | `voice_line_cache`, `wave_memory_subsystem` | Adapters from the core's one-word PCM read interface to an external line-read interface. `voice_line_cache` is the current cached render path; `wave_memory_subsystem` is the older single-line baseline used by some common/board wrappers. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and render testbenches. |
-| `rtl/audio` | `lookahead_compressor`, `output_sample_fifo`, `render_credit_scheduler` | Post-mix look-ahead dynamics, PCM buffering, and target-level render-credit generation. | Common I2S/demo wrappers; not used by the bare `rtl/top` cores. |
+| `rtl/audio` | `stereo_chorus`, `fdn_reverb`, `effect_return_mixer`, `global_effects_chain`, `global_audio_effects_chain`, `lookahead_compressor`, `output_sample_fifo`, `render_credit_scheduler` | Wet-effect processing, signed-24 routing and return mixing, unified spatial-effects plus compressor/master processing, PCM buffering, and target-level render-credit generation. | `wavetable_system_core` places `global_audio_effects_chain` between the renderer and output FIFO. The FIFO and scheduler serve common I2S/demo wrappers. |
 
 There is currently no `rtl/bus` source file. The generic register and memory
-ports are explicit ready/valid signals on module interfaces rather than a shared
-SystemVerilog interface.
+handshakes remain explicit rather than using a shared SystemVerilog interface.
+Their related payloads use packed structs from `synth_pkg`: `reg_bus_req_t` and
+`reg_bus_rsp_t` cross the common register fabric, while `wave_word_req_t` and
+`wave_word_rsp_t` cross the renderer/memory boundary. Global audio configuration,
+effect/compressor diagnostics, cache diagnostics, voice-pipeline diagnostics,
+and render timing diagnostics are also passed as named packed structs instead of
+repeated scalar port lists. Physical SPI, I2S, and external line-memory pins stay
+flat at the wrapper boundary.
 
 ## Generic Core Tree
 

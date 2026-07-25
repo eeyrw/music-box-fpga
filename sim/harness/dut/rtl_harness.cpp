@@ -20,6 +20,15 @@ int sample_timeout_cycles(const MemoryProfile& profile) {
                   (profile.random_latency_cycles + profile.ready_gap_cycles + kPipelineSlackPerRead);
 }
 
+bool packed_bit(uint64_t value, unsigned bit) {
+  return ((value >> bit) & 1U) != 0;
+}
+
+uint64_t packed_u64(const VlWide<13>& value, unsigned low_word) {
+  return uint64_t(value[low_word]) |
+         (uint64_t(value[low_word + 1]) << 32);
+}
+
 }  // namespace
 
 RtlHarness::RtlHarness(const std::vector<int16_t>& memory, const std::string& wav_path,
@@ -90,10 +99,14 @@ void RtlHarness::request_sample(int produced) {
                              " ext_req_valid=" + std::to_string(int(top_->ext_req_valid)) +
                              " ext_req_ready=" + std::to_string(int(top_->ext_req_ready)) +
                              " ext_rsp_valid=" + std::to_string(int(top_->ext_rsp_valid)) +
-                             " render_active=" + std::to_string(int(top_->render_active)) +
-                             " render_cycle_counter=" + std::to_string(uint32_t(top_->render_cycle_counter)) +
-                             " render_frame_count=" + std::to_string(uint64_t(top_->render_frame_count)) +
-                             " deadline_misses=" + std::to_string(uint64_t(top_->deadline_miss_count)) +
+                             " render_active=" +
+                             std::to_string(int(top_->render_diagnostics[12] & 1U)) +
+                             " render_cycle_counter=" +
+                             std::to_string(uint32_t(top_->render_diagnostics[0])) +
+                             " render_frame_count=" +
+                             std::to_string(packed_u64(top_->render_diagnostics, 6)) +
+                             " deadline_misses=" +
+                             std::to_string(packed_u64(top_->render_diagnostics, 4)) +
                              " prefetch_issued=" + std::to_string(prefetch_issued_) +
                              " prefetch_filled=" + std::to_string(prefetch_filled_) +
                              " prefetch_used=" + std::to_string(prefetch_used_) +
@@ -114,26 +127,26 @@ void RtlHarness::tick() {
   top_->clk = 1;
   top_->eval();
 
-  if (top_->mem_response_trace_pulse) {
+  if (packed_bit(top_->cache_diagnostics, 26)) {
     ++memory_responses_;
-    uint16_t latency = top_->mem_response_trace_latency;
+    uint16_t latency = uint16_t((top_->cache_diagnostics >> 10) & 0xffffU);
     response_latency_sum_ += latency;
     if (latency > response_latency_max_) response_latency_max_ = latency;
   }
-  if (top_->cache_demand_hit_pulse) ++cache_demand_hits_;
-  if (top_->cache_demand_miss_pulse) ++cache_demand_misses_;
-  if (top_->cache_line_fill_pulse) ++cache_line_fills_;
-  if (top_->cache_same_line_endpoint_hit_pulse) ++cache_same_line_endpoint_hits_;
-  if (top_->cache_replacement_pulse) ++cache_replacements_;
-  if (top_->cache_prefetch_issued_pulse) ++prefetch_issued_;
-  if (top_->cache_prefetch_filled_pulse) ++prefetch_filled_;
-  if (top_->cache_prefetch_used_pulse) ++prefetch_used_;
-  if (top_->cache_prefetch_dropped_pulse) ++prefetch_dropped_;
-  if (top_->cache_prefetch_late_pulse) ++prefetch_late_;
-  if (top_->endpoint_cross_line_pair_pulse) ++endpoint_cross_line_pairs_;
-  if (top_->endpoint_fetch_slot_pressure_pulse) ++endpoint_fetch_slot_pressure_cycles_;
-  if (top_->endpoint_memory_stall_pulse) ++endpoint_memory_stall_cycles_;
-  if (top_->dsp_ready_no_context_pulse) ++dsp_ready_no_context_cycles_;
+  if (packed_bit(top_->cache_diagnostics, 9)) ++cache_demand_hits_;
+  if (packed_bit(top_->cache_diagnostics, 8)) ++cache_demand_misses_;
+  if (packed_bit(top_->cache_diagnostics, 7)) ++cache_line_fills_;
+  if (packed_bit(top_->cache_diagnostics, 6)) ++cache_same_line_endpoint_hits_;
+  if (packed_bit(top_->cache_diagnostics, 5)) ++cache_replacements_;
+  if (packed_bit(top_->cache_diagnostics, 4)) ++prefetch_issued_;
+  if (packed_bit(top_->cache_diagnostics, 3)) ++prefetch_filled_;
+  if (packed_bit(top_->cache_diagnostics, 2)) ++prefetch_used_;
+  if (packed_bit(top_->cache_diagnostics, 1)) ++prefetch_dropped_;
+  if (packed_bit(top_->cache_diagnostics, 0)) ++prefetch_late_;
+  if (packed_bit(top_->voice_diagnostics, 35)) ++endpoint_cross_line_pairs_;
+  if (packed_bit(top_->voice_diagnostics, 34)) ++endpoint_fetch_slot_pressure_cycles_;
+  if (packed_bit(top_->voice_diagnostics, 33)) ++endpoint_memory_stall_cycles_;
+  if (packed_bit(top_->voice_diagnostics, 0)) ++dsp_ready_no_context_cycles_;
 
   top_->clk = 0;
   top_->eval();
@@ -231,20 +244,24 @@ MemoryStats RtlHarness::memory_stats() const {
   stats.prefetch_used = prefetch_used_;
   stats.prefetch_dropped = prefetch_dropped_;
   stats.prefetch_late = prefetch_late_;
-  stats.render_frames = top_->render_frame_count;
-  stats.last_render_cycles = top_->last_render_cycles;
-  stats.render_cycle_sum = top_->render_cycle_sum;
-  stats.max_render_cycles = top_->max_render_cycles;
-  stats.deadline_misses = top_->deadline_miss_count;
-  stats.over_budget_frames = top_->over_budget_frames;
-  stats.max_over_budget_cycles = top_->over_budget_max_cycles;
+  stats.render_frames = packed_u64(top_->render_diagnostics, 6);
+  stats.last_render_cycles = top_->render_diagnostics[11];
+  stats.render_cycle_sum = packed_u64(top_->render_diagnostics, 8);
+  stats.max_render_cycles = top_->render_diagnostics[10];
+  stats.deadline_misses = packed_u64(top_->render_diagnostics, 4);
+  stats.over_budget_frames = packed_u64(top_->render_diagnostics, 2);
+  stats.max_over_budget_cycles = top_->render_diagnostics[1];
   stats.endpoint_cross_line_pairs = endpoint_cross_line_pairs_;
   stats.endpoint_fetch_slot_pressure_cycles = endpoint_fetch_slot_pressure_cycles_;
   stats.endpoint_memory_stall_cycles = endpoint_memory_stall_cycles_;
-  stats.endpoint_fetch_slot_max_occupancy = top_->endpoint_fetch_slot_max_occupancy;
-  stats.endpoint_word_req_max_occupancy = top_->endpoint_word_req_max_occupancy;
-  stats.endpoint_rsp_meta_max_occupancy = top_->endpoint_rsp_meta_max_occupancy;
-  stats.dsp_context_queue_max_occupancy = top_->dsp_context_queue_max_occupancy;
+  stats.endpoint_fetch_slot_max_occupancy =
+      uint8_t((top_->voice_diagnostics >> 27) & 0x7U);
+  stats.endpoint_word_req_max_occupancy =
+      uint8_t((top_->voice_diagnostics >> 17) & 0x1fU);
+  stats.endpoint_rsp_meta_max_occupancy =
+      uint8_t((top_->voice_diagnostics >> 7) & 0x1fU);
+  stats.dsp_context_queue_max_occupancy =
+      uint8_t((top_->voice_diagnostics >> 1) & 0x7U);
   stats.dsp_ready_no_context_cycles = dsp_ready_no_context_cycles_;
   stats.line_words = kLineWords;
   stats.random_latency_cycles = memory_profile_.random_latency_cycles;

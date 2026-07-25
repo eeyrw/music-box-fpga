@@ -17,8 +17,8 @@ module synth_control_plane (
   input  logic [31:0]                current_sample,
   output synth_pkg::voice_config_t   render_config,
   output synth_pkg::voice_runtime_t  render_runtime,
-  output synth_pkg::compressor_config_t compressor_config,
-  output logic signed [15:0]        master_volume,
+  output synth_pkg::global_audio_config_t audio_config,
+  output logic [1:0]                effect_clear,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse
 );
@@ -159,8 +159,8 @@ module synth_control_plane (
     .debug_active,
     .render_config,
     .render_runtime,
-    .compressor_config,
-    .master_volume,
+    .audio_config,
+    .effect_clear,
     .config_valid,
     .commit_pulse,
     .prepared_valid

@@ -63,6 +63,11 @@ RTL_SOURCES := \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/dsp/voice_dsp_pipeline.sv \
+	rtl/audio/stereo_chorus.sv \
+	rtl/audio/fdn_reverb.sv \
+	rtl/audio/effect_return_mixer.sv \
+	rtl/audio/global_effects_chain.sv \
+	rtl/audio/global_audio_effects_chain.sv \
 	rtl/audio/lookahead_compressor.sv \
 	rtl/audio/output_sample_fifo.sv \
 	rtl/audio/render_credit_scheduler.sv \
@@ -109,6 +114,21 @@ I2S_OUTPUT_SIM_SOURCES := \
 
 COMPRESSOR_SIM_SOURCES := \
 	sim/tb/tb_lookahead_compressor.sv
+
+CHORUS_SIM_SOURCES := \
+	sim/tb/tb_stereo_chorus.sv
+
+REVERB_SIM_SOURCES := \
+	sim/tb/tb_fdn_reverb.sv
+
+EFFECT_MIXER_SIM_SOURCES := \
+	sim/tb/tb_effect_return_mixer.sv
+
+GLOBAL_EFFECTS_SIM_SOURCES := \
+	sim/tb/tb_global_effects_chain.sv
+
+GLOBAL_AUDIO_EFFECTS_SIM_SOURCES := \
+	sim/tb/tb_global_audio_effects_chain.sv
 
 RENDER_SCHEDULER_SIM_SOURCES := \
 	sim/tb/tb_render_credit_scheduler.sv
@@ -206,6 +226,21 @@ check-dsp-lut:
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module stereo_chorus \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv rtl/audio/stereo_chorus.sv
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module fdn_reverb \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv rtl/audio/fdn_reverb.sv
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module effect_return_mixer \
+		rtl/pkg/synth_pkg.sv rtl/audio/effect_return_mixer.sv
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module global_effects_chain \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/stereo_chorus.sv rtl/audio/fdn_reverb.sv \
+		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module global_audio_effects_chain \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/stereo_chorus.sv rtl/audio/fdn_reverb.sv \
+		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
+		rtl/audio/lookahead_compressor.sv rtl/audio/global_audio_effects_chain.sv
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_cached_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
@@ -232,6 +267,21 @@ test-cpp-unit:
 		sim/harness/render/lookahead_compressor_model_test.cpp \
 		-o $(BUILD_DIR)/lookahead_compressor_model_test
 	$(BUILD_DIR)/lookahead_compressor_model_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/stereo_chorus_model.cpp \
+		sim/harness/render/stereo_chorus_model_test.cpp \
+		-o $(BUILD_DIR)/stereo_chorus_model_test
+	$(BUILD_DIR)/stereo_chorus_model_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/fdn_reverb_model.cpp \
+		sim/harness/render/fdn_reverb_model_test.cpp \
+		-o $(BUILD_DIR)/fdn_reverb_model_test
+	$(BUILD_DIR)/fdn_reverb_model_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/effect_return_mixer_model.cpp \
+		sim/harness/render/effect_return_mixer_model_test.cpp \
+		-o $(BUILD_DIR)/effect_return_mixer_model_test
+	$(BUILD_DIR)/effect_return_mixer_model_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
@@ -285,6 +335,36 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/chorus_obj_dir --top-module tb_stereo_chorus \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/stereo_chorus.sv $(CHORUS_SIM_SOURCES)
+	$(BUILD_DIR)/chorus_obj_dir/Vtb_stereo_chorus
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/reverb_obj_dir --top-module tb_fdn_reverb \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/fdn_reverb.sv $(REVERB_SIM_SOURCES)
+	$(BUILD_DIR)/reverb_obj_dir/Vtb_fdn_reverb
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/effect_mixer_obj_dir --top-module tb_effect_return_mixer \
+		rtl/pkg/synth_pkg.sv rtl/audio/effect_return_mixer.sv $(EFFECT_MIXER_SIM_SOURCES)
+	$(BUILD_DIR)/effect_mixer_obj_dir/Vtb_effect_return_mixer
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/global_effects_obj_dir --top-module tb_global_effects_chain \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/stereo_chorus.sv rtl/audio/fdn_reverb.sv \
+		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
+		$(GLOBAL_EFFECTS_SIM_SOURCES)
+	$(BUILD_DIR)/global_effects_obj_dir/Vtb_global_effects_chain
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/global_audio_effects_obj_dir \
+		--top-module tb_global_audio_effects_chain \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/stereo_chorus.sv rtl/audio/fdn_reverb.sv \
+		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
+		rtl/audio/lookahead_compressor.sv rtl/audio/global_audio_effects_chain.sv \
+		$(GLOBAL_AUDIO_EFFECTS_SIM_SOURCES)
+	$(BUILD_DIR)/global_audio_effects_obj_dir/Vtb_global_audio_effects_chain
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/compressor_obj_dir --top-module tb_lookahead_compressor \
 		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \

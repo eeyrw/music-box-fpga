@@ -19,28 +19,13 @@ module wavetable_render_core #(
   output synth_pkg::pcm_t          sample_r,
   output synth_pkg::mix_t          mix_l,
   output synth_pkg::mix_t          mix_r,
-  output synth_pkg::compressor_config_t compressor_config,
-  output logic signed [15:0]        master_volume,
+  output synth_pkg::global_audio_config_t audio_config,
+  output logic [1:0]                effect_clear,
   output logic                     busy,
-  output logic                     mem_req_valid,
-  output logic [synth_pkg::VOICE_ID_WIDTH-1:0] mem_req_voice,
-  output logic [synth_pkg::STREAM_ID_WIDTH-1:0] mem_req_stream_id,
-  output logic [31:0]              mem_req_addr,
+  output synth_pkg::wave_word_req_t mem_req,
   input  logic                     mem_req_ready,
-  input  logic                     mem_rsp_valid,
-  input  synth_pkg::pcm_t          mem_rsp_data,
-  output logic                     endpoint_cross_line_pair_pulse,
-  output logic                     endpoint_fetch_slot_pressure_pulse,
-  output logic                     endpoint_memory_stall_pulse,
-  output logic [2:0]               endpoint_fetch_slot_occupancy,
-  output logic [2:0]               endpoint_fetch_slot_max_occupancy,
-  output logic [4:0]               endpoint_word_req_occupancy,
-  output logic [4:0]               endpoint_word_req_max_occupancy,
-  output logic [4:0]               endpoint_rsp_meta_occupancy,
-  output logic [4:0]               endpoint_rsp_meta_max_occupancy,
-  output logic [2:0]               dsp_context_queue_occupancy,
-  output logic [2:0]               dsp_context_queue_max_occupancy,
-  output logic                     dsp_ready_no_context_pulse
+  input  synth_pkg::wave_word_rsp_t mem_rsp,
+  output synth_pkg::voice_pipeline_diagnostics_t voice_diagnostics
 );
   localparam int VOICE_INDEX_WIDTH = $clog2(synth_pkg::NUM_VOICES);
 
@@ -60,8 +45,6 @@ module wavetable_render_core #(
   logic runtime_snapshot_valid;
   synth_pkg::reg_bus_req_t bus_req;
   synth_pkg::reg_bus_rsp_t bus_rsp;
-  synth_pkg::wave_word_req_t core_mem_req;
-  synth_pkg::wave_word_rsp_t core_mem_rsp;
 
   assign frame_request = sample_tick && !voices_busy && !control_busy;
   assign busy = voices_busy || control_busy;
@@ -72,12 +55,6 @@ module wavetable_render_core #(
   assign bus_rdata = bus_rsp.rdata;
   assign bus_ready = bus_rsp.ready;
   assign bus_error = bus_rsp.error;
-  assign mem_req_valid = core_mem_req.valid;
-  assign mem_req_voice = core_mem_req.voice;
-  assign mem_req_stream_id = core_mem_req.stream_id;
-  assign mem_req_addr = core_mem_req.addr;
-  assign core_mem_rsp.valid = mem_rsp_valid;
-  assign core_mem_rsp.data = mem_rsp_data;
 
   synth_control_plane control_plane (
     .clk,
@@ -98,8 +75,8 @@ module wavetable_render_core #(
     .current_sample(current_render_sample),
     .render_config,
     .render_runtime,
-    .compressor_config,
-    .master_volume,
+    .audio_config,
+    .effect_clear,
     .config_valid,
     .commit_pulse
   );
@@ -124,21 +101,10 @@ module wavetable_render_core #(
     .sample_r,
     .mix_l,
     .mix_r,
-    .mem_req(core_mem_req),
+    .mem_req,
     .mem_req_ready,
-    .mem_rsp(core_mem_rsp),
-    .endpoint_cross_line_pair_pulse,
-    .endpoint_fetch_slot_pressure_pulse,
-    .endpoint_memory_stall_pulse,
-    .endpoint_fetch_slot_occupancy,
-    .endpoint_fetch_slot_max_occupancy,
-    .endpoint_word_req_occupancy,
-    .endpoint_word_req_max_occupancy,
-    .endpoint_rsp_meta_occupancy,
-    .endpoint_rsp_meta_max_occupancy,
-    .dsp_context_queue_occupancy,
-    .dsp_context_queue_max_occupancy,
-    .dsp_ready_no_context_pulse
+    .mem_rsp,
+    .diagnostics_o(voice_diagnostics)
   );
 
   always_ff @(posedge clk) begin

@@ -7,7 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x00080000u;
+constexpr uint32_t kVersionValue = 0x00090000u;
 
 constexpr uint16_t kVersion = 0x9000u;
 constexpr uint16_t kSystemStatus = 0x9010u;
@@ -61,6 +61,17 @@ constexpr uint16_t kCompressorInputFrameCount = 0x9124u;
 constexpr uint16_t kCompressorOutputFrameCount = 0x9128u;
 constexpr uint16_t kCompressorCompressedFrameCount = 0x912cu;
 constexpr uint16_t kCompressorSaturationCount = 0x9130u;
+constexpr uint16_t kEffectStatus = 0x9134u;
+constexpr uint16_t kEffectInputFrameCount = 0x9138u;
+constexpr uint16_t kEffectOutputFrameCount = 0x913cu;
+constexpr uint16_t kEffectSaturationCount = 0x9140u;
+constexpr uint16_t kEffectMaxProcessingCycles = 0x9144u;
+constexpr uint16_t kChorusHistoryLevel = 0x9148u;
+constexpr uint16_t kChorusLfoPhase = 0x914cu;
+constexpr uint16_t kChorusSaturationCount = 0x9150u;
+constexpr uint16_t kReverbStatus = 0x9154u;
+constexpr uint16_t kReverbSaturationCount = 0x9158u;
+constexpr uint16_t kReverbMaxProcessingCycles = 0x915cu;
 constexpr uint16_t kPlatformStatus = 0x9040u;
 constexpr uint16_t kPlatformErrors = 0x9044u;
 constexpr uint16_t kPlatformBytesLoaded = 0x9048u;
@@ -98,6 +109,19 @@ constexpr uint32_t kCompressorStatusPrimedMask = 0x00000002u;
 constexpr uint32_t kCompressorStatusActiveMask = 0x00000004u;
 constexpr int kCompressorStatusDelayLevelLsb = 8;
 constexpr int kCompressorStatusDelayLevelWidth = 16;
+constexpr uint32_t kEffectStatusChorusEnabledMask = 0x00000001u;
+constexpr uint32_t kEffectStatusReverbEnabledMask = 0x00000002u;
+constexpr uint32_t kEffectStatusBusyMask = 0x00000004u;
+constexpr uint32_t kEffectStatusChorusHistoryValidMask = 0x00000008u;
+constexpr int kEffectStatusReverbValidLineMaskLsb = 4;
+constexpr int kEffectStatusReverbValidLineMaskWidth = 8;
+constexpr uint32_t kEffectStatusChorusConfigClampedMask = 0x00001000u;
+constexpr uint32_t kEffectStatusReverbConfigClampedMask = 0x00002000u;
+constexpr uint32_t kEffectStatusMixerConfigClampedMask = 0x00004000u;
+constexpr int kReverbStatusPreDelayOccupancyLsb = 0;
+constexpr int kReverbStatusPreDelayOccupancyWidth = 16;
+constexpr int kReverbStatusValidLineMaskLsb = 16;
+constexpr int kReverbStatusValidLineMaskWidth = 8;
 
 constexpr uint32_t kQ15Full = 0x00007fffu;
 constexpr uint32_t kFilterB0UnityQ214 = 0x00004000u;

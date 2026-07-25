@@ -26,39 +26,9 @@ module wavetable_cached_render_core #(
   output logic [31:0]              ext_req_addr,
   input  logic                     ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0] ext_rsp_data,
-  output logic                     mem_response_trace_pulse,
-  output logic [15:0]              mem_response_trace_latency,
-  output logic                     cache_demand_hit_pulse,
-  output logic                     cache_demand_miss_pulse,
-  output logic                     cache_line_fill_pulse,
-  output logic                     cache_same_line_endpoint_hit_pulse,
-  output logic                     cache_replacement_pulse,
-  output logic                     cache_prefetch_issued_pulse,
-  output logic                     cache_prefetch_filled_pulse,
-  output logic                     cache_prefetch_used_pulse,
-  output logic                     cache_prefetch_dropped_pulse,
-  output logic                     cache_prefetch_late_pulse,
-  output logic                     render_active,
-  output logic [31:0]              render_cycle_counter,
-  output logic [31:0]              last_render_cycles,
-  output logic [31:0]              max_render_cycles,
-  output logic [63:0]              render_cycle_sum,
-  output logic [63:0]              render_frame_count,
-  output logic [63:0]              deadline_miss_count,
-  output logic [63:0]              over_budget_frames,
-  output logic [31:0]              over_budget_max_cycles,
-  output logic                     endpoint_cross_line_pair_pulse,
-  output logic                     endpoint_fetch_slot_pressure_pulse,
-  output logic                     endpoint_memory_stall_pulse,
-  output logic [2:0]               endpoint_fetch_slot_occupancy,
-  output logic [2:0]               endpoint_fetch_slot_max_occupancy,
-  output logic [4:0]               endpoint_word_req_occupancy,
-  output logic [4:0]               endpoint_word_req_max_occupancy,
-  output logic [4:0]               endpoint_rsp_meta_occupancy,
-  output logic [4:0]               endpoint_rsp_meta_max_occupancy,
-  output logic [2:0]               dsp_context_queue_occupancy,
-  output logic [2:0]               dsp_context_queue_max_occupancy,
-  output logic                     dsp_ready_no_context_pulse
+  output synth_pkg::cache_diagnostics_t cache_diagnostics,
+  output synth_pkg::render_timing_diagnostics_t render_diagnostics,
+  output synth_pkg::voice_pipeline_diagnostics_t voice_diagnostics
 );
   localparam int FRAME_BUDGET_CYCLES = CLK_HZ / SAMPLE_RATE;
 
@@ -68,8 +38,8 @@ module wavetable_cached_render_core #(
   logic sample_tick_accepted;
   synth_pkg::mix_t unused_mix_l;
   synth_pkg::mix_t unused_mix_r;
-  synth_pkg::compressor_config_t unused_compressor_config;
-  logic signed [15:0] unused_master_volume;
+  synth_pkg::global_audio_config_t unused_audio_config;
+  logic [1:0] unused_effect_clear;
 
   assign sample_tick_accepted = sample_tick && !busy;
 
@@ -94,36 +64,21 @@ module wavetable_cached_render_core #(
     .sample_r,
     .mix_l(unused_mix_l),
     .mix_r(unused_mix_r),
-    .compressor_config(unused_compressor_config),
-    .master_volume(unused_master_volume),
+    .audio_config(unused_audio_config),
+    .effect_clear(unused_effect_clear),
     .busy,
-    .mem_req_valid(mem_req.valid),
-    .mem_req_voice(mem_req.voice),
-    .mem_req_stream_id(mem_req.stream_id),
-    .mem_req_addr(mem_req.addr),
+    .mem_req,
     .mem_req_ready,
-    .mem_rsp_valid(mem_rsp.valid),
-    .mem_rsp_data(mem_rsp.data),
-    .endpoint_cross_line_pair_pulse,
-    .endpoint_fetch_slot_pressure_pulse,
-    .endpoint_memory_stall_pulse,
-    .endpoint_fetch_slot_occupancy,
-    .endpoint_fetch_slot_max_occupancy,
-    .endpoint_word_req_occupancy,
-    .endpoint_word_req_max_occupancy,
-    .endpoint_rsp_meta_occupancy,
-    .endpoint_rsp_meta_max_occupancy,
-    .dsp_context_queue_occupancy,
-    .dsp_context_queue_max_occupancy,
-    .dsp_ready_no_context_pulse
+    .mem_rsp,
+    .voice_diagnostics
   );
 
 /* verilator lint_off UNUSEDSIGNAL */
   logic unused_wide_mix_and_compressor;
 /* verilator lint_on UNUSEDSIGNAL */
   assign unused_wide_mix_and_compressor = (|unused_mix_l) | (|unused_mix_r) |
-                                          (|unused_compressor_config) |
-                                          (|unused_master_volume);
+                                          (|unused_audio_config) |
+                                          (|unused_effect_clear);
 
   voice_line_cache #(
     .LINE_WORDS(LINE_WORDS),
@@ -139,56 +94,43 @@ module wavetable_cached_render_core #(
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .response_trace_pulse(mem_response_trace_pulse),
-    .response_trace_latency(mem_response_trace_latency),
-    .demand_hit_pulse(cache_demand_hit_pulse),
-    .demand_miss_pulse(cache_demand_miss_pulse),
-    .line_fill_pulse(cache_line_fill_pulse),
-    .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
-    .replacement_pulse(cache_replacement_pulse),
-    .prefetch_issued_pulse(cache_prefetch_issued_pulse),
-    .prefetch_filled_pulse(cache_prefetch_filled_pulse),
-    .prefetch_used_pulse(cache_prefetch_used_pulse),
-    .prefetch_dropped_pulse(cache_prefetch_dropped_pulse),
-    .prefetch_late_pulse(cache_prefetch_late_pulse)
+    .diagnostics_o(cache_diagnostics)
   );
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      render_active <= 1'b0;
-      render_cycle_counter <= 32'd0;
-      last_render_cycles <= 32'd0;
-      max_render_cycles <= 32'd0;
-      render_cycle_sum <= 64'd0;
-      render_frame_count <= 64'd0;
-      deadline_miss_count <= 64'd0;
-      over_budget_frames <= 64'd0;
-      over_budget_max_cycles <= 32'd0;
+      render_diagnostics <= '0;
     end else begin
-      if (sample_tick && render_active && !sample_valid)
-        deadline_miss_count <= deadline_miss_count + 64'd1;
+      if (sample_tick && render_diagnostics.active && !sample_valid)
+        render_diagnostics.deadline_miss_count <=
+            render_diagnostics.deadline_miss_count + 64'd1;
 
-      if (sample_valid && render_active) begin
-        last_render_cycles <= render_cycle_counter;
-        render_cycle_sum <= render_cycle_sum + 64'(render_cycle_counter);
-        render_frame_count <= render_frame_count + 64'd1;
-        if (render_cycle_counter > max_render_cycles)
-          max_render_cycles <= render_cycle_counter;
-        if (render_cycle_counter > 32'(FRAME_BUDGET_CYCLES)) begin
-          over_budget_frames <= over_budget_frames + 64'd1;
-          if ((render_cycle_counter - 32'(FRAME_BUDGET_CYCLES)) > over_budget_max_cycles)
-            over_budget_max_cycles <= render_cycle_counter - 32'(FRAME_BUDGET_CYCLES);
+      if (sample_valid && render_diagnostics.active) begin
+        render_diagnostics.last_cycles <= render_diagnostics.cycle_counter;
+        render_diagnostics.cycle_sum <= render_diagnostics.cycle_sum +
+                                        64'(render_diagnostics.cycle_counter);
+        render_diagnostics.frame_count <= render_diagnostics.frame_count + 64'd1;
+        if (render_diagnostics.cycle_counter > render_diagnostics.max_cycles)
+          render_diagnostics.max_cycles <= render_diagnostics.cycle_counter;
+        if (render_diagnostics.cycle_counter > 32'(FRAME_BUDGET_CYCLES)) begin
+          render_diagnostics.over_budget_frames <=
+              render_diagnostics.over_budget_frames + 64'd1;
+          if ((render_diagnostics.cycle_counter - 32'(FRAME_BUDGET_CYCLES)) >
+              render_diagnostics.over_budget_max_cycles)
+            render_diagnostics.over_budget_max_cycles <=
+                render_diagnostics.cycle_counter - 32'(FRAME_BUDGET_CYCLES);
         end
       end
 
       if (sample_valid) begin
-        render_active <= sample_tick_accepted;
-        render_cycle_counter <= sample_tick_accepted ? 32'd1 : 32'd0;
+        render_diagnostics.active <= sample_tick_accepted;
+        render_diagnostics.cycle_counter <= sample_tick_accepted ? 32'd1 : 32'd0;
       end else if (sample_tick_accepted) begin
-        render_active <= 1'b1;
-        render_cycle_counter <= 32'd1;
-      end else if (render_active && render_cycle_counter != 32'hffff_ffff) begin
-        render_cycle_counter <= render_cycle_counter + 32'd1;
+        render_diagnostics.active <= 1'b1;
+        render_diagnostics.cycle_counter <= 32'd1;
+      end else if (render_diagnostics.active &&
+                   render_diagnostics.cycle_counter != 32'hffff_ffff) begin
+        render_diagnostics.cycle_counter <= render_diagnostics.cycle_counter + 32'd1;
       end
     end
   end

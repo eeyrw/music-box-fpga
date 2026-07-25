@@ -57,12 +57,36 @@ struct CompressorCommandConfig {
   uint32_t release_step_cb_q12_20 = 0;
 };
 
+struct ChorusCommandConfig {
+  bool enable = false;
+  uint32_t base_delay_q16_8 = 0;
+  uint32_t depth_q16_8 = 0;
+  uint32_t lfo_phase_inc_q0_32 = 0;
+  uint16_t input_send_q1_15 = 0;
+  uint16_t return_gain_q1_15 = 0;
+  int16_t feedback_q1_15 = 0;
+  uint32_t stereo_phase_offset_q0_32 = 0;
+};
+
+struct ReverbCommandConfig {
+  bool enable = false;
+  uint16_t input_send_q1_15 = 0;
+  uint16_t return_gain_q1_15 = 0;
+  uint16_t damping_q1_15 = 0;
+  uint16_t chorus_to_reverb_q1_15 = 0;
+  uint16_t pre_delay_frames = 0;
+  std::array<uint16_t, 8> feedback_gain_q1_15{};
+};
+
 class CommandAudioControl {
  public:
   explicit CommandAudioControl(CommandWordSink& sink) : sink_(sink) {}
 
   void configure_compressor(const CompressorCommandConfig& config);
   void set_master_volume(int gain_q1_15);
+  void configure_chorus(const ChorusCommandConfig& config);
+  void configure_reverb(const ReverbCommandConfig& config);
+  void clear_effects(uint8_t mask);
 
  private:
   void emit(uint8_t opcode, std::initializer_list<uint32_t> payload);

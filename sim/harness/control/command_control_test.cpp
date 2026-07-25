@@ -121,8 +121,28 @@ void test_global_audio_commands() {
   config.release_step_cb_q12_20 = 1u << 20;
   control.configure_compressor(config);
   control.set_master_volume(0x4000);
+  ChorusCommandConfig chorus;
+  chorus.enable = true;
+  chorus.base_delay_q16_8 = 12u << 8;
+  chorus.depth_q16_8 = 3u << 8;
+  chorus.lfo_phase_inc_q0_32 = 0x12345678;
+  chorus.input_send_q1_15 = 0x6000;
+  chorus.return_gain_q1_15 = 0x2000;
+  chorus.feedback_q1_15 = -0x1000;
+  chorus.stereo_phase_offset_q0_32 = 0x40000000;
+  control.configure_chorus(chorus);
+  ReverbCommandConfig reverb;
+  reverb.enable = true;
+  reverb.pre_delay_frames = 17;
+  reverb.input_send_q1_15 = 0x3000;
+  reverb.return_gain_q1_15 = 0x2000;
+  reverb.damping_q1_15 = 0x1000;
+  reverb.chorus_to_reverb_q1_15 = 0x0800;
+  reverb.feedback_gain_q1_15 = {1, 2, 3, 4, 5, 6, 7, 8};
+  control.configure_reverb(reverb);
+  control.clear_effects(3);
 
-  if (sink.commands.size() != 2 || opcode(sink.commands[0]) != 0x20 ||
+  if (sink.commands.size() != 5 || opcode(sink.commands[0]) != 0x20 ||
       sink.commands[0].size() != 5 || sink.commands[0][1] != 0x00010001 ||
       sink.commands[0][2] != (120u << 20) ||
       sink.commands[0][3] != (4u << 20))
@@ -130,6 +150,16 @@ void test_global_audio_commands() {
   if (opcode(sink.commands[1]) != 0x21 || sink.commands[1].size() != 2 ||
       sink.commands[1][1] != 0x4000)
     throw std::runtime_error("MASTER_VOLUME packing mismatch");
+  if (opcode(sink.commands[2]) != 0x22 || sink.commands[2].size() != 7 ||
+      sink.commands[2][1] != 0xf0000001u ||
+      sink.commands[2][5] != 0x20006000u)
+    throw std::runtime_error("CHORUS_CONFIG packing mismatch");
+  if (opcode(sink.commands[3]) != 0x23 || sink.commands[3].size() != 10 ||
+      sink.commands[3][1] != 35u || sink.commands[3][6] != 0x00020001u ||
+      sink.commands[3][9] != 0x00080007u)
+    throw std::runtime_error("REVERB_CONFIG packing mismatch");
+  if (opcode(sink.commands[4]) != 0x24 || sink.commands[4][1] != 3u)
+    throw std::runtime_error("EFFECT_CLEAR packing mismatch");
 }
 
 }  // namespace

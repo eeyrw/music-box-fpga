@@ -4,13 +4,8 @@ module wavetable_common_status_regs #(
   input  logic                     clk,
   input  logic                     rst,
   input  logic                     core_reset,
-  input  logic                     bus_valid,
-  input  logic                     bus_write,
-  input  logic [15:0]              bus_address,
-  input  logic [31:0]              bus_wdata,
-  output logic [31:0]              bus_rdata,
-  output logic                     bus_ready,
-  output logic                     bus_error,
+  input  synth_pkg::reg_bus_req_t  bus_req,
+  output synth_pkg::reg_bus_rsp_t  bus_rsp,
   input  logic                     sample_tick,
   input  logic                     core_sample_valid,
   input  logic                     core_busy,
@@ -24,18 +19,7 @@ module wavetable_common_status_regs #(
   input  logic                     mem_response_trace_pulse,
   input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
-  input  logic                     compressor_enabled,
-  input  logic                     compressor_primed,
-  input  logic [15:0]              compressor_delay_level,
-  input  logic [31:0]              compressor_gain_reduction,
-  input  logic [31:0]              compressor_target_gain_reduction,
-  input  logic [synth_pkg::MIX_WIDTH-1:0] compressor_detector_peak,
-  input  logic [31:0]              compressor_max_gain_reduction,
-  input  logic [synth_pkg::MIX_WIDTH-1:0] compressor_max_detector_peak,
-  input  logic [31:0]              compressor_input_frame_count,
-  input  logic [31:0]              compressor_output_frame_count,
-  input  logic [31:0]              compressor_compressed_frame_count,
-  input  logic [31:0]              compressor_saturation_count,
+  input  synth_pkg::audio_diagnostics_t audio_diagnostics,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles
 );
@@ -67,6 +51,19 @@ module wavetable_common_status_regs #(
       REG_COMPRESSOR_COMPRESSED_FRAME_COUNT;
   localparam logic [15:0] ADDR_COMPRESSOR_SATURATION_COUNT =
       REG_COMPRESSOR_SATURATION_COUNT;
+  localparam logic [15:0] ADDR_EFFECT_STATUS = REG_EFFECT_STATUS;
+  localparam logic [15:0] ADDR_EFFECT_INPUT_FRAME_COUNT = REG_EFFECT_INPUT_FRAME_COUNT;
+  localparam logic [15:0] ADDR_EFFECT_OUTPUT_FRAME_COUNT = REG_EFFECT_OUTPUT_FRAME_COUNT;
+  localparam logic [15:0] ADDR_EFFECT_SATURATION_COUNT = REG_EFFECT_SATURATION_COUNT;
+  localparam logic [15:0] ADDR_EFFECT_MAX_PROCESSING_CYCLES =
+      REG_EFFECT_MAX_PROCESSING_CYCLES;
+  localparam logic [15:0] ADDR_CHORUS_HISTORY_LEVEL = REG_CHORUS_HISTORY_LEVEL;
+  localparam logic [15:0] ADDR_CHORUS_LFO_PHASE = REG_CHORUS_LFO_PHASE;
+  localparam logic [15:0] ADDR_CHORUS_SATURATION_COUNT = REG_CHORUS_SATURATION_COUNT;
+  localparam logic [15:0] ADDR_REVERB_STATUS = REG_REVERB_STATUS;
+  localparam logic [15:0] ADDR_REVERB_SATURATION_COUNT = REG_REVERB_SATURATION_COUNT;
+  localparam logic [15:0] ADDR_REVERB_MAX_PROCESSING_CYCLES =
+      REG_REVERB_MAX_PROCESSING_CYCLES;
 
   logic render_pending;
   logic [15:0] render_latency_count;
@@ -87,7 +84,12 @@ module wavetable_common_status_regs #(
       ADDR_COMPRESSOR_DETECTOR_PEAK, ADDR_COMPRESSOR_MAX_GAIN_REDUCTION,
       ADDR_COMPRESSOR_MAX_DETECTOR_PEAK, ADDR_COMPRESSOR_INPUT_FRAME_COUNT,
       ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT, ADDR_COMPRESSOR_COMPRESSED_FRAME_COUNT,
-      ADDR_COMPRESSOR_SATURATION_COUNT: begin
+      ADDR_COMPRESSOR_SATURATION_COUNT, ADDR_EFFECT_STATUS,
+      ADDR_EFFECT_INPUT_FRAME_COUNT, ADDR_EFFECT_OUTPUT_FRAME_COUNT,
+      ADDR_EFFECT_SATURATION_COUNT, ADDR_EFFECT_MAX_PROCESSING_CYCLES,
+      ADDR_CHORUS_HISTORY_LEVEL, ADDR_CHORUS_LFO_PHASE,
+      ADDR_CHORUS_SATURATION_COUNT, ADDR_REVERB_STATUS,
+      ADDR_REVERB_SATURATION_COUNT, ADDR_REVERB_MAX_PROCESSING_CYCLES: begin
         is_common_status_address = 1'b1;
       end
       default: is_common_status_address = 1'b0;
@@ -100,9 +102,9 @@ module wavetable_common_status_regs #(
 
   logic regs_access;
 
-  assign regs_access = bus_valid && is_common_status_address(bus_address);
-  assign bus_ready = bus_valid;
-  assign bus_error = bus_valid && !is_common_status_address(bus_address);
+  assign regs_access = bus_req.valid && is_common_status_address(bus_req.address);
+  assign bus_rsp.ready = bus_req.valid;
+  assign bus_rsp.error = bus_req.valid && !is_common_status_address(bus_req.address);
   assign common_event_set_mask = {
     28'd0,
     mem_response_trace_pulse,
@@ -112,10 +114,10 @@ module wavetable_common_status_regs #(
   };
 
   always_comb begin
-    bus_rdata = 32'd0;
-    unique case (bus_address)
+    bus_rsp.rdata = 32'd0;
+    unique case (bus_req.address)
       ADDR_SYSTEM_STATUS: begin
-        bus_rdata = {
+        bus_rsp.rdata = {
           24'd0,
           ext_rsp_valid,
           ext_req_ready,
@@ -127,9 +129,9 @@ module wavetable_common_status_regs #(
           core_busy
         };
       end
-      ADDR_COMMON_EVENT_FLAGS: bus_rdata = common_event_flags;
+      ADDR_COMMON_EVENT_FLAGS: bus_rsp.rdata = common_event_flags;
       ADDR_AUDIO_STATUS: begin
-        bus_rdata = {
+        bus_rsp.rdata = {
           14'd0,
           common_event_flags[1],
           common_event_flags[0],
@@ -137,10 +139,10 @@ module wavetable_common_status_regs #(
         };
       end
       ADDR_RENDER_STATUS: begin
-        bus_rdata = {14'd0, common_event_flags[2], render_pending, render_latency_cycles};
+        bus_rsp.rdata = {14'd0, common_event_flags[2], render_pending, render_latency_cycles};
       end
       ADDR_MEMORY_STATUS: begin
-        bus_rdata = {
+        bus_rsp.rdata = {
           12'd0,
           common_event_flags[3],
           ext_rsp_valid,
@@ -149,29 +151,70 @@ module wavetable_common_status_regs #(
           mem_response_trace_latency
         };
       end
-      ADDR_UNDERRUN_COUNT: bus_rdata = underrun_count;
-      ADDR_SAMPLE_DROP_COUNT: bus_rdata = sample_drop_count;
-      ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rdata = render_deadline_miss_count;
-      ADDR_MEM_RESPONSE_COUNT: bus_rdata = mem_response_count;
+      ADDR_UNDERRUN_COUNT: bus_rsp.rdata = underrun_count;
+      ADDR_SAMPLE_DROP_COUNT: bus_rsp.rdata = sample_drop_count;
+      ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rsp.rdata = render_deadline_miss_count;
+      ADDR_MEM_RESPONSE_COUNT: bus_rsp.rdata = mem_response_count;
       ADDR_COMPRESSOR_STATUS: begin
-        bus_rdata = {8'd0, compressor_delay_level, 5'd0,
-                     |compressor_gain_reduction, compressor_primed,
-                     compressor_enabled};
+        bus_rsp.rdata = {8'd0, audio_diagnostics.compressor.delay_level_frames,
+                     5'd0, |audio_diagnostics.compressor.gain_reduction_cb_q12_20,
+                     audio_diagnostics.compressor.primed,
+                     audio_diagnostics.compressor.enabled};
       end
-      ADDR_COMPRESSOR_GAIN_REDUCTION: bus_rdata = compressor_gain_reduction;
+      ADDR_COMPRESSOR_GAIN_REDUCTION:
+          bus_rsp.rdata = audio_diagnostics.compressor.gain_reduction_cb_q12_20;
       ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION:
-          bus_rdata = compressor_target_gain_reduction;
+          bus_rsp.rdata = audio_diagnostics.compressor.target_gain_reduction_cb_q12_20;
       ADDR_COMPRESSOR_DETECTOR_PEAK:
-          bus_rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}}, compressor_detector_peak};
-      ADDR_COMPRESSOR_MAX_GAIN_REDUCTION: bus_rdata = compressor_max_gain_reduction;
+          bus_rsp.rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}},
+                       audio_diagnostics.compressor.detector_peak};
+      ADDR_COMPRESSOR_MAX_GAIN_REDUCTION:
+          bus_rsp.rdata = audio_diagnostics.compressor.max_gain_reduction_cb_q12_20;
       ADDR_COMPRESSOR_MAX_DETECTOR_PEAK:
-          bus_rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}}, compressor_max_detector_peak};
-      ADDR_COMPRESSOR_INPUT_FRAME_COUNT: bus_rdata = compressor_input_frame_count;
-      ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT: bus_rdata = compressor_output_frame_count;
+          bus_rsp.rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}},
+                       audio_diagnostics.compressor.max_detector_peak};
+      ADDR_COMPRESSOR_INPUT_FRAME_COUNT:
+          bus_rsp.rdata = audio_diagnostics.compressor.input_frame_count;
+      ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT:
+          bus_rsp.rdata = audio_diagnostics.compressor.output_frame_count;
       ADDR_COMPRESSOR_COMPRESSED_FRAME_COUNT:
-          bus_rdata = compressor_compressed_frame_count;
-      ADDR_COMPRESSOR_SATURATION_COUNT: bus_rdata = compressor_saturation_count;
-      default: bus_rdata = 32'd0;
+          bus_rsp.rdata = audio_diagnostics.compressor.compressed_frame_count;
+      ADDR_COMPRESSOR_SATURATION_COUNT:
+          bus_rsp.rdata = audio_diagnostics.compressor.saturation_count;
+      ADDR_EFFECT_STATUS: begin
+        bus_rsp.rdata = {17'd0, audio_diagnostics.effects.mixer_config_clamped,
+                     audio_diagnostics.effects.reverb_config_clamped,
+                     audio_diagnostics.effects.chorus_config_clamped,
+                     audio_diagnostics.effects.reverb_valid_line_mask,
+                     |audio_diagnostics.effects.chorus_history_level_frames,
+                     audio_diagnostics.effects.busy,
+                     audio_diagnostics.effects.reverb_enabled,
+                     audio_diagnostics.effects.chorus_enabled};
+      end
+      ADDR_EFFECT_INPUT_FRAME_COUNT:
+          bus_rsp.rdata = audio_diagnostics.effects.input_frame_count;
+      ADDR_EFFECT_OUTPUT_FRAME_COUNT:
+          bus_rsp.rdata = audio_diagnostics.effects.output_frame_count;
+      ADDR_EFFECT_SATURATION_COUNT:
+          bus_rsp.rdata = audio_diagnostics.effects.mixer_saturation_count;
+      ADDR_EFFECT_MAX_PROCESSING_CYCLES:
+          bus_rsp.rdata = {16'd0, audio_diagnostics.effects.max_processing_cycles};
+      ADDR_CHORUS_HISTORY_LEVEL:
+          bus_rsp.rdata = {16'd0,
+                       audio_diagnostics.effects.chorus_history_level_frames};
+      ADDR_CHORUS_LFO_PHASE:
+          bus_rsp.rdata = audio_diagnostics.effects.chorus_lfo_phase_q0_32;
+      ADDR_CHORUS_SATURATION_COUNT:
+          bus_rsp.rdata = audio_diagnostics.effects.chorus_saturation_count;
+      ADDR_REVERB_STATUS:
+          bus_rsp.rdata = {8'd0, audio_diagnostics.effects.reverb_valid_line_mask,
+                       audio_diagnostics.effects.reverb_pre_delay_occupancy};
+      ADDR_REVERB_SATURATION_COUNT:
+          bus_rsp.rdata = audio_diagnostics.effects.reverb_saturation_count;
+      ADDR_REVERB_MAX_PROCESSING_CYCLES:
+          bus_rsp.rdata = {16'd0,
+                       audio_diagnostics.effects.reverb_max_processing_cycles};
+      default: bus_rsp.rdata = 32'd0;
     endcase
   end
 
@@ -189,8 +232,8 @@ module wavetable_common_status_regs #(
     end else begin
       render_deadline_miss_pulse <= 1'b0;
 
-      if (regs_access && bus_write && (bus_address == ADDR_COMMON_EVENT_FLAGS)) begin
-        common_event_flags <= (common_event_flags & ~bus_wdata) | common_event_set_mask;
+      if (regs_access && bus_req.write && (bus_req.address == ADDR_COMMON_EVENT_FLAGS)) begin
+        common_event_flags <= (common_event_flags & ~bus_req.wdata) | common_event_set_mask;
       end else begin
         common_event_flags <= common_event_flags | common_event_set_mask;
       end

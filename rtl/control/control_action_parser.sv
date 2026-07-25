@@ -27,6 +27,7 @@ module control_action_parser (
       VOICE_DEFINE_MONO, VOICE_DEFINE_STEREO, VOICE_START,
       VOICE_ENV_UPDATE, VOICE_RELEASE, VOICE_STOP,
       VOICE_GAIN_PHASE, VOICE_FILTER, COMPRESSOR_CONFIG, MASTER_VOLUME,
+      CHORUS_CONFIG, REVERB_CONFIG, EFFECT_CLEAR,
       STREAM_FLUSH:
         recognized_opcode = 1'b1;
       default: recognized_opcode = 1'b0;
@@ -49,6 +50,9 @@ module control_action_parser (
       VOICE_FILTER:        fixed_payload_length_valid = payload_words == 8'd3;
       COMPRESSOR_CONFIG:   fixed_payload_length_valid = payload_words == 8'd4;
       MASTER_VOLUME:       fixed_payload_length_valid = payload_words == 8'd1;
+      CHORUS_CONFIG:       fixed_payload_length_valid = payload_words == 8'd6;
+      REVERB_CONFIG:       fixed_payload_length_valid = payload_words == 8'd9;
+      EFFECT_CLEAR:        fixed_payload_length_valid = payload_words == 8'd1;
       STREAM_FLUSH:        fixed_payload_length_valid = payload_words == 8'd0;
       default:             fixed_payload_length_valid = 1'b0;
     endcase
@@ -59,7 +63,10 @@ module control_action_parser (
     fixed_length_valid = fixed_payload_length_valid(action.opcode, action.payload_words);
     voice_valid = (action.opcode == STREAM_FLUSH) ||
                   (((action.opcode == COMPRESSOR_CONFIG) ||
-                    (action.opcode == MASTER_VOLUME)) ?
+                    (action.opcode == MASTER_VOLUME) ||
+                    (action.opcode == CHORUS_CONFIG) ||
+                    (action.opcode == REVERB_CONFIG) ||
+                    (action.opcode == EFFECT_CLEAR)) ?
                    ((action.voice == 8'd0) && (action.seq == 8'd0)) :
                    (int'(action.voice) < NUM_VOICES));
     env_field_count = 8'($countones(action.payload[0][5:0]));

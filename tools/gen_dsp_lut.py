@@ -20,8 +20,25 @@ MAG_TO_CB_MAX_ERROR_CB = 0.35
 MAG_TO_CB_REFERENCE_EXPONENT = 15
 MAG_TO_CB_INDEX_SHIFT = 31 - MAG_TO_CB_MANTISSA_BITS
 MAG_TO_CB_ROUND_BIT = MAG_TO_CB_INDEX_SHIFT - 1
+FDN_DELAY_LENGTHS = [1451, 1559, 1663, 1777, 1879, 1999, 2131, 2371]
 SV_OUT = Path("rtl/generated/synth_dsp_lut_pkg.sv")
 CPP_OUT = Path("sim/harness/generated/dsp_lut.h")
+
+
+def chorus_sine_quarter_q15():
+    return [
+        int(round(Q15_FULL * math.sin((math.pi * index) / 512.0)))
+        for index in range(257)
+    ]
+
+
+def fdn_delay_bases():
+    bases = []
+    offset = 0
+    for length in FDN_DELAY_LENGTHS:
+        bases.append(offset)
+        offset += length
+    return bases
 
 
 def octave_q20():
@@ -198,7 +215,8 @@ def append_sv_array(lines, declaration, vals, columns, width=32):
     lines.append("  };")
 
 
-def render_sv(octaves, cb_mantissa, q15_mantissa, mag_mantissa,
+def render_sv(octaves, cb_mantissa, q15_mantissa, mag_mantissa, chorus_sine,
+              fdn_bases,
               max_integer_error, max_error_cb, mean_error_cb,
               mag_max_error_cb):
     lines = [
@@ -260,6 +278,29 @@ def render_sv(octaves, cb_mantissa, q15_mantissa, mag_mantissa,
         4,
         26,
     )
+    append_sv_array(
+        lines,
+        "  localparam logic [15:0] CHORUS_SINE_QUARTER_Q1_15_LUT [0:256] = '{",
+        chorus_sine,
+        8,
+        16,
+    )
+    lines.append(f"  localparam int FDN_LINE_COUNT = {len(FDN_DELAY_LENGTHS)};")
+    lines.append(f"  localparam int FDN_TOTAL_SAMPLES = {sum(FDN_DELAY_LENGTHS)};")
+    append_sv_array(
+        lines,
+        "  localparam logic [15:0] FDN_DELAY_LENGTH_LUT [0:7] = '{",
+        FDN_DELAY_LENGTHS,
+        8,
+        16,
+    )
+    append_sv_array(
+        lines,
+        "  localparam logic [15:0] FDN_DELAY_BASE_LUT [0:7] = '{",
+        fdn_bases,
+        8,
+        16,
+    )
     lines.extend([
         "endpackage",
         "/* verilator lint_on UNUSEDPARAM */",
@@ -277,7 +318,8 @@ def append_cpp_array(lines, declaration, vals, columns):
     lines.append("};")
 
 
-def render_cpp(octaves, cb_mantissa, q15_mantissa, mag_mantissa,
+def render_cpp(octaves, cb_mantissa, q15_mantissa, mag_mantissa, chorus_sine,
+               fdn_bases,
                max_integer_error, max_error_cb, mean_error_cb,
                mag_max_error_cb):
     lines = [
@@ -301,6 +343,25 @@ def render_cpp(octaves, cb_mantissa, q15_mantissa, mag_mantissa,
         f"constexpr std::array<uint32_t, {len(octaves)}> kEnvCbOctaveQ12_20 = {{",
         octaves,
         4,
+    )
+    append_cpp_array(
+        lines,
+        "constexpr std::array<uint32_t, 257> kChorusSineQuarterQ1_15 = {",
+        chorus_sine,
+        8,
+    )
+    lines.append(f"constexpr uint32_t kFdnTotalSamples = {sum(FDN_DELAY_LENGTHS)}u;")
+    append_cpp_array(
+        lines,
+        "constexpr std::array<uint32_t, 8> kFdnDelayLengths = {",
+        FDN_DELAY_LENGTHS,
+        8,
+    )
+    append_cpp_array(
+        lines,
+        "constexpr std::array<uint32_t, 8> kFdnDelayBases = {",
+        fdn_bases,
+        8,
     )
     append_cpp_array(
         lines,
@@ -352,6 +413,8 @@ def generated_outputs():
     cb_mantissa = cb_to_q15_mantissa()
     q15_mantissa = q15_to_cb_tables()
     mag_mantissa = magnitude_to_cb_mantissa()
+    chorus_sine = chorus_sine_quarter_q15()
+    fdn_bases = fdn_delay_bases()
     max_integer_error = validate_cb_to_q15(octaves, cb_mantissa)
     max_error_cb, mean_error_cb = validate_q15_to_cb(octaves, q15_mantissa)
     mag_max_error_cb = validate_magnitude_to_cb(mag_mantissa)
@@ -361,6 +424,8 @@ def generated_outputs():
             cb_mantissa,
             q15_mantissa,
             mag_mantissa,
+            chorus_sine,
+            fdn_bases,
             max_integer_error,
             max_error_cb,
             mean_error_cb,
@@ -371,6 +436,8 @@ def generated_outputs():
             cb_mantissa,
             q15_mantissa,
             mag_mantissa,
+            chorus_sine,
+            fdn_bases,
             max_integer_error,
             max_error_cb,
             mean_error_cb,

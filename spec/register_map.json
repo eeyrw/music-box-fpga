@@ -11,7 +11,7 @@
         "description": "Common and board platform register window.",
         "baseAddress": "0x9000",
         "registers": [
-          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00080000"},
+          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00090000"},
           {"name": "SYSTEM_STATUS", "addressOffset": "0x0010"},
           {
             "name": "COMMON_EVENT_FLAGS",
@@ -81,6 +81,37 @@
           {"name": "COMPRESSOR_OUTPUT_FRAME_COUNT", "addressOffset": "0x0128"},
           {"name": "COMPRESSOR_COMPRESSED_FRAME_COUNT", "addressOffset": "0x012c"},
           {"name": "COMPRESSOR_SATURATION_COUNT", "addressOffset": "0x0130"},
+          {
+            "name": "EFFECT_STATUS",
+            "addressOffset": "0x0134",
+            "fields": [
+              {"name": "CHORUS_ENABLED", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
+              {"name": "REVERB_ENABLED", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
+              {"name": "BUSY", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
+              {"name": "CHORUS_HISTORY_VALID", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
+              {"name": "REVERB_VALID_LINE_MASK", "bitOffset": 4, "bitWidth": 8},
+              {"name": "CHORUS_CONFIG_CLAMPED", "bitOffset": 12, "bitWidth": 1, "mask": "0x00001000"},
+              {"name": "REVERB_CONFIG_CLAMPED", "bitOffset": 13, "bitWidth": 1, "mask": "0x00002000"},
+              {"name": "MIXER_CONFIG_CLAMPED", "bitOffset": 14, "bitWidth": 1, "mask": "0x00004000"}
+            ]
+          },
+          {"name": "EFFECT_INPUT_FRAME_COUNT", "addressOffset": "0x0138"},
+          {"name": "EFFECT_OUTPUT_FRAME_COUNT", "addressOffset": "0x013c"},
+          {"name": "EFFECT_SATURATION_COUNT", "addressOffset": "0x0140"},
+          {"name": "EFFECT_MAX_PROCESSING_CYCLES", "addressOffset": "0x0144"},
+          {"name": "CHORUS_HISTORY_LEVEL", "addressOffset": "0x0148"},
+          {"name": "CHORUS_LFO_PHASE", "addressOffset": "0x014c"},
+          {"name": "CHORUS_SATURATION_COUNT", "addressOffset": "0x0150"},
+          {
+            "name": "REVERB_STATUS",
+            "addressOffset": "0x0154",
+            "fields": [
+              {"name": "PRE_DELAY_OCCUPANCY", "bitOffset": 0, "bitWidth": 16},
+              {"name": "VALID_LINE_MASK", "bitOffset": 16, "bitWidth": 8}
+            ]
+          },
+          {"name": "REVERB_SATURATION_COUNT", "addressOffset": "0x0158"},
+          {"name": "REVERB_MAX_PROCESSING_CYCLES", "addressOffset": "0x015c"},
           {
             "name": "PLATFORM_STATUS",
             "addressOffset": "0x0040",

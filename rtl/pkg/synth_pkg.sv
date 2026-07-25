@@ -88,6 +88,9 @@ package synth_pkg;
     VOICE_FILTER        = 8'h17,
     COMPRESSOR_CONFIG   = 8'h20,
     MASTER_VOLUME       = 8'h21,
+    CHORUS_CONFIG       = 8'h22,
+    REVERB_CONFIG       = 8'h23,
+    EFFECT_CLEAR        = 8'h24,
     STREAM_FLUSH        = 8'h7f
   } command_opcode_t;
 
@@ -106,6 +109,120 @@ package synth_pkg;
     logic [31:0] attack_step_cb_q12_20;
     logic [31:0] release_step_cb_q12_20;
   } compressor_config_t;
+
+  typedef struct packed {
+    logic               enable;
+    logic [23:0]        base_delay_q16_8;
+    logic [23:0]        depth_q16_8;
+    logic [31:0]        lfo_phase_inc_q0_32;
+    logic [15:0]        input_send_q1_15;
+    logic [15:0]        return_gain_q1_15;
+    logic signed [15:0] feedback_q1_15;
+    logic [31:0]        stereo_phase_offset_q0_32;
+  } chorus_config_t;
+
+  typedef struct packed {
+    logic             enable;
+    logic [15:0]      input_send_q1_15;
+    logic [15:0]      return_gain_q1_15;
+    logic [15:0]      damping_q1_15;
+    logic [15:0]      chorus_to_reverb_q1_15;
+    logic [10:0]      pre_delay_frames;
+    logic [7:0][15:0] feedback_gain_q1_15;
+  } reverb_config_t;
+
+  typedef struct packed {
+    compressor_config_t compressor;
+    logic signed [15:0] master_volume;
+    chorus_config_t     chorus;
+    reverb_config_t     reverb;
+  } global_audio_config_t;
+
+  typedef struct packed {
+    logic        chorus_enabled;
+    logic        reverb_enabled;
+    logic        busy;
+    logic        chorus_config_clamped;
+    logic        reverb_config_clamped;
+    logic        mixer_config_clamped;
+    logic [15:0] chorus_history_level_frames;
+    logic [31:0] chorus_lfo_phase_q0_32;
+    logic [7:0]  reverb_valid_line_mask;
+    logic [15:0] reverb_pre_delay_occupancy;
+    logic [31:0] input_frame_count;
+    logic [31:0] output_frame_count;
+    logic [15:0] max_processing_cycles;
+    logic [31:0] chorus_saturation_count;
+    logic [31:0] reverb_saturation_count;
+    logic [31:0] mixer_saturation_count;
+    logic [15:0] reverb_max_processing_cycles;
+  } spatial_effect_diagnostics_t;
+
+  typedef struct packed {
+    logic                 enabled;
+    logic                 primed;
+    logic [15:0]          delay_level_frames;
+    logic [31:0]          gain_reduction_cb_q12_20;
+    logic [31:0]          target_gain_reduction_cb_q12_20;
+    logic [MIX_WIDTH-1:0] detector_peak;
+    logic [31:0]          max_gain_reduction_cb_q12_20;
+    logic [MIX_WIDTH-1:0] max_detector_peak;
+    logic [31:0]          input_frame_count;
+    logic [31:0]          output_frame_count;
+    logic [31:0]          compressed_frame_count;
+    logic [31:0]          saturation_count;
+  } compressor_diagnostics_t;
+
+  typedef struct packed {
+    spatial_effect_diagnostics_t effects;
+    compressor_diagnostics_t     compressor;
+  } audio_diagnostics_t;
+
+  typedef struct packed {
+    logic       cross_line_endpoint_pair_pulse;
+    logic       fetch_slot_pressure_pulse;
+    logic       memory_stall_pulse;
+    logic [2:0] fetch_slot_occupancy;
+    logic [2:0] fetch_slot_max_occupancy;
+    logic [4:0] word_req_occupancy;
+    logic [4:0] word_req_max_occupancy;
+    logic [4:0] rsp_meta_occupancy;
+    logic [4:0] rsp_meta_max_occupancy;
+    logic [2:0] dsp_context_queue_occupancy;
+    logic [2:0] dsp_context_queue_max_occupancy;
+  } voice_endpoint_diagnostics_t;
+
+  typedef struct packed {
+    voice_endpoint_diagnostics_t endpoint;
+    logic                        dsp_ready_no_context_pulse;
+  } voice_pipeline_diagnostics_t;
+
+  typedef struct packed {
+    logic        response_trace_pulse;
+    logic [15:0] response_trace_latency;
+    logic        demand_hit_pulse;
+    logic        demand_miss_pulse;
+    logic        line_fill_pulse;
+    logic        same_line_endpoint_hit_pulse;
+    logic        replacement_pulse;
+    logic        prefetch_issued_pulse;
+    logic        prefetch_filled_pulse;
+    logic        prefetch_used_pulse;
+    logic        prefetch_dropped_pulse;
+    logic        prefetch_late_pulse;
+  } cache_diagnostics_t;
+
+  typedef struct packed {
+    logic        active;
+    logic [31:0] last_cycles;
+    logic [31:0] max_cycles;
+    logic [63:0] cycle_sum;
+    logic [63:0] frame_count;
+    logic [63:0] deadline_miss_count;
+    logic [63:0] over_budget_frames;
+    logic [31:0] over_budget_max_cycles;
+    logic [31:0] cycle_counter;
+  } render_timing_diagnostics_t;
 
   // One committed voice configuration. These fields describe the sample region
   // and static playback mode that must become visible atomically on voice commit.

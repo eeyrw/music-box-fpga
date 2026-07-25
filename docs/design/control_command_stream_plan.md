@@ -95,14 +95,18 @@ The command opcodes are:
 | `0x17` | `VOICE_FILTER` | 3 |
 | `0x20` | `COMPRESSOR_CONFIG` | 4 |
 | `0x21` | `MASTER_VOLUME` | 1 |
+| `0x22` | `CHORUS_CONFIG` | 6 |
+| `0x23` | `REVERB_CONFIG` | 9 |
+| `0x24` | `EFFECT_CLEAR` | 1 |
 | `0x7f` | `STREAM_FLUSH` | 0 |
 
 All reserved bits must be zero. Samples and coefficients use the formats in
 `docs/fixed_point.md`. Loop ends are exclusive.
 
-`COMPRESSOR_CONFIG` and `MASTER_VOLUME` are global actions. Their header `voice`
-and `seq` fields must both be zero. They are applied with the same bounded action
-batch that precedes a render frame.
+`COMPRESSOR_CONFIG`, `MASTER_VOLUME`, `CHORUS_CONFIG`, `REVERB_CONFIG`, and
+`EFFECT_CLEAR` are global actions. Their header `voice` and `seq` fields must
+both be zero. They are applied with the same bounded action batch that precedes
+a render frame.
 
 ### COMPRESSOR_CONFIG
 
@@ -126,6 +130,51 @@ word 0  signed nonnegative Q1.15 master gain in bits 15:0; bits 31:15 zero
 
 `0x7fff` is the exact bypass setting and is the reset default. Master volume is
 applied after compressor gain and before the only final PCM16 saturation.
+
+### CHORUS_CONFIG
+
+```text
+word 0  {feedback_q1_15, 15'b0, enable}
+word 1  {8'b0, base_delay_q16_8}
+word 2  {8'b0, depth_q16_8}
+word 3  lfo_phase_inc_q0_32
+word 4  {return_gain_q1_15, input_send_q1_15}
+word 5  stereo_phase_offset_q0_32
+```
+
+The complete chorus configuration is replaced atomically. The two gains must
+not exceed `0x7fff`; signed feedback must be in `-0x6000` through `0x6000`.
+Delay values are validated again by the chorus against its physical history
+capacity, with any clamp reported through effect diagnostics.
+
+### REVERB_CONFIG
+
+```text
+word 0  {20'b0, pre_delay_frames[10:0], enable}
+word 1  {16'b0, input_send_q1_15}
+word 2  {16'b0, return_gain_q1_15}
+word 3  {16'b0, damping_q1_15}
+word 4  {16'b0, chorus_to_reverb_q1_15}
+word 5  {feedback_gain_1_q1_15, feedback_gain_0_q1_15}
+word 6  {feedback_gain_3_q1_15, feedback_gain_2_q1_15}
+word 7  {feedback_gain_5_q1_15, feedback_gain_4_q1_15}
+word 8  {feedback_gain_7_q1_15, feedback_gain_6_q1_15}
+```
+
+The complete reverb configuration is replaced atomically. Send, return,
+damping, and chorus-to-reverb gains must not exceed `0x7fff`. Each feedback
+gain must not exceed the stability limit `0x2d41`.
+
+### EFFECT_CLEAR
+
+```text
+word 0  bits 1:0 clear mask; bit 0 chorus, bit 1 reverb; bits 31:2 zero
+```
+
+At least one mask bit must be set. The command emits a one-cycle clear pulse,
+resets only the selected effect histories without clearing RAM contents, and
+drops a frame currently in the spatial effect chain. Compressor state and its
+look-ahead history are unchanged.
 
 ### VOICE_DEFINE_MONO
 

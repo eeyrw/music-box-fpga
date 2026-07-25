@@ -21,18 +21,7 @@ module multi_voice_pipeline #(
   output synth_pkg::wave_word_req_t  mem_req,
   input  logic                       mem_req_ready,
   input  synth_pkg::wave_word_rsp_t  mem_rsp,
-  output logic                       endpoint_cross_line_pair_pulse,
-  output logic                       endpoint_fetch_slot_pressure_pulse,
-  output logic                       endpoint_memory_stall_pulse,
-  output logic [2:0]                 endpoint_fetch_slot_occupancy,
-  output logic [2:0]                 endpoint_fetch_slot_max_occupancy,
-  output logic [4:0]                 endpoint_word_req_occupancy,
-  output logic [4:0]                 endpoint_word_req_max_occupancy,
-  output logic [4:0]                 endpoint_rsp_meta_occupancy,
-  output logic [4:0]                 endpoint_rsp_meta_max_occupancy,
-  output logic [2:0]                 dsp_context_queue_occupancy,
-  output logic [2:0]                 dsp_context_queue_max_occupancy,
-  output logic                       dsp_ready_no_context_pulse
+  output synth_pkg::voice_pipeline_diagnostics_t diagnostics_o
 );
   import synth_pkg::*;
 
@@ -78,6 +67,9 @@ module multi_voice_pipeline #(
   logic endpoint_empty;
   logic dsp_issue_valid;
   logic dsp_valid;
+  logic dsp_ready_no_context_pulse;
+  voice_endpoint_diagnostics_t endpoint_diagnostics;
+
   logic [VOICE_INDEX_WIDTH:0] outstanding_count;
   logic [VOICE_INDEX_WIDTH:0] outstanding_next;
   logic signed [31:0] accum_l;
@@ -165,6 +157,9 @@ module multi_voice_pipeline #(
       saturate_pcm = value[15:0];
   endfunction
 
+  assign diagnostics_o.endpoint = endpoint_diagnostics;
+  assign diagnostics_o.dsp_ready_no_context_pulse =
+      dsp_ready_no_context_pulse;
   assign voice_read_index = render_index;
   assign prefetch_snapshot_prepare = prefetch_ready && current_enable &&
                                      current_config_valid && !voice_done &&
@@ -278,17 +273,7 @@ module multi_voice_pipeline #(
     .mem_req,
     .mem_req_ready,
     .mem_rsp,
-    .cross_line_endpoint_pair_pulse(endpoint_cross_line_pair_pulse),
-    .fetch_slot_pressure_pulse(endpoint_fetch_slot_pressure_pulse),
-    .memory_stall_pulse(endpoint_memory_stall_pulse),
-    .fetch_slot_occupancy(endpoint_fetch_slot_occupancy),
-    .fetch_slot_max_occupancy(endpoint_fetch_slot_max_occupancy),
-    .word_req_occupancy(endpoint_word_req_occupancy),
-    .word_req_max_occupancy(endpoint_word_req_max_occupancy),
-    .rsp_meta_occupancy(endpoint_rsp_meta_occupancy),
-    .rsp_meta_max_occupancy(endpoint_rsp_meta_max_occupancy),
-    .dsp_context_queue_occupancy(dsp_context_queue_occupancy),
-    .dsp_context_queue_max_occupancy(dsp_context_queue_max_occupancy)
+    .diagnostics_o(endpoint_diagnostics)
   );
 
   voice_dsp_pipeline dsp_pipeline (

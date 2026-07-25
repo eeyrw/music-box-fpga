@@ -45,27 +45,14 @@ module wavetable_demo_system #(
   input  logic                     platform_regs_bus_error
 );
   logic render_start;
-  logic spi_bus_valid;
-  logic spi_bus_write;
-  logic [15:0] spi_bus_address;
-  logic [31:0] spi_bus_wdata;
-  logic [31:0] spi_bus_rdata;
-  logic spi_bus_ready;
-  logic spi_bus_error;
-  logic core_bus_valid;
-  logic core_bus_write;
-  logic [15:0] core_bus_address;
-  logic [31:0] core_bus_wdata;
-  logic [31:0] core_bus_rdata;
-  logic core_bus_ready;
-  logic core_bus_error;
-  logic common_status_bus_valid;
-  logic common_status_bus_write;
-  logic [15:0] common_status_bus_address;
-  logic [31:0] common_status_bus_wdata;
-  logic [31:0] common_status_bus_rdata;
-  logic common_status_bus_ready;
-  logic common_status_bus_error;
+  synth_pkg::reg_bus_req_t spi_bus_req;
+  synth_pkg::reg_bus_rsp_t spi_bus_rsp;
+  synth_pkg::reg_bus_req_t core_bus_req;
+  synth_pkg::reg_bus_rsp_t core_bus_rsp;
+  synth_pkg::reg_bus_req_t common_status_bus_req;
+  synth_pkg::reg_bus_rsp_t common_status_bus_rsp;
+  synth_pkg::reg_bus_req_t platform_regs_bus_req;
+  synth_pkg::reg_bus_rsp_t platform_regs_bus_rsp;
   logic core_sample_valid;
   synth_pkg::pcm_t core_sample_l;
   synth_pkg::pcm_t core_sample_r;
@@ -78,20 +65,16 @@ module wavetable_demo_system #(
   logic spi_cmd_valid;
   logic [31:0] spi_cmd_data;
   logic spi_cmd_ready;
-  logic compressor_enabled;
-  logic compressor_primed;
-  logic [15:0] compressor_delay_level;
-  logic [31:0] compressor_gain_reduction;
-  logic [31:0] compressor_target_gain_reduction;
-  logic [synth_pkg::MIX_WIDTH-1:0] compressor_detector_peak;
-  logic [31:0] compressor_max_gain_reduction;
-  logic [synth_pkg::MIX_WIDTH-1:0] compressor_max_detector_peak;
-  logic [31:0] compressor_input_frame_count;
-  logic [31:0] compressor_output_frame_count;
-  logic [31:0] compressor_compressed_frame_count;
-  logic [31:0] compressor_saturation_count;
+  synth_pkg::audio_diagnostics_t audio_diagnostics;
 
   assign core_reset = rst || core_rst;
+  assign platform_regs_bus_valid = platform_regs_bus_req.valid;
+  assign platform_regs_bus_write = platform_regs_bus_req.write;
+  assign platform_regs_bus_address = platform_regs_bus_req.address;
+  assign platform_regs_bus_wdata = platform_regs_bus_req.wdata;
+  assign platform_regs_bus_rsp.rdata = platform_regs_bus_rdata;
+  assign platform_regs_bus_rsp.ready = platform_regs_bus_ready;
+  assign platform_regs_bus_rsp.error = platform_regs_bus_error;
 
   render_credit_scheduler #(
     .FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
@@ -115,13 +98,13 @@ module wavetable_demo_system #(
     .spi_mosi,
     .spi_miso,
     .spi_error,
-    .bus_valid(spi_bus_valid),
-    .bus_write(spi_bus_write),
-    .bus_address(spi_bus_address),
-    .bus_wdata(spi_bus_wdata),
-    .bus_rdata(spi_bus_rdata),
-    .bus_ready(spi_bus_ready),
-    .bus_error(spi_bus_error),
+    .bus_valid(spi_bus_req.valid),
+    .bus_write(spi_bus_req.write),
+    .bus_address(spi_bus_req.address),
+    .bus_wdata(spi_bus_req.wdata),
+    .bus_rdata(spi_bus_rsp.rdata),
+    .bus_ready(spi_bus_rsp.ready),
+    .bus_error(spi_bus_rsp.error),
     .cmd_valid(spi_cmd_valid),
     .cmd_data(spi_cmd_data),
     .cmd_ready(spi_cmd_ready)
@@ -130,35 +113,15 @@ module wavetable_demo_system #(
   wavetable_register_fabric #(
     .PLATFORM_REGS_PRESENT(PLATFORM_REGS_PRESENT)
   ) register_fabric (
-    .master_valid(spi_bus_valid),
-    .master_write(spi_bus_write),
-    .master_address(spi_bus_address),
-    .master_wdata(spi_bus_wdata),
+    .master_req(spi_bus_req),
     .core_reset,
-    .master_rdata(spi_bus_rdata),
-    .master_ready(spi_bus_ready),
-    .master_error(spi_bus_error),
-    .core_valid(core_bus_valid),
-    .core_write(core_bus_write),
-    .core_address(core_bus_address),
-    .core_wdata(core_bus_wdata),
-    .core_rdata(core_bus_rdata),
-    .core_ready(core_bus_ready),
-    .core_error(core_bus_error),
-    .common_status_valid(common_status_bus_valid),
-    .common_status_write(common_status_bus_write),
-    .common_status_address(common_status_bus_address),
-    .common_status_wdata(common_status_bus_wdata),
-    .common_status_rdata(common_status_bus_rdata),
-    .common_status_ready(common_status_bus_ready),
-    .common_status_error(common_status_bus_error),
-    .platform_regs_valid(platform_regs_bus_valid),
-    .platform_regs_write(platform_regs_bus_write),
-    .platform_regs_address(platform_regs_bus_address),
-    .platform_regs_wdata(platform_regs_bus_wdata),
-    .platform_regs_rdata(platform_regs_bus_rdata),
-    .platform_regs_ready(platform_regs_bus_ready),
-    .platform_regs_error(platform_regs_bus_error)
+    .master_rsp(spi_bus_rsp),
+    .core_req(core_bus_req),
+    .core_rsp(core_bus_rsp),
+    .common_status_req(common_status_bus_req),
+    .common_status_rsp(common_status_bus_rsp),
+    .platform_regs_req(platform_regs_bus_req),
+    .platform_regs_rsp(platform_regs_bus_rsp)
   );
 
   wavetable_common_status_regs #(
@@ -167,13 +130,8 @@ module wavetable_demo_system #(
     .clk,
     .rst,
     .core_reset,
-    .bus_valid(common_status_bus_valid),
-    .bus_write(common_status_bus_write),
-    .bus_address(common_status_bus_address),
-    .bus_wdata(common_status_bus_wdata),
-    .bus_rdata(common_status_bus_rdata),
-    .bus_ready(common_status_bus_ready),
-    .bus_error(common_status_bus_error),
+    .bus_req(common_status_bus_req),
+    .bus_rsp(common_status_bus_rsp),
     .sample_tick(1'b0),
     .core_sample_valid,
     .core_busy,
@@ -187,18 +145,7 @@ module wavetable_demo_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
-    .compressor_enabled,
-    .compressor_primed,
-    .compressor_delay_level,
-    .compressor_gain_reduction,
-    .compressor_target_gain_reduction,
-    .compressor_detector_peak,
-    .compressor_max_gain_reduction,
-    .compressor_max_detector_peak,
-    .compressor_input_frame_count,
-    .compressor_output_frame_count,
-    .compressor_compressed_frame_count,
-    .compressor_saturation_count,
+    .audio_diagnostics,
     .render_deadline_miss_pulse,
     .render_latency_cycles
   );
@@ -206,13 +153,8 @@ module wavetable_demo_system #(
   wavetable_system_core #(.LINE_WORDS(LINE_WORDS)) core (
     .clk,
     .rst(core_reset),
-    .bus_valid(core_bus_valid),
-    .bus_write(core_bus_write),
-    .bus_address(core_bus_address),
-    .bus_wdata(core_bus_wdata),
-    .bus_rdata(core_bus_rdata),
-    .bus_ready(core_bus_ready),
-    .bus_error(core_bus_error),
+    .bus_req(core_bus_req),
+    .bus_rsp(core_bus_rsp),
     .cmd_stream_valid(spi_cmd_valid),
     .cmd_stream_data(spi_cmd_data),
     .cmd_stream_ready(spi_cmd_ready),
@@ -222,18 +164,7 @@ module wavetable_demo_system #(
     .sample_l(core_sample_l),
     .sample_r(core_sample_r),
     .busy(core_busy),
-    .compressor_enabled,
-    .compressor_primed,
-    .compressor_delay_level,
-    .compressor_gain_reduction,
-    .compressor_target_gain_reduction,
-    .compressor_detector_peak,
-    .compressor_max_gain_reduction,
-    .compressor_max_detector_peak,
-    .compressor_input_frame_count,
-    .compressor_output_frame_count,
-    .compressor_compressed_frame_count,
-    .compressor_saturation_count,
+    .audio_diagnostics,
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,

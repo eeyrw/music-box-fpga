@@ -42,6 +42,9 @@ change.
 - [`design/envelope_backlog.md`](design/envelope_backlog.md): SoundFont envelope
   time ranges, Delay playback semantics, FluidSynth comparison, and open RTL
   and host compatibility work.
+- [`design/effects_backlog.md`](design/effects_backlog.md): implemented global
+  chorus/reverb architecture, completion matrix, remaining qualification gates,
+  and deferred per-voice sends.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
   transactional command-stream and continuous-render contract.
 - [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):

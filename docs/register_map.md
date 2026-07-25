@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x00080000`. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x00090000`. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x9018` | `AUDIO_STATUS` | platform | Audio FIFO and playback state. |
@@ -42,6 +42,17 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9128` | `COMPRESSOR_OUTPUT_FRAME_COUNT` | RO | Saturating count of valid post-delay output frames. |
 | `0x912c` | `COMPRESSOR_COMPRESSED_FRAME_COUNT` | RO | Saturating count of output frames with nonzero compressor reduction. |
 | `0x9130` | `COMPRESSOR_SATURATION_COUNT` | RO | Saturating count of final PCM16 channel saturation events. |
+| `0x9134` | `EFFECT_STATUS` | RO | Spatial-effect enable, activity, history-valid, and clamp flags. |
+| `0x9138` | `EFFECT_INPUT_FRAME_COUNT` | RO | Saturating count of frames accepted by the spatial-effect chain. |
+| `0x913c` | `EFFECT_OUTPUT_FRAME_COUNT` | RO | Saturating count of spatial-effect output handshakes. |
+| `0x9140` | `EFFECT_SATURATION_COUNT` | RO | Saturating count of signed-24 effect-return mixer channel clamps. |
+| `0x9144` | `EFFECT_MAX_PROCESSING_CYCLES` | RO | Maximum spatial-chain clocks from input acceptance to output valid. |
+| `0x9148` | `CHORUS_HISTORY_LEVEL` | RO | Valid stereo frames in chorus history, low 16 bits. |
+| `0x914c` | `CHORUS_LFO_PHASE` | RO | Current chorus LFO phase, unsigned Q0.32. |
+| `0x9150` | `CHORUS_SATURATION_COUNT` | RO | Saturating chorus signed-24 channel clamp count. |
+| `0x9154` | `REVERB_STATUS` | RO | Reverb pre-delay occupancy and valid-line mask. |
+| `0x9158` | `REVERB_SATURATION_COUNT` | RO | Saturating reverb signed-24 channel clamp count. |
+| `0x915c` | `REVERB_MAX_PROCESSING_CYCLES` | RO | Maximum clocks used by the reverb FSM. |
 
 The generic control plane accepts writes only at `CMD_FIFO_DATA`. Unknown
 addresses and writes to read-only generic registers return `bus_error`.
@@ -90,6 +101,28 @@ or post-master output level.
 Input/output/compressed counters count stereo frames;
 `COMPRESSOR_SATURATION_COUNT` counts channels, so a frame clipping both left and
 right increments it by two. All counters stop at `0xffffffff`.
+
+### Effect Diagnostics
+
+`EFFECT_STATUS` fields are:
+
+| Bits | Meaning |
+| ---: | --- |
+| `0` | chorus enabled |
+| `1` | reverb enabled |
+| `2` | a frame is active in the spatial-effect chain |
+| `3` | chorus history contains at least one valid frame |
+| `11:4` | reverb valid delay-line mask |
+| `12` | chorus configuration was clamped |
+| `13` | reverb configuration was clamped |
+| `14` | return-mixer configuration was clamped |
+| `31:15` | reserved, zero |
+
+`REVERB_STATUS[15:0]` is the pre-delay occupancy and bits `23:16` are the
+valid-line mask. Spatial input/output counters count stereo handshakes. The
+three saturation counters count clamped channels, not frames, and stop at
+`0xffffffff`. `EFFECT_CLEAR` clears spatial histories and their diagnostics,
+including these counters and maxima; compressor diagnostics are unchanged.
 
 ## Voice Debug Snapshot
 

@@ -23,12 +23,13 @@ module tb_transactional_control_plane;
   active_voice_t debug_active;
   voice_config_t render_config;
   voice_runtime_t render_runtime;
-  compressor_config_t compressor_config;
-  logic signed [15:0] master_volume;
+  global_audio_config_t audio_config;
+  logic [1:0] effect_clear;
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
   logic [NUM_VOICES-1:0] prepared_valid;
   logic saw_commit_voice3;
+  int effect_clear_pulse_count;
   int errors = 0;
 
   always #5 clk <= ~clk;
@@ -40,10 +41,15 @@ module tb_transactional_control_plane;
   ) dut (.*);
 
   always_ff @(posedge clk) begin
-    if (rst)
+    if (rst) begin
       saw_commit_voice3 <= 1'b0;
-    else if (commit_pulse[3])
+      effect_clear_pulse_count <= 0;
+    end else begin
+      if (effect_clear != 0)
+        effect_clear_pulse_count <= effect_clear_pulse_count + 1;
+      if (commit_pulse[3])
       saw_commit_voice3 <= 1'b1;
+    end
   end
 
   function automatic logic [31:0] header(
@@ -182,11 +188,11 @@ module tb_transactional_control_plane;
     push_word(32'd1 << 20);
     wait_actions(1);
     request_frame();
-    if (!compressor_config.enable ||
-        compressor_config.threshold_cb_q12_20 != (32'd120 << 20) ||
-        compressor_config.ratio_slope_q0_16 != 16'h8000 ||
-        compressor_config.attack_step_cb_q12_20 != (32'd4 << 20) ||
-        compressor_config.release_step_cb_q12_20 != (32'd1 << 20)) begin
+    if (!audio_config.compressor.enable ||
+        audio_config.compressor.threshold_cb_q12_20 != (32'd120 << 20) ||
+        audio_config.compressor.ratio_slope_q0_16 != 16'h8000 ||
+        audio_config.compressor.attack_step_cb_q12_20 != (32'd4 << 20) ||
+        audio_config.compressor.release_step_cb_q12_20 != (32'd1 << 20)) begin
       $error("compressor config action did not commit atomically");
       errors++;
     end
@@ -194,8 +200,41 @@ module tb_transactional_control_plane;
     push_word(32'h0000_4000);
     wait_actions(1);
     request_frame();
-    if (master_volume != 16'sh4000) begin
-      $error("master volume action mismatch: %h", master_volume);
+    if (audio_config.master_volume != 16'sh4000) begin
+      $error("master volume action mismatch: %h", audio_config.master_volume);
+      errors++;
+    end
+
+    push_word(header(CHORUS_CONFIG, 8'd0, 8'd0, 8'd6));
+    push_word(32'hf000_0001);
+    push_word(32'd3072);
+    push_word(32'd768);
+    push_word(32'h1234_5678);
+    push_word(32'h2000_6000);
+    push_word(32'h4000_0000);
+    push_word(header(REVERB_CONFIG, 8'd0, 8'd0, 8'd9));
+    push_word(32'd35);
+    push_word(32'h0000_3000);
+    push_word(32'h0000_2000);
+    push_word(32'h0000_1000);
+    push_word(32'h0000_0800);
+    push_word(32'h0002_0001);
+    push_word(32'h0004_0003);
+    push_word(32'h0006_0005);
+    push_word(32'h0008_0007);
+    push_word(header(EFFECT_CLEAR, 8'd0, 8'd0, 8'd1));
+    push_word(32'd3);
+    wait_actions(3);
+    request_frame();
+    if (!audio_config.chorus.enable ||
+        audio_config.chorus.feedback_q1_15 != -16'sh1000 ||
+        audio_config.chorus.base_delay_q16_8 != 24'd3072 ||
+        audio_config.chorus.return_gain_q1_15 != 16'h2000 ||
+        !audio_config.reverb.enable ||
+        audio_config.reverb.pre_delay_frames != 11'd17 ||
+        audio_config.reverb.feedback_gain_q1_15[7] != 16'd8 ||
+        effect_clear_pulse_count != 1 || effect_clear != 0) begin
+      $error("effect global actions did not commit atomically");
       errors++;
     end
 

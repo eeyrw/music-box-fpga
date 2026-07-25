@@ -12,18 +12,7 @@ module voice_line_cache #(
   output logic [synth_pkg::ADDR_WIDTH-1:0] ext_req_addr,
   input  logic                            ext_rsp_valid,
   input  logic [LINE_WORDS*16-1:0]        ext_rsp_data,
-  output logic                            response_trace_pulse,
-  output logic [15:0]                     response_trace_latency,
-  output logic                            demand_hit_pulse,
-  output logic                            demand_miss_pulse,
-  output logic                            line_fill_pulse,
-  output logic                            same_line_endpoint_hit_pulse,
-  output logic                            replacement_pulse,
-  output logic                            prefetch_issued_pulse,
-  output logic                            prefetch_filled_pulse,
-  output logic                            prefetch_used_pulse,
-  output logic                            prefetch_dropped_pulse,
-  output logic                            prefetch_late_pulse
+  output synth_pkg::cache_diagnostics_t   diagnostics_o
 );
   import synth_pkg::*;
 
@@ -151,18 +140,7 @@ module voice_line_cache #(
       pending_line_addr <= '0;
       latency_counter <= '0;
       rsp <= '0;
-      response_trace_pulse <= 1'b0;
-      response_trace_latency <= '0;
-      demand_hit_pulse <= 1'b0;
-      demand_miss_pulse <= 1'b0;
-      line_fill_pulse <= 1'b0;
-      same_line_endpoint_hit_pulse <= 1'b0;
-      replacement_pulse <= 1'b0;
-      prefetch_issued_pulse <= 1'b0;
-      prefetch_filled_pulse <= 1'b0;
-      prefetch_used_pulse <= 1'b0;
-      prefetch_dropped_pulse <= 1'b0;
-      prefetch_late_pulse <= 1'b0;
+      diagnostics_o <= '0;
       previous_accept_valid <= 1'b0;
       previous_accept_voice <= '0;
       previous_accept_stream_id <= '0;
@@ -177,17 +155,17 @@ module voice_line_cache #(
       prefetch_addr_aligned <= '0;
     end else begin
       rsp.valid <= 1'b0;
-      response_trace_pulse <= 1'b0;
-      demand_hit_pulse <= 1'b0;
-      demand_miss_pulse <= 1'b0;
-      line_fill_pulse <= 1'b0;
-      same_line_endpoint_hit_pulse <= 1'b0;
-      replacement_pulse <= 1'b0;
-      prefetch_issued_pulse <= 1'b0;
-      prefetch_filled_pulse <= 1'b0;
-      prefetch_used_pulse <= 1'b0;
-      prefetch_dropped_pulse <= 1'b0;
-      prefetch_late_pulse <= 1'b0;
+      diagnostics_o.response_trace_pulse <= 1'b0;
+      diagnostics_o.demand_hit_pulse <= 1'b0;
+      diagnostics_o.demand_miss_pulse <= 1'b0;
+      diagnostics_o.line_fill_pulse <= 1'b0;
+      diagnostics_o.same_line_endpoint_hit_pulse <= 1'b0;
+      diagnostics_o.replacement_pulse <= 1'b0;
+      diagnostics_o.prefetch_issued_pulse <= 1'b0;
+      diagnostics_o.prefetch_filled_pulse <= 1'b0;
+      diagnostics_o.prefetch_used_pulse <= 1'b0;
+      diagnostics_o.prefetch_dropped_pulse <= 1'b0;
+      diagnostics_o.prefetch_late_pulse <= 1'b0;
 
       if ((state == STATE_IDLE) && prefetch_req_active) begin
         if (req.valid) begin
@@ -196,7 +174,7 @@ module voice_line_cache #(
           prefetch_req_active <= 1'b0;
           prefetch_valid <= 1'b0;
           prefetch_inflight <= 1'b1;
-          prefetch_issued_pulse <= 1'b1;
+          diagnostics_o.prefetch_issued_pulse <= 1'b1;
         end
       end else if ((state == STATE_IDLE) && !req.valid && prefetch_valid && !prefetch_inflight) begin
         prefetch_req_active <= 1'b1;
@@ -210,7 +188,7 @@ module voice_line_cache #(
         cache_line[prefetch_voice][prefetch_stream_id][prefetch_way] <= ext_rsp_data;
         replace_way[prefetch_voice][prefetch_stream_id] <=
           (prefetch_way == WAY_WIDTH'(LINES_PER_VOICE - 1)) ? '0 : prefetch_way + 1'b1;
-        prefetch_filled_pulse <= 1'b1;
+        diagnostics_o.prefetch_filled_pulse <= 1'b1;
       end
 
       unique case (state)
@@ -229,12 +207,12 @@ module voice_line_cache #(
             previous_accept_tag <= req.addr[ADDR_WIDTH-1:INDEX_WIDTH];
             if (hit) begin
               rsp.data <= hit_data;
-              demand_hit_pulse <= 1'b1;
+              diagnostics_o.demand_hit_pulse <= 1'b1;
               if (cache_prefetched[req.voice][req.stream_id][hit_way]) begin
                 cache_prefetched[req.voice][req.stream_id][hit_way] <= 1'b0;
-                prefetch_used_pulse <= 1'b1;
+                diagnostics_o.prefetch_used_pulse <= 1'b1;
               end
-              same_line_endpoint_hit_pulse <= previous_accept_valid &&
+              diagnostics_o.same_line_endpoint_hit_pulse <= previous_accept_valid &&
                                               previous_accept_voice == req.voice &&
                                               previous_accept_stream_id == req.stream_id &&
                                               previous_accept_tag == req.addr[ADDR_WIDTH-1:INDEX_WIDTH];
@@ -246,12 +224,12 @@ module voice_line_cache #(
                 prefetch_way <= prefetch_fill_way;
                 prefetch_addr_aligned <= next_prefetch_addr_aligned;
                 if (prefetch_fill_replaces_valid && prefetch_fill_replaces_prefetched)
-                  prefetch_dropped_pulse <= 1'b1;
+                  diagnostics_o.prefetch_dropped_pulse <= 1'b1;
               end
               state <= STATE_RESPOND;
             end else begin
-              demand_miss_pulse <= 1'b1;
-              replacement_pulse <= fill_replaces_valid;
+              diagnostics_o.demand_miss_pulse <= 1'b1;
+              diagnostics_o.replacement_pulse <= fill_replaces_valid;
               if (same_cycle_prefetch_demand) begin
                 cache_valid[prefetch_voice][prefetch_stream_id][prefetch_way] <= 1'b1;
                 cache_prefetched[prefetch_voice][prefetch_stream_id][prefetch_way] <= 1'b0;
@@ -260,27 +238,27 @@ module voice_line_cache #(
                 replace_way[prefetch_voice][prefetch_stream_id] <=
                   (prefetch_way == WAY_WIDTH'(LINES_PER_VOICE - 1)) ? '0 : prefetch_way + 1'b1;
                 rsp.data <= ext_rsp_data[req.addr[INDEX_WIDTH-1:0] * PCM_WIDTH +: PCM_WIDTH];
-                line_fill_pulse <= 1'b1;
+                diagnostics_o.line_fill_pulse <= 1'b1;
                 prefetch_inflight <= 1'b0;
-                prefetch_late_pulse <= 1'b1;
+                diagnostics_o.prefetch_late_pulse <= 1'b1;
                 state <= STATE_RESPOND;
               end else if (prefetch_valid &&
                   prefetch_voice == req.voice &&
                   prefetch_stream_id == req.stream_id &&
                   prefetch_tag == req.addr[ADDR_WIDTH-1:INDEX_WIDTH]) begin
                 prefetch_valid <= 1'b0;
-                prefetch_late_pulse <= 1'b1;
-                prefetch_dropped_pulse <= 1'b1;
+                diagnostics_o.prefetch_late_pulse <= 1'b1;
+                diagnostics_o.prefetch_dropped_pulse <= 1'b1;
                 state <= STATE_EXT_REQ;
               end else if (prefetch_inflight &&
                            prefetch_voice == req.voice &&
                            prefetch_stream_id == req.stream_id &&
                            prefetch_tag == req.addr[ADDR_WIDTH-1:INDEX_WIDTH]) begin
                 pending_way <= prefetch_way;
-                prefetch_late_pulse <= 1'b1;
+                diagnostics_o.prefetch_late_pulse <= 1'b1;
                 if (ext_req_ready && !ext_rsp_valid) begin
                   prefetch_inflight <= 1'b0;
-                  prefetch_dropped_pulse <= 1'b1;
+                  diagnostics_o.prefetch_dropped_pulse <= 1'b1;
                   state <= STATE_EXT_REQ;
                 end else begin
                   state <= STATE_EXT_WAIT;
@@ -291,7 +269,7 @@ module voice_line_cache #(
                 end else begin
                   if (prefetch_inflight && !ext_rsp_valid && ext_req_ready) begin
                     prefetch_inflight <= 1'b0;
-                    prefetch_dropped_pulse <= 1'b1;
+                    diagnostics_o.prefetch_dropped_pulse <= 1'b1;
                   end
                   state <= STATE_EXT_REQ;
                 end
@@ -316,7 +294,7 @@ module voice_line_cache #(
                 cache_line[prefetch_voice][prefetch_stream_id][prefetch_way] <= ext_rsp_data;
                 replace_way[prefetch_voice][prefetch_stream_id] <=
                   (prefetch_way == WAY_WIDTH'(LINES_PER_VOICE - 1)) ? '0 : prefetch_way + 1'b1;
-                prefetch_filled_pulse <= 1'b1;
+                diagnostics_o.prefetch_filled_pulse <= 1'b1;
                 state <= STATE_EXT_REQ;
               end else begin
                 cache_valid[pending_voice][pending_stream_id][pending_way] <= 1'b1;
@@ -326,7 +304,7 @@ module voice_line_cache #(
                 replace_way[pending_voice][pending_stream_id] <=
                   (pending_way == WAY_WIDTH'(LINES_PER_VOICE - 1)) ? '0 : pending_way + 1'b1;
                 rsp.data <= ext_rsp_data[pending_index * PCM_WIDTH +: PCM_WIDTH];
-                line_fill_pulse <= 1'b1;
+                diagnostics_o.line_fill_pulse <= 1'b1;
                 state <= STATE_RESPOND;
               end
             end else begin
@@ -337,7 +315,7 @@ module voice_line_cache #(
               replace_way[pending_voice][pending_stream_id] <=
                 (pending_way == WAY_WIDTH'(LINES_PER_VOICE - 1)) ? '0 : pending_way + 1'b1;
               rsp.data <= ext_rsp_data[pending_index * PCM_WIDTH +: PCM_WIDTH];
-              line_fill_pulse <= 1'b1;
+              diagnostics_o.line_fill_pulse <= 1'b1;
               state <= STATE_RESPOND;
             end
           end
@@ -345,8 +323,8 @@ module voice_line_cache #(
 
         STATE_RESPOND: begin
           rsp.valid <= 1'b1;
-          response_trace_pulse <= 1'b1;
-          response_trace_latency <= latency_counter;
+          diagnostics_o.response_trace_pulse <= 1'b1;
+          diagnostics_o.response_trace_latency <= latency_counter;
           state <= STATE_IDLE;
         end
 

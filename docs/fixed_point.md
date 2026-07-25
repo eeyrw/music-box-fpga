@@ -236,6 +236,138 @@ The multi-voice renderer accumulates signed 16-bit voice outputs in a signed
 path therefore narrows the accumulator exactly to a signed 24-bit stereo mix
 and stores 48 such frames in the compressor delay line.
 
+## Stereo Chorus
+
+The isolated chorus processor uses signed 24-bit stereo samples and a 2048-frame
+power-of-two circular history. Delay base and depth are unsigned Q16.8 frame
+values. LFO phase and increment are unsigned Q0.32 cycles; the upper ten phase
+bits address 1024 full-cycle positions reconstructed from the generated
+257-entry quarter-wave Q1.15 sine table.
+
+For a modulated delay `N.f`, the tap uses the samples preceding the current
+write position by `N` and `N + 1` accepted frames:
+
+```text
+newer = history[write_position - N]
+older = history[write_position - N - 1]
+wet   = newer + ((older - newer) * f >>> 8)
+```
+
+Arithmetic right shifts round negative values toward negative infinity. A tap
+whose requested age exceeds the saturating history-age counter is exact zero.
+The accepted-frame configuration is clamped so that the complete modulated
+delay remains from one through `DELAY_CAPACITY - 2` frames. Feedback is signed
+Q1.15 and clamps to `-0x6000..0x6000`; input send is nonnegative Q1.15 and
+clamps to `0..0x7fff`. An input send of `0x7fff` bypasses multiplication to
+preserve the signed-24 input exactly. History writes use:
+
+```text
+write = saturate24(input_send * input + feedback * wet)
+```
+
+Products shift arithmetically by 15 bits and the sum saturates once. Saturation
+is counted per channel. Disabling the processor forces its wet output to exact
+zero but continues to advance history and LFO state. Reset or clear invalidates
+history by resetting pointers and age; it does not clear the RAM array.
+
+## Eight-Line FDN Reverb
+
+The isolated reverb processor stores eight signed-24 delay lines in one packed
+RAM. The production line lengths at 48 kHz are the odd prime frame counts below;
+the generated RTL and C++ tables also contain their packed base offsets.
+
+```text
+1451, 1559, 1663, 1777, 1879, 1999, 2131, 2371
+```
+
+They span approximately 30.2 through 49.4 ms and total 14,830 signed-24
+samples. A separate 2048-frame signed-24 stereo RAM provides zero through 2047
+frames of pre-delay. Saturating age counters make all pre-delay and FDN reads
+that precede valid written history return exact zero. Clear resets pointers,
+ages, damping state, and diagnostics without clearing either RAM.
+
+Damping and the eight feedback gains are nonnegative Q1.15. Damping clamps to
+`0..0x7fff`. Each feedback gain clamps to `0x2d41`, the Q1.15 approximation of
+`1/sqrt(8)`, because the Hadamard transform itself is not normalized. The FDN
+input is already scaled and routed by `effect_return_mixer`; the engine does not
+apply the reverb-send gain a second time.
+
+For delay-line value `read` and previous damping state `state`, damping is:
+
+```text
+damped = read + ((state - read) * damping >>> 15)
+```
+
+Thus zero damping passes the delay read exactly, while `0x7fff` nearly retains
+the previous state. The eight damped samples pass through the standard
+unnormalized three-stage Hadamard butterfly. Left and right pre-delayed inputs
+use Hadamard rows 0 and 1 as orthogonal injection sign vectors, with their sum
+shifted right once. Wet left and right use rows 2 and 3 as output sign vectors,
+with the signed sums shifted right three times:
+
+```text
+injection_i = (left + sign(row1, i) * right) >>> 1
+write_i = saturate24(injection_i +
+                     (hadamard_i * feedback_gain_i >>> 15))
+wet_l = sum(sign(row2, i) * damped_i) >>> 3
+wet_r = sum(sign(row3, i) * damped_i) >>> 3
+```
+
+Line-write saturation is counted once per affected line. Disabled reverb emits
+an exact-zero wet return while pre-delay, line pointers, damping, and feedback
+continue advancing once per accepted frame. The serial RTL performs one line
+read, damping multiply, and feedback write per clock group and currently
+completes a frame in fewer than 30 system clocks.
+
+## Effect Routing And Return Mix
+
+`effect_return_mixer` is the only owner of the dry/wet sums. It accepts signed
+24-bit dry, chorus-wet, and reverb-wet samples. The four routing and return
+gains are nonnegative Q1.15 values clamped to `0..0x7fff`; `0x7fff` uses an
+exact bypass instead of multiplying, so default dry routing and unity returns
+do not lose one least-significant step. A gain above `0x7fff` sets the sticky
+configuration-clamped diagnostic.
+
+The reverb input is evaluated when the chorus output is accepted:
+
+```text
+reverb_input = saturate24(
+    scale_q1_15(dry, reverb_input_send)
+  + scale_q1_15(chorus_wet, chorus_to_reverb))
+```
+
+The final return is evaluated when the reverb output is accepted:
+
+```text
+effect_mix = saturate24(
+    dry
+  + scale_q1_15(chorus_wet, chorus_return)
+  + scale_q1_15(reverb_wet, reverb_return))
+```
+
+For gains below `0x7fff`, `scale_q1_15(sample, gain)` is the wide signed product
+shifted arithmetically right by 15 bits. Negative values therefore round toward
+negative infinity. Each sum retains all product bits and saturates only once at
+its signed-24 boundary. A saturating 32-bit counter records each channel that
+saturates in either the committed reverb-input route or final return mix.
+
+`global_effects_chain` is the internal signed-24 spatial-effects segment. It
+accepts at most one frame at a time, snapshots both complete configurations with
+the dry input, and sequences chorus, reverb, and return-mixer handshakes. Delay
+state advances once per accepted frame regardless of output stalls. The dry
+sample and chorus wet result remain registered until the matching reverb result
+and final mixed output retire. The two effect-clear bits independently clear
+chorus and reverb state; either bit also drops an in-flight spatial frame and
+clears return-mixer diagnostics.
+
+`global_audio_effects_chain` is the complete user-visible processing chain. It
+feeds the signed-24 spatial result into `lookahead_compressor`, which also owns
+master gain and final PCM16 saturation. The compressor remains a distinct inner
+module because its output format and look-ahead fill semantics differ from the
+wet processors, but system integration uses the unified wrapper rather than
+constructing two unrelated paths. Effect clear does not reset compressor
+look-ahead, gain-reduction history, or compressor diagnostics.
+
 ### Compressor dBFS Reference
 
 The compressor uses the PCM16 numerical full scale as its dBFS reference even

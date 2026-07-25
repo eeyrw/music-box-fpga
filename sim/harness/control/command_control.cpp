@@ -16,6 +16,9 @@ constexpr uint8_t kGainPhase = 0x16;
 constexpr uint8_t kFilter = 0x17;
 constexpr uint8_t kCompressorConfig = 0x20;
 constexpr uint8_t kMasterVolume = 0x21;
+constexpr uint8_t kChorusConfig = 0x22;
+constexpr uint8_t kReverbConfig = 0x23;
+constexpr uint8_t kEffectClear = 0x24;
 constexpr uint32_t kSilenceCbQ12_20 = 1000u << 20;
 
 uint32_t pack_pair(int high, int low) {
@@ -132,6 +135,49 @@ void CommandAudioControl::configure_compressor(
 
 void CommandAudioControl::set_master_volume(int gain_q1_15) {
   emit(kMasterVolume, {uint32_t(uint16_t(clamp_q15(gain_q1_15)))});
+}
+
+void CommandAudioControl::configure_chorus(const ChorusCommandConfig& config) {
+  if (config.base_delay_q16_8 > 0x00ffffffu ||
+      config.depth_q16_8 > 0x00ffffffu ||
+      config.input_send_q1_15 > 0x7fffu ||
+      config.return_gain_q1_15 > 0x7fffu ||
+      config.feedback_q1_15 < -0x6000 || config.feedback_q1_15 > 0x6000) {
+    throw std::out_of_range("chorus command field");
+  }
+  emit(kChorusConfig,
+       {(uint32_t(uint16_t(config.feedback_q1_15)) << 16) |
+            (config.enable ? 1u : 0u),
+        config.base_delay_q16_8, config.depth_q16_8,
+        config.lfo_phase_inc_q0_32,
+        pack_pair(config.return_gain_q1_15, config.input_send_q1_15),
+        config.stereo_phase_offset_q0_32});
+}
+
+void CommandAudioControl::configure_reverb(const ReverbCommandConfig& config) {
+  if (config.pre_delay_frames > 0x7ffu || config.input_send_q1_15 > 0x7fffu ||
+      config.return_gain_q1_15 > 0x7fffu || config.damping_q1_15 > 0x7fffu ||
+      config.chorus_to_reverb_q1_15 > 0x7fffu ||
+      std::any_of(config.feedback_gain_q1_15.begin(),
+                  config.feedback_gain_q1_15.end(),
+                  [](uint16_t gain) { return gain > 0x2d41u; })) {
+    throw std::out_of_range("reverb command field");
+  }
+  emit(kReverbConfig,
+       {(uint32_t(config.pre_delay_frames) << 1) | (config.enable ? 1u : 0u),
+        config.input_send_q1_15, config.return_gain_q1_15,
+        config.damping_q1_15, config.chorus_to_reverb_q1_15,
+        pack_pair(config.feedback_gain_q1_15[1], config.feedback_gain_q1_15[0]),
+        pack_pair(config.feedback_gain_q1_15[3], config.feedback_gain_q1_15[2]),
+        pack_pair(config.feedback_gain_q1_15[5], config.feedback_gain_q1_15[4]),
+        pack_pair(config.feedback_gain_q1_15[7], config.feedback_gain_q1_15[6])});
+}
+
+void CommandAudioControl::clear_effects(uint8_t mask) {
+  if ((mask & ~uint8_t{3}) != 0 || (mask & 3u) == 0) {
+    throw std::out_of_range("effect clear mask");
+  }
+  emit(kEffectClear, {uint32_t(mask)});
 }
 
 uint32_t envelope_release_step(const Region& region) {

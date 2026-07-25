@@ -14,18 +14,7 @@ module tb_voice_line_cache;
   logic [ADDR_WIDTH-1:0] ext_req_addr;
   logic ext_rsp_valid;
   logic [LINE_WORDS*16-1:0] ext_rsp_data;
-  logic response_trace_pulse;
-  logic [15:0] response_trace_latency;
-  logic demand_hit_pulse;
-  logic demand_miss_pulse;
-  logic line_fill_pulse;
-  logic same_line_endpoint_hit_pulse;
-  logic replacement_pulse;
-  logic prefetch_issued_pulse;
-  logic prefetch_filled_pulse;
-  logic prefetch_used_pulse;
-  logic prefetch_dropped_pulse;
-  logic prefetch_late_pulse;
+  cache_diagnostics_t diagnostics_o;
 
   pcm_t memory [MEMORY_DEPTH];
   logic line_pending;
@@ -47,7 +36,7 @@ module tb_voice_line_cache;
   int backpressure_timeout;
   logic unused_trace;
 
-  assign unused_trace = response_trace_pulse;
+  assign unused_trace = diagnostics_o.response_trace_pulse;
 
   always #5 clk <= ~clk;
 
@@ -65,18 +54,7 @@ module tb_voice_line_cache;
     .ext_req_addr,
     .ext_rsp_valid,
     .ext_rsp_data,
-    .response_trace_pulse,
-    .response_trace_latency,
-    .demand_hit_pulse,
-    .demand_miss_pulse,
-    .line_fill_pulse,
-    .same_line_endpoint_hit_pulse,
-    .replacement_pulse,
-    .prefetch_issued_pulse,
-    .prefetch_filled_pulse,
-    .prefetch_used_pulse,
-    .prefetch_dropped_pulse,
-    .prefetch_late_pulse
+    .diagnostics_o
   );
 
   always_ff @(posedge clk) begin
@@ -120,25 +98,25 @@ module tb_voice_line_cache;
           line_countdown <= line_countdown - 1;
         end
       end
-      if (demand_hit_pulse)
+      if (diagnostics_o.demand_hit_pulse)
         hit_count <= hit_count + 1;
-      if (demand_miss_pulse)
+      if (diagnostics_o.demand_miss_pulse)
         miss_count <= miss_count + 1;
-      if (line_fill_pulse)
+      if (diagnostics_o.line_fill_pulse)
         fill_count <= fill_count + 1;
-      if (same_line_endpoint_hit_pulse)
+      if (diagnostics_o.same_line_endpoint_hit_pulse)
         same_line_hit_count <= same_line_hit_count + 1;
-      if (replacement_pulse)
+      if (diagnostics_o.replacement_pulse)
         replacement_count <= replacement_count + 1;
-      if (prefetch_issued_pulse)
+      if (diagnostics_o.prefetch_issued_pulse)
         prefetch_issued_count <= prefetch_issued_count + 1;
-      if (prefetch_filled_pulse)
+      if (diagnostics_o.prefetch_filled_pulse)
         prefetch_filled_count <= prefetch_filled_count + 1;
-      if (prefetch_used_pulse)
+      if (diagnostics_o.prefetch_used_pulse)
         prefetch_used_count <= prefetch_used_count + 1;
-      if (prefetch_dropped_pulse)
+      if (diagnostics_o.prefetch_dropped_pulse)
         prefetch_dropped_count <= prefetch_dropped_count + 1;
-      if (prefetch_late_pulse)
+      if (diagnostics_o.prefetch_late_pulse)
         prefetch_late_count <= prefetch_late_count + 1;
     end
   end
@@ -349,7 +327,7 @@ module tb_voice_line_cache;
     read_word('0, 32'd70, 190);
     expect_count("reset drops in-flight prefetched line", miss_count, 1);
 
-    if (response_trace_latency === 16'hxxxx) begin
+    if (diagnostics_o.response_trace_latency === 16'hxxxx) begin
       $error("response trace latency contains unknown bits");
       errors++;
     end

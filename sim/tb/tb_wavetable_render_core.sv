@@ -21,47 +21,19 @@ module tb_wavetable_render_core;
   logic busy;
   mix_t mix_l;
   mix_t mix_r;
-  compressor_config_t compressor_config;
-  logic signed [15:0] master_volume;
-  logic mem_req_valid;
-  logic [VOICE_ID_WIDTH-1:0] mem_req_voice;
-  logic [STREAM_ID_WIDTH-1:0] mem_req_stream_id;
-  logic [31:0] mem_req_addr;
+  global_audio_config_t audio_config;
+  logic [1:0] effect_clear;
+  wave_word_req_t mem_req;
   logic mem_req_ready;
-  logic mem_rsp_valid;
-  pcm_t mem_rsp_data;
-  wave_word_req_t core_mem_req;
-  wave_word_rsp_t core_mem_rsp;
+  wave_word_rsp_t mem_rsp;
   logic ext_req_valid;
   logic ext_req_ready;
   logic [31:0] ext_req_addr;
   logic ext_rsp_valid;
   localparam int LINE_WORDS = 32;
   logic [LINE_WORDS*16-1:0] ext_rsp_data;
-  logic mem_response_trace_pulse;
-  logic [15:0] mem_response_trace_latency;
-  logic cache_demand_hit_pulse;
-  logic cache_demand_miss_pulse;
-  logic cache_line_fill_pulse;
-  logic cache_same_line_endpoint_hit_pulse;
-  logic cache_replacement_pulse;
-  logic cache_prefetch_issued_pulse;
-  logic cache_prefetch_filled_pulse;
-  logic cache_prefetch_used_pulse;
-  logic cache_prefetch_dropped_pulse;
-  logic cache_prefetch_late_pulse;
-  logic endpoint_cross_line_pair_pulse;
-  logic endpoint_fetch_slot_pressure_pulse;
-  logic endpoint_memory_stall_pulse;
-  logic [2:0] endpoint_fetch_slot_occupancy;
-  logic [2:0] endpoint_fetch_slot_max_occupancy;
-  logic [4:0] endpoint_word_req_occupancy;
-  logic [4:0] endpoint_word_req_max_occupancy;
-  logic [4:0] endpoint_rsp_meta_occupancy;
-  logic [4:0] endpoint_rsp_meta_max_occupancy;
-  logic [2:0] dsp_context_queue_occupancy;
-  logic [2:0] dsp_context_queue_max_occupancy;
-  logic dsp_ready_no_context_pulse;
+  cache_diagnostics_t cache_diagnostics;
+  voice_pipeline_diagnostics_t voice_diagnostics;
   int errors = 0;
   int last_latency_cycles = 0;
   int memory_request_count = 0;
@@ -73,33 +45,16 @@ module tb_wavetable_render_core;
   always_ff @(posedge clk) begin
     if (rst)
       memory_request_count <= 0;
-    else if (mem_req_valid && mem_req_ready)
+    else if (mem_req.valid && mem_req_ready)
       memory_request_count <= memory_request_count + 1;
   end
 
   wavetable_render_core dut (.*);
 
-  assign core_mem_req.valid = mem_req_valid;
-  assign core_mem_req.voice = mem_req_voice;
-  assign core_mem_req.stream_id = mem_req_stream_id;
-  assign core_mem_req.addr = mem_req_addr;
-  assign mem_rsp_valid = core_mem_rsp.valid;
-  assign mem_rsp_data = core_mem_rsp.data;
-
   voice_line_cache #(.LINE_WORDS(LINE_WORDS), .LINES_PER_VOICE(2)) memory_subsystem (
-    .clk, .rst, .req(core_mem_req), .req_ready(mem_req_ready), .rsp(core_mem_rsp),
+    .clk, .rst, .req(mem_req), .req_ready(mem_req_ready), .rsp(mem_rsp),
     .ext_req_valid, .ext_req_ready, .ext_req_addr, .ext_rsp_valid, .ext_rsp_data,
-    .response_trace_pulse(mem_response_trace_pulse),
-    .response_trace_latency(mem_response_trace_latency),
-    .demand_hit_pulse(cache_demand_hit_pulse), .demand_miss_pulse(cache_demand_miss_pulse),
-    .line_fill_pulse(cache_line_fill_pulse),
-    .same_line_endpoint_hit_pulse(cache_same_line_endpoint_hit_pulse),
-    .replacement_pulse(cache_replacement_pulse),
-    .prefetch_issued_pulse(cache_prefetch_issued_pulse),
-    .prefetch_filled_pulse(cache_prefetch_filled_pulse),
-    .prefetch_used_pulse(cache_prefetch_used_pulse),
-    .prefetch_dropped_pulse(cache_prefetch_dropped_pulse),
-    .prefetch_late_pulse(cache_prefetch_late_pulse)
+    .diagnostics_o(cache_diagnostics)
   );
 
   line_memory_model #(.DEPTH(256), .LINE_WORDS(LINE_WORDS), .LATENCY(4)) memory_model (

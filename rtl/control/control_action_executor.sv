@@ -19,8 +19,8 @@ module control_action_executor (
   output synth_pkg::active_voice_t debug_active,
   output synth_pkg::voice_config_t render_config,
   output synth_pkg::voice_runtime_t render_runtime,
-  output synth_pkg::compressor_config_t compressor_config,
-  output logic signed [15:0] master_volume,
+  output synth_pkg::global_audio_config_t audio_config,
+  output logic [1:0] effect_clear,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse,
   output logic [synth_pkg::NUM_VOICES-1:0] prepared_valid
@@ -81,6 +81,9 @@ module control_action_executor (
   logic [31:0] snapshot_rounded_residual_next;
   logic [6:0] snapshot_mantissa_index_next;
   logic compressor_config_valid;
+  logic chorus_config_valid;
+  logic reverb_config_valid;
+  logic effect_clear_valid;
 
   localparam logic [1:0] SNAPSHOT_LEVEL_ZERO = 2'd0;
   localparam logic [1:0] SNAPSHOT_LEVEL_DIRECT = 2'd1;
@@ -361,6 +364,29 @@ module control_action_executor (
                               (action.payload[1] <= ENV_CB_SILENCE_Q12_20) &&
                               (action.payload[2] <= ENV_CB_SILENCE_Q12_20) &&
                               (action.payload[3] <= ENV_CB_SILENCE_Q12_20);
+    chorus_config_valid = (action.payload[0][15:1] == '0) &&
+                          (action.payload[1][31:24] == '0) &&
+                          (action.payload[2][31:24] == '0) &&
+                          ($signed(action.payload[0][31:16]) <= 16'sh6000) &&
+                          ($signed(action.payload[0][31:16]) >= -16'sh6000) &&
+                          (action.payload[4][15:0] <= 16'h7fff) &&
+                          (action.payload[4][31:16] <= 16'h7fff);
+    reverb_config_valid = (action.payload[0][31:12] == '0) &&
+                          (action.payload[1][31:16] == '0) &&
+                          (action.payload[2][31:16] == '0) &&
+                          (action.payload[3][31:16] == '0) &&
+                          (action.payload[4][31:16] == '0) &&
+                          (action.payload[1][15:0] <= 16'h7fff) &&
+                          (action.payload[2][15:0] <= 16'h7fff) &&
+                          (action.payload[3][15:0] <= 16'h7fff) &&
+                          (action.payload[4][15:0] <= 16'h7fff);
+    for (int word = 5; word < 9; word++) begin
+      reverb_config_valid = reverb_config_valid &&
+                            (action.payload[word][15:0] <= 16'h2d41) &&
+                            (action.payload[word][31:16] <= 16'h2d41);
+    end
+    effect_clear_valid = (action.payload[0][31:2] == '0) &&
+                         (action.payload[0][1:0] != 2'b00);
 
     action_next_data = active_read_data;
     unique case (current_action.opcode)
@@ -576,13 +602,15 @@ module control_action_executor (
       snapshot_stage2_mantissa <= '0;
       render_config <= '0;
       render_runtime <= '0;
-      compressor_config <= '0;
-      master_volume <= 16'sh7fff;
+      audio_config <= '0;
+      audio_config.master_volume <= 16'sh7fff;
+      effect_clear <= 2'b00;
     end else begin
       action_done <= 1'b0;
       stream_flush <= 1'b0;
       command_error_pulse <= 1'b0;
       stale_seq_pulse <= 1'b0;
+      effect_clear <= 2'b00;
       snapshot_valid <= snapshot_stage2_valid;
       snapshot_stage0_valid <= snapshot_accept;
       snapshot_stage1_valid <= snapshot_stage0_valid;
@@ -676,18 +704,57 @@ module control_action_executor (
               if (!compressor_config_valid) begin
                 command_error_pulse <= 1'b1;
               end else begin
-                compressor_config.enable <= action.payload[0][0];
-                compressor_config.threshold_cb_q12_20 <= action.payload[1];
-                compressor_config.ratio_slope_q0_16 <= action.payload[0][16:1];
-                compressor_config.attack_step_cb_q12_20 <= action.payload[2];
-                compressor_config.release_step_cb_q12_20 <= action.payload[3];
+                audio_config.compressor.enable <= action.payload[0][0];
+                audio_config.compressor.threshold_cb_q12_20 <= action.payload[1];
+                audio_config.compressor.ratio_slope_q0_16 <= action.payload[0][16:1];
+                audio_config.compressor.attack_step_cb_q12_20 <= action.payload[2];
+                audio_config.compressor.release_step_cb_q12_20 <= action.payload[3];
               end
               action_done <= 1'b1;
             end else if (action.opcode == MASTER_VOLUME) begin
               if (action.payload[0][31:15] != '0)
                 command_error_pulse <= 1'b1;
               else
-                master_volume <= $signed(action.payload[0][15:0]);
+                audio_config.master_volume <= $signed(action.payload[0][15:0]);
+              action_done <= 1'b1;
+            end else if (action.opcode == CHORUS_CONFIG) begin
+              if (!chorus_config_valid) begin
+                command_error_pulse <= 1'b1;
+              end else begin
+                audio_config.chorus.enable <= action.payload[0][0];
+                audio_config.chorus.feedback_q1_15 <=
+                    $signed(action.payload[0][31:16]);
+                audio_config.chorus.base_delay_q16_8 <= action.payload[1][23:0];
+                audio_config.chorus.depth_q16_8 <= action.payload[2][23:0];
+                audio_config.chorus.lfo_phase_inc_q0_32 <= action.payload[3];
+                audio_config.chorus.input_send_q1_15 <= action.payload[4][15:0];
+                audio_config.chorus.return_gain_q1_15 <= action.payload[4][31:16];
+                audio_config.chorus.stereo_phase_offset_q0_32 <= action.payload[5];
+              end
+              action_done <= 1'b1;
+            end else if (action.opcode == REVERB_CONFIG) begin
+              if (!reverb_config_valid) begin
+                command_error_pulse <= 1'b1;
+              end else begin
+                audio_config.reverb.enable <= action.payload[0][0];
+                audio_config.reverb.pre_delay_frames <= action.payload[0][11:1];
+                audio_config.reverb.input_send_q1_15 <= action.payload[1][15:0];
+                audio_config.reverb.return_gain_q1_15 <= action.payload[2][15:0];
+                audio_config.reverb.damping_q1_15 <= action.payload[3][15:0];
+                audio_config.reverb.chorus_to_reverb_q1_15 <= action.payload[4][15:0];
+                for (int pair = 0; pair < 4; pair++) begin
+                  audio_config.reverb.feedback_gain_q1_15[pair * 2] <=
+                      action.payload[5 + pair][15:0];
+                  audio_config.reverb.feedback_gain_q1_15[pair * 2 + 1] <=
+                      action.payload[5 + pair][31:16];
+                end
+              end
+              action_done <= 1'b1;
+            end else if (action.opcode == EFFECT_CLEAR) begin
+              if (!effect_clear_valid)
+                command_error_pulse <= 1'b1;
+              else
+                effect_clear <= action.payload[0][1:0];
               action_done <= 1'b1;
             end else begin
               current_action <= action;

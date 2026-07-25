@@ -1,38 +1,15 @@
 module wavetable_register_fabric #(
   parameter bit PLATFORM_REGS_PRESENT = 1'b0
 ) (
-  input  logic        master_valid,
-  input  logic        master_write,
-  input  logic [15:0] master_address,
-  input  logic [31:0] master_wdata,
+  input  synth_pkg::reg_bus_req_t master_req,
   input  logic        core_reset,
-  output logic [31:0] master_rdata,
-  output logic        master_ready,
-  output logic        master_error,
-
-  output logic        core_valid,
-  output logic        core_write,
-  output logic [15:0] core_address,
-  output logic [31:0] core_wdata,
-  input  logic [31:0] core_rdata,
-  input  logic        core_ready,
-  input  logic        core_error,
-
-  output logic        common_status_valid,
-  output logic        common_status_write,
-  output logic [15:0] common_status_address,
-  output logic [31:0] common_status_wdata,
-  input  logic [31:0] common_status_rdata,
-  input  logic        common_status_ready,
-  input  logic        common_status_error,
-
-  output logic        platform_regs_valid,
-  output logic        platform_regs_write,
-  output logic [15:0] platform_regs_address,
-  output logic [31:0] platform_regs_wdata,
-  input  logic [31:0] platform_regs_rdata,
-  input  logic        platform_regs_ready,
-  input  logic        platform_regs_error
+  output synth_pkg::reg_bus_rsp_t master_rsp,
+  output synth_pkg::reg_bus_req_t core_req,
+  input  synth_pkg::reg_bus_rsp_t core_rsp,
+  output synth_pkg::reg_bus_req_t common_status_req,
+  input  synth_pkg::reg_bus_rsp_t common_status_rsp,
+  output synth_pkg::reg_bus_req_t platform_regs_req,
+  input  synth_pkg::reg_bus_rsp_t platform_regs_rsp
 );
   import synth_register_pkg::*;
 
@@ -46,7 +23,13 @@ module wavetable_register_fabric #(
       REG_COMPRESSOR_DETECTOR_PEAK, REG_COMPRESSOR_MAX_GAIN_REDUCTION,
       REG_COMPRESSOR_MAX_DETECTOR_PEAK, REG_COMPRESSOR_INPUT_FRAME_COUNT,
       REG_COMPRESSOR_OUTPUT_FRAME_COUNT, REG_COMPRESSOR_COMPRESSED_FRAME_COUNT,
-      REG_COMPRESSOR_SATURATION_COUNT: is_common_status_address = 1'b1;
+      REG_COMPRESSOR_SATURATION_COUNT, REG_EFFECT_STATUS,
+      REG_EFFECT_INPUT_FRAME_COUNT, REG_EFFECT_OUTPUT_FRAME_COUNT,
+      REG_EFFECT_SATURATION_COUNT, REG_EFFECT_MAX_PROCESSING_CYCLES,
+      REG_CHORUS_HISTORY_LEVEL, REG_CHORUS_LFO_PHASE,
+      REG_CHORUS_SATURATION_COUNT, REG_REVERB_STATUS,
+      REG_REVERB_SATURATION_COUNT,
+      REG_REVERB_MAX_PROCESSING_CYCLES: is_common_status_address = 1'b1;
       default: is_common_status_address = 1'b0;
     endcase
   endfunction
@@ -68,51 +51,38 @@ module wavetable_register_fabric #(
   logic select_platform_regs;
   logic select_core;
 
-  assign select_common_status = is_common_status_address(master_address);
-  assign select_platform_regs = is_platform_regs_address(master_address);
+  assign select_common_status = is_common_status_address(master_req.address);
+  assign select_platform_regs = is_platform_regs_address(master_req.address);
   assign select_core = !select_common_status && !select_platform_regs;
 
-  assign core_valid = master_valid && select_core && !core_reset;
-  assign core_write = master_write;
-  assign core_address = master_address;
-  assign core_wdata = master_wdata;
-
-  assign common_status_valid = master_valid && select_common_status;
-  assign common_status_write = master_write;
-  assign common_status_address = master_address;
-  assign common_status_wdata = master_wdata;
-
-  assign platform_regs_valid = master_valid && select_platform_regs && PLATFORM_REGS_PRESENT;
-  assign platform_regs_write = master_write;
-  assign platform_regs_address = master_address;
-  assign platform_regs_wdata = master_wdata;
+  always_comb begin
+    core_req = master_req;
+    core_req.valid = master_req.valid && select_core && !core_reset;
+    common_status_req = master_req;
+    common_status_req.valid = master_req.valid && select_common_status;
+    platform_regs_req = master_req;
+    platform_regs_req.valid = master_req.valid && select_platform_regs &&
+                              PLATFORM_REGS_PRESENT;
+  end
 
   always_comb begin
-    master_rdata = 32'd0;
-    master_ready = 1'b0;
-    master_error = 1'b0;
+    master_rsp = '0;
 
-    if (master_valid) begin
+    if (master_req.valid) begin
       if (select_common_status) begin
-        master_rdata = common_status_rdata;
-        master_ready = common_status_ready;
-        master_error = common_status_error;
+        master_rsp = common_status_rsp;
       end else if (select_platform_regs) begin
         if (PLATFORM_REGS_PRESENT) begin
-          master_rdata = platform_regs_rdata;
-          master_ready = platform_regs_ready;
-          master_error = platform_regs_error;
+          master_rsp = platform_regs_rsp;
         end else begin
-          master_ready = 1'b1;
-          master_error = 1'b1;
+          master_rsp.ready = 1'b1;
+          master_rsp.error = 1'b1;
         end
       end else if (core_reset) begin
-        master_ready = 1'b1;
-        master_error = 1'b1;
+        master_rsp.ready = 1'b1;
+        master_rsp.error = 1'b1;
       end else begin
-        master_rdata = core_rdata;
-        master_ready = core_ready;
-        master_error = core_error;
+        master_rsp = core_rsp;
       end
     end
   end
