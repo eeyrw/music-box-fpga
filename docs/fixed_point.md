@@ -295,11 +295,14 @@ apply the reverb-send gain a second time.
 For delay-line value `read` and previous damping state `state`, damping is:
 
 ```text
-damped = read + ((state - read) * damping >>> 15)
+damped = deadband32(read + round_q15((state - read) * damping))
 ```
 
 Thus zero damping passes the delay read exactly, while `0x7fff` nearly retains
-the previous state. The eight damped samples pass through the standard
+the previous state outside the internal deadband. `round_q15` rounds the
+magnitude to nearest with exact half values away from zero, then restores the
+sign. `deadband32` maps inclusive signed-24 values from `-32` through `32` to
+zero. The eight damped samples pass through the standard
 unnormalized three-stage Hadamard butterfly. Left and right pre-delayed inputs
 use Hadamard rows 0 and 1 as orthogonal injection sign vectors, with their sum
 shifted right once. Wet left and right use rows 2 and 3 as output sign vectors,
@@ -307,8 +310,8 @@ with the signed sums shifted right three times:
 
 ```text
 injection_i = (left + sign(row1, i) * right) >>> 1
-write_i = saturate24(injection_i +
-                     (hadamard_i * feedback_gain_i >>> 15))
+write_i = deadband32(saturate24(
+    injection_i + round_q15(hadamard_i * feedback_gain_i)))
 wet_l = sum(sign(row2, i) * damped_i) >>> 3
 wet_r = sum(sign(row3, i) * damped_i) >>> 3
 ```
@@ -317,7 +320,10 @@ Line-write saturation is counted once per affected line. Disabled reverb emits
 an exact-zero wet return while pre-delay, line pointers, damping, and feedback
 continue advancing once per accepted frame. The serial RTL performs one line
 read, damping multiply, and feedback write per clock group and currently
-completes a frame in fewer than 30 system clocks.
+completes a frame in fewer than 30 system clocks. Symmetric product rounding
+removes the negative DC bias of arithmetic shifting at the two recursive
+boundaries, while the state deadband guarantees that a stable zero-input tail
+eventually reaches exact digital silence.
 
 ## Effect Routing And Return Mix
 

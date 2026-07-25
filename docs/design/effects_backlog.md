@@ -22,11 +22,33 @@ cached-memory stress renders, Smart Artix synthesis/timing/utilization, hardware
 capture, listening evaluation, and RT60 preset sweeps remain open. Per-voice
 SoundFont/MIDI sends remain a deliberately deferred milestone.
 
+The C++ reference song renderer now accepts musical `chorus`, `studio`, and
+`hall` presets plus diagnostic `chorus-max` and `reverb-max` presets. Each
+processor can be explicitly disabled while retaining the selected preset's
+remaining parameters. Effect configuration uses the same transactional command
+layouts consumed by RTL. The renderer runs the exact integer chorus,
+reverb routing, return mixer, compressor, and
+PCM16 output order, can append a configurable effect tail, and reports effect
+clamp and saturation diagnostics. This enables listening qualification but is
+not itself a completed listening evaluation or a full-session RTL comparison.
+
+The first 300-second `hall` listening render completed without configuration
+clamps or chorus, reverb, return-mixer, or compressor saturation. Its silent
+ending settles into a bounded 2-to-3 PCM16-LSB DC residue (about -82 dBFS)
+rather than exact zero. This is consistent with the specified negative
+arithmetic-right-shift behavior forming a low-level FDN fixed-point limit cycle.
+The subsequent C++ and RTL change uses symmetric Q1.15 rounding at recursive
+boundaries plus an inclusive 32-LSB internal state deadband. Focused zero-input
+tail tests now require exact convergence; whole-song listening requalification
+remains open.
+
 This document records implemented architecture plus remaining qualification
 work. Stable command layouts, fixed-point behavior, delay lengths, clear
 semantics, and register addresses are defined by `docs/fixed_point.md`,
 `docs/register_map.md`, `control_command_stream_plan.md`, and the generated
-register specification.
+register specification. The mapping from product-style chorus/reverb controls
+and listening terminology to the implemented algorithms is documented in
+[`effects_parameter_mapping.md`](effects_parameter_mapping.md).
 
 ## Current Boundary
 
@@ -291,8 +313,9 @@ compressor look-ahead plus output-FIFO lead.
 
 1. Build an independent integer C++ chorus and FDN prototype. Select delay
    constants and presets using exact impulse tests plus listening evaluation.
-   **Models, delay constants, and focused impulse tests implemented; listening
-   evaluation and preset sweeps remain.**
+   **Models, delay constants, focused impulse tests, and whole-song listening
+   render presets implemented; subjective evaluation and broader preset sweeps
+   remain.**
 2. Freeze fixed-point arithmetic, rounding, saturation, reset, warm-up, and
    configuration-update behavior in `docs/fixed_point.md`.
    **Implemented.**
@@ -310,8 +333,9 @@ compressor look-ahead plus output-FIFO lead.
    **Implemented.**
 8. Add generated status registers, JSON diagnostics, and bit-exact C++/RTL
    render comparison.
-   **Status registers and JSON diagnostics implemented; focused independent
-   model tests pass; full-session render comparison remains.**
+   **Status registers, JSON diagnostics, and the command-driven integrated C++
+   song model are implemented; focused independent model tests pass;
+   full-session C++/RTL comparison remains.**
 9. Run full-polyphony cached-memory renders and Smart Artix synthesis,
    implementation, timing, and utilization checks.
    **Open.**

@@ -10,6 +10,7 @@ namespace render {
 namespace {
 
 constexpr uint16_t kFeedbackLimitQ1_15 = 0x2d41;
+constexpr int32_t kStateDeadband = 32;
 
 }  // namespace
 
@@ -80,8 +81,9 @@ std::pair<int32_t, int32_t> FdnReverbModel::process_frame(int32_t left,
     const int32_t read = ages_[line] < lines_[line].size()
                              ? 0
                              : lines_[line][pointers_[line]];
-    damped[line] = int32_t(int64_t(read) + arithmetic_shift_right(
-        int64_t(damping_state_[line] - read) * config.damping_q1_15, 15));
+    damped[line] = apply_state_deadband(int32_t(
+        int64_t(read) + symmetric_round_shift_15(
+            int64_t(damping_state_[line] - read) * config.damping_q1_15)));
     damping_state_[line] = damped[line];
   }
 
@@ -89,10 +91,11 @@ std::pair<int32_t, int32_t> FdnReverbModel::process_frame(int32_t left,
   for (std::size_t line = 0; line < 8; ++line) {
     const int64_t injection = arithmetic_shift_right(
         input_l + ((line & 1u) ? -input_r : input_r), 1);
-    const int64_t feedback = arithmetic_shift_right(
-        transformed[line] * config.feedback_gain_q1_15[line], 15);
+    const int64_t feedback = symmetric_round_shift_15(
+        transformed[line] * config.feedback_gain_q1_15[line]);
     bool saturated = false;
-    lines_[line][pointers_[line]] = saturate_mix24(injection + feedback, &saturated);
+    lines_[line][pointers_[line]] = apply_state_deadband(
+        saturate_mix24(injection + feedback, &saturated));
     saturation_count_ = sat_inc(saturation_count_, saturated ? 1u : 0u);
     pointers_[line] = (pointers_[line] + 1) % lines_[line].size();
     ages_[line] = std::min(ages_[line] + 1, lines_[line].size());
@@ -162,6 +165,16 @@ uint8_t FdnReverbModel::valid_line_mask() const {
 int64_t FdnReverbModel::arithmetic_shift_right(int64_t value, unsigned bits) {
   if (value >= 0) return value >> bits;
   return -int64_t((uint64_t(-(value + 1)) + 1u + ((uint64_t{1} << bits) - 1u)) >> bits);
+}
+
+int64_t FdnReverbModel::symmetric_round_shift_15(int64_t value) {
+  constexpr int64_t half = int64_t{1} << 14;
+  if (value >= 0) return (value + half) >> 15;
+  return -((-value + half) >> 15);
+}
+
+int32_t FdnReverbModel::apply_state_deadband(int32_t value) {
+  return value >= -kStateDeadband && value <= kStateDeadband ? 0 : value;
 }
 
 int32_t FdnReverbModel::signed_mix24(int32_t value) {

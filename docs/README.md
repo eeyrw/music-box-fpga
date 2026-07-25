@@ -45,6 +45,9 @@ change.
 - [`design/effects_backlog.md`](design/effects_backlog.md): implemented global
   chorus/reverb architecture, completion matrix, remaining qualification gates,
   and deferred per-voice sends.
+- [`design/effects_parameter_mapping.md`](design/effects_parameter_mapping.md):
+  mapping from common chorus/reverb controls and listening terminology to the
+  implemented fixed-point algorithms, presets, and known limitations.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
   transactional command-stream and continuous-render contract.
 - [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):

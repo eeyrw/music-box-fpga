@@ -82,8 +82,41 @@ module tb_fdn_reverb;
     end
   endtask
 
+  task automatic push_and_capture(
+    input mix_t left, input mix_t right, output int actual_l, output int actual_r
+  );
+    int timeout;
+    begin
+      while (!in_ready) @(negedge clk);
+      in_l = left;
+      in_r = right;
+      in_valid = 1'b1;
+      @(negedge clk);
+      in_valid = 1'b0;
+      timeout = 0;
+      while (!out_valid && timeout < 40) begin
+        @(negedge clk);
+        timeout++;
+      end
+      if (!out_valid) begin
+        $error("FDN output timeout during tail test");
+        errors++;
+        actual_l = 0;
+        actual_r = 0;
+      end else begin
+        actual_l = int'($signed(out_l));
+        actual_r = int'($signed(out_r));
+      end
+      @(negedge clk);
+    end
+  endtask
+
   initial begin
     int line;
+    int frame;
+    int tail_l;
+    int tail_r;
+    int nonzero_tail_frames;
     int signs_l [0:7];
     int signs_r [0:7];
     signs_l = '{1, 1, -1, -1, 1, 1, -1, -1};
@@ -163,6 +196,22 @@ module tb_fdn_reverb;
     @(negedge clk);
     if (output_frame_count != 32'd2) begin
       $error("FDN output handshake count mismatch");
+      errors++;
+    end
+
+    reset_dut();
+    config_i.enable = 1'b1;
+    config_i.damping_q1_15 = 16'h4666;
+    config_i.feedback_gain_q1_15 = '{default: 16'h2c00};
+    push_and_capture(24'sd1048576, -24'sd1048576, tail_l, tail_r);
+    nonzero_tail_frames = 0;
+    for (frame = 0; frame < 4000; frame++) begin
+      push_and_capture('0, '0, tail_l, tail_r);
+      if (frame >= 3744 && (tail_l != 0 || tail_r != 0))
+        nonzero_tail_frames++;
+    end
+    if (nonzero_tail_frames != 0) begin
+      $error("FDN quantized tail did not converge to exact zero");
       errors++;
     end
 

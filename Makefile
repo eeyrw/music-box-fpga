@@ -34,6 +34,10 @@ COMPRESSOR_RATIO ?= 4
 COMPRESSOR_ATTACK_MS ?= 0
 COMPRESSOR_RELEASE_MS ?= 5000
 MASTER_VOLUME ?= 1
+EFFECTS_PRESET ?= off
+CHORUS_ENABLE ?= auto
+REVERB_ENABLE ?= auto
+EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -283,6 +287,15 @@ test-cpp-unit:
 		-o $(BUILD_DIR)/effect_return_mixer_model_test
 	$(BUILD_DIR)/effect_return_mixer_model_test
 	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/control/command_control.cpp \
+		sim/harness/render/stereo_chorus_model.cpp \
+		sim/harness/render/fdn_reverb_model.cpp \
+		sim/harness/render/effect_return_mixer_model.cpp \
+		sim/harness/render/global_effects_model.cpp \
+		sim/harness/render/global_effects_model_test.cpp \
+		-o $(BUILD_DIR)/global_effects_model_test
+	$(BUILD_DIR)/global_effects_model_test
+	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
@@ -461,6 +474,10 @@ render-reference:
 		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
 		$(abspath sim/harness/render/lookahead_compressor_model.cpp) \
+		$(abspath sim/harness/render/stereo_chorus_model.cpp) \
+		$(abspath sim/harness/render/fdn_reverb_model.cpp) \
+		$(abspath sim/harness/render/effect_return_mixer_model.cpp) \
+		$(abspath sim/harness/render/global_effects_model.cpp) \
 		-o $(BUILD_DIR)/render_reference_cpp
 	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
@@ -475,6 +492,10 @@ render-reference:
 		--compressor-attack-ms $(COMPRESSOR_ATTACK_MS) \
 		--compressor-release-ms $(COMPRESSOR_RELEASE_MS) \
 		--master-volume $(MASTER_VOLUME) \
+		--effects-preset $(EFFECTS_PRESET) \
+		--chorus-enable $(CHORUS_ENABLE) \
+		--reverb-enable $(REVERB_ENABLE) \
+		--effects-tail-seconds $(EFFECTS_TAIL_SECONDS) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:

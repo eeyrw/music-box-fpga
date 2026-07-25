@@ -36,6 +36,10 @@ std::string render_input_json_fields(const Args& args, int tick_samples) {
     << ",\n  \"compressor_attack_ms\": " << args.compressor_attack_ms
     << ",\n  \"compressor_release_ms\": " << args.compressor_release_ms
     << ",\n  \"master_volume\": " << args.master_volume
+    << ",\n  \"effects_preset\": " << json_string(args.effects_preset)
+    << ",\n  \"chorus_enable_override\": " << json_string(args.chorus_enable)
+    << ",\n  \"reverb_enable_override\": " << json_string(args.reverb_enable)
+    << ",\n  \"effects_tail_seconds\": " << args.effects_tail_seconds
     << ",\n  \"render_num_voices\": " << kNumVoices;
   return s.str();
 }
@@ -76,6 +80,11 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--compressor-release-ms")
       args.compressor_release_ms = std::stod(need("--compressor-release-ms"));
     else if (a == "--master-volume") args.master_volume = std::stod(need("--master-volume"));
+    else if (a == "--effects-preset") args.effects_preset = need("--effects-preset");
+    else if (a == "--chorus-enable") args.chorus_enable = need("--chorus-enable");
+    else if (a == "--reverb-enable") args.reverb_enable = need("--reverb-enable");
+    else if (a == "--effects-tail-seconds")
+      args.effects_tail_seconds = std::stod(need("--effects-tail-seconds"));
     else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);

@@ -92,6 +92,85 @@ the default integrated RTL sample-domain latency 96 frames (2 ms). The C++ WAV
 render flushes the lookahead and still writes exactly the requested number of
 output frames; it does not model the final I2S FIFO lead.
 
+## Chorus And Reverb Listening Render
+
+The C++ reference render can place the bit-exact global chorus, FDN reverb, and
+return mixer before the compressor. Effects default to `off`, which preserves
+the existing dry render path. The initial listening presets are:
+
+| Preset | Intended use | Chorus | Reverb RT60 |
+| --- | --- | --- | ---: |
+| `chorus` | classic musical thickening and stereo width | light | off |
+| `studio` | restrained room and stereo width | very light | 1.0 s |
+| `hall` | clear concert-hall space without chorus coloration | off | 4.5 s |
+| `chorus-max` | chorus identification/stress check | maximum | off |
+| `reverb-max` | maximum wet-level stress/listening check | off | 8.0 s |
+
+All presets use the generated RTL delay lengths and command-field limits.
+They currently require a 48 kHz render because the hardware delay contract is
+defined at that rate. Render a full song plus five seconds of effect tail with:
+
+```bash
+make render-reference \
+  SF2='/path/to/soundfont.sf2' \
+  MIDI='/path/to/song.mid' \
+  SECONDS=300 \
+  CONTROL_TICK_MS=1 \
+  EFFECTS_PRESET=hall \
+  CHORUS_ENABLE=auto \
+  REVERB_ENABLE=auto \
+  EFFECTS_TAIL_SECONDS=5 \
+  RENDER_REFERENCE_OUT_DIR=build/song_hall
+```
+
+`EFFECTS_TAIL_SECONDS` adds output frames only when chorus or reverb remains
+enabled after applying the explicit overrides. During that interval the
+synthesizer and effects continue advancing,
+so note releases and the spatial tail are both retained. The summary JSON
+records the selected preset, tail length, effect validity, configuration-clamp
+state, and saturation counters.
+
+`CHORUS_ENABLE` and `REVERB_ENABLE` accept `auto`, `on`, or `off`. The default
+`auto` follows the selected preset. An explicit `off` disables that processor;
+for example, `EFFECTS_PRESET=studio CHORUS_ENABLE=off` renders only the short
+room reverb. Explicit `on` verifies that the selected preset already contains
+parameters for that processor and is rejected otherwise. This prevents an
+`off` or chorus-only preset from silently enabling an all-zero reverb setup.
+
+`reverb-max` sets the global reverb send and return to the maximum Q1.15 value
+and disables chorus so the reverb is easy to judge. Its feedback coefficients
+target an 8-second RT60 but remain below the non-decaying stability boundary.
+`chorus-max` disables reverb and sets chorus send/return to maximum. Its two
+quarter-cycle-offset stereo taps sweep approximately 10 through 26 ms at
+0.8 Hz with 0.4 feedback. It is intentionally stronger than a normal musical
+preset so modulation, thickening, and stereo widening are easy to identify.
+
+The musical `chorus` preset follows the classic low-feedback, low-depth region:
+8 ms center delay, 1.5 ms depth, 0.6 Hz rate, 0.04 feedback, and 0.28 return.
+`studio` uses still less chorus plus a short, damped 1-second room tail. `hall`
+disables chorus to avoid moving comb coloration and uses a 4.5-second FDN tail,
+35 ms pre-delay, and a clearly audible but sub-maximum wet return.
+
+The preset categories and starting ranges are based on vendor algorithm
+documentation, while the exact fixed-point values above are project listening
+choices. JUCE describes chorus as a modulated delay that creates moving notches
+and identifies approximately 7--8 ms center delay with low depth and feedback
+as a classic chorus region; it also notes that shorter delay plus substantial
+feedback approaches flanging. Roland documents chorus pre-delay through 40 ms
+and describes longer values as a doubling effect. Roland's reverb controls
+separate room/hall/plate type, decay time, pre-delay, density, and damping, which
+is why `hall` uses pre-delay and decay rather than chorus to create width.
+The complete mathematical mapping, exact preset table, and unsupported-control
+list are recorded in
+[`../design/effects_parameter_mapping.md`](../design/effects_parameter_mapping.md).
+
+Primary references:
+
+- [JUCE Chorus class](https://docs.juce.com/master/classjuce_1_1dsp_1_1Chorus.html)
+- [Roland GX-100 Prime Chorus parameters](https://static.roland.com/manuals/gx-100_parameter/eng/25630354.html)
+- [Roland GX-100 Reverb parameters](https://static.roland.com/manuals/gx-100_parameter/eng/25630401.html)
+- [Roland SH-4d Reverb parameters](https://static.roland.com/manuals/sh-4d/eng/66978025.html)
+
 ## Diagnostics
 
 Compressor diagnostics are collected whenever the compressor path is enabled.

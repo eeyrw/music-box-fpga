@@ -662,6 +662,17 @@ int main() {
         parsed_compressor.master_volume != 0.75) {
       throw std::runtime_error("compressor arguments were not parsed");
     }
+    const char* effects_argv[] = {
+        "render", "--effects-preset", "hall", "--chorus-enable", "off",
+        "--reverb-enable", "on", "--effects-tail-seconds", "3.5"};
+    render::Args parsed_effects =
+        render::parse_args(9, const_cast<char**>(effects_argv));
+    if (parsed_effects.effects_preset != "hall" ||
+        parsed_effects.chorus_enable != "off" ||
+        parsed_effects.reverb_enable != "on" ||
+        parsed_effects.effects_tail_seconds != 3.5) {
+      throw std::runtime_error("effects arguments were not parsed");
+    }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");
     }

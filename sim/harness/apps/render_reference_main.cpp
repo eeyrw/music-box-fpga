@@ -1,4 +1,5 @@
 #include "command_control.h"
+#include "global_effects_model.h"
 #include "midi_parser.h"
 #include "lookahead_compressor_model.h"
 #include "reference_synth.h"
@@ -34,16 +35,22 @@ int main(int argc, char** argv) {
 
     render::RenderDiagnostics diagnostics;
     diagnostics.detailed_enabled = args.detailed_diagnostics;
+    render::GlobalEffectsPreset effects_preset =
+        render::make_global_effects_preset(args.effects_preset, args.sample_rate);
+    render::apply_global_effect_enable_overrides(
+        effects_preset, args.chorus_enable, args.reverb_enable);
     render::ReferenceSynth reference(wave_memory, &diagnostics);
+    render::GlobalEffectsModel effects(effects_preset.reverb_line_lengths);
     render::LookaheadCompressorModel compressor(48, &diagnostics);
-    render::CommandFanout command_stream(reference, compressor);
+    render::CommandFanout synth_and_effects(reference, effects);
+    render::CommandFanout command_stream(synth_and_effects, compressor);
     render::CommandVoiceControl control(command_stream);
     render::CommandAudioControl audio_control(command_stream);
     if (args.compressor_threshold_cb < 0.0 || args.compressor_threshold_cb > 1000.0 ||
         args.compressor_ratio < 1.0 || args.compressor_attack_ms < 0.0 ||
         args.compressor_release_ms < 0.0 || args.master_volume < 0.0 ||
-        args.master_volume > 1.0) {
-      throw std::runtime_error("invalid compressor or master-volume argument");
+        args.master_volume > 1.0 || args.effects_tail_seconds < 0.0) {
+      throw std::runtime_error("invalid compressor, master-volume, or effects-tail argument");
     }
     auto cb_q12_20 = [](double cb) {
       return uint32_t(std::llround(cb * double(uint32_t{1} << 20)));
@@ -64,7 +71,14 @@ int main(int argc, char** argv) {
     compressor_config.release_step_cb_q12_20 = step_for_ms(args.compressor_release_ms);
     audio_control.configure_compressor(compressor_config);
     audio_control.set_master_volume(int(std::llround(args.master_volume * 32767.0)));
-    const bool use_output_dynamics = args.compressor_enable || args.master_volume != 1.0;
+    audio_control.configure_chorus(effects_preset.chorus);
+    audio_control.configure_reverb(effects_preset.reverb);
+    const bool use_effects = effects_preset.chorus.enable || effects_preset.reverb.enable;
+    const bool use_output_chain = use_effects || args.compressor_enable ||
+                                  args.master_volume != 1.0;
+    const int effect_tail_frames = use_effects
+        ? int(std::llround(args.effects_tail_seconds * args.sample_rate)) : 0;
+    const int target_output_frames = inputs.sample_count + effect_tail_frames;
     render::McuModel mcu(control, regions, &diagnostics);
     render::RenderTimeline timeline(inputs.events, inputs.control_tick_samples, mcu);
 
@@ -75,12 +89,13 @@ int main(int argc, char** argv) {
     const auto render_start = Clock::now();
     int produced = 0;
     int input_frame = 0;
-    while (produced < inputs.sample_count && !render::interrupt_requested()) {
+    while (produced < target_output_frames && !render::interrupt_requested()) {
       timeline.advance_to(input_frame);
 
       std::pair<int16_t, int16_t> sample;
-      if (use_output_dynamics) {
-        const auto mix = reference.render_mix();
+      if (use_output_chain) {
+        auto mix = reference.render_mix();
+        if (use_effects) mix = effects.process_frame(mix.first, mix.second);
         const auto compressed = compressor.process_frame(mix.first, mix.second);
         input_frame++;
         if (!compressed) continue;
@@ -109,9 +124,24 @@ int main(int argc, char** argv) {
     std::ostringstream stats;
     stats << "  \"render_target\": \"render-reference\""
           << ",\n  \"algorithm\": \"cpp_reference_synth"
-          << (use_output_dynamics ? "_lookahead_compressor\"" : "\"")
+          << (use_effects ? "_global_effects" : "")
+          << (use_output_chain ? "_lookahead_compressor\"" : "\"")
           << ",\n" << render::render_input_json_fields(args, inputs.control_tick_samples)
           << ",\n" << render::diagnostics_json_fields(diagnostics)
+          << ",\n  \"effects_enabled\": " << (use_effects ? "true" : "false")
+          << ",\n  \"effects_tail_frames\": " << effect_tail_frames
+          << ",\n  \"effects_config_clamped\": "
+          << (effects.config_clamped() ? "true" : "false")
+          << ",\n  \"effects_chorus_history_level\": "
+          << effects.chorus_history_level()
+          << ",\n  \"effects_reverb_valid_line_mask\": "
+          << unsigned(effects.reverb_valid_line_mask())
+          << ",\n  \"effects_chorus_saturation_count\": "
+          << effects.chorus_saturation_count()
+          << ",\n  \"effects_reverb_saturation_count\": "
+          << effects.reverb_saturation_count()
+          << ",\n  \"effects_mixer_saturation_count\": "
+          << effects.mixer_saturation_count()
           << ",\n  \"timing_sf2_load_ms\": " << sf2_load_ms
           << ",\n  \"timing_event_parse_ms\": " << event_parse_ms
           << ",\n  \"timing_prepare_ms\": " << prepare_ms
@@ -129,7 +159,7 @@ int main(int argc, char** argv) {
       return 130;
     }
 
-    std::cout << "PASS: C++ reference render produced " << inputs.sample_count
+    std::cout << "PASS: C++ reference render produced " << produced
               << " stereo samples, regions=" << regions.size()
               << " wave_words=" << wave_memory.size()
               << " events=" << inputs.events.size()

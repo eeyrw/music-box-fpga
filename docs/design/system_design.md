@@ -10,6 +10,8 @@ external contracts live in:
 - `envelope_backlog.md`: envelope timing and Delay compatibility backlog.
 - `effects_backlog.md`: implemented global chorus/reverb path, completion
   matrix, remaining resource/verification gates, and deferred per-voice sends.
+- `effects_parameter_mapping.md`: common effect-control terminology mapped to
+  the implemented chorus/FDN fields, preset values, and modeling limits.
 - `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
   sizing analysis.
 - `spi_register_timing.md`: SPI register read/write and burst timing analysis.

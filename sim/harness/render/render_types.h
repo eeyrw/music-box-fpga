@@ -40,6 +40,10 @@ struct Args {
   double compressor_attack_ms = 0.0;
   double compressor_release_ms = 100.0;
   double master_volume = 1.0;
+  std::string effects_preset = "off";
+  std::string chorus_enable = "auto";
+  std::string reverb_enable = "auto";
+  double effects_tail_seconds = 0.0;
 };
 
 struct NoteEvent {

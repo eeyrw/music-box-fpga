@@ -47,6 +47,7 @@ module fdn_reverb #(
                                  $clog2(PRE_DELAY_CAPACITY);
   localparam int PRE_AGE_WIDTH = $clog2(PRE_DELAY_CAPACITY + 1);
   localparam logic [15:0] FEEDBACK_MAX_Q1_15 = 16'h2d41;
+  localparam logic signed [23:0] STATE_DEADBAND = 24'sd32;
 
   typedef enum logic [2:0] {
     IDLE, PRE_DELAY, READ_LINES, DAMP_LINES, WRITE_LINES, EMIT, HOLD
@@ -78,6 +79,7 @@ module fdn_reverb #(
   logic effective_config_clamped;
   logic signed [24:0] damping_delta;
   logic signed [41:0] damping_product;
+  logic signed [45:0] damping_scaled;
   mix_t damped_value;
   logic signed [24:0] hadamard_a [0:7];
   logic signed [25:0] hadamard_b [0:7];
@@ -86,6 +88,7 @@ module fdn_reverb #(
   logic signed [41:0] scaled_input_r;
   logic signed [42:0] injection;
   logic signed [44:0] feedback_product;
+  logic signed [45:0] feedback_scaled;
   logic signed [45:0] line_write_wide;
   mix_t line_write_value;
   logic line_write_saturated;
@@ -141,6 +144,27 @@ module fdn_reverb #(
     sat_inc = (value == 32'hffff_ffff) ? value : value + 32'd1;
   endfunction
 
+  function automatic logic signed [45:0] round_shift_q1_15(
+      input logic signed [45:0] value);
+    logic signed [45:0] magnitude;
+    begin
+      if (value >= 0)
+        round_shift_q1_15 = (value + 46'sd16384) >>> 15;
+      else begin
+        magnitude = -value;
+        round_shift_q1_15 = -((magnitude + 46'sd16384) >>> 15);
+      end
+    end
+  endfunction
+
+  function automatic mix_t apply_state_deadband(input mix_t value);
+    if ($signed(value) >= -STATE_DEADBAND &&
+        $signed(value) <= STATE_DEADBAND)
+      apply_state_deadband = '0;
+    else
+      apply_state_deadband = value;
+  endfunction
+
   assign in_ready = (state == IDLE) && !out_valid;
   assign busy = state != IDLE;
   assign pre_delay_occupancy = 16'(pre_delay_age);
@@ -168,9 +192,11 @@ module fdn_reverb #(
     damping_delta = $signed(damping_state[line_index]) -
                     $signed(line_read[line_index]);
     damping_product = damping_delta * $signed({1'b0, config_damping_q});
-    damped_value = mix_t'(
-        $signed({{18{line_read[line_index][23]}}, line_read[line_index]}) +
-        (damping_product >>> 15));
+    damping_scaled = round_shift_q1_15(
+        $signed({{4{damping_product[41]}}, damping_product}));
+    damped_value = apply_state_deadband(mix_t'(
+        $signed({{22{line_read[line_index][23]}}, line_read[line_index]}) +
+        damping_scaled));
 
     for (int pair = 0; pair < 8; pair += 2) begin
       hadamard_a[pair] = $signed({damped[pair][23], damped[pair]}) +
@@ -204,9 +230,11 @@ module fdn_reverb #(
            $signed({scaled_input_r[41], scaled_input_r})) >>> 1;
     feedback_product = hadamard_value[line_index] *
                        $signed({1'b0, config_feedback_gain_q[line_index]});
+    feedback_scaled = round_shift_q1_15(
+        $signed({feedback_product[44], feedback_product}));
     line_write_wide = $signed({{3{injection[42]}}, injection}) +
-                      ($signed({feedback_product[44], feedback_product}) >>> 15);
-    line_write_value = saturate_mix(line_write_wide);
+                      feedback_scaled;
+    line_write_value = apply_state_deadband(saturate_mix(line_write_wide));
     line_write_saturated = (line_write_wide > 46'sd8388607) ||
                            (line_write_wide < -46'sd8388608);
 
