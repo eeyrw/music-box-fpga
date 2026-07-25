@@ -216,9 +216,8 @@ make render-memory SECONDS=1 MEMORY_PROFILE=sdram
 make render-reference SECONDS=1 CONTROL_TICK_MS=2
 make render-reference SECONDS=1 SAMPLE_ACCURATE_CONTROL=1
 make render-reference SECONDS=1 DETAILED_DIAGNOSTICS=1
-make render-reference SECONDS=10 COMPRESSOR_ENABLE=1 \
-  COMPRESSOR_THRESHOLD_CB=120 COMPRESSOR_RATIO=4 \
-  COMPRESSOR_ATTACK_MS=0 COMPRESSOR_RELEASE_MS=100 MASTER_VOLUME=1
+make render-reference SECONDS=10
+make render-reference SECONDS=10 COMPRESSOR_ENABLE=0
 ```
 
 See [`docs/verification/render_commands.md`](docs/verification/render_commands.md)
@@ -234,14 +233,16 @@ already advances once per sample in either mode.
 saturation events, and pre-saturation maxima. It is disabled by default because
 these checks execute in the sample loop.
 
-The `render-reference` compressor is opt-in. `COMPRESSOR_THRESHOLD_CB` is the
-positive attenuation below full scale in centibels, so `120` means -12 dBFS.
-`COMPRESSOR_RATIO`, attack, and release are translated into the same compact
-command payload consumed by RTL. `MASTER_VOLUME` is a linear gain applied after
-the compressor and is limited to `0..1` by the hardware Q1.15 format. Attack and
-release times describe traversal of the complete 100 dB control range. The
-render report records the compressor's peak detector value, maximum gain
-reduction, active-frame count, frame counts, and final saturation count.
+The `render-reference` Make target defaults to a transparent protection setting:
+-2 dBFS threshold, 4:1 ratio, immediate attack, and a 5000 ms full-range release.
+Set `COMPRESSOR_ENABLE=0` for an uncompressed reference. Threshold is expressed
+as positive attenuation below full scale in centibels, so `20` means -2 dBFS.
+The parameters are translated into the same compact command payload consumed by
+RTL. `MASTER_VOLUME` is a linear post-compressor gain limited to `0..1` by the
+hardware Q1.15 format. Attack and release times describe traversal of the
+complete 100 dB control range. The render report records peak detector value,
+maximum gain reduction, active-frame count, frame counts, and final saturation
+count.
 
 Build the PC-side CH347 USB-to-SPI control tool:
 

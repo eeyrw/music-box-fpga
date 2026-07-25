@@ -99,8 +99,7 @@ make render-rtl-core MIDI=assets/midi/example.mid SECONDS=10
 make render-memory MIDI=assets/midi/example.mid START_SECONDS=30 SECONDS=10
 make render-reference SF2=assets/soundfonts/example.sf2 INSTRUMENT=0
 make render-reference MIDI=assets/midi/example.mid SECONDS=10 \
-  COMPRESSOR_ENABLE=1 COMPRESSOR_THRESHOLD_CB=120 COMPRESSOR_RATIO=4 \
-  COMPRESSOR_ATTACK_MS=0 COMPRESSOR_RELEASE_MS=100 MASTER_VOLUME=1
+  COMPRESSOR_ENABLE=0
 ```
 
 `CONTROL_TICK_MS` sets the periodic MCU control-update interval used for
@@ -115,10 +114,12 @@ sample exactly. `render-memory` uses the cached RTL path with a selectable
 external-memory timing profile. `render-board-loader` also exercises the raw SD
 image and board-loader path.
 
-The optional `render-reference` compressor uses the same fixed-point LUTs,
-lookahead length, compact configuration command, and gain arithmetic as RTL.
-The threshold is expressed as positive centibels below full scale (`120` is
--12 dBFS). Master volume is a linear `0..1` post-compressor gain. Attack and
+The `render-reference` Make target enables transparent peak protection by
+default: -2 dBFS, 4:1, immediate attack, and a 5000 ms full-range release. Set
+`COMPRESSOR_ENABLE=0` for an uncompressed comparison. The model uses the same
+fixed-point LUTs, lookahead length, compact configuration command, and gain
+arithmetic as RTL. Threshold is positive centibels below full scale (`20` is
+-2 dBFS), and master volume is a linear `0..1` post-compressor gain. Attack and
 release milliseconds specify traversal time for the complete 100 dB control
 range and are converted to a fixed centibel step per frame. The JSON report
 includes current and maximum detector/gain-reduction values, delay occupancy,

@@ -41,9 +41,9 @@ make render-reference \
 
 ## Compressor Render
 
-The compressor is disabled by default. A useful starting point for music is a
--12 dBFS threshold, 4:1 ratio, immediate attack, and a 100 ms full-range
-release setting:
+The `render-reference` Make target defaults to a transparent protection mode:
+-2 dBFS threshold, 4:1 ratio, immediate attack, and a 5000 ms full-range
+release setting. The following command uses those defaults:
 
 ```bash
 make render-reference \
@@ -52,13 +52,7 @@ make render-reference \
   START_SECONDS=0 \
   SECONDS=300 \
   CONTROL_TICK_MS=1 \
-  COMPRESSOR_ENABLE=1 \
-  COMPRESSOR_THRESHOLD_CB=120 \
-  COMPRESSOR_RATIO=4 \
-  COMPRESSOR_ATTACK_MS=0 \
-  COMPRESSOR_RELEASE_MS=100 \
-  MASTER_VOLUME=1 \
-  RENDER_REFERENCE_OUT_DIR=build/song_compressor_12db_4to1
+  RENDER_REFERENCE_OUT_DIR=build/song_protection_compressor
 ```
 
 Render an uncompressed control using the same input and time window:
@@ -70,6 +64,7 @@ make render-reference \
   START_SECONDS=0 \
   SECONDS=300 \
   CONTROL_TICK_MS=1 \
+  COMPRESSOR_ENABLE=0 \
   RENDER_REFERENCE_OUT_DIR=build/song_uncompressed
 ```
 
@@ -77,11 +72,11 @@ The compressor-related Make variables are:
 
 | Variable | Meaning | Default |
 | --- | --- | ---: |
-| `COMPRESSOR_ENABLE` | Enable the C++ fixed-point lookahead compressor | `0` |
-| `COMPRESSOR_THRESHOLD_CB` | Positive centibels below full scale; `120` means -12 dBFS | `120` |
+| `COMPRESSOR_ENABLE` | Enable the C++ fixed-point lookahead compressor | `1` |
+| `COMPRESSOR_THRESHOLD_CB` | Positive centibels below full scale; `20` means -2 dBFS | `20` |
 | `COMPRESSOR_RATIO` | Compression ratio; `4` means 4:1 | `4` |
 | `COMPRESSOR_ATTACK_MS` | Milliseconds to traverse the full 100 dB control range | `0` |
-| `COMPRESSOR_RELEASE_MS` | Milliseconds to traverse the full 100 dB control range | `100` |
+| `COMPRESSOR_RELEASE_MS` | Milliseconds to traverse the full 100 dB control range | `5000` |
 | `MASTER_VOLUME` | Linear post-compressor gain in the range `0..1`; `1` is unity | `1` |
 
 The C++ model uses the same 48-frame lookahead length, fixed-point LUTs,
@@ -125,14 +120,14 @@ jq '{
   diagnostics_compressor_output_frame_count,
   diagnostics_compressor_compressed_frame_count,
   diagnostics_compressor_saturation_count
-}' build/song_compressor_12db_4to1/reference_render_config.json
+}' build/song_protection_compressor/reference_render_config.json
 ```
 
 Compare WAV mean and peak levels with FFmpeg:
 
 ```bash
 ffmpeg -hide_banner -nostats \
-  -i build/song_compressor_12db_4to1/out.wav \
+  -i build/song_protection_compressor/out.wav \
   -af volumedetect -f null -
 
 ffmpeg -hide_banner -nostats \
