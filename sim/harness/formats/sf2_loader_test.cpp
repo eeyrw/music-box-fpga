@@ -109,6 +109,115 @@ uint16_t bits(int16_t value) {
   return uint16_t(value);
 }
 
+void expect_equal(int actual, int expected, const char* label);
+
+render::Sf2Data make_envelope_range_sf2(int delay_tc, int attack_tc,
+                                        int hold_tc, int hold_key_scale,
+                                        int decay_tc, int decay_key_scale,
+                                        int release_tc) {
+  render::Sf2Data sf2;
+  sf2.instruments = {{"EnvelopeRange", 0}, {"EOI", 1}};
+  sf2.instrument_bags = {{0, 0}, {13, 0}};
+  sf2.instrument_generators = {
+      {21, delay_tc}, {23, delay_tc}, {25, delay_tc}, {26, attack_tc},
+      {27, hold_tc}, {28, decay_tc}, {29, 1000}, {30, release_tc},
+      {31, hold_key_scale}, {32, decay_key_scale},
+      {33, delay_tc}, {34, attack_tc}, {35, hold_tc},
+      {36, decay_tc}, {37, 1000}, {38, release_tc},
+      {39, hold_key_scale}, {40, decay_key_scale}, {53, 0}};
+  sf2.instrument_bags[1].gen_index = int(sf2.instrument_generators.size());
+  sf2.samples = {{"Sample", 0, 64, 0, 64, 200000, 60, 0, 0, 1}};
+  sf2.smpl.resize(64);
+  sf2.file_words.resize(64);
+  return sf2;
+}
+
+uint32_t expected_samples(int timecents, int sample_rate) {
+  return uint32_t(std::round(std::pow(2.0, double(timecents) / 1200.0) * sample_rate));
+}
+
+int expected_ticks(int timecents, int sample_rate, int tick_samples) {
+  return int(std::round(std::pow(2.0, double(timecents) / 1200.0) *
+                        sample_rate / tick_samples));
+}
+
+void test_envelope_timecent_ranges() {
+  constexpr int kSampleRate = 200000;
+  constexpr int kTickSamples = 1000;
+  std::vector<int16_t> memory;
+
+  render::Sf2Data at_limits = make_envelope_range_sf2(5000, 8000, 4900, 2,
+                                                       7900, 2, 8000);
+  render::Region limit = render::make_region_for_instrument(
+      at_limits, 0, 10, 100, kSampleRate, kTickSamples, memory);
+  expect_equal(int(limit.volume_envelope.delay_samples),
+               int(expected_samples(5000, kSampleRate)), "5000 timecent delay");
+  expect_equal(int(limit.volume_envelope.hold_samples),
+               int(expected_samples(5000, kSampleRate)), "key-scaled 5000 timecent hold");
+  expect_equal(int(limit.volume_envelope.attack_samples),
+               int(expected_samples(8000, kSampleRate)), "8000 timecent attack");
+  expect_equal(int(limit.volume_envelope.decay_samples),
+               int(expected_samples(8000, kSampleRate)), "key-scaled 8000 timecent decay");
+  expect_equal(int(limit.volume_envelope.release_samples),
+               int(expected_samples(8000, kSampleRate)), "8000 timecent release");
+  expect_equal(limit.mod_lfo_delay_ticks,
+               expected_ticks(5000, kSampleRate, kTickSamples),
+               "5000 timecent modulation LFO delay");
+  expect_equal(limit.vib_lfo_delay_ticks, limit.mod_lfo_delay_ticks,
+               "5000 timecent vibrato LFO delay");
+  expect_equal(limit.mod_env_hold_ticks, limit.mod_lfo_delay_ticks,
+               "key-scaled 5000 timecent modulation-envelope hold");
+  expect_equal(limit.mod_env_attack_ticks,
+               expected_ticks(8000, kSampleRate, kTickSamples),
+               "8000 timecent modulation-envelope attack");
+  expect_equal(limit.mod_env_decay_ticks, limit.mod_env_attack_ticks,
+               "key-scaled 8000 timecent modulation-envelope decay");
+  expect_equal(limit.mod_env_release_ticks, limit.mod_env_attack_ticks,
+               "8000 timecent modulation-envelope release");
+  if (limit.volume_envelope.attack_samples <= 0x00ffffffu ||
+      limit.volume_envelope.decay_samples <= 0x00ffffffu ||
+      limit.volume_envelope.release_samples <= 0x00ffffffu) {
+    throw std::runtime_error("long attack/decay/release duration retained a 24-bit clamp");
+  }
+
+  render::Sf2Data above_limits = make_envelope_range_sf2(5001, 8001, 4901, 2,
+                                                          7901, 2, 8001);
+  render::Region clamped = render::make_region_for_instrument(
+      above_limits, 0, 10, 100, kSampleRate, kTickSamples, memory);
+  expect_equal(int(clamped.volume_envelope.delay_samples),
+               int(limit.volume_envelope.delay_samples), "5001 timecent delay clamp");
+  expect_equal(int(clamped.volume_envelope.hold_samples),
+               int(limit.volume_envelope.hold_samples), "key-scaled 5001 timecent hold clamp");
+  expect_equal(int(clamped.volume_envelope.attack_samples),
+               int(limit.volume_envelope.attack_samples), "8001 timecent attack clamp");
+  expect_equal(int(clamped.volume_envelope.decay_samples),
+               int(limit.volume_envelope.decay_samples), "key-scaled 8001 timecent decay clamp");
+  expect_equal(int(clamped.volume_envelope.release_samples),
+               int(limit.volume_envelope.release_samples), "8001 timecent release clamp");
+  expect_equal(clamped.mod_lfo_delay_ticks, limit.mod_lfo_delay_ticks,
+               "5001 timecent LFO delay clamp");
+  expect_equal(clamped.mod_env_delay_ticks, limit.mod_env_delay_ticks,
+               "5001 timecent modulation-envelope delay clamp");
+  expect_equal(clamped.mod_env_hold_ticks, limit.mod_env_hold_ticks,
+               "key-scaled 5001 timecent modulation-envelope hold clamp");
+  expect_equal(clamped.mod_env_attack_ticks, limit.mod_env_attack_ticks,
+               "8001 timecent modulation-envelope attack clamp");
+  expect_equal(clamped.mod_env_decay_ticks, limit.mod_env_decay_ticks,
+               "key-scaled 8001 timecent modulation-envelope decay clamp");
+  expect_equal(clamped.mod_env_release_ticks, limit.mod_env_release_ticks,
+               "8001 timecent modulation-envelope release clamp");
+
+  render::Sf2Data immediate = make_envelope_range_sf2(-32768, -32768, -32768, 0,
+                                                       -32768, 0, -32768);
+  render::Region zero = render::make_region_for_instrument(
+      immediate, 0, 60, 100, kSampleRate, kTickSamples, memory);
+  expect_equal(int(zero.volume_envelope.delay_samples), 0, "immediate delay");
+  expect_equal(int(zero.volume_envelope.attack_samples), 0, "immediate attack");
+  expect_equal(int(zero.volume_envelope.hold_samples), 0, "immediate hold");
+  expect_equal(int(zero.volume_envelope.decay_samples), 0, "immediate decay");
+  expect_equal(int(zero.volume_envelope.release_samples), 0, "immediate release");
+}
+
 std::string write_test_sf2() {
   std::vector<uint8_t> smpl;
   std::vector<uint8_t> sm24;
@@ -465,6 +574,7 @@ void expect_load_fails_without_pmod(const std::string& good_path) {
 
 int main() {
   try {
+    test_envelope_timecent_ranges();
     std::string path = write_test_sf2();
     expect_load_fails_without_pmod(path);
     render::Sf2Data sf2 = render::load_sf2(path);

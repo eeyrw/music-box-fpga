@@ -106,6 +106,12 @@ playback phase.
 `0x7fff` means full level and is treated as a bypass to preserve exact samples
 from the channel-gain stage.
 
+During Delay, the renderer advances Q24.8 phase and applies the normal loop
+wrapping rules without fetching interpolation endpoints or entering the DSP
+pipeline. The voice remains active, its output is exact zero, and biquad history
+is unchanged. The first frame whose advanced envelope state is Attack uses the
+normal memory and DSP path.
+
 Attack advances a Q0.32 linear-amplitude accumulator. Decay, Sustain, and
 Release store Q12.20 centibel attenuation and convert it to Q1.15 with a
 generated SoundFont amplitude curve:

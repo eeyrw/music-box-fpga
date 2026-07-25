@@ -305,6 +305,7 @@ std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
     VoiceConfig& v = voices_[voice];
     int16_t envelope_before = detailed ? v.envelope : 0;
     if (v.enable) advance_envelope(v, envelopes_[voice]);
+    const bool silent_delay = envelopes_[voice].stage == EnvelopeState::kDelay;
     if (detailed && v.envelope != envelope_before) {
       diagnostics_->audible_envelope_updates += 1;
       uint32_t jump = uint32_t(std::abs(int(v.envelope) - int(envelope_before)));
@@ -359,6 +360,8 @@ std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
       else
         v.phase_r = uint32_t(phase_r_sum);
     }
+
+    if (silent_delay) continue;
 
     int16_t raw_l0 = read_word(v.base_addr + uint32_t(frame_0));
     int16_t raw_l1 = read_word(v.base_addr + uint32_t(frame_1));

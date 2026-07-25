@@ -185,6 +185,7 @@ package synth_pkg;
     logic signed [15:0]        gain_l;
     logic signed [15:0]        gain_r;
     logic signed [15:0]        envelope_level;
+    logic                      envelope_delay;
     logic                      released;
     logic                      filter_enable;
     logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;

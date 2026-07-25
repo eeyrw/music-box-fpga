@@ -91,6 +91,25 @@ void test_mono_word_count_and_seq_generation() {
     throw std::runtime_error("voice sequence did not advance");
 }
 
+void test_long_envelope_durations_produce_nonzero_steps() {
+  CaptureSink sink;
+  CommandVoiceControl control(sink);
+  Region r;
+  r.length = 8;
+  r.loop_end = 8;
+  r.volume_envelope.attack_samples = 20'318'733;
+  r.volume_envelope.decay_samples = 20'318'733;
+  r.volume_envelope.sustain_cb_q12_20 = 1000u << 20;
+  r.volume_envelope.release_samples = 20'318'733;
+
+  control.start_voice(0, 0x100, r);
+  const auto& start = sink.commands.at(1);
+  if (start[4] == 0 || start[6] == 0 || start[8] == 0)
+    throw std::runtime_error("long envelope duration produced a zero step");
+  if (start[4] != 212u || start[6] != 52u || start[8] != 52u)
+    throw std::runtime_error("long envelope duration did not use ceiling division");
+}
+
 void test_global_audio_commands() {
   CaptureSink sink;
   CommandAudioControl control(sink);
@@ -120,6 +139,7 @@ int main() {
   try {
     render::test_stereo_start_and_runtime_actions();
     render::test_mono_word_count_and_seq_generation();
+    render::test_long_envelope_durations_produce_nonzero_steps();
     render::test_global_audio_commands();
   } catch (const std::exception& e) {
     std::cerr << "FAIL: " << e.what() << "\n";

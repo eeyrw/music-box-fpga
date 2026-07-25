@@ -26,9 +26,9 @@ The current RTL agrees on lifecycle and phase semantics:
 - the envelope advances once per output frame and produces Q1.15 zero in Delay;
 - sample phase and loop state advance during Delay.
 
-The current RTL differs in work performed while silent. It still issues wave
-memory requests, interpolates samples, runs the DSP pipeline, and advances
-biquad history before multiplying the result by a zero envelope level.
+The RTL now also agrees on work performed while silent. It advances phase and
+loop state without issuing wave-memory requests, running interpolation or DSP,
+or advancing biquad history.
 
 ## Time Ranges And Representation
 
@@ -50,10 +50,8 @@ shortened according to the sustain distance, and Release from an already
 attenuated level completes sooner than a full-level Release.
 
 FluidSynth clamps Delay and Hold to 5000 timecents and Attack, Decay, and
-Release to 8000 timecents. The current loader instead routes all time parameters
-through `timecents_to_seconds()`, which applies one 100-second ceiling. It
-therefore permits Delay/Hold beyond the SoundFont range and truncates the top
-1.593667 seconds from Attack/Decay/Release.
+Release to 8000 timecents. The loader now applies those same parameter-specific
+limits.
 
 RTL stores durations only for Delay and Hold:
 
@@ -65,34 +63,37 @@ decay_step:     unsigned Q12.20 centibel step
 release_step:   unsigned Q12.20 centibel step
 ```
 
-The command builder temporarily represents Attack, Decay, and Release as sample
-counts and converts them to non-zero ceiling-divided steps. The 100-second limit
-is host policy, not an RTL step-format limit. At 48 kHz, a minimum step of one
-can represent about 24.85 hours for Attack and about 6.07 hours for a full
-1000 cB Decay or Release. Delay and Hold have a direct 24-bit limit of about
-349.53 seconds.
+The command builder temporarily represents Attack, Decay, and Release as 32-bit
+sample counts and converts them to non-zero ceiling-divided steps. At 48 kHz, a
+minimum step of one can represent about 24.85 hours for Attack and about 6.07
+hours for a full 1000 cB Decay or Release. Delay and Hold have a direct 24-bit
+limit of about 349.53 seconds.
 
-## Open Work
+## Completed Work
 
-1. Split the host timecent conversion by generator class. Clamp Delay and Hold
-   to `[-12000, 5000]` and Attack, Decay, and Release to `[-12000, 8000]`, while
-   preserving each generator's documented `-32768` immediate-stage semantics.
-2. Remove the shared 24-bit clamp from the temporary Attack, Decay, and Release
-   sample-count conversion. Apply the 24-bit limit only to RTL Delay and Hold
-   fields, and retain ceiling division when producing steps.
-3. Add focused loader and command-control tests at `5000`, `5001`, `8000`, and
+1. The host timecent conversion is split by generator class. Delay and Hold
+   clamp to `[-12000, 5000]` and Attack, Decay, and Release to
+   `[-12000, 8000]`, while preserving each generator's documented `-32768`
+   immediate-stage semantics.
+2. The shared 24-bit clamp was removed from temporary Attack, Decay, and Release
+   sample counts. Only RTL Delay and Hold fields retain the 24-bit limit, and
+   command steps retain ceiling division.
+3. Loader and command-control tests cover `5000`, `5001`, `8000`, and
    `8001` timecents, including key-scaled Hold/Decay and non-zero 100-second
    Attack/Decay/Release steps.
-4. Add a silent Delay renderer path that advances phase and loop state without
-   issuing wave-memory requests or entering `voice_dsp_pipeline`.
-5. Keep the voice slot active during Delay. Do not defer `VOICE_START` or make
-   the delayed note eligible as a free voice.
-6. Match FluidSynth by leaving filter history unchanged during Delay, unless a
-   separately documented compatibility decision and listening regression show
-   that filter warm-up is preferred.
-7. Add RTL tests proving that Delay consumes a voice, produces exact zero,
+4. The renderer has a silent Delay path that advances phase and loop state
+   without issuing wave-memory requests or entering `voice_dsp_pipeline`.
+5. The voice slot remains active during Delay; `VOICE_START` is not deferred and
+   the delayed note is not eligible as a free voice.
+6. Filter history remains unchanged during Delay, matching FluidSynth.
+7. RTL tests prove that Delay consumes a voice, produces exact zero,
    advances and wraps phase correctly, performs no memory request, preserves
    filter history, and transitions to the expected first Attack sample.
-8. Add a C++ reference/RTL comparison using a non-constant waveform and enabled
-   filter so a postponed phase or unintended filter warm-up cannot pass as an
-   all-zero Delay-only test.
+8. The C++ reference and RTL use the same exact result with a non-constant
+   waveform and enabled filter so a postponed phase or unintended filter
+   warm-up cannot pass as an all-zero Delay-only test.
+
+This optimization removes wave-memory traffic and DSP switching activity while
+voices are in Delay. The shared DSP pipeline remains required for audible
+voices, so this is an activity and throughput improvement rather than removal
+of the synthesis DSP datapath.

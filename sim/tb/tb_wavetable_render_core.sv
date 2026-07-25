@@ -64,10 +64,18 @@ module tb_wavetable_render_core;
   logic dsp_ready_no_context_pulse;
   int errors = 0;
   int last_latency_cycles = 0;
+  int memory_request_count = 0;
   string current_case = "startup";
   localparam int SAMPLE_TIMEOUT_CYCLES = 512 + (NUM_VOICES * 16);
 
   always #5 clk <= ~clk;
+
+  always_ff @(posedge clk) begin
+    if (rst)
+      memory_request_count <= 0;
+    else if (mem_req_valid && mem_req_ready)
+      memory_request_count <= memory_request_count + 1;
+  end
 
   wavetable_render_core dut (.*);
 
@@ -233,15 +241,33 @@ module tb_wavetable_render_core;
     input logic signed [15:0] gain_r,
     input logic [31:0] phase_inc
   );
+    start_voice_envelope(voice, seq, gain_l, gain_r, phase_inc,
+                         24'd0, 32'd0, 24'd0, 32'd0, 32'd0,
+                         32'h0100_0000);
+  endtask
+
+  task automatic start_voice_envelope(
+    input logic [7:0] voice,
+    input logic [7:0] seq,
+    input logic signed [15:0] gain_l,
+    input logic signed [15:0] gain_r,
+    input logic [31:0] phase_inc,
+    input logic [23:0] delay_samples,
+    input logic [31:0] attack_step,
+    input logic [23:0] hold_samples,
+    input logic [31:0] decay_step,
+    input logic [31:0] sustain_cb,
+    input logic [31:0] release_step
+  );
     push_word(header(VOICE_START, voice, seq, 8'd8));
     push_word({gain_r, gain_l});
     push_word(phase_inc);
-    push_word(32'd0);
-    push_word(32'd0);
-    push_word(32'd0);
-    push_word(32'd0);
-    push_word(32'd0);
-    push_word(32'h0100_0000);
+    push_word({8'd0, delay_samples});
+    push_word(attack_step);
+    push_word({8'd0, hold_samples});
+    push_word(decay_step);
+    push_word(sustain_cb);
+    push_word(release_step);
   endtask
 
   task automatic define_start_mono(
@@ -434,6 +460,84 @@ module tb_wavetable_render_core;
                       LOOP_MODE_CONTINUOUS, 16'sh4000, 1'b1,
                       16'sh6000, 0, 0, 0, 0);
     request_and_check(22500, 22500);
+
+    begin_case("silent delay advances phase without memory or filter work");
+    begin
+      int requests_before;
+      logic signed [FILTER_STATE_WIDTH-1:0] prior_filter_z2;
+      logic [31:0] debug_status;
+      logic [31:0] debug_envelope;
+
+      reset_core();
+      memory_model.memory[2] = 16'sd3000;
+      memory_model.memory[3] = 16'sd6000;
+      define_start_mono(0, 8'h68, 0, 4, 1, 3, 32'h0000_0080,
+                        32'h0000_0100, LOOP_MODE_CONTINUOUS, 16'sh7fff, 1'b1,
+                        16'sh2000, 0, 16'sh2000, 0, 0);
+      request_and_check(249, 249);
+      prior_filter_z2 = dut.voices.filter_z2_l[0];
+      if (prior_filter_z2 == '0) begin
+        $error("[%s] filter setup did not create history", current_case);
+        errors++;
+      end
+
+      define_mono(0, 8'h69, 0, 4, 1, 3, 32'h0000_0240,
+                  LOOP_MODE_CONTINUOUS, 1'b1,
+                  16'sh2000, 0, 16'sh2000, 0, 0);
+      start_voice_envelope(0, 8'h69, 16'sh7fff, 16'sh7fff,
+                           32'h0000_0100, 24'd2, 32'h8000_0000,
+                           24'd0, 32'd0, 32'd0, 32'h0100_0000);
+      wait_command_parse();
+
+      requests_before = memory_request_count;
+      request_and_check(0, 0);
+      if (memory_request_count != requests_before) begin
+        $error("[%s] delay issued %0d memory requests", current_case,
+               memory_request_count - requests_before);
+        errors++;
+      end
+      if (dut.voices.phase[0] != 32'h0000_0140) begin
+        $error("[%s] delay phase did not advance and wrap: %h", current_case,
+               dut.voices.phase[0]);
+        errors++;
+      end
+      if (dut.voices.filter_z2_l[0] != prior_filter_z2) begin
+        $error("[%s] delay changed filter history", current_case);
+        errors++;
+      end
+
+      bus_write_word(REG_DEBUG_VOICE_INDEX, 32'd0);
+      bus_write_word(REG_DEBUG_VOICE_CAPTURE, 32'd1);
+      debug_status = 32'd1;
+      while (debug_status[0])
+        bus_read_word(REG_DEBUG_VOICE_STATUS, debug_status);
+      if (!debug_status[3] || !debug_status[4] ||
+          debug_status[8:6] != ENV_DELAY) begin
+        $error("[%s] delayed voice was not active and audible: %h",
+               current_case, debug_status);
+        errors++;
+      end
+      bus_read_word(REG_DEBUG_VOICE_ENVELOPE, debug_envelope);
+      if (!debug_envelope[19] || debug_envelope[18:16] != ENV_DELAY) begin
+        $error("[%s] delayed envelope debug state mismatch: %h",
+               current_case, debug_envelope);
+        errors++;
+      end
+
+      requests_before = memory_request_count;
+      request_and_check(0, 0);
+      if (memory_request_count == requests_before) begin
+        $error("[%s] first Attack sample did not enter the sample pipeline",
+               current_case);
+        errors++;
+      end
+      if (dut.voices.phase[0] != 32'h0000_0240) begin
+        $error("[%s] first Attack phase mismatch: %h", current_case,
+               dut.voices.phase[0]);
+        errors++;
+      end
+      request_and_check(624, 624);
+    end
 
     begin_case("highest voice command addressing");
     reset_core();

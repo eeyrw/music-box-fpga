@@ -596,6 +596,9 @@ module control_action_executor (
         render_runtime.phase_inc <= active_read_data.phase_inc;
         render_runtime.gain_l <= active_read_data.gain_l;
         render_runtime.gain_r <= active_read_data.gain_r;
+        render_runtime.envelope_delay <= active_envelope_write &&
+                                         envelope_next_data.audible &&
+                                         (envelope_next_data.env_state.stage == ENV_DELAY);
         render_runtime.released <= active_read_data.released;
         render_runtime.filter_enable <= active_read_data.filter_enable;
         render_runtime.filter_b0 <= active_read_data.filter_b0;

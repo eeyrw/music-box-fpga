@@ -108,8 +108,10 @@ or filter values through runtime commands.
 3. Read one packed active record through the synchronous control RAM port.
 4. Snapshot command-owned state and renderer-owned phase/filter history.
 5. Compute interpolation endpoints and next phase.
-6. Queue mono or stereo word reads through `voice_endpoint_fetch`.
-7. Run interpolation, optional biquad filtering, independent left/right gain,
+6. For Delay, advance and store phase without issuing word reads; otherwise,
+   queue mono or stereo word reads through `voice_endpoint_fetch`.
+7. For non-Delay voices, run interpolation, optional biquad filtering,
+   independent left/right gain,
    envelope gain, and saturation in `voice_dsp_pipeline`.
 8. Retire contributions into signed 32-bit stereo accumulators.
 9. Emit both the exact signed 24-bit mix and the compatibility saturated PCM16

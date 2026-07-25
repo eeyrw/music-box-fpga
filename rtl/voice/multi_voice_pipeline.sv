@@ -105,6 +105,7 @@ module multi_voice_pipeline #(
   logic signed [15:0] cfg_gain_l;
   logic signed [15:0] cfg_gain_r;
   logic signed [15:0] cfg_envelope_level;
+  logic cfg_envelope_delay;
   logic [1:0] cfg_loop_mode;
   logic cfg_released;
   logic cfg_filter_enable;
@@ -129,6 +130,7 @@ module multi_voice_pipeline #(
   logic signed [15:0] current_gain_l;
   logic signed [15:0] current_gain_r;
   logic signed [15:0] current_envelope_level;
+  logic current_envelope_delay;
   logic [1:0] current_loop_mode;
   logic current_released;
   logic current_filter_enable;
@@ -152,6 +154,7 @@ module multi_voice_pipeline #(
   logic prefetch_snapshot_prepare;
   logic prefetch_snapshot_requested;
   logic prefetch_snapshot_valid;
+  logic silent_delay_advance;
 
   function automatic pcm_t saturate_pcm(input logic signed [63:0] value);
     if (value > 64'sd32767)
@@ -173,8 +176,13 @@ module multi_voice_pipeline #(
   assign runtime_snapshot_voice = prefetch_snapshot_prepare ?
                                   prefetch_index : voice_index;
   assign endpoint_issue_valid = (state == PROCESS_VOICE) && current_enable &&
-                                current_config_valid && !voice_done;
-  assign phase_write_en = endpoint_issue_valid && endpoint_issue_ready;
+                                current_config_valid && !voice_done &&
+                                !current_envelope_delay;
+  assign silent_delay_advance = (state == PROCESS_VOICE) && current_enable &&
+                                current_config_valid && !voice_done &&
+                                current_envelope_delay;
+  assign phase_write_en = (endpoint_issue_valid && endpoint_issue_ready) ||
+                          silent_delay_advance;
   assign dsp_issue_valid = endpoint_context_valid;
   assign dsp_ready_no_context_pulse = (state != IDLE) && !endpoint_context_valid;
   assign cfg_enable = snapshot_config.enable;
@@ -191,6 +199,7 @@ module multi_voice_pipeline #(
   assign cfg_gain_l = snapshot_runtime.gain_l;
   assign cfg_gain_r = snapshot_runtime.gain_r;
   assign cfg_envelope_level = snapshot_runtime.envelope_level;
+  assign cfg_envelope_delay = snapshot_runtime.envelope_delay;
   assign cfg_loop_mode = snapshot_config.loop_mode;
   assign cfg_released = snapshot_runtime.released;
   assign cfg_filter_enable = snapshot_runtime.filter_enable;
@@ -337,6 +346,7 @@ module multi_voice_pipeline #(
       current_gain_l <= '0;
       current_gain_r <= '0;
       current_envelope_level <= '0;
+      current_envelope_delay <= 1'b0;
       current_loop_mode <= LOOP_MODE_NONE;
       current_released <= 1'b0;
       current_filter_enable <= 1'b0;
@@ -477,6 +487,7 @@ module multi_voice_pipeline #(
           current_gain_l <= cfg_gain_l;
           current_gain_r <= cfg_gain_r;
           current_envelope_level <= cfg_envelope_level;
+          current_envelope_delay <= cfg_envelope_delay;
           current_loop_mode <= cfg_loop_mode;
           current_released <= cfg_released;
           current_filter_enable <= cfg_filter_enable;
@@ -512,7 +523,7 @@ module multi_voice_pipeline #(
               voice_index <= voice_index + 1'b1;
               state <= SCAN_VOICE;
             end
-          end else if (endpoint_issue_ready) begin
+          end else if (current_envelope_delay || endpoint_issue_ready) begin
             if (current_commit)
               filter_state_valid[voice_index] <= 1'b0;
             phase_valid[voice_index] <= 1'b1;

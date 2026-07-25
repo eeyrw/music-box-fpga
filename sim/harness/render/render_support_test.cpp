@@ -507,6 +507,24 @@ int main() {
     if (envelope_synth.render_sample().first != 0)
       throw std::runtime_error("reference zero-step RELEASE did not stop immediately");
 
+    std::vector<int16_t> delay_memory{0, 1000, 3000, 6000};
+    render::ReferenceSynth delay_synth(delay_memory);
+    delay_synth.write_command_words(
+        {0x1000690bu, 0u, 4u, 1u, 3u, 0x00000240u, 1u,
+         0x00002000u, 0x00002000u, 0x00010000u, 0u, 0u});
+    delay_synth.write_command_words(
+        {0x12006908u, 0x7fff7fffu, 0x00000100u, 2u, 0x80000000u,
+         0u, 0u, 0u, 0x01000000u});
+    int delay_first = delay_synth.render_sample().first;
+    int delay_transition = delay_synth.render_sample().first;
+    int delay_attack = delay_synth.render_sample().first;
+    if (delay_first != 0 || delay_transition != 0 || delay_attack != 624) {
+      throw std::runtime_error("reference silent Delay outputs were " +
+                               std::to_string(delay_first) + ", " +
+                               std::to_string(delay_transition) + ", " +
+                               std::to_string(delay_attack));
+    }
+
     render::ReferenceSynth reverse_decay_synth(hot_memory);
     render::Region reverse_decay_region = hot_region;
     reverse_decay_region.volume_envelope.decay_samples = 1;

@@ -785,12 +785,20 @@ void gain_config(const Zone& zone, Region& region) {
   region.gain_r = gains.second;
 }
 
-double timecents_to_seconds(int value, bool present, int default_timecents) {
+enum class TimecentRange {
+  kDelayHold,
+  kAttackDecayRelease,
+};
+
+double timecents_to_seconds(int value, bool present, int default_timecents,
+                            TimecentRange range) {
   // SF2 envelope times use timecents: seconds = 2^(timecents / 1200). The spec's
   // most negative value conventionally represents an immediate stage.
   int tc = present ? signed_amount(value) : default_timecents;
   if (tc <= -32768) return 0.0;
-  return std::min(100.0, std::pow(2.0, double(tc) / 1200.0));
+  const int maximum = range == TimecentRange::kDelayHold ? 5000 : 8000;
+  tc = std::max(-12000, std::min(maximum, tc));
+  return std::pow(2.0, double(tc) / 1200.0);
 }
 
 int centibels_to_level(int cb) {
@@ -815,10 +823,14 @@ int envelope_step(double seconds, int tick_samples, int sample_rate) {
   return std::max(1, std::min(kQ15Full, int(std::round(double(kQ15Full) / ticks))));
 }
 
-uint32_t volume_envelope_samples(double seconds, int sample_rate) {
+uint32_t duration_samples(double seconds, int sample_rate) {
   if (seconds <= 0.0) return 0;
   double samples = std::round(seconds * double(sample_rate));
-  return uint32_t(std::max(1.0, std::min(double(0x00ffffffu), samples)));
+  return uint32_t(std::max(1.0, std::min(double(UINT32_MAX), samples)));
+}
+
+uint32_t rtl_duration_samples(double seconds, int sample_rate) {
+  return std::min(0x00ffffffu, duration_samples(seconds, sample_rate));
 }
 
 int envelope_tick_count(double seconds, int tick_samples, int sample_rate) {
@@ -896,10 +908,12 @@ uint32_t lfo_step(int freq_cents, int tick_samples, int sample_rate) {
 
 void modulation_generators(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
   region.mod_lfo_delay_ticks = envelope_ticks(timecents_to_seconds(zone.count(GEN_DELAY_MOD_LFO) ? zone.at(GEN_DELAY_MOD_LFO) : 0,
-                                                              zone.count(GEN_DELAY_MOD_LFO), -12000),
+                                                              zone.count(GEN_DELAY_MOD_LFO), -12000,
+                                                              TimecentRange::kDelayHold),
                                              tick_samples, sample_rate);
   region.vib_lfo_delay_ticks = envelope_ticks(timecents_to_seconds(zone.count(GEN_DELAY_VIB_LFO) ? zone.at(GEN_DELAY_VIB_LFO) : 0,
-                                                              zone.count(GEN_DELAY_VIB_LFO), -12000),
+                                                              zone.count(GEN_DELAY_VIB_LFO), -12000,
+                                                              TimecentRange::kDelayHold),
                                              tick_samples, sample_rate);
   region.mod_lfo_step = lfo_step(zone.count(GEN_FREQ_MOD_LFO) ? zone.at(GEN_FREQ_MOD_LFO) : 0,
                                  tick_samples, sample_rate);
@@ -911,17 +925,22 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
   region.mod_lfo_to_volume = zone.count(GEN_MOD_LFO_TO_VOLUME) ? signed_amount(zone.at(GEN_MOD_LFO_TO_VOLUME)) : 0;
 
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_MOD_ENV) ? zone.at(GEN_ATTACK_MOD_ENV) : 0,
-                                  zone.count(GEN_ATTACK_MOD_ENV), -12000);
+                                  zone.count(GEN_ATTACK_MOD_ENV), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   int hold_tc = signed_amount(zone.count(GEN_HOLD_MOD_ENV) ? zone.at(GEN_HOLD_MOD_ENV) : 0);
   if (zone.count(GEN_KEYNUM_TO_MOD_ENV_HOLD)) hold_tc += signed_amount(zone.at(GEN_KEYNUM_TO_MOD_ENV_HOLD)) * (60 - key);
-  double h = timecents_to_seconds(hold_tc, zone.count(GEN_HOLD_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_HOLD), -12000);
+  double h = timecents_to_seconds(hold_tc, zone.count(GEN_HOLD_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_HOLD), -12000,
+                                  TimecentRange::kDelayHold);
   int decay_tc = signed_amount(zone.count(GEN_DECAY_MOD_ENV) ? zone.at(GEN_DECAY_MOD_ENV) : 0);
   if (zone.count(GEN_KEYNUM_TO_MOD_ENV_DECAY)) decay_tc += signed_amount(zone.at(GEN_KEYNUM_TO_MOD_ENV_DECAY)) * (60 - key);
-  double d = timecents_to_seconds(decay_tc, zone.count(GEN_DECAY_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_DECAY), -12000);
+  double d = timecents_to_seconds(decay_tc, zone.count(GEN_DECAY_MOD_ENV) || zone.count(GEN_KEYNUM_TO_MOD_ENV_DECAY), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   double r = timecents_to_seconds(zone.count(GEN_RELEASE_MOD_ENV) ? zone.at(GEN_RELEASE_MOD_ENV) : 0,
-                                  zone.count(GEN_RELEASE_MOD_ENV), -12000);
+                                  zone.count(GEN_RELEASE_MOD_ENV), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   double delay = timecents_to_seconds(zone.count(GEN_DELAY_MOD_ENV) ? zone.at(GEN_DELAY_MOD_ENV) : 0,
-                                      zone.count(GEN_DELAY_MOD_ENV), -12000);
+                                      zone.count(GEN_DELAY_MOD_ENV), -12000,
+                                      TimecentRange::kDelayHold);
   region.mod_env_delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
   region.mod_env_hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
   int mod_sustain_drop = signed_amount(zone.count(GEN_SUSTAIN_MOD_ENV) ? zone.at(GEN_SUSTAIN_MOD_ENV) : 0);
@@ -941,17 +960,22 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
   // Audible envelope parameters are prepared directly in output-sample units.
   // The tick counts below are only the MCU lifecycle shadow used for allocation.
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_VOL_ENV) ? zone.at(GEN_ATTACK_VOL_ENV) : 0,
-                                  zone.count(GEN_ATTACK_VOL_ENV), -12000);
+                                  zone.count(GEN_ATTACK_VOL_ENV), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   int hold_tc = signed_amount(zone.count(GEN_HOLD_VOL_ENV) ? zone.at(GEN_HOLD_VOL_ENV) : 0);
   if (zone.count(GEN_KEYNUM_TO_VOL_ENV_HOLD)) hold_tc += signed_amount(zone.at(GEN_KEYNUM_TO_VOL_ENV_HOLD)) * (60 - key);
-  double h = timecents_to_seconds(hold_tc, zone.count(GEN_HOLD_VOL_ENV) || zone.count(GEN_KEYNUM_TO_VOL_ENV_HOLD), -12000);
+  double h = timecents_to_seconds(hold_tc, zone.count(GEN_HOLD_VOL_ENV) || zone.count(GEN_KEYNUM_TO_VOL_ENV_HOLD), -12000,
+                                  TimecentRange::kDelayHold);
   int decay_tc = signed_amount(zone.count(GEN_DECAY_VOL_ENV) ? zone.at(GEN_DECAY_VOL_ENV) : 0);
   if (zone.count(GEN_KEYNUM_TO_VOL_ENV_DECAY)) decay_tc += signed_amount(zone.at(GEN_KEYNUM_TO_VOL_ENV_DECAY)) * (60 - key);
-  double d = timecents_to_seconds(decay_tc, zone.count(GEN_DECAY_VOL_ENV) || zone.count(GEN_KEYNUM_TO_VOL_ENV_DECAY), -12000);
+  double d = timecents_to_seconds(decay_tc, zone.count(GEN_DECAY_VOL_ENV) || zone.count(GEN_KEYNUM_TO_VOL_ENV_DECAY), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   double r = timecents_to_seconds(zone.count(GEN_RELEASE_VOL_ENV) ? zone.at(GEN_RELEASE_VOL_ENV) : 0,
-                                  zone.count(GEN_RELEASE_VOL_ENV), -12000);
+                                  zone.count(GEN_RELEASE_VOL_ENV), -12000,
+                                  TimecentRange::kAttackDecayRelease);
   double delay = timecents_to_seconds(zone.count(GEN_DELAY_VOL_ENV) ? zone.at(GEN_DELAY_VOL_ENV) : 0,
-                                      zone.count(GEN_DELAY_VOL_ENV), -12000);
+                                      zone.count(GEN_DELAY_VOL_ENV), -12000,
+                                      TimecentRange::kDelayHold);
   region.delay_ticks = envelope_ticks(delay, tick_samples, sample_rate);
   region.hold_ticks = envelope_ticks(h, tick_samples, sample_rate);
   int vol_sustain_cb = signed_amount(zone.count(GEN_SUSTAIN_VOL_ENV) ? zone.at(GEN_SUSTAIN_VOL_ENV) : 0);
@@ -961,13 +985,13 @@ void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rat
   region.decay_ticks = scaled_envelope_tick_count(d, double(std::min(1000, vol_sustain_cb)) / 1000.0,
                                                   tick_samples, sample_rate);
   region.release_ticks = envelope_tick_count(r, tick_samples, sample_rate);
-  region.volume_envelope.delay_samples = volume_envelope_samples(delay, sample_rate);
-  region.volume_envelope.attack_samples = volume_envelope_samples(a, sample_rate);
-  region.volume_envelope.hold_samples = volume_envelope_samples(h, sample_rate);
+  region.volume_envelope.delay_samples = rtl_duration_samples(delay, sample_rate);
+  region.volume_envelope.attack_samples = duration_samples(a, sample_rate);
+  region.volume_envelope.hold_samples = rtl_duration_samples(h, sample_rate);
   double decay_fraction = double(std::min(1000, vol_sustain_cb)) / 1000.0;
-  region.volume_envelope.decay_samples = volume_envelope_samples(d * decay_fraction, sample_rate);
+  region.volume_envelope.decay_samples = duration_samples(d * decay_fraction, sample_rate);
   region.volume_envelope.sustain_cb_q12_20 = uint32_t(std::min(1000, vol_sustain_cb)) << 20;
-  region.volume_envelope.release_samples = volume_envelope_samples(r, sample_rate);
+  region.volume_envelope.release_samples = duration_samples(r, sample_rate);
 }
 
 Zone combine_preset_and_instrument_zones(const Zone& preset, const Zone& instrument) {
