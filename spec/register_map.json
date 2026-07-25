@@ -11,7 +11,7 @@
         "description": "Common and board platform register window.",
         "baseAddress": "0x9000",
         "registers": [
-          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00070000"},
+          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x00080000"},
           {"name": "SYSTEM_STATUS", "addressOffset": "0x0010"},
           {
             "name": "COMMON_EVENT_FLAGS",
@@ -62,6 +62,25 @@
           {"name": "DEBUG_ENV_ELAPSED", "addressOffset": "0x0100"},
           {"name": "DEBUG_ENV_ATTACK_LEVEL", "addressOffset": "0x0104"},
           {"name": "DEBUG_ENV_ATTENUATION", "addressOffset": "0x0108"},
+          {
+            "name": "COMPRESSOR_STATUS",
+            "addressOffset": "0x010c",
+            "fields": [
+              {"name": "ENABLED", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
+              {"name": "PRIMED", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
+              {"name": "ACTIVE", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
+              {"name": "DELAY_LEVEL", "bitOffset": 8, "bitWidth": 16}
+            ]
+          },
+          {"name": "COMPRESSOR_GAIN_REDUCTION", "addressOffset": "0x0110"},
+          {"name": "COMPRESSOR_TARGET_GAIN_REDUCTION", "addressOffset": "0x0114"},
+          {"name": "COMPRESSOR_DETECTOR_PEAK", "addressOffset": "0x0118"},
+          {"name": "COMPRESSOR_MAX_GAIN_REDUCTION", "addressOffset": "0x011c"},
+          {"name": "COMPRESSOR_MAX_DETECTOR_PEAK", "addressOffset": "0x0120"},
+          {"name": "COMPRESSOR_INPUT_FRAME_COUNT", "addressOffset": "0x0124"},
+          {"name": "COMPRESSOR_OUTPUT_FRAME_COUNT", "addressOffset": "0x0128"},
+          {"name": "COMPRESSOR_COMPRESSED_FRAME_COUNT", "addressOffset": "0x012c"},
+          {"name": "COMPRESSOR_SATURATION_COUNT", "addressOffset": "0x0130"},
           {
             "name": "PLATFORM_STATUS",
             "addressOffset": "0x0040",

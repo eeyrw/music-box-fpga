@@ -30,6 +30,12 @@ std::string render_input_json_fields(const Args& args, int tick_samples) {
     << (args.sample_accurate_control ? "true" : "false")
     << ",\n  \"control_tick_samples\": " << tick_samples
     << ",\n  \"detailed_diagnostics\": " << (args.detailed_diagnostics ? "true" : "false")
+    << ",\n  \"compressor_enable\": " << (args.compressor_enable ? "true" : "false")
+    << ",\n  \"compressor_threshold_cb\": " << args.compressor_threshold_cb
+    << ",\n  \"compressor_ratio\": " << args.compressor_ratio
+    << ",\n  \"compressor_attack_ms\": " << args.compressor_attack_ms
+    << ",\n  \"compressor_release_ms\": " << args.compressor_release_ms
+    << ",\n  \"master_volume\": " << args.master_volume
     << ",\n  \"render_num_voices\": " << kNumVoices;
   return s.str();
 }
@@ -60,6 +66,16 @@ Args parse_args(int argc, char** argv) {
     else if (a == "--control-tick-ms") args.control_tick_ms = std::stod(need("--control-tick-ms"));
     else if (a == "--sample-accurate-control") args.sample_accurate_control = true;
     else if (a == "--detailed-diagnostics") args.detailed_diagnostics = true;
+    else if (a == "--compressor-enable") args.compressor_enable = true;
+    else if (a == "--compressor-threshold-cb")
+      args.compressor_threshold_cb = std::stod(need("--compressor-threshold-cb"));
+    else if (a == "--compressor-ratio")
+      args.compressor_ratio = std::stod(need("--compressor-ratio"));
+    else if (a == "--compressor-attack-ms")
+      args.compressor_attack_ms = std::stod(need("--compressor-attack-ms"));
+    else if (a == "--compressor-release-ms")
+      args.compressor_release_ms = std::stod(need("--compressor-release-ms"));
+    else if (a == "--master-volume") args.master_volume = std::stod(need("--master-volume"));
     else if (a == "--memory-profile") args.memory_profile = need("--memory-profile");
     else if (a == "--out-dir") args.out_dir = need("--out-dir");
     else throw std::runtime_error("unknown argument: " + a);

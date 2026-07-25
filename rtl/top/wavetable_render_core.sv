@@ -17,6 +17,10 @@ module wavetable_render_core #(
   output logic                     sample_valid,
   output synth_pkg::pcm_t          sample_l,
   output synth_pkg::pcm_t          sample_r,
+  output synth_pkg::mix_t          mix_l,
+  output synth_pkg::mix_t          mix_r,
+  output synth_pkg::compressor_config_t compressor_config,
+  output logic signed [15:0]        master_volume,
   output logic                     busy,
   output logic                     mem_req_valid,
   output logic [synth_pkg::VOICE_ID_WIDTH-1:0] mem_req_voice,
@@ -94,6 +98,8 @@ module wavetable_render_core #(
     .current_sample(current_render_sample),
     .render_config,
     .render_runtime,
+    .compressor_config,
+    .master_volume,
     .config_valid,
     .commit_pulse
   );
@@ -116,6 +122,8 @@ module wavetable_render_core #(
     .sample_valid,
     .sample_l,
     .sample_r,
+    .mix_l,
+    .mix_r,
     .mem_req(core_mem_req),
     .mem_req_ready,
     .mem_rsp(core_mem_rsp),

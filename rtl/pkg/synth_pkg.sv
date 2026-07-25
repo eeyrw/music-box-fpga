@@ -2,6 +2,7 @@ package synth_pkg;
   // Shared widths keep the audio, phase, and memory-address contracts in one
   // place. Modules import this package instead of repeating magic numbers.
   localparam int PCM_WIDTH = 16;
+  localparam int MIX_WIDTH = 24;
   localparam int PHASE_FRAME_WIDTH = 24;
   localparam int PHASE_FRAC_WIDTH = 8;
   localparam int PHASE_WIDTH = PHASE_FRAME_WIDTH + PHASE_FRAC_WIDTH;
@@ -38,12 +39,18 @@ package synth_pkg;
   // Signed 16-bit PCM is the external sample format used by wave memory and by
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
+  typedef logic signed [MIX_WIDTH-1:0] mix_t;
   typedef logic signed [FILTER_SAMPLE_WIDTH-1:0] filter_sample_t;
 
   typedef struct packed {
     pcm_t l;
     pcm_t r;
   } stereo_pcm_t;
+
+  typedef struct packed {
+    mix_t l;
+    mix_t r;
+  } stereo_mix_t;
 
   typedef struct packed {
     logic                       valid;
@@ -79,6 +86,8 @@ package synth_pkg;
     VOICE_STOP          = 8'h15,
     VOICE_GAIN_PHASE    = 8'h16,
     VOICE_FILTER        = 8'h17,
+    COMPRESSOR_CONFIG   = 8'h20,
+    MASTER_VOLUME       = 8'h21,
     STREAM_FLUSH        = 8'h7f
   } command_opcode_t;
 
@@ -89,6 +98,14 @@ package synth_pkg;
     logic [7:0] payload_words;
     logic [CONTROL_ACTION_MAX_PAYLOAD_WORDS-1:0][31:0] payload;
   } control_action_t;
+
+  typedef struct packed {
+    logic        enable;
+    logic [31:0] threshold_cb_q12_20;
+    logic [15:0] ratio_slope_q0_16;
+    logic [31:0] attack_step_cb_q12_20;
+    logic [31:0] release_step_cb_q12_20;
+  } compressor_config_t;
 
   // One committed voice configuration. These fields describe the sample region
   // and static playback mode that must become visible atomically on voice commit.

@@ -34,6 +34,20 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | --- | --- |
 | `tb_control_cmd_parser` | Header framing, payload length, reserved fields, flush, malformed commands. |
 | `tb_transactional_control_plane` | DEFINE isolation, START promotion, sequence rejection, all runtime actions, envelope stages, and 16+1 action batching. |
+| `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |
+
+`sim/harness/render/lookahead_compressor_model` is the bit-exact C++ model of
+the same post-mix path. It consumes signed 24-bit stereo mixes, accepts the
+global compressor and master-volume commands, and returns no sample while the
+fixed delay primes. Its unit test uses the same exact bypass, gain, linked
+detector, release, saturation, current/max state, and counter vectors as
+`tb_lookahead_compressor`. When constructed with a `RenderDiagnostics` pointer,
+the model also publishes those fields through the existing render JSON report.
+
+`ReferenceSynth::render_mix()` exposes the pre-compressor signed stereo
+accumulator for system-path composition. Existing bare-core comparisons continue
+to use `render_sample()`, which preserves their direct PCM16 saturation and has
+no look-ahead delay.
 | `tb_wavetable_render_core` | Exact mono/stereo PCM, phase, loops, filter/gain changes, highest voice, mixing, and debug snapshot. |
 | `tb_voice_phase_frame` | Exact Q24.8 endpoint, loop, and done calculations. |
 | `tb_wave_memory_subsystem` | Word-to-line adaptation and ready/valid behavior. |
@@ -67,6 +81,10 @@ There is no C++ per-voice register compatibility adapter.
 
 ## Render Targets
 
+See [`render_commands.md`](render_commands.md) for complete, directly reusable
+commands covering real MIDI/SF2 inputs, compressor and baseline renders,
+diagnostic extraction, and output-directory conventions.
+
 ```bash
 make render-reference SECONDS=1
 make render-rtl-core SECONDS=1
@@ -80,6 +98,9 @@ Common overrides include:
 make render-rtl-core MIDI=assets/midi/example.mid SECONDS=10
 make render-memory MIDI=assets/midi/example.mid START_SECONDS=30 SECONDS=10
 make render-reference SF2=assets/soundfonts/example.sf2 INSTRUMENT=0
+make render-reference MIDI=assets/midi/example.mid SECONDS=10 \
+  COMPRESSOR_ENABLE=1 COMPRESSOR_THRESHOLD_CB=120 COMPRESSOR_RATIO=4 \
+  COMPRESSOR_ATTACK_MS=0 COMPRESSOR_RELEASE_MS=100 MASTER_VOLUME=1
 ```
 
 `CONTROL_TICK_MS` sets the periodic MCU control-update interval used for
@@ -93,6 +114,15 @@ fans identical command words to RTL and the reference and compares every output
 sample exactly. `render-memory` uses the cached RTL path with a selectable
 external-memory timing profile. `render-board-loader` also exercises the raw SD
 image and board-loader path.
+
+The optional `render-reference` compressor uses the same fixed-point LUTs,
+lookahead length, compact configuration command, and gain arithmetic as RTL.
+The threshold is expressed as positive centibels below full scale (`120` is
+-12 dBFS). Master volume is a linear `0..1` post-compressor gain. Attack and
+release milliseconds specify traversal time for the complete 100 dB control
+range and are converted to a fixed centibel step per frame. The JSON report
+includes current and maximum detector/gain-reduction values, delay occupancy,
+input/output/compressed frame counters, and the final PCM16 saturation count.
 
 If a requested time window contains no audible events, the harness reports that
 condition rather than treating an all-zero render as success.

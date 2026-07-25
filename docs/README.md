@@ -59,6 +59,8 @@ change.
   self-checking tests, SoundFont/MIDI render harnesses, memory-profile renders,
   C++ harness source layout, board-loader simulation, and generated register-map
   consistency checks.
+- [`verification/render_commands.md`](verification/render_commands.md): common
+  reference, compressor, diagnostic, RTL, and memory render command lines.
 - [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
   local copy of the Standard MIDI File format reference used when validating the
   C++ MIDI parser.

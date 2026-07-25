@@ -28,6 +28,12 @@ SAMPLE_RATE ?= 48000
 CONTROL_TICK_MS ?= 5
 SAMPLE_ACCURATE_CONTROL ?= 0
 DETAILED_DIAGNOSTICS ?= 0
+COMPRESSOR_ENABLE ?= 0
+COMPRESSOR_THRESHOLD_CB ?= 120
+COMPRESSOR_RATIO ?= 4
+COMPRESSOR_ATTACK_MS ?= 0
+COMPRESSOR_RELEASE_MS ?= 100
+MASTER_VOLUME ?= 1
 MIDI ?=
 MEMORY_PROFILE ?= ddr
 RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
@@ -44,7 +50,7 @@ RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 RTL_SOURCES := \
 	rtl/pkg/synth_pkg.sv \
 	rtl/pkg/synth_register_pkg.sv \
-	rtl/generated/synth_envelope_lut_pkg.sv \
+	rtl/generated/synth_dsp_lut_pkg.sv \
 	rtl/control/voice_bram_1r1w.sv \
 	rtl/control/control_word_fifo.sv \
 	rtl/control/control_action_fifo.sv \
@@ -57,6 +63,7 @@ RTL_SOURCES := \
 	rtl/dsp/linear_interpolator.sv \
 	rtl/dsp/gain_saturate.sv \
 	rtl/dsp/voice_dsp_pipeline.sv \
+	rtl/audio/lookahead_compressor.sv \
 	rtl/audio/output_sample_fifo.sv \
 	rtl/audio/render_credit_scheduler.sv \
 	rtl/voice/voice_phase_frame.sv \
@@ -99,6 +106,9 @@ I2S_SIM_SOURCES := \
 
 I2S_OUTPUT_SIM_SOURCES := \
 	sim/tb/tb_wavetable_i2s_output.sv
+
+COMPRESSOR_SIM_SOURCES := \
+	sim/tb/tb_lookahead_compressor.sv
 
 RENDER_SCHEDULER_SIM_SOURCES := \
 	sim/tb/tb_render_credit_scheduler.sv
@@ -176,24 +186,23 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-envelope-lut check-register-map check-envelope-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
 
 all: test
 
 generate-register-map:
 	python3 tools/gen_register_map.py
-	python3 tools/gen_envelope_lut.py
+	python3 tools/gen_dsp_lut.py
 
-generate-envelope-lut:
-	python3 tools/gen_envelope_lut.py
+generate-dsp-lut:
+	python3 tools/gen_dsp_lut.py
 
 check-register-map:
-	python3 tools/gen_register_map.py
-	git diff --exit-code -- rtl/pkg/synth_register_pkg.sv sim/harness/generated/register_map.h
-	python3 tools/gen_envelope_lut.py --check
+	python3 tools/gen_register_map.py --check
+	python3 tools/gen_dsp_lut.py --check
 
-check-envelope-lut:
-	python3 tools/gen_envelope_lut.py --check
+check-dsp-lut:
+	python3 tools/gen_dsp_lut.py --check
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
@@ -217,6 +226,12 @@ test-cpp-unit:
 		sim/harness/control/command_control.cpp sim/harness/control/command_control_test.cpp \
 		-o $(BUILD_DIR)/command_control_test
 	$(BUILD_DIR)/command_control_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/control/command_control.cpp \
+		sim/harness/render/lookahead_compressor_model.cpp \
+		sim/harness/render/lookahead_compressor_model_test.cpp \
+		-o $(BUILD_DIR)/lookahead_compressor_model_test
+	$(BUILD_DIR)/lookahead_compressor_model_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
@@ -270,6 +285,11 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/compressor_obj_dir --top-module tb_lookahead_compressor \
+		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
+		rtl/audio/lookahead_compressor.sv $(COMPRESSOR_SIM_SOURCES)
+	$(BUILD_DIR)/compressor_obj_dir/Vtb_lookahead_compressor
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/render_scheduler_obj_dir --top-module tb_render_credit_scheduler \
 		rtl/audio/render_credit_scheduler.sv $(RENDER_SCHEDULER_SIM_SOURCES)
@@ -360,6 +380,7 @@ render-reference:
 		$(HARNESS_WAV_SRC) \
 		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/render/reference_synth.cpp) \
+		$(abspath sim/harness/render/lookahead_compressor_model.cpp) \
 		-o $(BUILD_DIR)/render_reference_cpp
 	$(BUILD_DIR)/render_reference_cpp --sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
@@ -368,6 +389,12 @@ render-reference:
 		--control-tick-ms $(CONTROL_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
 		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
+		$(if $(filter 1 true yes,$(COMPRESSOR_ENABLE)),--compressor-enable,) \
+		--compressor-threshold-cb $(COMPRESSOR_THRESHOLD_CB) \
+		--compressor-ratio $(COMPRESSOR_RATIO) \
+		--compressor-attack-ms $(COMPRESSOR_ATTACK_MS) \
+		--compressor-release-ms $(COMPRESSOR_RELEASE_MS) \
+		--master-volume $(MASTER_VOLUME) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-core:

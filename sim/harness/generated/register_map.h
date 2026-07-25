@@ -7,7 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x00070000u;
+constexpr uint32_t kVersionValue = 0x00080000u;
 
 constexpr uint16_t kVersion = 0x9000u;
 constexpr uint16_t kSystemStatus = 0x9010u;
@@ -51,6 +51,16 @@ constexpr uint16_t kDebugEnvReleaseStep = 0x90fcu;
 constexpr uint16_t kDebugEnvElapsed = 0x9100u;
 constexpr uint16_t kDebugEnvAttackLevel = 0x9104u;
 constexpr uint16_t kDebugEnvAttenuation = 0x9108u;
+constexpr uint16_t kCompressorStatus = 0x910cu;
+constexpr uint16_t kCompressorGainReduction = 0x9110u;
+constexpr uint16_t kCompressorTargetGainReduction = 0x9114u;
+constexpr uint16_t kCompressorDetectorPeak = 0x9118u;
+constexpr uint16_t kCompressorMaxGainReduction = 0x911cu;
+constexpr uint16_t kCompressorMaxDetectorPeak = 0x9120u;
+constexpr uint16_t kCompressorInputFrameCount = 0x9124u;
+constexpr uint16_t kCompressorOutputFrameCount = 0x9128u;
+constexpr uint16_t kCompressorCompressedFrameCount = 0x912cu;
+constexpr uint16_t kCompressorSaturationCount = 0x9130u;
 constexpr uint16_t kPlatformStatus = 0x9040u;
 constexpr uint16_t kPlatformErrors = 0x9044u;
 constexpr uint16_t kPlatformBytesLoaded = 0x9048u;
@@ -83,6 +93,11 @@ constexpr uint32_t kDdrAccessStatusPresentMask = 0x00000001u;
 constexpr uint32_t kDdrAccessStatusReadyMask = 0x00000002u;
 constexpr uint32_t kDdrAccessStatusDoneMask = 0x00000008u;
 constexpr uint32_t kDdrAccessStatusErrorMask = 0x00000010u;
+constexpr uint32_t kCompressorStatusEnabledMask = 0x00000001u;
+constexpr uint32_t kCompressorStatusPrimedMask = 0x00000002u;
+constexpr uint32_t kCompressorStatusActiveMask = 0x00000004u;
+constexpr int kCompressorStatusDelayLevelLsb = 8;
+constexpr int kCompressorStatusDelayLevelWidth = 16;
 
 constexpr uint32_t kQ15Full = 0x00007fffu;
 constexpr uint32_t kFilterB0UnityQ214 = 0x00004000u;

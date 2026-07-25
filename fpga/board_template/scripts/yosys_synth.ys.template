@@ -3,7 +3,7 @@
 
 read_verilog -sv ../../rtl/pkg/synth_pkg.sv
 read_verilog -sv ../../rtl/pkg/synth_register_pkg.sv
-read_verilog -sv ../../rtl/generated/synth_envelope_lut_pkg.sv
+read_verilog -sv ../../rtl/generated/synth_dsp_lut_pkg.sv
 read_verilog -sv ../../rtl/control/voice_bram_1r1w.sv
 read_verilog -sv ../../rtl/control/control_word_fifo.sv
 read_verilog -sv ../../rtl/control/control_action_fifo.sv
@@ -16,6 +16,7 @@ read_verilog -sv ../../rtl/memory/voice_line_cache.sv
 read_verilog -sv ../../rtl/dsp/linear_interpolator.sv
 read_verilog -sv ../../rtl/dsp/gain_saturate.sv
 read_verilog -sv ../../rtl/dsp/voice_dsp_pipeline.sv
+read_verilog -sv ../../rtl/audio/lookahead_compressor.sv
 read_verilog -sv ../../rtl/audio/output_sample_fifo.sv
 read_verilog -sv ../../rtl/audio/render_credit_scheduler.sv
 read_verilog -sv ../../rtl/voice/voice_phase_frame.sv

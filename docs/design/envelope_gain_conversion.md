@@ -15,8 +15,10 @@ be mirrored exactly across command queuing and frame boundaries. Moving
 `cb_to_q15` to software would require per-voice, per-frame gain streaming and is
 not a useful control-bandwidth trade.
 
-The C++ reference synth implements the same integer algorithms. The generator
-`tools/gen_envelope_lut.py` is the single source for both RTL and C++ tables.
+The C++ reference synth implements the same integer algorithms. The shared DSP
+table generator `tools/gen_dsp_lut.py` is the single source for both RTL and C++
+tables. It also owns the normalized magnitude-log table used by global dynamics
+processing; envelope logic only consumes the tables described below.
 
 ## SoundFont Contract
 
@@ -125,8 +127,8 @@ optimization checkpoint, not post-route timing closure.
 Run the following checks after changing the algorithm or table precision:
 
 ```text
-python3 tools/gen_envelope_lut.py
-make check-envelope-lut
+python3 tools/gen_dsp_lut.py
+make check-dsp-lut
 make lint
 make test
 ```

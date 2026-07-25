@@ -187,6 +187,16 @@ module tb_wavetable_demo_common_status;
     expect_read_success(REG_SYSTEM_STATUS);
     expect_read(REG_COMMON_EVENT_FLAGS, 32'h0000_0000);
     expect_read_success(REG_AUDIO_STATUS);
+    expect_read_success(REG_COMPRESSOR_STATUS);
+    expect_read(REG_COMPRESSOR_GAIN_REDUCTION, 32'd0);
+    expect_read(REG_COMPRESSOR_TARGET_GAIN_REDUCTION, 32'd0);
+    expect_read(REG_COMPRESSOR_DETECTOR_PEAK, 32'd0);
+    expect_read(REG_COMPRESSOR_MAX_GAIN_REDUCTION, 32'd0);
+    expect_read(REG_COMPRESSOR_MAX_DETECTOR_PEAK, 32'd0);
+    expect_read_success(REG_COMPRESSOR_INPUT_FRAME_COUNT);
+    expect_read_success(REG_COMPRESSOR_OUTPUT_FRAME_COUNT);
+    expect_read(REG_COMPRESSOR_COMPRESSED_FRAME_COUNT, 32'd0);
+    expect_read(REG_COMPRESSOR_SATURATION_COUNT, 32'd0);
     expect_read(REG_UNDERRUN_COUNT, 32'h0000_0000);
     spi_write_word(REG_COMMON_EVENT_FLAGS,
                    REG_COMMON_EVENT_FLAGS_UNDERRUN_MASK |

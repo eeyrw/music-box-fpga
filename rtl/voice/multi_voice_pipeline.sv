@@ -16,6 +16,8 @@ module multi_voice_pipeline #(
   output logic                       sample_valid,
   output synth_pkg::pcm_t            sample_l,
   output synth_pkg::pcm_t            sample_r,
+  output synth_pkg::mix_t            mix_l,
+  output synth_pkg::mix_t            mix_r,
   output synth_pkg::wave_word_req_t  mem_req,
   input  logic                       mem_req_ready,
   input  synth_pkg::wave_word_rsp_t  mem_rsp,
@@ -361,6 +363,8 @@ module multi_voice_pipeline #(
       sample_valid <= 1'b0;
       sample_l <= '0;
       sample_r <= '0;
+      mix_l <= '0;
+      mix_r <= '0;
       frame_commit <= '0;
       snapshot_config <= '0;
       snapshot_runtime <= '0;
@@ -550,6 +554,8 @@ module multi_voice_pipeline #(
             state <= FINISH;
         end
         FINISH: begin
+          mix_l <= mix_t'(accum_l);
+          mix_r <= mix_t'(accum_r);
           sample_l <= saturate_pcm({{32{accum_l[31]}}, accum_l});
           sample_r <= saturate_pcm({{32{accum_r[31]}}, accum_r});
           sample_valid <= 1'b1;

@@ -34,6 +34,12 @@ struct Args {
   double control_tick_ms = 5.0;
   bool sample_accurate_control = false;
   bool detailed_diagnostics = false;
+  bool compressor_enable = false;
+  double compressor_threshold_cb = 120.0;
+  double compressor_ratio = 4.0;
+  double compressor_attack_ms = 0.0;
+  double compressor_release_ms = 100.0;
+  double master_volume = 1.0;
 };
 
 struct NoteEvent {
@@ -159,6 +165,19 @@ struct FilterConfig {
 struct RenderDiagnostics {
   bool detailed_enabled = false;
   uint64_t frames = 0;
+  bool compressor_enabled = false;
+  bool compressor_primed = false;
+  bool compressor_active = false;
+  uint32_t compressor_delay_level = 0;
+  uint32_t compressor_gain_reduction_cb_q12_20 = 0;
+  uint32_t compressor_target_gain_reduction_cb_q12_20 = 0;
+  uint32_t compressor_detector_peak = 0;
+  uint32_t compressor_max_gain_reduction_cb_q12_20 = 0;
+  uint32_t compressor_max_detector_peak = 0;
+  uint32_t compressor_input_frame_count = 0;
+  uint32_t compressor_output_frame_count = 0;
+  uint32_t compressor_compressed_frame_count = 0;
+  uint32_t compressor_saturation_count = 0;
   uint64_t filter_y_saturated_frames = 0;
   uint64_t filter_y_saturations = 0;
   uint64_t filter_state_saturated_frames = 0;

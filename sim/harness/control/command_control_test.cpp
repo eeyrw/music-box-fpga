@@ -91,6 +91,28 @@ void test_mono_word_count_and_seq_generation() {
     throw std::runtime_error("voice sequence did not advance");
 }
 
+void test_global_audio_commands() {
+  CaptureSink sink;
+  CommandAudioControl control(sink);
+  CompressorCommandConfig config;
+  config.enable = true;
+  config.threshold_cb_q12_20 = 120u << 20;
+  config.ratio_slope_q0_16 = 0x8000;
+  config.attack_step_cb_q12_20 = 4u << 20;
+  config.release_step_cb_q12_20 = 1u << 20;
+  control.configure_compressor(config);
+  control.set_master_volume(0x4000);
+
+  if (sink.commands.size() != 2 || opcode(sink.commands[0]) != 0x20 ||
+      sink.commands[0].size() != 5 || sink.commands[0][1] != 0x00010001 ||
+      sink.commands[0][2] != (120u << 20) ||
+      sink.commands[0][3] != (4u << 20))
+    throw std::runtime_error("COMPRESSOR_CONFIG packing mismatch");
+  if (opcode(sink.commands[1]) != 0x21 || sink.commands[1].size() != 2 ||
+      sink.commands[1][1] != 0x4000)
+    throw std::runtime_error("MASTER_VOLUME packing mismatch");
+}
+
 }  // namespace
 }  // namespace render
 
@@ -98,6 +120,7 @@ int main() {
   try {
     render::test_stereo_start_and_runtime_actions();
     render::test_mono_word_count_and_seq_generation();
+    render::test_global_audio_commands();
   } catch (const std::exception& e) {
     std::cerr << "FAIL: " << e.what() << "\n";
     return 1;

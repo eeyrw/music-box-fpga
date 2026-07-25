@@ -66,6 +66,10 @@ module wavetable_cached_render_core #(
   synth_pkg::wave_word_req_t mem_req;
   synth_pkg::wave_word_rsp_t mem_rsp;
   logic sample_tick_accepted;
+  synth_pkg::mix_t unused_mix_l;
+  synth_pkg::mix_t unused_mix_r;
+  synth_pkg::compressor_config_t unused_compressor_config;
+  logic signed [15:0] unused_master_volume;
 
   assign sample_tick_accepted = sample_tick && !busy;
 
@@ -88,6 +92,10 @@ module wavetable_cached_render_core #(
     .sample_valid,
     .sample_l,
     .sample_r,
+    .mix_l(unused_mix_l),
+    .mix_r(unused_mix_r),
+    .compressor_config(unused_compressor_config),
+    .master_volume(unused_master_volume),
     .busy,
     .mem_req_valid(mem_req.valid),
     .mem_req_voice(mem_req.voice),
@@ -109,6 +117,13 @@ module wavetable_cached_render_core #(
     .dsp_context_queue_max_occupancy,
     .dsp_ready_no_context_pulse
   );
+
+/* verilator lint_off UNUSEDSIGNAL */
+  logic unused_wide_mix_and_compressor;
+/* verilator lint_on UNUSEDSIGNAL */
+  assign unused_wide_mix_and_compressor = (|unused_mix_l) | (|unused_mix_r) |
+                                          (|unused_compressor_config) |
+                                          (|unused_master_volume);
 
   voice_line_cache #(
     .LINE_WORDS(LINE_WORDS),

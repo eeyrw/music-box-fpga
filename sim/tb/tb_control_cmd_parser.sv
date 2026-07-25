@@ -81,6 +81,15 @@ module tb_control_cmd_parser;
     end
     consume_action();
 
+    send_word(header(MASTER_VOLUME, 8'd0, 8'd0, 8'd1));
+    send_word(32'h0000_4000);
+    wait (action_valid);
+    if (action.opcode != MASTER_VOLUME || action.payload[0] != 32'h0000_4000) begin
+      $error("MASTER_VOLUME decode mismatch");
+      errors++;
+    end
+    consume_action();
+
     send_word(header(VOICE_ENV_UPDATE, 8'd9, 8'h44, 8'd4));
     send_word(32'h0000_0025);
     send_word(32'h0000_0100);
@@ -94,11 +103,34 @@ module tb_control_cmd_parser;
     end
     consume_action();
 
+    send_word(header(COMPRESSOR_CONFIG, 8'd0, 8'd0, 8'd4));
+    send_word(32'h0001_0001);
+    send_word(32'd120 << 20);
+    send_word(32'd10 << 20);
+    send_word(32'd1 << 20);
+    wait (action_valid);
+    if (action.opcode != COMPRESSOR_CONFIG || action.payload_words != 8'd4 ||
+        action.payload[0] != 32'h0001_0001 ||
+        action.payload[1] != (32'd120 << 20)) begin
+      $error("COMPRESSOR_CONFIG decode mismatch");
+      errors++;
+    end
+    consume_action();
+
+    send_word(header(COMPRESSOR_CONFIG, 8'd1, 8'd0, 8'd4));
+    for (int index = 0; index < 4; index++)
+      send_word(32'd0);
+    repeat (3) @(negedge clk);
+    if (action_valid || command_errors != 1) begin
+      $error("global compressor command accepted nonzero voice");
+      errors++;
+    end
+
     send_word(header(VOICE_ENV_UPDATE, 8'd1, 8'h01, 8'd2));
     send_word(32'h0000_0003);
     send_word(32'h0000_1111);
     repeat (3) @(negedge clk);
-    if (action_valid || command_errors != 1) begin
+    if (action_valid || command_errors != 2) begin
       $error("invalid envelope mask/length was not rejected, errors=%0d", command_errors);
       errors++;
     end
@@ -107,7 +139,7 @@ module tb_control_cmd_parser;
     send_word(32'hdead_beef);
     send_word(32'h0123_4567);
     repeat (3) @(negedge clk);
-    if (action_valid || command_errors != 2) begin
+    if (action_valid || command_errors != 3) begin
       $error("unknown opcode was not drained and rejected, errors=%0d", command_errors);
       errors++;
     end

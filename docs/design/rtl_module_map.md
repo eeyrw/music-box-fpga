@@ -35,7 +35,7 @@ pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
 | `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
 | `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
 | `rtl/memory` | `voice_line_cache`, `wave_memory_subsystem` | Adapters from the core's one-word PCM read interface to an external line-read interface. `voice_line_cache` is the current cached render path; `wave_memory_subsystem` is the older single-line baseline used by some common/board wrappers. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and render testbenches. |
-| `rtl/audio` | `output_sample_fifo`, `render_credit_scheduler` | PCM buffering plus target-level render-credit generation for continuous output. | Common I2S/demo wrappers; not used by the bare `rtl/top` cores. |
+| `rtl/audio` | `lookahead_compressor`, `output_sample_fifo`, `render_credit_scheduler` | Post-mix look-ahead dynamics, PCM buffering, and target-level render-credit generation. | Common I2S/demo wrappers; not used by the bare `rtl/top` cores. |
 
 There is currently no `rtl/bus` source file. The generic register and memory
 ports are explicit ready/valid signals on module interfaces rather than a shared
@@ -77,6 +77,7 @@ keeping SPI and I2S out of the synthesis engine boundary:
 ```text
 wavetable_system_core
 +- wavetable_render_core
++- lookahead_compressor
 +- wave_memory_subsystem
 ```
 

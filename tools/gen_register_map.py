@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -208,17 +209,34 @@ def write_if_changed(path, text):
     path.write_text(text, encoding="utf-8")
 
 
+def check_matches(path, text):
+    return path.exists() and path.read_text(encoding="utf-8") == text
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec", default="spec/register_map.json")
     parser.add_argument("--sv-out", default="rtl/pkg/synth_register_pkg.sv")
     parser.add_argument("--cpp-out", default="sim/harness/generated/register_map.h")
+    parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
     spec = load_spec(Path(args.spec))
-    write_if_changed(Path(args.sv_out), render_sv(spec))
-    write_if_changed(Path(args.cpp_out), render_cpp(spec))
+    sv_path = Path(args.sv_out)
+    cpp_path = Path(args.cpp_out)
+    sv_text = render_sv(spec)
+    cpp_text = render_cpp(spec)
+    if args.check:
+        stale = [str(path) for path, text in ((sv_path, sv_text), (cpp_path, cpp_text))
+                 if not check_matches(path, text)]
+        if stale:
+            print("stale generated register map: " + ", ".join(stale), file=sys.stderr)
+            return 1
+        return 0
+    write_if_changed(sv_path, sv_text)
+    write_if_changed(cpp_path, cpp_text)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

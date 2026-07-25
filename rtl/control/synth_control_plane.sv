@@ -17,6 +17,8 @@ module synth_control_plane (
   input  logic [31:0]                current_sample,
   output synth_pkg::voice_config_t   render_config,
   output synth_pkg::voice_runtime_t  render_runtime,
+  output synth_pkg::compressor_config_t compressor_config,
+  output logic signed [15:0]        master_volume,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse
 );
@@ -62,6 +64,8 @@ module synth_control_plane (
   logic [4:0] debug_bus_word_index;
   (* ram_style = "distributed" *) logic [31:0] debug_words [0:DEBUG_WORDS-1];
 
+  // The snapshot aperture intentionally serializes only the documented subset.
+/* verilator lint_off UNUSEDSIGNAL */
   function automatic logic [31:0] debug_word(
     input active_voice_t voice,
     input logic [4:0] index
@@ -98,6 +102,7 @@ module synth_control_plane (
       endcase
     end
   endfunction
+/* verilator lint_on UNUSEDSIGNAL */
 
   assign bus_command_push = bus_req.valid && bus_req.write &&
                             (bus_req.address == REG_CMD_FIFO_DATA) &&
@@ -154,6 +159,8 @@ module synth_control_plane (
     .debug_active,
     .render_config,
     .render_runtime,
+    .compressor_config,
+    .master_volume,
     .config_valid,
     .commit_pulse,
     .prepared_valid

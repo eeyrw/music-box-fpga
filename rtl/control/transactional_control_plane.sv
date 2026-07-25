@@ -25,6 +25,8 @@ module transactional_control_plane #(
   output synth_pkg::active_voice_t debug_active,
   output synth_pkg::voice_config_t render_config,
   output synth_pkg::voice_runtime_t render_runtime,
+  output synth_pkg::compressor_config_t compressor_config,
+  output logic signed [15:0] master_volume,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse,
   output logic [synth_pkg::NUM_VOICES-1:0] prepared_valid
@@ -89,7 +91,8 @@ module transactional_control_plane #(
     .stale_seq_pulse, .render_voice_index, .snapshot_prepare, .snapshot_voice,
     .snapshot_valid,
     .debug_read_select, .debug_read_voice, .debug_prepared_seq, .debug_active,
-    .render_config, .render_runtime, .config_valid, .commit_pulse, .prepared_valid
+    .render_config, .render_runtime, .compressor_config, .master_volume,
+    .config_valid, .commit_pulse, .prepared_valid
   );
 
   always_ff @(posedge clk) begin

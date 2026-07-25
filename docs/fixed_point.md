@@ -137,10 +137,22 @@ avoids a variable divider and a wide linear search. Exhaustive generator
 validation over all positive non-full-scale Q1.15 values limits maximum error to
 `0.68 cB`; the generated-file header records the actual maximum and mean error.
 
-`tools/gen_envelope_lut.py` generates both
-`rtl/generated/synth_envelope_lut_pkg.sv` and
-`sim/harness/generated/envelope_lut.h` so the FPGA action executor and C++ reference
-use the same integer table.
+`tools/gen_dsp_lut.py` generates both
+`rtl/generated/synth_dsp_lut_pkg.sv` and
+`sim/harness/generated/dsp_lut.h` so the FPGA datapaths and C++ reference use
+matching integer tables. Envelope and compressor constants have separate names
+and separate generated arrays, even where the current exponential values are
+identical. This keeps the ROM inference and precision choices application-local
+instead of coupling future envelope and dynamics changes.
+
+The compressor-specific set contains a leading-zero-normalized
+magnitude-to-centibel mantissa table. The compressor combines the binary
+exponent with this mantissa correction to produce a signed level relative to
+`2^15` PCM full scale, then uses its own centibel-to-Q1.15 table for gain
+conversion. Seven mantissa bits plus the next-bit rounding decision address 129
+table nodes. Generator checks cover every rounding boundary and every exponent
+in the signed 24-bit mix range, including magnitude `2^23`; maximum logarithmic
+error is limited to `0.35 cB`.
 
 ## Biquad IIR Filter
 
@@ -213,8 +225,28 @@ raw state expressions before the state is saturated back to 34 bits.
 ## Mixing
 
 The multi-voice renderer accumulates signed 16-bit voice outputs in a signed
-32-bit stereo accumulator. Saturation back to signed 16-bit PCM happens once, at
-the final mixed output sample.
+32-bit stereo accumulator. With at most 256 voices, the exact range is
+`-8,388,608..8,388,352`, which fits a signed 24-bit sample. The common system
+path therefore narrows the accumulator exactly to a signed 24-bit stereo mix
+and stores 48 such frames in the compressor delay line.
+
+The detector uses the current undelayed stereo peak while gain is applied to the
+sample leaving that fixed delay. Threshold, gain reduction, and attack/release
+steps are unsigned cB Q12.20; the ratio field is the unsigned Q0.16 slope
+`1 - 1/ratio`. Left and right always receive the same compressor gain.
+
+Master volume is a nonnegative signed Q1.15 gain applied after compressor gain.
+The two gain products use explicit wide signed intermediates and are shifted
+only after multiplication. Saturation back to signed 16-bit PCM happens once,
+after both gains and before the final output FIFO. `0x7fff` has an exact bypass
+path so the default does not attenuate samples by one Q1.15 least-significant
+step.
+
+The C++ `LookaheadCompressorModel` mirrors these integer boundaries and exposes
+output validity with `std::optional`: the first look-ahead frames update detector
+state and fill the delay without producing PCM. `ReferenceSynth::render_mix()`
+provides its unsaturated accumulator for feeding this model without changing the
+existing bare-core `render_sample()` contract.
 
 ## Current Voice Render Calculation
 

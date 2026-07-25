@@ -49,6 +49,26 @@ class CommandVoiceControl : public VoiceCommandSink {
   std::array<VoiceMirror, kNumVoices> voices_{};
 };
 
+struct CompressorCommandConfig {
+  bool enable = false;
+  uint32_t threshold_cb_q12_20 = 0;
+  uint16_t ratio_slope_q0_16 = 0;
+  uint32_t attack_step_cb_q12_20 = 0;
+  uint32_t release_step_cb_q12_20 = 0;
+};
+
+class CommandAudioControl {
+ public:
+  explicit CommandAudioControl(CommandWordSink& sink) : sink_(sink) {}
+
+  void configure_compressor(const CompressorCommandConfig& config);
+  void set_master_volume(int gain_q1_15);
+
+ private:
+  void emit(uint8_t opcode, std::initializer_list<uint32_t> payload);
+  CommandWordSink& sink_;
+};
+
 uint32_t envelope_release_step(const Region& region);
 
 }  // namespace render

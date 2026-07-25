@@ -19,19 +19,25 @@ module control_action_executor (
   output synth_pkg::active_voice_t debug_active,
   output synth_pkg::voice_config_t render_config,
   output synth_pkg::voice_runtime_t render_runtime,
+  output synth_pkg::compressor_config_t compressor_config,
+  output logic signed [15:0] master_volume,
   output logic [synth_pkg::NUM_VOICES-1:0] config_valid,
   output logic [synth_pkg::NUM_VOICES-1:0] commit_pulse,
   output logic [synth_pkg::NUM_VOICES-1:0] prepared_valid
 );
   import synth_pkg::*;
-  import synth_envelope_lut_pkg::*;
+  import synth_dsp_lut_pkg::*;
 
   localparam int PREPARED_WIDTH = $bits(prepared_voice_t);
   localparam int ACTIVE_WIDTH = $bits(active_voice_t);
 
   typedef enum logic [1:0] {EXEC_IDLE, EXEC_READ, EXEC_APPLY} exec_state_t;
   exec_state_t state;
+  // Voice is retained separately for the RAM address; payload_words was
+  // already validated by the parser before this action is latched.
+/* verilator lint_off UNUSEDSIGNAL */
   control_action_t current_action;
+/* verilator lint_on UNUSEDSIGNAL */
   logic [VOICE_ID_WIDTH-1:0] action_voice;
   logic [VOICE_ID_WIDTH-1:0] prepared_read_voice;
   logic [VOICE_ID_WIDTH-1:0] active_read_voice;
@@ -74,21 +80,29 @@ module control_action_executor (
   logic [31:0] snapshot_residual_next;
   logic [31:0] snapshot_rounded_residual_next;
   logic [6:0] snapshot_mantissa_index_next;
+  logic compressor_config_valid;
 
   localparam logic [1:0] SNAPSHOT_LEVEL_ZERO = 2'd0;
   localparam logic [1:0] SNAPSHOT_LEVEL_DIRECT = 2'd1;
   localparam logic [1:0] SNAPSHOT_LEVEL_CB = 2'd2;
 
-  function automatic logic loop_valid(input voice_config_t cfg);
+  function automatic logic loop_valid(
+    input logic [1:0] loop_mode,
+    input logic stereo,
+    input logic [PHASE_FRAME_WIDTH-1:0] length,
+    input logic [PHASE_FRAME_WIDTH-1:0] length_r,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_start,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_start_r,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_end,
+    input logic [PHASE_FRAME_WIDTH-1:0] loop_end_r
+  );
     logic left_valid;
     logic right_valid;
     begin
-      left_valid = (cfg.loop_start < cfg.loop_end) &&
-                   (cfg.loop_end <= cfg.length);
-      right_valid = (cfg.loop_start_r < cfg.loop_end_r) &&
-                    (cfg.loop_end_r <= cfg.length_r);
-      loop_valid = (cfg.loop_mode == LOOP_MODE_NONE) ||
-                   (left_valid && (!cfg.stereo || right_valid));
+      left_valid = (loop_start < loop_end) && (loop_end <= length);
+      right_valid = (loop_start_r < loop_end_r) && (loop_end_r <= length_r);
+      loop_valid = (loop_mode == LOOP_MODE_NONE) ||
+                   (left_valid && (!stereo || right_valid));
     end
   endfunction
 
@@ -101,8 +115,8 @@ module control_action_executor (
     begin
       scaled_mantissa = mantissa >> octave_index;
       rounded_mantissa = {1'b0, scaled_mantissa} +
-                         25'(1 << (CB_TO_Q15_GUARD_BITS - 1));
-      scaled_mantissa_to_q15 = $signed(rounded_mantissa[23:8]);
+                         25'(1 << (ENV_CB_TO_Q15_GUARD_BITS - 1));
+      scaled_mantissa_to_q15 = $signed(16'(rounded_mantissa >> 8));
     end
   endfunction
 
@@ -110,7 +124,7 @@ module control_action_executor (
     logic [14:0] magnitude;
     logic [14:0] normalized;
     logic [3:0] leading_zeros;
-    logic [Q15_TO_CB_MANTISSA_BITS-1:0] mantissa_index;
+    logic [ENV_Q15_TO_CB_MANTISSA_BITS-1:0] mantissa_index;
     logic found;
     logic [32:0] approximation;
     begin
@@ -131,21 +145,25 @@ module control_action_executor (
           end
         end
         normalized = magnitude << leading_zeros;
-        mantissa_index = normalized[13 -: Q15_TO_CB_MANTISSA_BITS];
+        mantissa_index = ENV_Q15_TO_CB_MANTISSA_BITS'(
+            normalized >> (14 - ENV_Q15_TO_CB_MANTISSA_BITS));
         approximation =
-            {1'b0, CB_OCTAVE_Q12_20_LUT[5'(leading_zeros)]} +
-            {1'b0, Q15_TO_CB_MANTISSA_LUT[mantissa_index]};
+            {1'b0, ENV_CB_OCTAVE_Q12_20_LUT[5'(leading_zeros)]} +
+            {1'b0, ENV_Q15_TO_CB_MANTISSA_LUT[mantissa_index]};
         if (approximation < {1'b0, ENV_CB_SILENCE_Q12_20})
           q15_to_cb = approximation[31:0];
       end
     end
   endfunction
 
-  function automatic volume_env_stage_t stage_after_attack(input volume_env_params_t params);
-    if (params.hold_samples != '0)
+  function automatic volume_env_stage_t stage_after_attack(
+    input logic [23:0] hold_samples,
+    input logic [31:0] sustain_cb_q12_20,
+    input logic [31:0] decay_step_cb_q12_20
+  );
+    if (hold_samples != '0)
       stage_after_attack = ENV_HOLD;
-    else if ((params.sustain_cb_q12_20 != '0) &&
-             (params.decay_step_cb_q12_20 != '0))
+    else if ((sustain_cb_q12_20 != '0) && (decay_step_cb_q12_20 != '0))
       stage_after_attack = ENV_DECAY;
     else
       stage_after_attack = ENV_SUSTAIN;
@@ -164,7 +182,10 @@ module control_action_executor (
               out_voice.env_state.elapsed = '0;
               if (in_voice.env_params.attack_step_q0_32 == '0) begin
                 out_voice.env_state.attack_level_q0_32 = 32'hffff_ffff;
-                out_voice.env_state.stage = stage_after_attack(in_voice.env_params);
+                out_voice.env_state.stage = stage_after_attack(
+                    in_voice.env_params.hold_samples,
+                    in_voice.env_params.sustain_cb_q12_20,
+                    in_voice.env_params.decay_step_cb_q12_20);
                 if (out_voice.env_state.stage == ENV_SUSTAIN)
                   out_voice.env_state.attenuation_cb_q12_20 =
                       in_voice.env_params.sustain_cb_q12_20;
@@ -181,7 +202,10 @@ module control_action_executor (
             if (attack_sum[32] || (attack_sum[31:0] >= 32'hffff_ffff)) begin
               out_voice.env_state.attack_level_q0_32 = 32'hffff_ffff;
               out_voice.env_state.elapsed = '0;
-              out_voice.env_state.stage = stage_after_attack(in_voice.env_params);
+              out_voice.env_state.stage = stage_after_attack(
+                  in_voice.env_params.hold_samples,
+                  in_voice.env_params.sustain_cb_q12_20,
+                  in_voice.env_params.decay_step_cb_q12_20);
               if (out_voice.env_state.stage == ENV_SUSTAIN)
                 out_voice.env_state.attenuation_cb_q12_20 =
                     in_voice.env_params.sustain_cb_q12_20;
@@ -300,7 +324,14 @@ module control_action_executor (
     define_valid = (define_data.voice.length != '0) &&
                    (define_data.voice.loop_mode != 2'b11) &&
                    (define_data.voice.phase_init[31:8] < define_data.voice.length) &&
-                   loop_valid(define_data.voice);
+                   loop_valid(define_data.voice.loop_mode,
+                              define_data.voice.stereo,
+                              define_data.voice.length,
+                              define_data.voice.length_r,
+                              define_data.voice.loop_start,
+                              define_data.voice.loop_start_r,
+                              define_data.voice.loop_end,
+                              define_data.voice.loop_end_r);
     if (action.opcode == VOICE_DEFINE_STEREO)
       define_valid = define_valid && (define_data.voice.length_r != '0) &&
                      (define_data.voice.phase_init[31:8] < define_data.voice.length_r) &&
@@ -326,6 +357,10 @@ module control_action_executor (
       action_semantic_valid = env_update_payload_valid;
     else if (current_action.opcode == VOICE_FILTER)
       action_semantic_valid = current_action.payload[2][31:17] == '0;
+    compressor_config_valid = (action.payload[0][31:17] == '0) &&
+                              (action.payload[1] <= ENV_CB_SILENCE_Q12_20) &&
+                              (action.payload[2] <= ENV_CB_SILENCE_Q12_20) &&
+                              (action.payload[3] <= ENV_CB_SILENCE_Q12_20);
 
     action_next_data = active_read_data;
     unique case (current_action.opcode)
@@ -353,7 +388,10 @@ module control_action_executor (
                                            ENV_DELAY : ENV_ATTACK;
         if ((current_action.payload[2][23:0] == '0) && (current_action.payload[3] == '0)) begin
           action_next_data.env_state.attack_level_q0_32 = 32'hffff_ffff;
-          action_next_data.env_state.stage = stage_after_attack(action_next_data.env_params);
+          action_next_data.env_state.stage = stage_after_attack(
+              action_next_data.env_params.hold_samples,
+              action_next_data.env_params.sustain_cb_q12_20,
+              action_next_data.env_params.decay_step_cb_q12_20);
           if (action_next_data.env_state.stage == ENV_SUSTAIN)
             action_next_data.env_state.attenuation_cb_q12_20 =
                 action_next_data.env_params.sustain_cb_q12_20;
@@ -468,27 +506,27 @@ module control_action_executor (
                           (debug_read_select ? debug_read_voice : render_voice_index);
 
     snapshot_octave_next = '0;
-    if (snapshot_stage0_attenuation >= CB_OCTAVE_Q12_20_LUT[16]) begin
+    if (snapshot_stage0_attenuation >= ENV_CB_OCTAVE_Q12_20_LUT[16]) begin
       snapshot_octave_next = 5'd16;
     end else begin
-      if (snapshot_stage0_attenuation >= CB_OCTAVE_Q12_20_LUT[8])
+      if (snapshot_stage0_attenuation >= ENV_CB_OCTAVE_Q12_20_LUT[8])
         snapshot_octave_next = 5'd8;
       if (snapshot_stage0_attenuation >=
-          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd4])
+          ENV_CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd4])
         snapshot_octave_next = snapshot_octave_next + 5'd4;
       if (snapshot_stage0_attenuation >=
-          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd2])
+          ENV_CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd2])
         snapshot_octave_next = snapshot_octave_next + 5'd2;
       if (snapshot_stage0_attenuation >=
-          CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd1])
+          ENV_CB_OCTAVE_Q12_20_LUT[snapshot_octave_next + 5'd1])
         snapshot_octave_next = snapshot_octave_next + 5'd1;
     end
     snapshot_residual_next = snapshot_stage0_attenuation -
-                             CB_OCTAVE_Q12_20_LUT[snapshot_octave_next];
+                             ENV_CB_OCTAVE_Q12_20_LUT[snapshot_octave_next];
     snapshot_rounded_residual_next = snapshot_residual_next +
-        32'(1 << (CB_TO_Q15_RESIDUAL_INDEX_SHIFT - 1));
+        32'(1 << (ENV_CB_TO_Q15_RESIDUAL_INDEX_SHIFT - 1));
     snapshot_mantissa_index_next = 7'(
-        snapshot_rounded_residual_next >> CB_TO_Q15_RESIDUAL_INDEX_SHIFT);
+        snapshot_rounded_residual_next >> ENV_CB_TO_Q15_RESIDUAL_INDEX_SHIFT);
     config_valid = active_valid;
   end
 
@@ -538,6 +576,8 @@ module control_action_executor (
       snapshot_stage2_mantissa <= '0;
       render_config <= '0;
       render_runtime <= '0;
+      compressor_config <= '0;
+      master_volume <= 16'sh7fff;
     end else begin
       action_done <= 1'b0;
       stream_flush <= 1'b0;
@@ -595,7 +635,7 @@ module control_action_executor (
         snapshot_stage2_direct_level <= snapshot_stage1_direct_level;
         snapshot_stage2_octave <= snapshot_stage1_octave;
         snapshot_stage2_mantissa <=
-            CB_TO_Q15_MANTISSA_LUT[snapshot_stage1_mantissa_index];
+            ENV_CB_TO_Q15_MANTISSA_LUT[snapshot_stage1_mantissa_index];
       end
 
       if (snapshot_stage2_valid) begin
@@ -628,6 +668,23 @@ module control_action_executor (
               action_done <= 1'b1;
             end else if (action.opcode == STREAM_FLUSH) begin
               stream_flush <= 1'b1;
+              action_done <= 1'b1;
+            end else if (action.opcode == COMPRESSOR_CONFIG) begin
+              if (!compressor_config_valid) begin
+                command_error_pulse <= 1'b1;
+              end else begin
+                compressor_config.enable <= action.payload[0][0];
+                compressor_config.threshold_cb_q12_20 <= action.payload[1];
+                compressor_config.ratio_slope_q0_16 <= action.payload[0][16:1];
+                compressor_config.attack_step_cb_q12_20 <= action.payload[2];
+                compressor_config.release_step_cb_q12_20 <= action.payload[3];
+              end
+              action_done <= 1'b1;
+            end else if (action.opcode == MASTER_VOLUME) begin
+              if (action.payload[0][31:15] != '0)
+                command_error_pulse <= 1'b1;
+              else
+                master_volume <= $signed(action.payload[0][15:0]);
               action_done <= 1'b1;
             end else begin
               current_action <= action;

@@ -14,6 +14,8 @@ constexpr uint8_t kRelease = 0x14;
 constexpr uint8_t kStop = 0x15;
 constexpr uint8_t kGainPhase = 0x16;
 constexpr uint8_t kFilter = 0x17;
+constexpr uint8_t kCompressorConfig = 0x20;
+constexpr uint8_t kMasterVolume = 0x21;
 constexpr uint32_t kSilenceCbQ12_20 = 1000u << 20;
 
 uint32_t pack_pair(int high, int low) {
@@ -103,6 +105,33 @@ void CommandVoiceControl::stop_voice(int voice) {
   if (!mirror.active) return;
   emit(kStop, voice, mirror.seq, {});
   mirror.active = false;
+}
+
+void CommandAudioControl::emit(uint8_t opcode,
+                               std::initializer_list<uint32_t> payload) {
+  std::vector<uint32_t> words;
+  words.reserve(payload.size() + 1);
+  words.push_back((uint32_t(opcode) << 24) | uint32_t(payload.size()));
+  words.insert(words.end(), payload.begin(), payload.end());
+  sink_.write_command_words(words);
+}
+
+void CommandAudioControl::configure_compressor(
+    const CompressorCommandConfig& config) {
+  if (config.threshold_cb_q12_20 > kSilenceCbQ12_20 ||
+      config.attack_step_cb_q12_20 > kSilenceCbQ12_20 ||
+      config.release_step_cb_q12_20 > kSilenceCbQ12_20) {
+    throw std::out_of_range("compressor centibel field");
+  }
+  emit(kCompressorConfig,
+       {(uint32_t(config.ratio_slope_q0_16) << 1) |
+            (config.enable ? 1u : 0u),
+        config.threshold_cb_q12_20, config.attack_step_cb_q12_20,
+        config.release_step_cb_q12_20});
+}
+
+void CommandAudioControl::set_master_volume(int gain_q1_15) {
+  emit(kMasterVolume, {uint32_t(uint16_t(clamp_q15(gain_q1_15)))});
 }
 
 uint32_t envelope_release_step(const Region& region) {

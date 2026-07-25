@@ -78,6 +78,18 @@ module wavetable_demo_system #(
   logic spi_cmd_valid;
   logic [31:0] spi_cmd_data;
   logic spi_cmd_ready;
+  logic compressor_enabled;
+  logic compressor_primed;
+  logic [15:0] compressor_delay_level;
+  logic [31:0] compressor_gain_reduction;
+  logic [31:0] compressor_target_gain_reduction;
+  logic [synth_pkg::MIX_WIDTH-1:0] compressor_detector_peak;
+  logic [31:0] compressor_max_gain_reduction;
+  logic [synth_pkg::MIX_WIDTH-1:0] compressor_max_detector_peak;
+  logic [31:0] compressor_input_frame_count;
+  logic [31:0] compressor_output_frame_count;
+  logic [31:0] compressor_compressed_frame_count;
+  logic [31:0] compressor_saturation_count;
 
   assign core_reset = rst || core_rst;
 
@@ -175,6 +187,18 @@ module wavetable_demo_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
+    .compressor_enabled,
+    .compressor_primed,
+    .compressor_delay_level,
+    .compressor_gain_reduction,
+    .compressor_target_gain_reduction,
+    .compressor_detector_peak,
+    .compressor_max_gain_reduction,
+    .compressor_max_detector_peak,
+    .compressor_input_frame_count,
+    .compressor_output_frame_count,
+    .compressor_compressed_frame_count,
+    .compressor_saturation_count,
     .render_deadline_miss_pulse,
     .render_latency_cycles
   );
@@ -198,6 +222,18 @@ module wavetable_demo_system #(
     .sample_l(core_sample_l),
     .sample_r(core_sample_r),
     .busy(core_busy),
+    .compressor_enabled,
+    .compressor_primed,
+    .compressor_delay_level,
+    .compressor_gain_reduction,
+    .compressor_target_gain_reduction,
+    .compressor_detector_peak,
+    .compressor_max_gain_reduction,
+    .compressor_max_detector_peak,
+    .compressor_input_frame_count,
+    .compressor_output_frame_count,
+    .compressor_compressed_frame_count,
+    .compressor_saturation_count,
     .ext_req_valid,
     .ext_req_ready,
     .ext_req_addr,

@@ -1,6 +1,6 @@
 #include "reference_synth.h"
 
-#include "generated/envelope_lut.h"
+#include "generated/dsp_lut.h"
 
 #include <algorithm>
 
@@ -136,13 +136,13 @@ void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
     EnvelopeState& e = envelopes_[voice];
     e.release_step = words[1];
     if (e.release_step == 0) {
-      e.attenuation_cb = envelope_lut::kCbSilenceQ12_20;
+      e.attenuation_cb = dsp_lut::kEnvCbSilenceQ12_20;
     } else if (e.stage == EnvelopeState::kAttack) {
       e.attenuation_cb = q15_to_cb(int16_t((e.attack_level >> 17) & 0x7fffu));
     } else if (e.stage == EnvelopeState::kHold) {
       e.attenuation_cb = 0;
     } else if (e.stage == EnvelopeState::kDelay) {
-      e.attenuation_cb = envelope_lut::kCbSilenceQ12_20;
+      e.attenuation_cb = dsp_lut::kEnvCbSilenceQ12_20;
     }
     e.elapsed = 0;
     e.stage = EnvelopeState::kRelease;
@@ -165,28 +165,28 @@ void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
 }
 
 int16_t ReferenceSynth::cb_to_q15(uint32_t cb_q12_20) {
-  if (cb_q12_20 >= envelope_lut::kCbSilenceQ12_20) return 0;
+  if (cb_q12_20 >= dsp_lut::kEnvCbSilenceQ12_20) return 0;
   uint32_t octave = 0;
-  if (cb_q12_20 >= envelope_lut::kCbOctaveQ12_20[16]) {
+  if (cb_q12_20 >= dsp_lut::kEnvCbOctaveQ12_20[16]) {
     octave = 16;
   } else {
-    if (cb_q12_20 >= envelope_lut::kCbOctaveQ12_20[8]) octave = 8;
-    if (cb_q12_20 >= envelope_lut::kCbOctaveQ12_20[octave + 4]) octave += 4;
-    if (cb_q12_20 >= envelope_lut::kCbOctaveQ12_20[octave + 2]) octave += 2;
-    if (cb_q12_20 >= envelope_lut::kCbOctaveQ12_20[octave + 1]) octave += 1;
+    if (cb_q12_20 >= dsp_lut::kEnvCbOctaveQ12_20[8]) octave = 8;
+    if (cb_q12_20 >= dsp_lut::kEnvCbOctaveQ12_20[octave + 4]) octave += 4;
+    if (cb_q12_20 >= dsp_lut::kEnvCbOctaveQ12_20[octave + 2]) octave += 2;
+    if (cb_q12_20 >= dsp_lut::kEnvCbOctaveQ12_20[octave + 1]) octave += 1;
   }
-  uint32_t residual = cb_q12_20 - envelope_lut::kCbOctaveQ12_20[octave];
+  uint32_t residual = cb_q12_20 - dsp_lut::kEnvCbOctaveQ12_20[octave];
   uint32_t index =
-      (residual + (1u << (envelope_lut::kCbToQ15ResidualIndexShift - 1u))) >>
-      envelope_lut::kCbToQ15ResidualIndexShift;
-  uint32_t scaled = envelope_lut::kCbToQ15Mantissa.at(index) >> octave;
-  return int16_t((scaled + (1u << (envelope_lut::kCbToQ15GuardBits - 1u))) >>
-                 envelope_lut::kCbToQ15GuardBits);
+      (residual + (1u << (dsp_lut::kEnvCbToQ15ResidualIndexShift - 1u))) >>
+      dsp_lut::kEnvCbToQ15ResidualIndexShift;
+  uint32_t scaled = dsp_lut::kEnvCbToQ15Mantissa.at(index) >> octave;
+  return int16_t((scaled + (1u << (dsp_lut::kEnvCbToQ15GuardBits - 1u))) >>
+                 dsp_lut::kEnvCbToQ15GuardBits);
 }
 
 uint32_t ReferenceSynth::q15_to_cb(int16_t level) {
   if (level >= int16_t(0x7fff)) return 0;
-  if (level <= 0) return envelope_lut::kCbSilenceQ12_20;
+  if (level <= 0) return dsp_lut::kEnvCbSilenceQ12_20;
   uint32_t magnitude = uint16_t(level);
   uint32_t leading_zeros = 0;
   for (int bit = 14; bit >= 0; --bit) {
@@ -197,10 +197,10 @@ uint32_t ReferenceSynth::q15_to_cb(int16_t level) {
   }
   uint32_t normalized = magnitude << leading_zeros;
   uint32_t index =
-      (normalized >> (14u - envelope_lut::kQ15ToCbMantissaBits)) &
-      ((1u << envelope_lut::kQ15ToCbMantissaBits) - 1u);
-  return envelope_lut::kCbOctaveQ12_20.at(leading_zeros) +
-         envelope_lut::kQ15ToCbMantissa.at(index);
+      (normalized >> (14u - dsp_lut::kEnvQ15ToCbMantissaBits)) &
+      ((1u << dsp_lut::kEnvQ15ToCbMantissaBits) - 1u);
+  return dsp_lut::kEnvCbOctaveQ12_20.at(leading_zeros) +
+         dsp_lut::kEnvQ15ToCbMantissa.at(index);
 }
 
 int16_t ReferenceSynth::envelope_level(const VoiceConfig& voice, const EnvelopeState& e) {
@@ -212,7 +212,7 @@ int16_t ReferenceSynth::envelope_level(const VoiceConfig& voice, const EnvelopeS
 }
 
 void ReferenceSynth::advance_envelope(VoiceConfig& v, EnvelopeState& e) {
-  constexpr uint32_t kSilence = envelope_lut::kCbSilenceQ12_20;
+  constexpr uint32_t kSilence = dsp_lut::kEnvCbSilenceQ12_20;
   switch (e.stage) {
     case EnvelopeState::kDelay:
       if (++e.elapsed >= e.delay_samples) {
@@ -288,7 +288,7 @@ void ReferenceSynth::advance_envelope(VoiceConfig& v, EnvelopeState& e) {
   v.envelope = envelope_level(v, e);
 }
 
-std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
+std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
   int32_t accum_l = 0;
   int32_t accum_r = 0;
   const bool detailed = diagnostics_ && diagnostics_->detailed_enabled;
@@ -424,8 +424,10 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     update_max_abs(diagnostics_->max_abs_mix_input_l, accum_l);
     update_max_abs(diagnostics_->max_abs_mix_input_r, accum_r);
   }
-  auto out = std::make_pair(saturate(accum_l, detailed ? &mix_l_saturated : nullptr),
-                            saturate(accum_r, detailed ? &mix_r_saturated : nullptr));
+  if (detailed) {
+    (void)saturate(accum_l, &mix_l_saturated);
+    (void)saturate(accum_r, &mix_r_saturated);
+  }
   if (detailed) {
     if (mix_l_saturated || mix_r_saturated) frame_mix_saturated = true;
     if (mix_l_saturated) mix_saturations += 1;
@@ -446,7 +448,12 @@ std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
     }
   }
   sample_counter_ += 1;
-  return out;
+  return {accum_l, accum_r};
+}
+
+std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {
+  const auto mix = render_mix();
+  return {saturate(mix.first), saturate(mix.second)};
 }
 
 int16_t ReferenceSynth::interpolate(int16_t sample_0, int16_t sample_1, uint32_t fraction) {

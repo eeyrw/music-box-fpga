@@ -95,7 +95,7 @@ The generic synthesizer core source list should match `RTL_SOURCES` in the root
 ```text
 rtl/pkg/synth_pkg.sv
 rtl/pkg/synth_register_pkg.sv
-rtl/generated/synth_envelope_lut_pkg.sv
+rtl/generated/synth_dsp_lut_pkg.sv
 rtl/control/voice_bram_1r1w.sv
 rtl/control/control_word_fifo.sv
 rtl/control/control_action_fifo.sv

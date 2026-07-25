@@ -525,6 +525,10 @@ int main() {
     if (diagnostics_text.find("diagnostics_max_abs_filter_y_input") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_voice_contribution_input_l") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_abs_mix_input_r") == std::string::npos ||
+        diagnostics_text.find("diagnostics_compressor_gain_reduction_cb_q12_20") ==
+            std::string::npos ||
+        diagnostics_text.find("diagnostics_compressor_saturation_count") ==
+            std::string::npos ||
         diagnostics_text.find("diagnostics_max_voice_steal_score") == std::string::npos ||
         diagnostics_text.find("diagnostics_max_audible_envelope_jump_frame") == std::string::npos) {
       throw std::runtime_error("diagnostics JSON did not include pre-saturation maxima");
@@ -625,6 +629,20 @@ int main() {
     render::Args parsed_start = render::parse_args(5, const_cast<char**>(start_seconds_argv));
     if (parsed_start.start_seconds != 144.0 || parsed_start.seconds != 30.0) {
       throw std::runtime_error("start-seconds argument was not parsed");
+    }
+    const char* compressor_argv[] = {
+        "render", "--compressor-enable", "--compressor-threshold-cb", "120",
+        "--compressor-ratio", "4", "--compressor-attack-ms", "0",
+        "--compressor-release-ms", "100", "--master-volume", "0.75"};
+    render::Args parsed_compressor =
+        render::parse_args(12, const_cast<char**>(compressor_argv));
+    if (!parsed_compressor.compressor_enable ||
+        parsed_compressor.compressor_threshold_cb != 120.0 ||
+        parsed_compressor.compressor_ratio != 4.0 ||
+        parsed_compressor.compressor_attack_ms != 0.0 ||
+        parsed_compressor.compressor_release_ms != 100.0 ||
+        parsed_compressor.master_volume != 0.75) {
+      throw std::runtime_error("compressor arguments were not parsed");
     }
     for (const auto& e : events) {
       if (e.on && e.note == 61) throw std::runtime_error("unmapped melodic note-on was not silenced");

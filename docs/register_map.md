@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x00070000`. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x00080000`. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x9018` | `AUDIO_STATUS` | platform | Audio FIFO and playback state. |
@@ -32,6 +32,16 @@ updates, release, and stop use the transactional command stream documented in
 | `0x90a0` | `DEBUG_VOICE_INDEX` | RW | Voice selected for the next debug capture. |
 | `0x90a4` | `DEBUG_VOICE_CAPTURE` | WO | Write exactly `1` to request a capture. |
 | `0x90a8` | `DEBUG_VOICE_STATUS` | RO | Capture state and selected voice metadata. |
+| `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
+| `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
+| `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
+| `0x9118` | `COMPRESSOR_DETECTOR_PEAK` | RO | Current linked unsigned 24-bit peak magnitude. |
+| `0x911c` | `COMPRESSOR_MAX_GAIN_REDUCTION` | RO | Maximum gain reduction since core reset, cB Q12.20. |
+| `0x9120` | `COMPRESSOR_MAX_DETECTOR_PEAK` | RO | Maximum unsigned 24-bit detector peak since core reset. |
+| `0x9124` | `COMPRESSOR_INPUT_FRAME_COUNT` | RO | Saturating count of accepted mix frames. |
+| `0x9128` | `COMPRESSOR_OUTPUT_FRAME_COUNT` | RO | Saturating count of valid post-delay output frames. |
+| `0x912c` | `COMPRESSOR_COMPRESSED_FRAME_COUNT` | RO | Saturating count of output frames with nonzero compressor reduction. |
+| `0x9130` | `COMPRESSOR_SATURATION_COUNT` | RO | Saturating count of final PCM16 channel saturation events. |
 
 The generic control plane accepts writes only at `CMD_FIFO_DATA`. Unknown
 addresses and writes to read-only generic registers return `bus_error`.
@@ -54,6 +64,25 @@ window.
 `CMD_ERROR_STATUS[0]` reports malformed or semantically invalid commands;
 bit 1 reports stale sequences. `CMD_ACTION_STATUS` repeats the action FIFO
 empty, full, and level fields in bits `0`, `1`, and `15:2`.
+
+### Compressor Diagnostics
+
+`COMPRESSOR_STATUS` fields are:
+
+| Bits | Meaning |
+| ---: | --- |
+| `0` | compressor enabled by the active global command |
+| `1` | fixed look-ahead delay fully primed |
+| `2` | current gain reduction is nonzero |
+| `7:3` | reserved, zero |
+| `23:8` | accepted frames currently stored while priming the delay |
+| `31:24` | reserved, zero |
+
+The current detector peak, target, and applied reduction are published together
+after one accepted input frame is analyzed. Maximum values and counters clear on
+core reset. Input/output/compressed counters count stereo frames;
+`COMPRESSOR_SATURATION_COUNT` counts channels, so a frame clipping both left and
+right increments it by two. All counters stop at `0xffffffff`.
 
 ## Voice Debug Snapshot
 

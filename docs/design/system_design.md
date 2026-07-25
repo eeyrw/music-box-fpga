@@ -36,7 +36,13 @@ sample/frame request ------------------------> multi_voice_pipeline
                                        word memory request/response
                                                        |
                                                        v
-                                             stereo PCM frame
+                                      signed 24-bit stereo mix
+                                                       |
+                                                       v
+                                      look-ahead compressor + master
+                                                       |
+                                                       v
+                                      final PCM16 FIFO and serializer
 ```
 
 `wavetable_render_core` composes the control plane and renderer.
@@ -106,7 +112,8 @@ or filter values through runtime commands.
 7. Run interpolation, optional biquad filtering, independent left/right gain,
    envelope gain, and saturation in `voice_dsp_pipeline`.
 8. Retire contributions into signed 32-bit stereo accumulators.
-9. Emit one saturated signed 16-bit stereo frame after all work drains.
+9. Emit both the exact signed 24-bit mix and the compatibility saturated PCM16
+   frame after all work drains.
 
 The renderer overlaps the next valid-voice scan and envelope snapshot with the
 current voice's endpoint traffic. Four fetch slots plus independent 16-entry
@@ -139,6 +146,53 @@ The common wrapper uses a credit scheduler and output FIFO:
 - startup does not count as underrun;
 - rendered, played, lead, minimum-level, underrun, and drop diagnostics are
   exposed through common status registers.
+
+## Look-Ahead Compressor
+
+The post-mix compressor operates before the final PCM saturation and before
+the existing output FIFO. Its stereo-linked detector observes the undelayed mix,
+while a fixed 48-frame delay line holds the corresponding stereo samples. The
+current approximately 1 ms output FIFO remains after the compressor and retains
+its renderer/I2S decoupling and underrun-protection role; it is not the
+look-ahead delay line.
+
+The delay line never drains its stored frames as a burst. With the default
+48-frame look-ahead, input frames 0 through 47 only prime the delay. Accepting
+input frame 48 detects that future frame and releases delayed frame 0; each
+subsequent accepted input releases exactly one subsequent delayed frame. The
+post-compressor FIFO must then accumulate its own 48-frame startup level before
+I2S playback begins. The default sample-domain latency is therefore additive:
+
+```text
+48-frame compressor look-ahead + 48-frame output-FIFO lead
+= 96 frames = 2 ms at 48 kHz
+```
+
+Pre-rendering may fill both stages faster than real time, so wall-clock startup
+can be shorter than 2 ms. That does not change the 96-frame logical latency from
+a rendered input sample to its queued I2S playback. Reducing the FIFO target
+level reduces total latency but also reduces tolerance for renderer and memory
+service jitter.
+
+Each voice contribution is already saturated to signed 16-bit PCM. With the
+8-bit voice index limiting the design to 256 voices, the exact worst-case mix
+range is `-8,388,608..8,388,352`, so a signed 24-bit sample preserves the mix
+without loss. The look-ahead storage therefore uses two signed 24-bit
+channels. Gain multiplication widens explicitly before the only final PCM16
+rounding and saturation.
+
+Compressor parameters use the dedicated command stream rather than the register
+window. One four-word global compressor action replaces enable, threshold,
+ratio slope, attack, and release fields atomically before a render frame. A
+separate global action updates master volume. Master gain is applied after the
+compressor gain in the wide datapath, before final PCM16 saturation and the
+output FIFO.
+
+The common read-only status window exposes coherent current detector peak,
+target and applied gain reduction, delay prime state, maxima, input/output and
+compressed-frame counts, and final channel-saturation count. Maxima and 32-bit
+saturating counters clear with core reset. These diagnostics use only registers,
+comparators, and carry-chain incrementers; they add no sample RAM or multiplier.
 
 ## Debug Snapshot
 

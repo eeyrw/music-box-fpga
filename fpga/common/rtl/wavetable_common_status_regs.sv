@@ -24,6 +24,18 @@ module wavetable_common_status_regs #(
   input  logic                     mem_response_trace_pulse,
   input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
+  input  logic                     compressor_enabled,
+  input  logic                     compressor_primed,
+  input  logic [15:0]              compressor_delay_level,
+  input  logic [31:0]              compressor_gain_reduction,
+  input  logic [31:0]              compressor_target_gain_reduction,
+  input  logic [synth_pkg::MIX_WIDTH-1:0] compressor_detector_peak,
+  input  logic [31:0]              compressor_max_gain_reduction,
+  input  logic [synth_pkg::MIX_WIDTH-1:0] compressor_max_detector_peak,
+  input  logic [31:0]              compressor_input_frame_count,
+  input  logic [31:0]              compressor_output_frame_count,
+  input  logic [31:0]              compressor_compressed_frame_count,
+  input  logic [31:0]              compressor_saturation_count,
   output logic                     render_deadline_miss_pulse,
   output logic [15:0]              render_latency_cycles
 );
@@ -38,6 +50,23 @@ module wavetable_common_status_regs #(
   localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = REG_SAMPLE_DROP_COUNT;
   localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = REG_RENDER_DEADLINE_MISS_COUNT;
   localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = REG_MEM_RESPONSE_COUNT;
+  localparam logic [15:0] ADDR_COMPRESSOR_STATUS = REG_COMPRESSOR_STATUS;
+  localparam logic [15:0] ADDR_COMPRESSOR_GAIN_REDUCTION = REG_COMPRESSOR_GAIN_REDUCTION;
+  localparam logic [15:0] ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION =
+      REG_COMPRESSOR_TARGET_GAIN_REDUCTION;
+  localparam logic [15:0] ADDR_COMPRESSOR_DETECTOR_PEAK = REG_COMPRESSOR_DETECTOR_PEAK;
+  localparam logic [15:0] ADDR_COMPRESSOR_MAX_GAIN_REDUCTION =
+      REG_COMPRESSOR_MAX_GAIN_REDUCTION;
+  localparam logic [15:0] ADDR_COMPRESSOR_MAX_DETECTOR_PEAK =
+      REG_COMPRESSOR_MAX_DETECTOR_PEAK;
+  localparam logic [15:0] ADDR_COMPRESSOR_INPUT_FRAME_COUNT =
+      REG_COMPRESSOR_INPUT_FRAME_COUNT;
+  localparam logic [15:0] ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT =
+      REG_COMPRESSOR_OUTPUT_FRAME_COUNT;
+  localparam logic [15:0] ADDR_COMPRESSOR_COMPRESSED_FRAME_COUNT =
+      REG_COMPRESSOR_COMPRESSED_FRAME_COUNT;
+  localparam logic [15:0] ADDR_COMPRESSOR_SATURATION_COUNT =
+      REG_COMPRESSOR_SATURATION_COUNT;
 
   logic render_pending;
   logic [15:0] render_latency_count;
@@ -53,7 +82,12 @@ module wavetable_common_status_regs #(
       ADDR_SYSTEM_STATUS, ADDR_COMMON_EVENT_FLAGS, ADDR_AUDIO_STATUS,
       ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
-      ADDR_MEM_RESPONSE_COUNT: begin
+      ADDR_MEM_RESPONSE_COUNT, ADDR_COMPRESSOR_STATUS,
+      ADDR_COMPRESSOR_GAIN_REDUCTION, ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION,
+      ADDR_COMPRESSOR_DETECTOR_PEAK, ADDR_COMPRESSOR_MAX_GAIN_REDUCTION,
+      ADDR_COMPRESSOR_MAX_DETECTOR_PEAK, ADDR_COMPRESSOR_INPUT_FRAME_COUNT,
+      ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT, ADDR_COMPRESSOR_COMPRESSED_FRAME_COUNT,
+      ADDR_COMPRESSOR_SATURATION_COUNT: begin
         is_common_status_address = 1'b1;
       end
       default: is_common_status_address = 1'b0;
@@ -119,6 +153,24 @@ module wavetable_common_status_regs #(
       ADDR_SAMPLE_DROP_COUNT: bus_rdata = sample_drop_count;
       ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rdata = render_deadline_miss_count;
       ADDR_MEM_RESPONSE_COUNT: bus_rdata = mem_response_count;
+      ADDR_COMPRESSOR_STATUS: begin
+        bus_rdata = {8'd0, compressor_delay_level, 5'd0,
+                     |compressor_gain_reduction, compressor_primed,
+                     compressor_enabled};
+      end
+      ADDR_COMPRESSOR_GAIN_REDUCTION: bus_rdata = compressor_gain_reduction;
+      ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION:
+          bus_rdata = compressor_target_gain_reduction;
+      ADDR_COMPRESSOR_DETECTOR_PEAK:
+          bus_rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}}, compressor_detector_peak};
+      ADDR_COMPRESSOR_MAX_GAIN_REDUCTION: bus_rdata = compressor_max_gain_reduction;
+      ADDR_COMPRESSOR_MAX_DETECTOR_PEAK:
+          bus_rdata = {{(32-synth_pkg::MIX_WIDTH){1'b0}}, compressor_max_detector_peak};
+      ADDR_COMPRESSOR_INPUT_FRAME_COUNT: bus_rdata = compressor_input_frame_count;
+      ADDR_COMPRESSOR_OUTPUT_FRAME_COUNT: bus_rdata = compressor_output_frame_count;
+      ADDR_COMPRESSOR_COMPRESSED_FRAME_COUNT:
+          bus_rdata = compressor_compressed_frame_count;
+      ADDR_COMPRESSOR_SATURATION_COUNT: bus_rdata = compressor_saturation_count;
       default: bus_rdata = 32'd0;
     endcase
   end

@@ -5,7 +5,7 @@
 package synth_register_pkg;
   localparam int REG_BUS_ADDR_WIDTH = 16;
   localparam int REG_BUS_DATA_WIDTH = 32;
-  localparam logic [31:0] REG_VERSION_VALUE = 32'h00070000;
+  localparam logic [31:0] REG_VERSION_VALUE = 32'h00080000;
 
   localparam logic [15:0] REG_VERSION = 16'h9000;
   localparam logic [15:0] REG_SYSTEM_STATUS = 16'h9010;
@@ -49,6 +49,16 @@ package synth_register_pkg;
   localparam logic [15:0] REG_DEBUG_ENV_ELAPSED = 16'h9100;
   localparam logic [15:0] REG_DEBUG_ENV_ATTACK_LEVEL = 16'h9104;
   localparam logic [15:0] REG_DEBUG_ENV_ATTENUATION = 16'h9108;
+  localparam logic [15:0] REG_COMPRESSOR_STATUS = 16'h910c;
+  localparam logic [15:0] REG_COMPRESSOR_GAIN_REDUCTION = 16'h9110;
+  localparam logic [15:0] REG_COMPRESSOR_TARGET_GAIN_REDUCTION = 16'h9114;
+  localparam logic [15:0] REG_COMPRESSOR_DETECTOR_PEAK = 16'h9118;
+  localparam logic [15:0] REG_COMPRESSOR_MAX_GAIN_REDUCTION = 16'h911c;
+  localparam logic [15:0] REG_COMPRESSOR_MAX_DETECTOR_PEAK = 16'h9120;
+  localparam logic [15:0] REG_COMPRESSOR_INPUT_FRAME_COUNT = 16'h9124;
+  localparam logic [15:0] REG_COMPRESSOR_OUTPUT_FRAME_COUNT = 16'h9128;
+  localparam logic [15:0] REG_COMPRESSOR_COMPRESSED_FRAME_COUNT = 16'h912c;
+  localparam logic [15:0] REG_COMPRESSOR_SATURATION_COUNT = 16'h9130;
   localparam logic [15:0] REG_PLATFORM_STATUS = 16'h9040;
   localparam logic [15:0] REG_PLATFORM_ERRORS = 16'h9044;
   localparam logic [15:0] REG_PLATFORM_BYTES_LOADED = 16'h9048;
@@ -81,6 +91,11 @@ package synth_register_pkg;
   localparam logic [31:0] REG_DDR_ACCESS_STATUS_READY_MASK = 32'h00000002;
   localparam logic [31:0] REG_DDR_ACCESS_STATUS_DONE_MASK = 32'h00000008;
   localparam logic [31:0] REG_DDR_ACCESS_STATUS_ERROR_MASK = 32'h00000010;
+  localparam logic [31:0] REG_COMPRESSOR_STATUS_ENABLED_MASK = 32'h00000001;
+  localparam logic [31:0] REG_COMPRESSOR_STATUS_PRIMED_MASK = 32'h00000002;
+  localparam logic [31:0] REG_COMPRESSOR_STATUS_ACTIVE_MASK = 32'h00000004;
+  localparam int REG_COMPRESSOR_STATUS_DELAY_LEVEL_LSB = 8;
+  localparam int REG_COMPRESSOR_STATUS_DELAY_LEVEL_WIDTH = 16;
 
   localparam logic [31:0] REG_Q15_FULL = 32'h00007fff;
   localparam logic [31:0] REG_FILTER_B0_UNITY_Q2_14 = 32'h00004000;

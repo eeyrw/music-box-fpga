@@ -226,6 +226,30 @@ std::string diagnostics_json_fields(const RenderDiagnostics& d) {
   std::ostringstream s;
   s << "  \"diagnostics_detailed_enabled\": " << (d.detailed_enabled ? "true" : "false")
     << ",\n  \"diagnostics_frames\": " << d.frames
+    << ",\n  \"diagnostics_compressor_enabled\": "
+    << (d.compressor_enabled ? "true" : "false")
+    << ",\n  \"diagnostics_compressor_primed\": "
+    << (d.compressor_primed ? "true" : "false")
+    << ",\n  \"diagnostics_compressor_active\": "
+    << (d.compressor_active ? "true" : "false")
+    << ",\n  \"diagnostics_compressor_delay_level\": " << d.compressor_delay_level
+    << ",\n  \"diagnostics_compressor_gain_reduction_cb_q12_20\": "
+    << d.compressor_gain_reduction_cb_q12_20
+    << ",\n  \"diagnostics_compressor_target_gain_reduction_cb_q12_20\": "
+    << d.compressor_target_gain_reduction_cb_q12_20
+    << ",\n  \"diagnostics_compressor_detector_peak\": " << d.compressor_detector_peak
+    << ",\n  \"diagnostics_compressor_max_gain_reduction_cb_q12_20\": "
+    << d.compressor_max_gain_reduction_cb_q12_20
+    << ",\n  \"diagnostics_compressor_max_detector_peak\": "
+    << d.compressor_max_detector_peak
+    << ",\n  \"diagnostics_compressor_input_frame_count\": "
+    << d.compressor_input_frame_count
+    << ",\n  \"diagnostics_compressor_output_frame_count\": "
+    << d.compressor_output_frame_count
+    << ",\n  \"diagnostics_compressor_compressed_frame_count\": "
+    << d.compressor_compressed_frame_count
+    << ",\n  \"diagnostics_compressor_saturation_count\": "
+    << d.compressor_saturation_count
     << ",\n  \"diagnostics_filter_y_saturated_frames\": " << d.filter_y_saturated_frames
     << ",\n  \"diagnostics_filter_y_saturations\": " << d.filter_y_saturations
     << ",\n  \"diagnostics_filter_state_saturated_frames\": " << d.filter_state_saturated_frames

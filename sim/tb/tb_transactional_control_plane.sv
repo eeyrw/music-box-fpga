@@ -23,6 +23,8 @@ module tb_transactional_control_plane;
   active_voice_t debug_active;
   voice_config_t render_config;
   voice_runtime_t render_runtime;
+  compressor_config_t compressor_config;
+  logic signed [15:0] master_volume;
   logic [NUM_VOICES-1:0] config_valid;
   logic [NUM_VOICES-1:0] commit_pulse;
   logic [NUM_VOICES-1:0] prepared_valid;
@@ -172,6 +174,30 @@ module tb_transactional_control_plane;
     debug_read_voice = '0;
     repeat (4) @(negedge clk);
     rst = 1'b0;
+
+    push_word(header(COMPRESSOR_CONFIG, 8'd0, 8'd0, 8'd4));
+    push_word(32'h0001_0001);
+    push_word(32'd120 << 20);
+    push_word(32'd4 << 20);
+    push_word(32'd1 << 20);
+    wait_actions(1);
+    request_frame();
+    if (!compressor_config.enable ||
+        compressor_config.threshold_cb_q12_20 != (32'd120 << 20) ||
+        compressor_config.ratio_slope_q0_16 != 16'h8000 ||
+        compressor_config.attack_step_cb_q12_20 != (32'd4 << 20) ||
+        compressor_config.release_step_cb_q12_20 != (32'd1 << 20)) begin
+      $error("compressor config action did not commit atomically");
+      errors++;
+    end
+    push_word(header(MASTER_VOLUME, 8'd0, 8'd0, 8'd1));
+    push_word(32'h0000_4000);
+    wait_actions(1);
+    request_frame();
+    if (master_volume != 16'sh4000) begin
+      $error("master volume action mismatch: %h", master_volume);
+      errors++;
+    end
 
     push_define_mono(8'd3, 8'h21);
     wait_actions(1);

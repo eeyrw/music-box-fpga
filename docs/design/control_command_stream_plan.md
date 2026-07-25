@@ -93,10 +93,39 @@ The command opcodes are:
 | `0x15` | `VOICE_STOP` | 0 |
 | `0x16` | `VOICE_GAIN_PHASE` | 2 |
 | `0x17` | `VOICE_FILTER` | 3 |
+| `0x20` | `COMPRESSOR_CONFIG` | 4 |
+| `0x21` | `MASTER_VOLUME` | 1 |
 | `0x7f` | `STREAM_FLUSH` | 0 |
 
 All reserved bits must be zero. Samples and coefficients use the formats in
 `docs/fixed_point.md`. Loop ends are exclusive.
+
+`COMPRESSOR_CONFIG` and `MASTER_VOLUME` are global actions. Their header `voice`
+and `seq` fields must both be zero. They are applied with the same bounded action
+batch that precedes a render frame.
+
+### COMPRESSOR_CONFIG
+
+```text
+word 0  control: bit 0 enable, bits 16:1 ratio slope Q0.16, bits 31:17 zero
+word 1  threshold attenuation, unsigned cB Q12.20
+word 2  attack step, unsigned cB Q12.20 per frame
+word 3  release step, unsigned cB Q12.20 per frame
+```
+
+The ratio slope is `1 - 1/ratio`: `0x0000` is 1:1, `0x8000` is
+2:1, and `0xffff` approaches limiting. A zero attack or release step means an
+immediate transition to the current target. Each command replaces the complete
+compressor configuration atomically. Centibel fields must not exceed 1000 cB.
+
+### MASTER_VOLUME
+
+```text
+word 0  signed nonnegative Q1.15 master gain in bits 15:0; bits 31:15 zero
+```
+
+`0x7fff` is the exact bypass setting and is the reset default. Master volume is
+applied after compressor gain and before the only final PCM16 saturation.
 
 ### VOICE_DEFINE_MONO
 

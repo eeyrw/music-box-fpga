@@ -13,6 +13,7 @@ class ReferenceSynth : public CommandWordSink {
   explicit ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnostics* diagnostics = nullptr);
 
   void write_command_words(const std::vector<uint32_t>& words) override;
+  std::pair<int32_t, int32_t> render_mix();
   std::pair<int16_t, int16_t> render_sample();
 
  private:
