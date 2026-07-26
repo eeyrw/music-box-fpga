@@ -38,6 +38,10 @@ change.
   prioritized structural cleanup for executor ownership, renderer working
   records, typed voice-layer boundaries, debug capture, and cache state, with
   RAM-inference and timing-preservation gates.
+- [`design/system_architecture_backlog.md`](design/system_architecture_backlog.md):
+  architecture-level control, renderer, memory/cache, effects, transport, and
+  audio-timeline redesign candidates, dependency order, and acceptance gates.
+  These items may intentionally change internal or external contracts.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
   synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):

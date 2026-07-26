@@ -17,6 +17,8 @@ external contracts live in:
 - `spi_register_timing.md`: SPI register read/write and burst timing analysis.
 - `spi_transport_backlog.md`: SPI correctness bugs and DMA-safe transport work.
 - `../verification/simulation_design.md`: tests and render flows.
+- `system_architecture_backlog.md`: measured system-level limitations and
+  candidate control/render/memory/audio redesigns.
 
 ## Scope
 
