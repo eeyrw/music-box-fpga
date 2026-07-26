@@ -49,13 +49,16 @@ module fdn_reverb #(
   localparam logic [15:0] FEEDBACK_MAX_Q1_15 = 16'h2d41;
   localparam logic signed [23:0] STATE_DEADBAND = 24'sd32;
 
-  typedef enum logic [2:0] {
-    IDLE, PRE_DELAY, READ_LINES, DAMP_LINES, WRITE_LINES, EMIT, HOLD
+  typedef enum logic [3:0] {
+    IDLE, PRE_DELAY, PRE_DELAY_CAPTURE, READ_LINES, READ_LINES_DRAIN,
+    PREP_DAMP, SCALE_DAMP, DAMP_LINES, TRANSFORM, PREP_WRITE, SCALE_FEEDBACK,
+    CALCULATE_WRITE, WRITE_LINES, EMIT, HOLD
   } state_t;
 
   state_t state;
   (* ram_style = "block" *) mix_t fdn_memory [0:TOTAL_SAMPLES-1];
-  (* ram_style = "block" *) stereo_mix_t pre_delay_memory [0:PRE_DELAY_CAPACITY-1];
+  (* ram_style = "block" *) mix_t pre_delay_memory_l [0:PRE_DELAY_CAPACITY-1];
+  (* ram_style = "block" *) mix_t pre_delay_memory_r [0:PRE_DELAY_CAPACITY-1];
   logic [15:0] line_pointer [0:LINE_COUNT-1];
   logic [15:0] line_age [0:LINE_COUNT-1];
   mix_t line_read [0:LINE_COUNT-1];
@@ -71,6 +74,13 @@ module fdn_reverb #(
   logic [7:0][15:0] config_feedback_gain_q;
   logic [10:0] config_pre_delay_q;
   logic [15:0] processing_cycles;
+  mix_t fdn_read_data;
+  logic fdn_read_valid;
+  mix_t pre_delay_read_l;
+  mix_t pre_delay_read_r;
+  logic pre_delay_read_valid;
+  logic [FDN_ADDR_WIDTH-1:0] fdn_memory_addr;
+  logic [PRE_PTR_WIDTH-1:0] pre_delay_read_addr;
 
   // Return and chorus-route gains are consumed by the separate return mixer.
   /* verilator lint_off UNUSEDSIGNAL */
@@ -79,19 +89,27 @@ module fdn_reverb #(
   logic effective_config_clamped;
   logic signed [24:0] damping_delta;
   logic signed [41:0] damping_product;
+  logic signed [41:0] damping_product_q;
   logic signed [45:0] damping_scaled;
+  logic signed [45:0] damping_scaled_q;
   mix_t damped_value;
   logic signed [24:0] hadamard_a [0:7];
   logic signed [25:0] hadamard_b [0:7];
   logic signed [26:0] hadamard_value [0:7];
+  logic signed [26:0] hadamard_q [0:7];
   logic signed [41:0] scaled_input_l;
   logic signed [41:0] scaled_input_r;
   logic signed [42:0] injection;
   logic signed [44:0] feedback_product;
+  logic signed [44:0] feedback_product_q;
   logic signed [45:0] feedback_scaled;
+  logic signed [45:0] feedback_scaled_q;
+  logic signed [45:0] injection_q;
   logic signed [45:0] line_write_wide;
   mix_t line_write_value;
   logic line_write_saturated;
+  mix_t line_write_value_q;
+  logic line_write_saturated_q;
   logic signed [26:0] wet_sum_l;
   logic signed [26:0] wet_sum_r;
 
@@ -168,6 +186,25 @@ module fdn_reverb #(
   assign in_ready = (state == IDLE) && !out_valid;
   assign busy = state != IDLE;
   assign pre_delay_occupancy = 16'(pre_delay_age);
+  assign fdn_memory_addr = line_base(line_index) +
+                           FDN_ADDR_WIDTH'(line_pointer[line_index]);
+  assign pre_delay_read_addr = pre_delay_pointer -
+                               PRE_PTR_WIDTH'(config_pre_delay_q);
+
+  // Keep the large delay arrays on canonical synchronous RAM ports. Valid-age
+  // tracking prevents uninitialized locations from affecting audio or reset.
+  always_ff @(posedge clk) begin
+    if (state == PRE_DELAY) begin
+      pre_delay_memory_l[pre_delay_pointer] <= input_q.l;
+      pre_delay_memory_r[pre_delay_pointer] <= input_q.r;
+      pre_delay_read_l <= pre_delay_memory_l[pre_delay_read_addr];
+      pre_delay_read_r <= pre_delay_memory_r[pre_delay_read_addr];
+    end
+    if (state == READ_LINES)
+      fdn_read_data <= fdn_memory[fdn_memory_addr];
+    if (state == WRITE_LINES)
+      fdn_memory[fdn_memory_addr] <= line_write_value_q;
+  end
 
   always_comb begin
     effective_config = config_i;
@@ -193,10 +230,10 @@ module fdn_reverb #(
                     $signed(line_read[line_index]);
     damping_product = damping_delta * $signed({1'b0, config_damping_q});
     damping_scaled = round_shift_q1_15(
-        $signed({{4{damping_product[41]}}, damping_product}));
+        $signed({{4{damping_product_q[41]}}, damping_product_q}));
     damped_value = apply_state_deadband(mix_t'(
         $signed({{22{line_read[line_index][23]}}, line_read[line_index]}) +
-        damping_scaled));
+        damping_scaled_q));
 
     for (int pair = 0; pair < 8; pair += 2) begin
       hadamard_a[pair] = $signed({damped[pair][23], damped[pair]}) +
@@ -228,12 +265,11 @@ module fdn_reverb #(
            $signed({scaled_input_r[41], scaled_input_r})) >>> 1
         : ($signed({scaled_input_l[41], scaled_input_l}) +
            $signed({scaled_input_r[41], scaled_input_r})) >>> 1;
-    feedback_product = hadamard_value[line_index] *
+    feedback_product = hadamard_q[line_index] *
                        $signed({1'b0, config_feedback_gain_q[line_index]});
     feedback_scaled = round_shift_q1_15(
-        $signed({feedback_product[44], feedback_product}));
-    line_write_wide = $signed({{3{injection[42]}}, injection}) +
-                      feedback_scaled;
+        $signed({feedback_product_q[44], feedback_product_q}));
+    line_write_wide = injection_q + feedback_scaled_q;
     line_write_value = apply_state_deadband(saturate_mix(line_write_wide));
     line_write_saturated = (line_write_wide > 46'sd8388607) ||
                            (line_write_wide < -46'sd8388608);
@@ -263,6 +299,15 @@ module fdn_reverb #(
       config_feedback_gain_q <= '0;
       config_pre_delay_q <= '0;
       processing_cycles <= '0;
+      fdn_read_valid <= 1'b0;
+      pre_delay_read_valid <= 1'b0;
+      line_write_value_q <= '0;
+      line_write_saturated_q <= 1'b0;
+      damping_scaled_q <= '0;
+      damping_product_q <= '0;
+      feedback_scaled_q <= '0;
+      feedback_product_q <= '0;
+      injection_q <= '0;
       out_valid <= 1'b0;
       out_l <= '0;
       out_r <= '0;
@@ -278,6 +323,7 @@ module fdn_reverb #(
         line_read[line] <= '0;
         damping_state[line] <= '0;
         damped[line] <= '0;
+        hadamard_q[line] <= '0;
       end
     end else begin
       if (state != IDLE && state != HOLD)
@@ -301,13 +347,8 @@ module fdn_reverb #(
         PRE_DELAY: begin
           if (config_pre_delay_q == 0) begin
             delayed_input_q <= input_q;
-          end else if (config_pre_delay_q <= 11'(pre_delay_age)) begin
-            delayed_input_q <= pre_delay_memory[
-                pre_delay_pointer - PRE_PTR_WIDTH'(config_pre_delay_q)];
-          end else begin
-            delayed_input_q <= '0;
           end
-          pre_delay_memory[pre_delay_pointer] <= input_q;
+          pre_delay_read_valid <= config_pre_delay_q <= 11'(pre_delay_age);
           if (pre_delay_pointer == PRE_PTR_WIDTH'(PRE_DELAY_CAPACITY - 1))
             pre_delay_pointer <= '0;
           else
@@ -315,34 +356,69 @@ module fdn_reverb #(
           if (pre_delay_age < PRE_AGE_WIDTH'(PRE_DELAY_CAPACITY))
             pre_delay_age <= pre_delay_age + PRE_AGE_WIDTH'(1);
           line_index <= '0;
+          fdn_read_valid <= 1'b0;
+          state <= (config_pre_delay_q == 0) ? READ_LINES : PRE_DELAY_CAPTURE;
+        end
+        PRE_DELAY_CAPTURE: begin
+          delayed_input_q <= pre_delay_read_valid
+              ? stereo_mix_t'{l: pre_delay_read_l, r: pre_delay_read_r}
+              : '0;
           state <= READ_LINES;
         end
         READ_LINES: begin
-          if (line_age[line_index] < 16'(line_length(line_index)))
-            line_read[line_index] <= '0;
-          else
-            line_read[line_index] <= fdn_memory[
-                line_base(line_index) + FDN_ADDR_WIDTH'(line_pointer[line_index])];
+          if (line_index != 0)
+            line_read[line_index - 3'd1] <= fdn_read_valid ? fdn_read_data : '0;
+          fdn_read_valid <= line_age[line_index] >= 16'(line_length(line_index));
           if (line_index == 3'd7) begin
-            line_index <= '0;
-            state <= DAMP_LINES;
+            state <= READ_LINES_DRAIN;
           end else begin
             line_index <= line_index + 3'd1;
           end
+        end
+        READ_LINES_DRAIN: begin
+          line_read[7] <= fdn_read_valid ? fdn_read_data : '0;
+          line_index <= '0;
+          state <= PREP_DAMP;
+        end
+        PREP_DAMP: begin
+          damping_product_q <= damping_product;
+          state <= SCALE_DAMP;
+        end
+        SCALE_DAMP: begin
+          damping_scaled_q <= damping_scaled;
+          state <= DAMP_LINES;
         end
         DAMP_LINES: begin
           damped[line_index] <= damped_value;
           damping_state[line_index] <= damped_value;
           if (line_index == 3'd7) begin
             line_index <= '0;
-            state <= WRITE_LINES;
+            state <= TRANSFORM;
           end else begin
             line_index <= line_index + 3'd1;
+            state <= PREP_DAMP;
           end
         end
+        TRANSFORM: begin
+          for (int line = 0; line < LINE_COUNT; line++)
+            hadamard_q[line] <= hadamard_value[line];
+          state <= PREP_WRITE;
+        end
+        PREP_WRITE: begin
+          feedback_product_q <= feedback_product;
+          injection_q <= $signed({{3{injection[42]}}, injection});
+          state <= SCALE_FEEDBACK;
+        end
+        SCALE_FEEDBACK: begin
+          feedback_scaled_q <= feedback_scaled;
+          state <= CALCULATE_WRITE;
+        end
+        CALCULATE_WRITE: begin
+          line_write_value_q <= line_write_value;
+          line_write_saturated_q <= line_write_saturated;
+          state <= WRITE_LINES;
+        end
         WRITE_LINES: begin
-          fdn_memory[line_base(line_index) +
-                     FDN_ADDR_WIDTH'(line_pointer[line_index])] <= line_write_value;
           if (line_pointer[line_index] == 16'(line_length(line_index) - 1))
             line_pointer[line_index] <= '0;
           else
@@ -352,13 +428,14 @@ module fdn_reverb #(
             if ((line_age[line_index] + 16'd1) == 16'(line_length(line_index)))
               valid_line_mask[line_index] <= 1'b1;
           end
-          if (line_write_saturated)
+          if (line_write_saturated_q)
             saturation_count <= sat_inc(saturation_count);
           if (line_index == 3'd7) begin
             line_index <= '0;
             state <= EMIT;
           end else begin
             line_index <= line_index + 3'd1;
+            state <= PREP_WRITE;
           end
         end
         EMIT: begin

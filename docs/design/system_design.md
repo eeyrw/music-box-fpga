@@ -244,7 +244,13 @@ arbitration, MIG integration, DDR debug access, clocking, and constraints.
 
 ## Next Hardware Work
 
-The generic command/control and render architecture is complete. Board work now
-centers on post-route timing closure, long memory-stall/full-polyphony stress,
-and physical SPI/I2S validation. Voice observability should grow through bounded
-snapshot or trace apertures rather than a writable per-voice register window.
+The generic command/control and render architecture is complete. The current
+Smart Artix top fits and closes the constrained internal 100 MHz domain after
+routing. Board work now centers on schematic-verified non-DDR pins, external
+SPI/I2S delay constraints, long memory-stall/full-polyphony stress, physical
+audio validation, and hardware qualification of the SD/DDR path. The current
+resource and timing baseline and the remaining narrow path clusters are recorded
+in `../verification/vivado_synthesis_timing.md`.
+
+Voice observability should grow through bounded snapshot or trace apertures
+rather than a writable per-voice register window.

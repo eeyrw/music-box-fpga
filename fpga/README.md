@@ -89,33 +89,15 @@ fpga/<board-name>/
 
 ## Source Files For Synthesis
 
-The generic synthesizer core source list should match `RTL_SOURCES` in the root
-`Makefile`:
+`rtl/filelist.f` is the single source of truth for generic synthesizable RTL.
+The root `Makefile` derives `RTL_SOURCES` from that file. Board projects must
+read it directly and keep only common/board integration sources in their local
+`filelist.f`; do not copy the generic list into each board directory.
 
-```text
-rtl/pkg/synth_pkg.sv
-rtl/pkg/synth_register_pkg.sv
-rtl/generated/synth_dsp_lut_pkg.sv
-rtl/control/voice_bram_1r1w.sv
-rtl/control/control_word_fifo.sv
-rtl/control/control_action_fifo.sv
-rtl/control/control_action_parser.sv
-rtl/control/control_action_executor.sv
-rtl/control/transactional_control_plane.sv
-rtl/control/synth_control_plane.sv
-rtl/memory/wave_memory_subsystem.sv
-rtl/memory/voice_line_cache.sv
-rtl/dsp/linear_interpolator.sv
-rtl/dsp/gain_saturate.sv
-rtl/dsp/voice_dsp_pipeline.sv
-rtl/audio/output_sample_fifo.sv
-rtl/audio/render_credit_scheduler.sv
-rtl/voice/voice_phase_frame.sv
-rtl/voice/voice_endpoint_fetch.sv
-rtl/voice/multi_voice_pipeline.sv
-rtl/top/wavetable_render_core.sv
-rtl/top/wavetable_cached_render_core.sv
-```
+The Smart Artix `project.tcl` demonstrates the required ordering: generic RTL
+first, then `fpga/common/rtl` and Smart Artix integration RTL. Simulation models
+under `sim/` and `fpga/<board>/sim/` must never be added to either synthesis
+list.
 
 Common board/peripheral adapters live under `fpga/common/rtl`:
 

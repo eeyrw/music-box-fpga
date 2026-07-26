@@ -67,6 +67,10 @@ change.
   consistency checks.
 - [`verification/render_commands.md`](verification/render_commands.md): common
   reference, compressor, diagnostic, RTL, and memory render command lines.
+- [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
+  Smart Artix source-list ownership, BRAM inference repairs, per-module timing
+  case studies, residual path clusters, run-freshness checks, and closure
+  criteria.
 - [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
   local copy of the Standard MIDI File format reference used when validating the
   C++ MIDI parser.

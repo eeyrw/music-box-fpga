@@ -438,9 +438,10 @@ integer PCM. SPI Note On and Note Off tests must verify the complete command
 path.
 
 RTL acceptance requires `make lint`, `make test`, generated-table consistency,
-and a forced non-incremental Smart Artix synthesis. Physical timing closure,
-minimum FIFO level under long memory stalls, and I/O validation are board-level
-qualification gates.
+and a forced non-incremental Smart Artix implementation. The constrained
+internal 100 MHz domain now closes post-route. Minimum FIFO level under long
+memory stalls and external I/O validation remain board-level qualification
+gates.
 
 ## Implementation Status
 
@@ -605,7 +606,7 @@ host/ch347_control_main.cpp
   pressure, NRPN, pitch/filter modulation, and sustained polyphony when that
   phase is enabled.
 
-## Current Synthesis Result
+## Historical Control-Plane Synthesis Checkpoint
 
 Forced non-incremental Vivado 2025.2 synthesis for
 `xc7a50tfgg484-2` on 2026-07-24 reports:
@@ -620,10 +621,19 @@ post-synth TNS -81.645 ns, 44 failing endpoints
 DRC              0 errors, 0 critical warnings
 ```
 
-The command FIFO is one `1024 x 32` RAMB36. The DSP tail no longer owns the
-worst setup path; the current worst path is the active voice RAM write path,
+The command FIFO is one `1024 x 32` RAMB36. At this historical checkpoint, the
+DSP tail no longer owned the worst setup path; the worst path was the active
+voice RAM write path,
 from its BRAM clock pin to `DIADI[10]`, with 12.464 ns data-path delay and 22
-logic levels. Post-route timing closure remains board work.
+logic levels.
+
+This result is retained to explain the control-plane optimization history; it is
+not the current board baseline. The current full design, including global
+effects, uses 19,306 LUTs, 20,750 FFs, 39.5 BRAM tiles, and 47 DSPs and closes
+post-route at 100 MHz with WNS +0.226 ns and WHS +0.036 ns. The current worst
+passing setup cluster is DEFINE validation/action decode to prepared-RAM write
+enable. See `../verification/vivado_synthesis_timing.md` for its routed path,
+the executor staging changes, and the remaining margin.
 
 ## Later Performance Phase
 

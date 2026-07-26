@@ -3,15 +3,16 @@
 This directory is the board-specific integration workspace for the Smart Artix
 minimum system board. The RTL connects SPI control, native-SD asset loading,
 DDR3-backed wavetable reads, and I2S output. Pin locations, exact clocking, and
-DDR3 MIG files must still be verified against the board schematic and
-Vivado-generated IP before hardware implementation.
+external interface timing must still be verified against the board schematic
+before hardware use. The source-controlled Vivado flow already generates and
+implements the Clocking Wizard and DDR3 MIG configuration.
 
 Use [`../../docs/board/smart_artix_bringup.md`](../../docs/board/smart_artix_bringup.md) as
 the practical hardware bring-up checklist.
 
 ## Known Board Facts
 
-- FPGA family target: Xilinx Artix-7, planned as `XC7A50T`.
+- FPGA family target: Xilinx Artix-7 `XC7A50T`.
 - FPGA device reported by the board owner: `XC7A50T-2FGG484I`.
 - Vivado 2018.3 part name: `xc7a50tfgg484-2`. Vivado does not encode the
   industrial temperature suffix in the part name used by `create_project`.
@@ -25,12 +26,12 @@ the practical hardware bring-up checklist.
   output.
 - Generated MIG IP source configuration: `vivado/ip/smart_artix_ddr3_mig`.
 
-Still required from the board documentation:
+Still required from the board documentation or hardware measurements:
 
 - Reset source and polarity.
-- SPI, I2S, LED, and DDR3 pin locations.
-- I/O standards and bank voltages.
-- Target DDR3 clock rate and MIG configuration.
+- Schematic verification of SPI, I2S, LED, and other non-DDR pin locations.
+- Non-DDR I/O standards and bank voltages.
+- External SPI and I2S timing limits.
 - Audio codec timing limits and whether MCLK, reset, mute, or codec register
   configuration pins are actually needed.
 
@@ -145,7 +146,8 @@ source material for later pin and constraint work, not as synthesis inputs.
 
 Vivado is installed locally under `/opt/Xilinx2051.1/2025.2/Vivado`. The batch flow in
 `vivado/scripts/synth.tcl` now creates a local project for `xc7a50tfgg484-2`,
-reads `filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
+merges the generic `../../rtl/filelist.f` with the board integration
+`filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
 `smart_artix_top`, reads source-controlled IP configuration from `vivado/ip`,
 writes reports and checkpoints under `../../build/fpga/smart_artix/vivado`, and
 keeps the board source directory free of generated Vivado output.
@@ -196,78 +198,50 @@ The latest generated MIG native app interface is `128` bits wide with a `29` bit
 app address. The board top therefore uses `LINE_WORDS = 8` so one MIG read beat
 contains one complete wavetable cache line.
 
-Latest post-synthesis result with `smart_artix_clk_50m_to_200m`,
-`smart_artix_ddr3_mig`, the generated MIG XDC, the read-only line-reader path,
-and the voice snapshot timing stage connected:
+Latest forced full implementation result with `smart_artix_clk_50m_to_200m`,
+`smart_artix_ddr3_mig`, the generated MIG XDC, the complete generic RTL
+filelist, and the board RTL filelist merged by `project.tcl`:
 
 ```text
 Design: smart_artix_top
 Device: 7a50tfgg484-2
-Vivado result: synth_design completed successfully
+Vivado result: route_design completed successfully
 Errors: 0
 Critical warnings: 0
-Warnings: 310 during synth_design; 165 in final Vivado session summary
+Synthesis checksum: d17fba4
 ```
 
-The warning count is left visible instead of suppressed. It currently includes
-generated IP messages plus expected early board-level timing gaps while the MIG
-input clock and external SPI/I2S timing contracts are still unresolved.
+Warnings remain visible and include generated-IP and board I/O timing messages.
+They do not include route or DRC errors. External SPI and I2S input/output delay
+constraints still require measured board timing contracts.
 
-Post-synthesis utilization:
+Post-route utilization:
 
 ```text
-Slice LUTs        9905 / 32600  30.38%
-Slice Registers  13611 / 65200  20.88%
-DSP48E1             26 / 120    21.67%
-Block RAM tiles      9 / 75     12.00%
-Bonded IOB          61 / 250    24.40%
+Slice LUTs       19306 / 32600  59.22%
+Slice Registers 20750 / 65200  31.83%
+DSP48E1            47 / 120    39.17%
+Block RAM tiles  39.5 / 75     52.67%
 ```
 
-Post-synthesis timing still reports hold violations in generated clocking paths:
+Post-route timing at the MIG 100 MHz `ui_clk`:
 
 ```text
-WNS  +0.678 ns
-TNS  0.000 ns
-Failing setup endpoints: 0
-WHS  -1.345 ns
-THS  -23.952 ns
-Failing hold endpoints: 55
-No unclocked registers
-No unconstrained internal endpoints
-```
-
-Treat this post-synthesis timing result as an implementation-stage DDR PHY timing
-warning. The remaining hold violations are in MIG-generated clock domains such as
-`oserdes_clk` to `oserdes_clkdiv` and the Clocking Wizard output to MIG
-`clk_pll_i`, not in the generic wavetable core.
-
-Post-route timing closes after snapshotting the selected voice before phase
-advance:
-
-```text
-WNS  +0.428 ns
+WNS  +0.226 ns
 TNS  0.000 ns
 Failing setup endpoints: 0
 WHS  +0.036 ns
 THS  0.000 ns
 Failing hold endpoints: 0
+Fully routed nets: 39892 / 39892
+Route errors: 0
+DRC errors: 0
 ```
 
-The previous worst routed setup path was in the core voice pipeline, from
-replicated `voice_index_reg` through configuration/runtime selection and phase
-carry-chain logic to `phase_reg`. The current `multi_voice_pipeline` keeps the
-external interface unchanged and adds a `PROCESS_VOICE` stage: `START_VOICE`
-captures the selected voice's config, runtime controls, commit bit, and phase;
-the next cycle computes frame indexes, loop wrap, and phase writeback from those
-registers. This costs one clock per visited voice and keeps the core at the MIG
-`100 MHz` `ui_clk`.
-
-The first remaining timing pressure to watch is around the voice pipeline
-multiply and wide accumulation paths. Vivado also reports that several wide
-multipliers do not have the two pipeline stages it recommends. If later feature
-work reintroduces timing pressure, prefer adding focused pipeline stages in
-`rtl/voice/multi_voice_pipeline.sv` over changing board constraints to hide the
-path.
+Timing closure required BRAM-safe chorus/reverb memories and explicit numeric
+stages in the chorus, reverb, return mixer, compressor, and control executor.
+The reusable coding patterns, path-cluster history, and failure signatures are
+recorded in `../../docs/verification/vivado_synthesis_timing.md`.
 
 The timing report also shows expected board-level gaps: SPI input ports and I2S
 or status output ports do not yet have external input/output delays. Add those
@@ -275,22 +249,10 @@ only after the real board timing contract is known.
 
 ## Resource Follow-Up
 
-The first resource cleanup removed the renderer's full per-frame copies of
-`voice_config` and `voice_runtime`. That brought post-synthesis LUT use down from
-about `81.89%` to `57.43%`, while register use remains high at `69.45%`.
-
-Board-level optimization should now focus on these items, in order:
-
-1. Add a board build option to compile out the optional biquad filter when a
-   bring-up image does not need it.
-2. If filter support is required, replace the current combinational biquad path
-   with a registered multi-cycle/shared-DSP filter block.
-3. Move wide, low-rate voice control fields toward LUTRAM or RAM-backed storage
-   while preserving output-frame atomic updates.
-4. Consider narrowing filter state only with matching fixed-point documentation
-   and exact regression tests.
-5. Re-run full implementation with real pins and clocking before adding final
-   pipeline stages for timing closure.
+The design now fits with useful headroom in every reported programmable
+resource. Preserve synchronous BRAM templates and re-run full implementation
+after effects, voice-count, or control-record changes; post-synthesis timing is
+not sufficient for signoff.
 
 ## Bring-Up Order
 

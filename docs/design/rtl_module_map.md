@@ -252,8 +252,11 @@ decouple rendering from sample consumption.
 
 ## Source Order
 
-The generic RTL source list in `Makefile` is ordered from shared packages through
-leaf/storage modules, then composition modules:
+`rtl/filelist.f` is the single ordered source of truth for generic synthesizable
+RTL. The root `Makefile` derives `RTL_SOURCES` from it, and board synthesis flows
+prepend/append their own board sources without copying the generic list. The
+generic order runs from shared packages through leaf/storage modules, then
+composition modules:
 
 ```text
 rtl/pkg

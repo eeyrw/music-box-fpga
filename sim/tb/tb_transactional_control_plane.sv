@@ -262,7 +262,9 @@ module tb_transactional_control_plane;
         debug_active.voice.base_addr != 32'h0010_0003 ||
         debug_active.phase_inc != 32'h0000_0180 ||
         debug_active.gain_l != 16'sh3000 || debug_active.gain_r != 16'sh2000) begin
-      $error("matching START did not atomically promote prepared state");
+      $error("matching START did not atomically promote prepared state: valid=%0b audible=%0b base=%h phase_inc=%h gain_l=%h gain_r=%h",
+             config_valid[3], debug_active.audible, debug_active.voice.base_addr,
+             debug_active.phase_inc, debug_active.gain_l, debug_active.gain_r);
       errors++;
     end
     if (!saw_commit_voice3) begin

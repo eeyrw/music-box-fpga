@@ -18,8 +18,9 @@ self-checking RTL tests cover the isolated blocks and integrated chain.
 
 The initial global-effects implementation is therefore functionally complete.
 Qualification is not complete: full-session C++/RTL comparison, full-polyphony
-cached-memory stress renders, Smart Artix synthesis/timing/utilization, hardware
-capture, listening evaluation, and RT60 preset sweeps remain open. Per-voice
+cached-memory stress renders, hardware capture, listening evaluation, and RT60
+preset sweeps remain open. Smart Artix synthesis, implementation, utilization,
+and constrained internal 100 MHz timing closure are complete. Per-voice
 SoundFont/MIDI sends remain a deliberately deferred milestone.
 
 The C++ reference song renderer now accepts musical `chorus`, `studio`, and
@@ -52,16 +53,15 @@ and listening terminology to the implemented algorithms is documented in
 
 ## Current Boundary
 
-The renderer currently emits both saturated PCM16 compatibility samples and an
-exact signed 24-bit stereo mix. `wavetable_system_core` holds that wide mix in a
-one-frame register and sends it directly to `lookahead_compressor`. The
-compressor applies the final master gain, saturates to PCM16, and feeds the
-existing output FIFO and I2S path.
+The renderer emits both saturated PCM16 compatibility samples and an exact
+signed 24-bit stereo mix. `wavetable_system_core` sends the wide mix through
+`global_audio_effects_chain`, which owns the serial spatial-effect path followed
+by `lookahead_compressor`. The compressor applies the final master gain,
+saturates to PCM16, and feeds the existing output FIFO and I2S path.
 
-The initial effects milestone must not modify the per-voice renderer, wave
-memory protocol, phase/filter state, or bare `wavetable_render_core` PCM
-behavior. The effects belong in the board-facing system path between the wide
-mix and the compressor:
+The implementation does not modify the per-voice renderer, wave-memory protocol,
+phase/filter state, or bare `wavetable_render_core` PCM behavior. The effects
+occupy the board-facing system path between the wide mix and the compressor:
 
 ```text
 signed 24-bit stereo mix
@@ -131,9 +131,9 @@ must still saturate safely for hostile configurations and report that event.
 
 ## Chorus Architecture
 
-The planned `stereo_chorus` is a modulated fractional delay with feedback. It
-stores stereo signed 24-bit history in a circular block RAM and evaluates two
-independent fractional taps:
+The implemented `stereo_chorus` is a modulated fractional delay with feedback.
+It stores signed 24-bit history in separate left/right circular block RAMs and
+evaluates two independent fractional taps:
 
 ```text
 write_sample = saturate24(input + feedback * delayed_sample)
@@ -148,9 +148,9 @@ A generated 257-entry quarter-wave Q1.15 sine table can provide 1024 full-cycle
 phase positions using symmetry. The generator must emit matching RTL and C++
 tables.
 
-Initial sizing and formats:
+Implemented sizing and formats:
 
-| Item | Planned value |
+| Item | Value |
 | --- | --- |
 | Delay capacity | 2048 stereo frames, approximately 42.7 ms at 48 kHz |
 | Delay storage | two signed 24-bit channels per frame |
@@ -417,7 +417,7 @@ reverb payload contains enable, input send, wet return, damping,
 chorus-to-reverb level, pre-delay, and eight packed line gains. `EFFECT_CLEAR`
 contains a mask selecting chorus and/or reverb state.
 
-Implementation of these commands requires updates to:
+The implemented command path crosses:
 
 - `synth_pkg` opcode and configuration types;
 - command parser length and global-header validation;
@@ -449,25 +449,33 @@ specification.
 
 ## Resource And Timing Gates
 
-The current Smart Artix synthesis baseline uses approximately 9 of 75 block-RAM
-tiles and 26 of 120 DSP48E1 blocks. The effects milestone should target:
+The earlier 9-BRAM/26-DSP baseline and incremental estimates predated the final
+effect and control implementation and are retired as acceptance data. The
+current forced Smart Artix post-route result is:
 
-| Resource | Incremental gate |
+| Resource or timing field | Current result |
 | --- | ---: |
-| Block RAM | no more than approximately 18 BRAM36 tiles |
-| DSP48E1 | no more than 8 blocks |
-| Effect processing | no more than 128 clocks per stereo frame combined |
-| Clock target | post-route timing closure at 100 MHz |
+| LUT | 19,306 / 32,600 (59.22%) |
+| FF | 20,750 / 65,200 (31.83%) |
+| Block RAM tiles | 39.5 / 75 (52.67%) |
+| DSP48E1 | 47 / 120 (39.17%) |
+| Combined spatial-effect processing test gate | no more than 96 clocks/frame |
+| Reverb processing test gate | no more than 88 clocks/frame |
+| Post-route setup | WNS +0.226 ns, TNS 0, zero failing endpoints |
+| Post-route hold | WHS +0.036 ns, THS 0, zero failing endpoints |
 
-Expected first-order usage is 3 to 4 BRAM36 and 2 to 3 DSP48E1 for chorus, plus
-12 to 15 BRAM36 and 3 to 5 DSP48E1 for reverb. Actual inference and RAM packing
-must be checked in Vivado; source-level bit counts are not sufficient proof.
+The first effects-enabled synthesis did not fit because chorus and reverb delay
+storage failed to infer BRAM. After separate physical memories, synchronous
+reads, validity/age tracking, and arithmetic/control staging, the implementation
+uses 39.5 BRAM tiles and 47 DSPs and is fully routed. Source-level bit counts and
+`ram_style` attributes are not proof of inference; the detailed failure and
+closure history is in `../verification/vivado_synthesis_timing.md`.
 
-The complete renderer plus effects path still has to meet the 48 kHz render
-credit requirement under full polyphony and realistic memory stalls. Effect
-latency is system-clock latency only: neither effect may withhold the dry frame
-for a sample-domain delay. The existing logical startup latency remains the
-compressor look-ahead plus output-FIFO lead.
+The focused effect tests meet their bounded processing-cycle gates. The complete
+renderer plus effects path still requires long full-polyphony qualification with
+realistic memory stalls. Effect latency is system-clock latency only: neither
+effect may add a sample-domain delay to the dry path. The existing logical
+startup latency remains the compressor look-ahead plus output-FIFO lead.
 
 ## Implementation Sequence
 
@@ -498,7 +506,8 @@ compressor look-ahead plus output-FIFO lead.
    full-session C++/RTL comparison remains.**
 9. Run full-polyphony cached-memory renders and Smart Artix synthesis,
    implementation, timing, and utilization checks.
-   **Open.**
+   **Smart Artix synthesis, implementation, resource, and constrained internal
+   timing checks complete; long full-polyphony memory-stress renders remain.**
 10. Qualify the result on hardware with impulse capture, sustained tails,
     silence, rapid configuration changes, and long underrun-free playback.
     **Open.**
@@ -517,7 +526,7 @@ compressor look-ahead plus output-FIFO lead.
 | Focused lint and regression | Complete | `make lint`, `make test`, and generator checks pass. |
 | Full-session C++/RTL comparison | Open | Integrated reference/render comparison has not been added. |
 | Full-polyphony memory stress | Open | Representative long cached-memory renders are still required. |
-| FPGA resource and timing gates | Open | Vivado synthesis, implementation, utilization, and 100 MHz timing remain. |
+| FPGA resource and timing gates | Complete | Forced Vivado implementation fits, fully routes, and closes setup/hold at 100 MHz; external I/O delays remain board qualification. |
 | Hardware/audio qualification | Open | Capture, sustained-tail, listening, RT60, and long-run tests remain. |
 | Early-reflection branch | Open | Define 8-tap C++ model, packed tap configuration, RTL, routing, and impulse tests. |
 | Input diffusion | Open | Sweep two versus four all-pass stages before freezing delay sets and arithmetic. |

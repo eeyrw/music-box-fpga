@@ -127,7 +127,7 @@ module tb_global_effects_chain;
     if (diagnostics_o.input_frame_count != 2 ||
         diagnostics_o.output_frame_count != 1 ||
         diagnostics_o.max_processing_cycles == 0 ||
-        diagnostics_o.max_processing_cycles > 40) begin
+        diagnostics_o.max_processing_cycles > 96) begin
       $error("global effects frame diagnostics mismatch in=%0d out=%0d max=%0d",
              diagnostics_o.input_frame_count,
              diagnostics_o.output_frame_count,
@@ -162,7 +162,7 @@ module tb_global_effects_chain;
         diagnostics_o.mixer_config_clamped ||
         diagnostics_o.chorus_saturation_count != 0 ||
         diagnostics_o.reverb_saturation_count != 0 ||
-        diagnostics_o.reverb_max_processing_cycles > 16'd30) begin
+        diagnostics_o.reverb_max_processing_cycles > 16'd88) begin
       $error("global effects diagnostics mismatch");
       errors++;
     end

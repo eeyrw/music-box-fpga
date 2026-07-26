@@ -375,3 +375,11 @@ steady-state sample_drop_count == 0
 `make lint` and `make test` prove functional consistency. Only implementation
 reports and long-running render stress can prove the resource and throughput
 targets.
+
+The incremental BRAM/DSP/LUT limits above belong to the command/control
+refactor checkpoint and are not whole-design limits after global effects were
+added. The current complete Smart Artix implementation uses 39.5 BRAM tiles, 47
+DSPs, 19,306 LUTs, and 20,750 FFs and closes the constrained internal 100 MHz
+domain with WNS +0.226 ns and WHS +0.036 ns. Long memory-stall/full-polyphony
+render stress and external SPI/I2S timing remain open. See
+`vivado_synthesis_timing.md` for the current signoff scope and path margin.

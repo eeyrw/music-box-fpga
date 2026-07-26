@@ -168,23 +168,47 @@ foreach ip [list \
   }
 }
 
-set filelist_fd [open [file join $board_dir filelist.f] r]
-set filelist_text [read $filelist_fd]
-close $filelist_fd
-
-set expected_sources [list]
-foreach src [split $filelist_text "\n"] {
-  set src [string trim $src]
-  if {$src eq "" || [string match "#*" $src]} { continue }
-  lappend expected_sources [file normalize [file join $board_dir $src]]
+proc append_filelist_sources {filelist_path base_dir result_name} {
+  upvar 1 $result_name result
+  if {![file exists $filelist_path]} {
+    error "RTL source list is missing: $filelist_path"
+  }
+  set filelist_fd [open $filelist_path r]
+  set filelist_text [read $filelist_fd]
+  close $filelist_fd
+  foreach src [split $filelist_text "\n"] {
+    set src [string trim $src]
+    if {$src eq "" || [string match "#*" $src]} { continue }
+    set source_path [file normalize [file join $base_dir $src]]
+    if {![file exists $source_path]} {
+      error "RTL source does not exist: $source_path"
+    }
+    lappend result $source_path
+  }
 }
 
-set generic_rtl_root [file normalize [file join $repo_root rtl]]
+set expected_sources [list]
+append_filelist_sources [file join $repo_root rtl/filelist.f] \
+  [file join $repo_root rtl] expected_sources
+append_filelist_sources [file join $board_dir filelist.f] \
+  $board_dir expected_sources
+
+set managed_rtl_roots [list \
+  [file normalize [file join $repo_root rtl]] \
+  [file normalize [file join $repo_root fpga/common/rtl]] \
+  [file normalize [file join $board_dir rtl]] \
+]
 foreach existing [get_files -quiet -of_objects [get_filesets sources_1]] {
   set existing_path [file normalize $existing]
-  set is_generic_rtl [string match ${generic_rtl_root}/* $existing_path]
+  set is_managed_rtl 0
+  foreach managed_root $managed_rtl_roots {
+    if {[string match ${managed_root}/* $existing_path]} {
+      set is_managed_rtl 1
+      break
+    }
+  }
   set is_expected [expr {[lsearch -exact $expected_sources $existing_path] >= 0}]
-  if {$is_generic_rtl && !$is_expected} {
+  if {$is_managed_rtl && !$is_expected} {
     remove_files -quiet $existing_path
   }
 }

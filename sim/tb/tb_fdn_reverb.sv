@@ -65,7 +65,7 @@ module tb_fdn_reverb;
       @(negedge clk);
       in_valid = 1'b0;
       timeout = 0;
-      while (!out_valid && timeout < 40) begin
+      while (!out_valid && timeout < 88) begin
         @(negedge clk);
         timeout++;
       end
@@ -94,7 +94,7 @@ module tb_fdn_reverb;
       @(negedge clk);
       in_valid = 1'b0;
       timeout = 0;
-      while (!out_valid && timeout < 40) begin
+      while (!out_valid && timeout < 88) begin
         @(negedge clk);
         timeout++;
       end
@@ -128,7 +128,7 @@ module tb_fdn_reverb;
     for (line = 0; line < 8; line++)
       push_and_expect(0, 0, 500 * signs_l[line], 500 * signs_r[line]);
     if (valid_line_mask != 8'hff || input_frame_count != 32'd9 ||
-        output_frame_count != 32'd9 || max_processing_cycles > 16'd30) begin
+        output_frame_count != 32'd9 || max_processing_cycles > 16'd88) begin
       $error("FDN warm-up/cycle diagnostics mismatch");
       errors++;
     end

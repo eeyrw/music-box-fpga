@@ -41,4 +41,6 @@ open_run $impl_run_name
 write_checkpoint -force $checkpoint_dir/post_route.dcp
 report_utilization -file $report_dir/post_route_utilization.rpt
 report_timing_summary -file $report_dir/post_route_timing.rpt
+report_timing -delay_type max -max_paths 100 -nworst 10 \
+  -file $report_dir/post_route_setup_paths.rpt
 write_vivado_summary post_route [file join $report_dir post_route_summary.json]

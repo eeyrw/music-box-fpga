@@ -107,13 +107,13 @@ module tb_global_audio_effects_chain;
         diagnostics_o.effects.input_frame_count != 4 ||
         diagnostics_o.effects.output_frame_count != 4 ||
         diagnostics_o.effects.max_processing_cycles == 0 ||
-        diagnostics_o.effects.max_processing_cycles > 40 ||
+        diagnostics_o.effects.max_processing_cycles > 96 ||
         diagnostics_o.effects.busy ||
         diagnostics_o.effects.chorus_history_level_frames != 4 ||
         diagnostics_o.effects.chorus_lfo_phase_q0_32 != 0 ||
         diagnostics_o.effects.reverb_valid_line_mask != 8'h0f ||
         diagnostics_o.effects.reverb_pre_delay_occupancy != 4 ||
-        diagnostics_o.effects.reverb_max_processing_cycles > 30 ||
+        diagnostics_o.effects.reverb_max_processing_cycles > 88 ||
         diagnostics_o.effects.chorus_config_clamped ||
         diagnostics_o.effects.reverb_config_clamped ||
         diagnostics_o.effects.mixer_config_clamped ||

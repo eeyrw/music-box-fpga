@@ -27,8 +27,8 @@ module global_effects_chain #(
 );
   import synth_pkg::*;
 
-  typedef enum logic [1:0] {
-    WAIT_INPUT, WAIT_CHORUS, WAIT_REVERB, WAIT_OUTPUT
+  typedef enum logic [2:0] {
+    WAIT_INPUT, WAIT_CHORUS, WAIT_REVERB_INPUT, WAIT_REVERB, WAIT_OUTPUT
   } state_t;
 
   state_t state;
@@ -103,8 +103,8 @@ module global_effects_chain #(
     diagnostics_o.reverb_max_processing_cycles = reverb_max_processing_cycles;
   end
   assign chorus_in_valid = (state == WAIT_INPUT) && in_valid;
-  assign chorus_out_ready = (state == WAIT_CHORUS) && reverb_in_ready;
-  assign reverb_in_valid = (state == WAIT_CHORUS) && chorus_out_valid;
+  assign chorus_out_ready = state == WAIT_CHORUS;
+  assign reverb_in_valid = state == WAIT_REVERB_INPUT;
   assign reverb_out_ready = (state == WAIT_REVERB) && mixer_in_ready;
   assign mixer_in_valid = (state == WAIT_REVERB) && reverb_out_valid;
   assign mixer_out_ready = (state == WAIT_OUTPUT) && out_ready;
@@ -186,7 +186,7 @@ module global_effects_chain #(
     .reverb_input_r_o(reverb_in_r),
     .reverb_input_saturated_l_o(),
     .reverb_input_saturated_r_o(),
-    .reverb_input_commit_i(reverb_in_valid && reverb_in_ready),
+    .reverb_input_commit_i(chorus_out_valid && chorus_out_ready),
     .in_valid(mixer_in_valid),
     .in_ready(mixer_in_ready),
     .reverb_wet_l_i(reverb_out_l),
@@ -231,8 +231,12 @@ module global_effects_chain #(
         WAIT_CHORUS: begin
           if (chorus_out_valid && chorus_out_ready) begin
             chorus_wet_q <= '{l: chorus_out_l, r: chorus_out_r};
-            state <= WAIT_REVERB;
+            state <= WAIT_REVERB_INPUT;
           end
+        end
+        WAIT_REVERB_INPUT: begin
+          if (reverb_in_valid && reverb_in_ready)
+            state <= WAIT_REVERB;
         end
         WAIT_REVERB: begin
           if (reverb_out_valid && reverb_out_ready)

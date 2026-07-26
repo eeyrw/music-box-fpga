@@ -62,6 +62,8 @@ Implementation writes matching post-route files:
 
 - `post_route_utilization.rpt`: flat routed utilization summary.
 - `post_route_timing.rpt`: routed timing summary.
+- `post_route_setup_paths.rpt`: top 100 maximum-delay paths, with up to 10
+  paths per endpoint for cluster analysis.
 - `post_route_summary.json`: compact machine-readable routed summary.
 
 Read the JSON summaries from the repository root with:
@@ -89,9 +91,15 @@ Useful environment overrides:
 VIVADO_FORCE_REBUILD=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
   -journal logs/synth.jou -log logs/synth.log
 
+VIVADO_FORCE_REBUILD=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
+  -journal logs/impl.jou -log logs/impl.log
+
 VIVADO_REGENERATE_IP=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
   -journal logs/synth.jou -log logs/synth.log
 ```
 
-This is project/run reuse for synthesis. It is not implementation incremental
-checkpointing; RTL changes still require synthesis to run again.
+`VIVADO_FORCE_REBUILD=1` deletes the generated project/runs before recreating
+them. Use the `impl.tcl` form for timing signoff; the `synth.tcl` form is only a
+resource and post-synthesis timing checkpoint. The current BRAM-inference and
+timing-closure procedure is documented in
+`../../../docs/verification/vivado_synthesis_timing.md`.

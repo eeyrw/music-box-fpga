@@ -33,7 +33,11 @@ module lookahead_compressor #(
                                    $clog2(LOOKAHEAD_FRAMES);
   localparam int DELAY_LEVEL_WIDTH = $clog2(LOOKAHEAD_FRAMES + 1);
 
-  typedef enum logic [2:0] {IDLE, CALC_LEVEL, LOOKUP_GAIN, SCALE, HOLD} state_t;
+  typedef enum logic [3:0] {
+    IDLE, DETECT, DETECT_INDEX, CALC_LEVEL, CALC_TARGET, CALC_GAIN,
+    CALC_GAIN_OCTAVE, CALC_GAIN_INDEX, LOOKUP_GAIN, PREP_SCALE, SCALE, COMMIT,
+    HOLD
+  } state_t;
   state_t state;
 
   (* ram_style = "distributed" *) stereo_mix_t delay_line [0:LOOKAHEAD_FRAMES-1];
@@ -48,7 +52,15 @@ module lookahead_compressor #(
   logic [4:0] magnitude_exponent_q;
   logic [7:0] magnitude_mantissa_index_q;
   logic [4:0] gain_octave_q;
+  logic [6:0] gain_mantissa_index_q;
   logic [23:0] gain_mantissa_q;
+  logic signed [31:0] combined_gain_q;
+  logic signed [32:0] level_cb_q12_20_q;
+  logic [31:0] target_gain_reduction_q;
+  logic signed [55:0] scaled_output_l_q;
+  logic signed [55:0] scaled_output_r_q;
+  logic output_saturated_l_q;
+  logic output_saturated_r_q;
 
   logic [MIX_WIDTH-1:0] magnitude_l;
   logic [MIX_WIDTH-1:0] magnitude_r;
@@ -67,8 +79,6 @@ module lookahead_compressor #(
   logic [32:0] gain_rounded_residual;
   logic [6:0] gain_mantissa_index;
   logic signed [15:0] compressor_gain;
-  logic signed [39:0] compressor_product_l;
-  logic signed [39:0] compressor_product_r;
   logic signed [39:0] master_product_l;
   logic signed [39:0] master_product_r;
   logic signed [55:0] combined_product_l;
@@ -133,11 +143,11 @@ module lookahead_compressor #(
     magnitude_zero = peak_magnitude == '0;
     magnitude_exponent = '0;
     for (int bit_index = MIX_WIDTH-1; bit_index >= 0; bit_index--) begin
-      if ((magnitude_exponent == '0) && peak_magnitude[bit_index])
+      if ((magnitude_exponent == '0) && peak_magnitude_q[bit_index])
         magnitude_exponent = 5'(bit_index);
     end
-    normalized_magnitude = magnitude_zero ? 32'd0 :
-        (32'(peak_magnitude) << (31 - magnitude_exponent));
+    normalized_magnitude = magnitude_zero_q ? 32'd0 :
+        (32'(peak_magnitude_q) << (31 - magnitude_exponent_q));
     magnitude_mantissa_index = 8'(
         ((normalized_magnitude >> COMP_MAG_TO_CB_INDEX_SHIFT) &
          ((1 << COMP_MAG_TO_CB_MANTISSA_BITS) - 1)) +
@@ -159,7 +169,7 @@ module lookahead_compressor #(
     end
 
     over_threshold_cb_q12_20 =
-        {{1{level_cb_q12_20[32]}}, level_cb_q12_20} +
+        {{1{level_cb_q12_20_q[32]}}, level_cb_q12_20_q} +
         $signed({2'b00, config_q.threshold_cb_q12_20});
     target_product = 48'd0;
     target_gain_reduction = 32'd0;
@@ -173,19 +183,19 @@ module lookahead_compressor #(
     next_gain_reduction = gain_reduction_cb_q12_20;
     if (!config_q.enable) begin
       next_gain_reduction = 32'd0;
-    end else if (target_gain_reduction > gain_reduction_cb_q12_20) begin
+    end else if (target_gain_reduction_q > gain_reduction_cb_q12_20) begin
       if ((config_q.attack_step_cb_q12_20 == '0) ||
-          ((target_gain_reduction - gain_reduction_cb_q12_20) <=
+          ((target_gain_reduction_q - gain_reduction_cb_q12_20) <=
            config_q.attack_step_cb_q12_20))
-        next_gain_reduction = target_gain_reduction;
+        next_gain_reduction = target_gain_reduction_q;
       else
         next_gain_reduction = gain_reduction_cb_q12_20 +
                               config_q.attack_step_cb_q12_20;
-    end else if (target_gain_reduction < gain_reduction_cb_q12_20) begin
+    end else if (target_gain_reduction_q < gain_reduction_cb_q12_20) begin
       if ((config_q.release_step_cb_q12_20 == '0) ||
-          ((gain_reduction_cb_q12_20 - target_gain_reduction) <=
+          ((gain_reduction_cb_q12_20 - target_gain_reduction_q) <=
            config_q.release_step_cb_q12_20))
-        next_gain_reduction = target_gain_reduction;
+        next_gain_reduction = target_gain_reduction_q;
       else
         next_gain_reduction = gain_reduction_cb_q12_20 -
                               config_q.release_step_cb_q12_20;
@@ -208,19 +218,17 @@ module lookahead_compressor #(
         gain_octave = gain_octave + 5'd1;
     end
     gain_residual = gain_reduction_cb_q12_20 -
-                    COMP_CB_OCTAVE_Q12_20_LUT[gain_octave];
+                    COMP_CB_OCTAVE_Q12_20_LUT[gain_octave_q];
     gain_rounded_residual = {1'b0, gain_residual} +
         33'(1 << (COMP_CB_TO_Q15_RESIDUAL_INDEX_SHIFT - 1));
     gain_mantissa_index = 7'(
         gain_rounded_residual >> COMP_CB_TO_Q15_RESIDUAL_INDEX_SHIFT);
 
     compressor_gain = mantissa_to_q15(gain_mantissa_q, gain_octave_q);
-    compressor_product_l = delayed_sample.l * compressor_gain;
-    compressor_product_r = delayed_sample.r * compressor_gain;
     master_product_l = delayed_sample.l * master_volume_q;
     master_product_r = delayed_sample.r * master_volume_q;
-    combined_product_l = compressor_product_l * master_volume_q;
-    combined_product_r = compressor_product_r * master_volume_q;
+    combined_product_l = delayed_sample.l * combined_gain_q;
+    combined_product_r = delayed_sample.r * combined_gain_q;
 
     if ((!config_q.enable || (gain_reduction_cb_q12_20 == '0)) &&
         (master_volume_q == 16'sh7fff)) begin
@@ -232,10 +240,8 @@ module lookahead_compressor #(
       scaled_output_l = $signed({{16{master_product_l[39]}}, master_product_l}) >>> 15;
       scaled_output_r = $signed({{16{master_product_r[39]}}, master_product_r}) >>> 15;
     end else if (master_volume_q == 16'sh7fff) begin
-      scaled_output_l =
-          $signed({{16{compressor_product_l[39]}}, compressor_product_l}) >>> 15;
-      scaled_output_r =
-          $signed({{16{compressor_product_r[39]}}, compressor_product_r}) >>> 15;
+      scaled_output_l = combined_product_l >>> 15;
+      scaled_output_r = combined_product_r >>> 15;
     end else begin
       scaled_output_l = combined_product_l >>> 30;
       scaled_output_r = combined_product_r >>> 30;
@@ -260,7 +266,15 @@ module lookahead_compressor #(
       magnitude_exponent_q <= '0;
       magnitude_mantissa_index_q <= '0;
       gain_octave_q <= '0;
+      gain_mantissa_index_q <= '0;
       gain_mantissa_q <= '0;
+      combined_gain_q <= '0;
+      level_cb_q12_20_q <= '0;
+      target_gain_reduction_q <= '0;
+      scaled_output_l_q <= '0;
+      scaled_output_r_q <= '0;
+      output_saturated_l_q <= 1'b0;
+      output_saturated_r_q <= 1'b0;
       gain_reduction_cb_q12_20 <= '0;
       target_gain_reduction_cb_q12_20 <= '0;
       detector_peak <= '0;
@@ -291,37 +305,72 @@ module lookahead_compressor #(
             master_volume_q <= master_volume_i;
             magnitude_zero_q <= magnitude_zero;
             peak_magnitude_q <= peak_magnitude;
-            magnitude_exponent_q <= magnitude_exponent;
-            magnitude_mantissa_index_q <= magnitude_mantissa_index;
             if (peak_magnitude > max_detector_peak)
               max_detector_peak <= peak_magnitude;
             input_frame_count <= sat_inc(input_frame_count);
-            state <= CALC_LEVEL;
+            state <= DETECT;
           end
         end
+        DETECT: begin
+          magnitude_exponent_q <= magnitude_exponent;
+          state <= DETECT_INDEX;
+        end
+        DETECT_INDEX: begin
+          magnitude_mantissa_index_q <= magnitude_mantissa_index;
+          state <= CALC_LEVEL;
+        end
         CALC_LEVEL: begin
-          gain_reduction_cb_q12_20 <= next_gain_reduction;
+          level_cb_q12_20_q <= level_cb_q12_20;
+          state <= CALC_TARGET;
+        end
+        CALC_TARGET: begin
+          target_gain_reduction_q <= target_gain_reduction;
           target_gain_reduction_cb_q12_20 <= target_gain_reduction;
+          state <= CALC_GAIN;
+        end
+        CALC_GAIN: begin
+          gain_reduction_cb_q12_20 <= next_gain_reduction;
           detector_peak <= peak_magnitude_q;
           if (next_gain_reduction > max_gain_reduction_cb_q12_20)
             max_gain_reduction_cb_q12_20 <= next_gain_reduction;
+          state <= CALC_GAIN_OCTAVE;
+        end
+        CALC_GAIN_OCTAVE: begin
+          gain_octave_q <= gain_octave;
+          state <= CALC_GAIN_INDEX;
+        end
+        CALC_GAIN_INDEX: begin
+          gain_mantissa_index_q <= gain_mantissa_index;
           state <= LOOKUP_GAIN;
         end
         LOOKUP_GAIN: begin
-          gain_octave_q <= gain_octave;
           gain_mantissa_q <= (gain_reduction_cb_q12_20 >=
                               COMP_CB_SILENCE_Q12_20) ? 24'd0 :
-              COMP_CB_TO_Q15_MANTISSA_LUT[gain_mantissa_index];
+              COMP_CB_TO_Q15_MANTISSA_LUT[gain_mantissa_index_q];
+          state <= PREP_SCALE;
+        end
+        PREP_SCALE: begin
+          if (master_volume_q == 16'sh7fff)
+            combined_gain_q <= {{16{compressor_gain[15]}}, compressor_gain};
+          else
+            combined_gain_q <= compressor_gain * master_volume_q;
           state <= SCALE;
         end
         SCALE: begin
+          scaled_output_l_q <= scaled_output_l;
+          scaled_output_r_q <= scaled_output_r;
+          output_saturated_l_q <= output_saturated_l;
+          output_saturated_r_q <= output_saturated_r;
+          state <= COMMIT;
+        end
+        COMMIT: begin
           if (delayed_valid) begin
-            out_l <= saturate_pcm(scaled_output_l);
-            out_r <= saturate_pcm(scaled_output_r);
+            out_l <= saturate_pcm(scaled_output_l_q);
+            out_r <= saturate_pcm(scaled_output_r_q);
             output_frame_count <= sat_inc(output_frame_count);
             if (config_q.enable && (gain_reduction_cb_q12_20 != '0))
               compressed_frame_count <= sat_inc(compressed_frame_count);
-            unique case ({output_saturated_l, output_saturated_r})
+            unique case ({output_saturated_l_q, output_saturated_r_q})
               2'b01, 2'b10: saturation_count <= sat_inc(saturation_count);
               2'b11: saturation_count <= sat_add_two(saturation_count);
               default: begin end

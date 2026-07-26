@@ -1,9 +1,9 @@
 # Music Box FPGA
 
-An open SystemVerilog wavetable synthesizer core. The project currently targets
-self-checking simulation paths for the core datapath, memory subsystem, and
-board-facing SPI/I2S adapter layer before board-specific timing and synthesis are
-introduced.
+An open SystemVerilog wavetable synthesizer core. The project includes
+self-checking simulation paths for the core datapath, memory subsystem, effects,
+and board-facing SPI/I2S adapters, plus a source-controlled Smart Artix Vivado
+synthesis and implementation flow.
 
 The current milestone implements 32 stereo output voice slots with configurable
 variable-length wavetable playback, simple loop modes, per-voice biquad IIR
@@ -23,17 +23,22 @@ filtering, and saturated mixing.
 - Per-voice biquad IIR filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
 - Shared multi-voice rendering pipeline and saturated stereo mixer
+- Signed-24 global chorus, eight-line FDN reverb, return mixer, look-ahead
+  compressor, and master-volume path
 - Ready/valid abstract memory interface
 - Minimal line-cache memory subsystem and external line-read interface
 - Transport-independent register bus for host, MCU, soft-core, or simulation control
 - Common board/peripheral adapters for SPI register transport and I2S output
+- Smart Artix clock/MIG integration, SD-to-DDR loader path, Tcl batch flow, and
+  post-route 100 MHz internal timing closure
 - One-cycle behavioral wave-memory model
 - Self-checking SystemVerilog regression test
 
-The current core intentionally does not implement board-level SPI electrical
-timing, physical NOR Flash timing, DDR controller timing, I2S codec integration,
-complete SF2 preset/modulator/velocity behavior, filter coefficient calculation,
-or vendor-specific FPGA logic.
+The generic core intentionally does not contain vendor-specific FPGA logic.
+Board-level SPI/I2S external timing constraints, schematic-verified non-DDR pin
+assignments, physical audio-codec integration, complete SF2
+preset/modulator/velocity behavior, and filter coefficient calculation remain
+open. The Smart Artix wrapper owns the current vendor clocking and DDR3 MIG path.
 See [`docs/README.md`](docs/README.md) for the current documentation map and
 [`docs/design/system_design.md`](docs/design/system_design.md) for the architecture
 and roadmap notes.
@@ -69,12 +74,13 @@ metadata. Detailed contracts are documented in [`docs/`](docs/).
 
 ```text
 rtl/                    Generic synthesizable SystemVerilog core
+  filelist.f            Ordered generic synthesis/Verilator source of truth
   pkg/                  Shared types and constants
   control/              Command parsing, action execution, and voice state
   memory/               Abstract line-cache memory subsystem
   voice/                Multi-voice phase, fetch, and render sequencing
   dsp/                  Interpolation, filters, gain, envelope, and mixing
-  audio/                Output FIFO for rendered PCM frames
+  audio/                Chorus, reverb, mixing, compression, and PCM buffering
   top/                  Register-bus and line-memory core wrappers
 
 sim/                    Simulation-only code

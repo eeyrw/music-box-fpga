@@ -54,9 +54,14 @@ module tb_effect_return_mixer;
 
   task automatic accept_mix(input int expected_l, input int expected_r);
     begin
+      if (!in_ready) begin
+        $error("effect mixer was not ready for a new sample");
+        errors++;
+      end
       in_valid = 1'b1;
       @(negedge clk);
       in_valid = 1'b0;
+      @(negedge clk);
       if (!out_valid || int'($signed(out_l)) != expected_l ||
           int'($signed(out_r)) != expected_r) begin
         $error("effect mix mismatch got %0d/%0d expected %0d/%0d",
@@ -76,6 +81,9 @@ module tb_effect_return_mixer;
     chorus_wet_r_i = 24'sd40;
     reverb_config_i.input_send_q1_15 = 16'h7fff;
     reverb_config_i.chorus_to_reverb_q1_15 = 16'h4000;
+    reverb_input_commit_i = 1'b1;
+    @(negedge clk);
+    reverb_input_commit_i = 1'b0;
     #1;
     if ($signed(reverb_input_l_o) != 80 ||
         $signed(reverb_input_r_o) != -80) begin
@@ -105,12 +113,14 @@ module tb_effect_return_mixer;
     @(negedge clk);
     reverb_input_commit_i = 1'b0;
     in_valid = 1'b0;
+    @(negedge clk);
     if (!out_valid || $signed(out_l) != 8388607 ||
         $signed(out_r) != -8388608) begin
       $error("saturated effect mix mismatch got %0d/%0d",
              $signed(out_l), $signed(out_r));
       errors++;
     end
+    @(negedge clk);
     if (saturation_count != 32'd4) begin
       $error("saturation count mismatch got %0d expected 4", saturation_count);
       errors++;
@@ -119,20 +129,18 @@ module tb_effect_return_mixer;
       $error("reverb route saturation flags missing");
       errors++;
     end
-    @(negedge clk);
-
     reverb_config_i.input_send_q1_15 = 16'hffff;
     dry_l_i = 24'sd111;
     dry_r_i = -24'sd222;
+    reverb_input_commit_i = 1'b1;
+    @(negedge clk);
+    reverb_input_commit_i = 1'b0;
     #1;
     if ($signed(reverb_input_l_o) != 8388607 ||
         $signed(reverb_input_r_o) != -8388608) begin
       $error("clamped gain route mismatch");
       errors++;
     end
-    reverb_input_commit_i = 1'b1;
-    @(negedge clk);
-    reverb_input_commit_i = 1'b0;
     if (!config_clamped) begin
       $error("invalid mixer gain was not reported");
       errors++;
@@ -146,9 +154,10 @@ module tb_effect_return_mixer;
     in_valid = 1'b1;
     @(negedge clk);
     in_valid = 1'b0;
+    @(negedge clk);
     repeat (4) begin
       @(negedge clk);
-      if (!out_valid || in_ready || $signed(out_l) != 1234 ||
+      if (!out_valid || $signed(out_l) != 1234 ||
           $signed(out_r) != -2345) begin
         $error("effect mixer output changed under backpressure");
         errors++;
