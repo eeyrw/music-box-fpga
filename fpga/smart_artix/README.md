@@ -2,13 +2,17 @@
 
 This directory is the board-specific integration workspace for the Smart Artix
 minimum system board. The RTL connects SPI control, native-SD asset loading,
-DDR3-backed wavetable reads, and I2S output. Pin locations, exact clocking, and
-external interface timing must still be verified against the board schematic
-before hardware use. The source-controlled Vivado flow already generates and
-implements the Clocking Wizard and DDR3 MIG configuration.
+DDR3-backed wavetable reads, and I2S output. The native-SD pins and the
+project-selected SPI/I2S expansion-header pins have been checked against the
+board pin table and schematic. External timing, BANK15 voltage, wiring, and
+signal integrity still require qualification before hardware signoff. The
+source-controlled Vivado flow already generates and implements the Clocking
+Wizard and DDR3 MIG configuration.
 
 Use [`../../docs/board/smart_artix_bringup.md`](../../docs/board/smart_artix_bringup.md) as
 the practical hardware bring-up checklist.
+Use [`../../docs/board/smart_artix_io_constraints_backlog.md`](../../docs/board/smart_artix_io_constraints_backlog.md)
+for SPI, native-SD, and I2S constraint analysis and completion gates.
 
 ## Known Board Facts
 
@@ -26,11 +30,11 @@ the practical hardware bring-up checklist.
   output.
 - Generated MIG IP source configuration: `vivado/ip/smart_artix_ddr3_mig`.
 
-Still required from the board documentation or hardware measurements:
+Still required from peripheral documentation or hardware measurements:
 
 - Reset source and polarity.
-- Schematic verification of SPI, I2S, LED, and other non-DDR pin locations.
-- Non-DDR I/O standards and bank voltages.
+- Confirmation that BANK15 `VCCIO_ADJ` is 3.3 V before using the selected SPI
+  and I2S expansion pins as `LVCMOS33`.
 - External SPI and I2S timing limits.
 - Audio codec timing limits and whether MCLK, reset, mute, or codec register
   configuration pins are actually needed.
@@ -162,12 +166,13 @@ cd ../../build/fpga/smart_artix/vivado
   -journal logs/synth.jou -log logs/synth.log
 ```
 
-The non-DDR XDC currently contains temporary package pins selected only to let
-Vivado run early synthesis and timing checks. These pins are legal user I/O for
-the package, but they are not verified against the Smart Artix schematic and must
-not be used to connect real hardware. The temporary non-DDR I/O standard is
-`LVCMOS33`, and the primary board clock is constrained to `20.000 ns` for the
-confirmed `50 MHz` oscillator. DDR3 pins come from the generated MIG XDC.
+The non-DDR XDC uses board-documented native-SD pins and project-selected
+BANK15 expansion-header pins for SPI and I2S. The package locations match the
+board pin table, but external wiring and BANK15 voltage still require
+verification. The current non-DDR I/O standard is `LVCMOS33`, and the primary
+board clock is constrained to `20.000 ns` for the confirmed `50 MHz`
+oscillator. DDR3 pins come from the generated MIG XDC. External timing remains
+open as detailed in the board I/O constraints backlog.
 
 `DDRPIN.ucf` is the board-provided DDR3 pin assignment source. Keep it with the
 board target: the Vivado project script checks the MIG `mig_b.prj` pin selection
@@ -256,8 +261,8 @@ not sufficient for signoff.
 
 ## Bring-Up Order
 
-1. Replace the temporary non-DDR XDC package pins with schematic-verified Smart Artix
-   pins before connecting hardware.
+1. Confirm BANK15 is at 3.3 V and wire the selected SPI/I2S expansion pins in
+   the same order recorded by the XDC and board I/O constraints backlog.
 2. Run full implementation with the `200 MHz` MIG input clock and review
    post-route MIG DDR PHY hold timing before treating post-synthesis hold as a
    board-blocking failure.

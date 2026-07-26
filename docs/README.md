@@ -98,6 +98,9 @@ change.
   checks.
 - [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical Smart
   Artix hardware bring-up sequence and bring-up checklist.
+- [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):
+  confirmed non-DDR pin facts, SPI/SD/I2S timing analysis, open RTL and XDC
+  work, and board-level signoff gates.
 - [`board/asset_loading.md`](board/asset_loading.md): SD raw-image to DDR3 asset
   loading contract and Smart Artix loader blocks.
 
