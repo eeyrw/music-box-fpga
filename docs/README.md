@@ -34,6 +34,10 @@ change.
   roadmap notes.
 - [`design/rtl_module_map.md`](design/rtl_module_map.md): concise RTL reading map
   and instantiation tree.
+- [`design/rtl_refactoring_backlog.md`](design/rtl_refactoring_backlog.md):
+  prioritized structural cleanup for executor ownership, renderer working
+  records, typed voice-layer boundaries, debug capture, and cache state, with
+  RAM-inference and timing-preservation gates.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
   synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
