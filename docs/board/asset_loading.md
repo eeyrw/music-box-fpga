@@ -203,6 +203,12 @@ in reset until `asset_loaded` is set.
 
 ## Verification Coverage
 
+The Version 9.10 protocol audit and remaining correctness work are tracked in
+[`sd_native_backlog.md`](sd_native_backlog.md). The passing simulations below
+are the current functional baseline; they do not yet qualify R1/R6 error
+handling, R1b busy, CMD6 fallback, specification-length read latency, optional
+CMD23 support, or mid-burst error recovery.
+
 The board-level regression target runs all focused Smart Artix simulations:
 
 ```bash
