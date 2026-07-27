@@ -374,6 +374,10 @@ This is a candidate, not a commitment. In particular, block size, cache size,
 associativity, outstanding count, and audio-reservoir organization require
 simulation sweeps and post-route comparison.
 
+The detailed implementation and verification checklist for the voice-major
+render stage is maintained in
+[`voice_major_block_renderer_plan.md`](voice_major_block_renderer_plan.md).
+
 ## Architecture Workstreams
 
 ### P0: Measurement Before Replacement

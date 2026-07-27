@@ -44,6 +44,9 @@ change.
   These items may intentionally change internal or external contracts.
 - [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
   synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
+- [`design/voice_major_block_renderer_plan.md`](design/voice_major_block_renderer_plan.md):
+  implementation plan for voice-major N-frame rendering, block accumulation,
+  event boundaries, state ownership, DDR locality, and ping-pong output.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.
