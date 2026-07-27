@@ -1,11 +1,18 @@
 # Chorus And Reverb RTL Backlog
 
+> Architecture status (2026-07-27): the effect modules and their focused tests
+> remain, but the referenced `wavetable_system_core`, transactional commands,
+> Smart Artix top, and integrated timing results belong to the deleted renderer.
+> Treat those passages as historical evidence. The current integration target is
+> the published mix-bank boundary described in
+> `voice_major_render_pipeline_detailed.md`.
+
 ## Implementation Status
 
 The signed-24 `stereo_chorus`, eight-line `fdn_reverb`, `effect_return_mixer`,
 serial `global_effects_chain`, and compressor-inclusive
-`global_audio_effects_chain` ready/valid path are implemented and integrated in
-`wavetable_system_core`. The system order is chorus, reverb/return mixing,
+`global_audio_effects_chain` ready/valid path are implemented and independently
+tested. The intended system order is chorus, reverb/return mixing,
 look-ahead compression, master volume, and final PCM16 saturation. Reset-default
 effect settings preserve the exact dry signed-24 path.
 

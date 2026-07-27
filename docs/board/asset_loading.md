@@ -1,5 +1,11 @@
 # SD Asset Loading To DDR3
 
+> Integration status (2026-07-27): the raw SD image and retained SD/DDR
+> peripheral details remain useful, but references to `wavetable_render_core`,
+> `wavetable_cached_render_core`, `wave_memory_subsystem`, and `smart_artix_top`
+> describe deleted integration. The new adapter must drive the ordered 8-word
+> line interface documented in `../memory_format.md`.
+
 This document defines the planned board-level path for loading large SoundFont
 assets from an SD card into DDR3 before wavetable playback starts. It is a board
 system contract, not part of the generic wavetable core under `rtl/`.

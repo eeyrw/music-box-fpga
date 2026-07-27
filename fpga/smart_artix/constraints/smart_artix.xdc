@@ -9,7 +9,7 @@
 set_property PACKAGE_PIN Y18 [get_ports clk_in]
 set_property IOSTANDARD LVCMOS33 [get_ports clk_in]
 
-# RESET_N pushbutton. smart_artix_top expects active-low rst_n.
+# RESET_N pushbutton is active low at the board boundary.
 set_property PACKAGE_PIN T20 [get_ports rst_n]
 set_property IOSTANDARD LVCMOS33 [get_ports rst_n]
 

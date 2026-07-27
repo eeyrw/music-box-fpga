@@ -1,5 +1,10 @@
 # Vivado Synthesis, RAM Inference, And Timing Closure
 
+> Historical results (2026-07-27): measurements below apply to the deleted
+> renderer and Smart Artix top. They are useful optimization case studies, but
+> they do not sign off `voice_major_render_core`. The new eight-slot pipeline has
+> not yet been synthesized or routed.
+
 This note records the Smart Artix synthesis lessons that are specific enough to
 be actionable in this repository. The target used for the measurements is
 xc7a50tfgg484-2, with the generic core clocked by the MIG `ui_clk` at 100 MHz.

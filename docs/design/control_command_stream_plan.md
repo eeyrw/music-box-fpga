@@ -1,6 +1,12 @@
 # Transactional Control And Continuous Render Plan
 
-This document is the frozen control-plane and audio-scheduling contract.
+> Legacy architecture (2026-07-27): this document records the deleted
+> command-word/prepared-state renderer and is not a current RTL contract. The
+> remaining C++ reference model may still use parts of the command vocabulary.
+> New RTL integration must target `block_voice_event_t`, the voice state store,
+> and the voice-major block pipeline.
+
+This document is retained as the old control-plane and audio-scheduling record.
 
 ## Ownership
 

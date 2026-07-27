@@ -1,5 +1,10 @@
 # Smart Artix Bring-Up Plan
 
+> Legacy board procedure (2026-07-27): `smart_artix_top` and
+> `wavetable_demo_system` were deleted with the old renderer. Do not execute this
+> procedure as a current bitstream flow. Retained SD/DDR peripherals must first
+> be connected to a new top around `voice_major_render_core`.
+
 This document turns the current Smart Artix board integration state into a
 hardware bring-up procedure. It assumes the `fpga/smart_artix/` top level is the
 target image and that the first board goal is to prove the platform path before
@@ -20,9 +25,9 @@ Do not start with MIDI playback or full SoundFont preset policy. The FPGA does
 not parse MIDI, allocate voices, or evaluate SoundFont regions; those remain
 host, MCU, or later soft-processor responsibilities.
 
-## Current Board Image
+## Deleted Board Image Reference
 
-`fpga/smart_artix/rtl/smart_artix_top.sv` currently connects:
+The deleted `fpga/smart_artix/rtl/smart_artix_top.sv` connected:
 
 - `clk_in` from the board `50 MHz` oscillator.
 - `smart_artix_clk_50m_to_200m`, feeding MIG `sys_clk_i`.

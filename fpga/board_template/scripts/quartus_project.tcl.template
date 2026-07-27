@@ -1,7 +1,4 @@
-# Quartus project-generation template.
-# Usage after copying to a concrete board directory:
-#   quartus_sh -t scripts/quartus_project.tcl
-
+# Quartus project-generation template. Run from the concrete board directory.
 set board_name <board-name>
 set family_name <fpga-family>
 set part_name <fpga-part-name>
@@ -11,49 +8,17 @@ project_new $board_name -overwrite
 set_global_assignment -name FAMILY $family_name
 set_global_assignment -name DEVICE $part_name
 set_global_assignment -name TOP_LEVEL_ENTITY $top_name
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/${top_name}.sv
 
-set rtl_sources {
-  ../../rtl/pkg/synth_pkg.sv
-  ../../rtl/pkg/synth_register_pkg.sv
-  ../../rtl/generated/synth_dsp_lut_pkg.sv
-  ../../rtl/control/voice_bram_1r1w.sv
-  ../../rtl/control/control_word_fifo.sv
-  ../../rtl/control/control_action_fifo.sv
-  ../../rtl/control/control_action_parser.sv
-  ../../rtl/control/control_action_executor.sv
-  ../../rtl/control/transactional_control_plane.sv
-  ../../rtl/control/synth_control_plane.sv
-  ../../rtl/memory/wave_memory_subsystem.sv
-  ../../rtl/memory/voice_line_cache.sv
-  ../../rtl/dsp/linear_interpolator.sv
-  ../../rtl/dsp/gain_saturate.sv
-  ../../rtl/dsp/voice_dsp_pipeline.sv
-  ../../rtl/audio/lookahead_compressor.sv
-  ../../rtl/audio/output_sample_fifo.sv
-  ../../rtl/audio/render_credit_scheduler.sv
-  ../../rtl/voice/voice_phase_frame.sv
-  ../../rtl/voice/voice_endpoint_fetch.sv
-  ../../rtl/voice/multi_voice_pipeline.sv
-  ../../rtl/top/wavetable_render_core.sv
-  ../../rtl/top/wavetable_cached_render_core.sv
-  ../common/rtl/fractional_tick_gen.sv
-  ../common/rtl/spi_register_bridge.sv
-  ../common/rtl/wavetable_register_fabric.sv
-  ../common/rtl/wavetable_common_status_regs.sv
-  ../common/rtl/i2s_tx.sv
-  ../common/rtl/wavetable_system_core.sv
-  ../common/rtl/wavetable_i2s_output.sv
-  ../common/rtl/wavetable_demo_system.sv
-}
-
-foreach src $rtl_sources {
+set fd [open filelist.f r]
+foreach line [split [read $fd] "\n"] {
+  set src [string trim $line]
+  if {$src eq "" || [string match "#*" $src] || [string match "*.template" $src]} {
+    continue
+  }
   set_global_assignment -name SYSTEMVERILOG_FILE $src
 }
+close $fd
 
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/${top_name}.sv
 set_global_assignment -name SDC_FILE constraints/${board_name}.sdc
-
-# TODO: Add pin assignments in a .qsf file or extend this script with
-# set_location_assignment and set_instance_assignment commands.
-
 project_close

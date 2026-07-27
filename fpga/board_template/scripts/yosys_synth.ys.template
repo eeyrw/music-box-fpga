@@ -1,44 +1,30 @@
-# Yosys synthesis template. Replace the target command with the selected FPGA
-# family flow, then run from the concrete board directory.
-
+# Yosys synthesis template. Keep the source list aligned with filelist.f.
 read_verilog -sv ../../rtl/pkg/synth_pkg.sv
 read_verilog -sv ../../rtl/pkg/synth_register_pkg.sv
 read_verilog -sv ../../rtl/generated/synth_dsp_lut_pkg.sv
-read_verilog -sv ../../rtl/control/voice_bram_1r1w.sv
-read_verilog -sv ../../rtl/control/control_word_fifo.sv
-read_verilog -sv ../../rtl/control/control_action_fifo.sv
-read_verilog -sv ../../rtl/control/control_action_parser.sv
-read_verilog -sv ../../rtl/control/control_action_executor.sv
-read_verilog -sv ../../rtl/control/transactional_control_plane.sv
-read_verilog -sv ../../rtl/control/synth_control_plane.sv
-read_verilog -sv ../../rtl/memory/wave_memory_subsystem.sv
-read_verilog -sv ../../rtl/memory/voice_line_cache.sv
-read_verilog -sv ../../rtl/dsp/linear_interpolator.sv
-read_verilog -sv ../../rtl/dsp/gain_saturate.sv
-read_verilog -sv ../../rtl/dsp/voice_dsp_pipeline.sv
+read_verilog -sv ../../rtl/control/block_voice_event_executor.sv
+read_verilog -sv ../../rtl/control/block_voice_state_store.sv
+read_verilog -sv ../../rtl/dsp/block_interleaved_voice_dsp.sv
+read_verilog -sv ../../rtl/audio/stereo_chorus.sv
+read_verilog -sv ../../rtl/audio/fdn_reverb.sv
+read_verilog -sv ../../rtl/audio/effect_return_mixer.sv
+read_verilog -sv ../../rtl/audio/global_effects_chain.sv
+read_verilog -sv ../../rtl/audio/global_audio_effects_chain.sv
 read_verilog -sv ../../rtl/audio/lookahead_compressor.sv
 read_verilog -sv ../../rtl/audio/output_sample_fifo.sv
 read_verilog -sv ../../rtl/audio/render_credit_scheduler.sv
-read_verilog -sv ../../rtl/voice/voice_phase_frame.sv
-read_verilog -sv ../../rtl/voice/voice_endpoint_fetch.sv
-read_verilog -sv ../../rtl/voice/multi_voice_pipeline.sv
-read_verilog -sv ../../rtl/top/wavetable_render_core.sv
-read_verilog -sv ../../rtl/top/wavetable_cached_render_core.sv
-read_verilog -sv ../common/rtl/fractional_tick_gen.sv
-read_verilog -sv ../common/rtl/spi_register_bridge.sv
-read_verilog -sv ../common/rtl/wavetable_register_fabric.sv
-read_verilog -sv ../common/rtl/wavetable_common_status_regs.sv
-read_verilog -sv ../common/rtl/i2s_tx.sv
-read_verilog -sv ../common/rtl/wavetable_system_core.sv
-read_verilog -sv ../common/rtl/wavetable_i2s_output.sv
-read_verilog -sv ../common/rtl/wavetable_demo_system.sv
+read_verilog -sv ../../rtl/voice/mono_phase_frame.sv
+read_verilog -sv ../../rtl/voice/block_interleaved_envelope_frontend.sv
+read_verilog -sv ../../rtl/voice/block_mix_buffer.sv
+read_verilog -sv ../../rtl/voice/block_interleaved_voice_renderer.sv
+read_verilog -sv ../../rtl/voice/block_mono_voice_engine.sv
+read_verilog -sv ../../rtl/voice/voice_major_block_controller.sv
+read_verilog -sv ../../rtl/top/voice_major_render_core.sv
 read_verilog -sv rtl/<board-name>_top.sv
 
 hierarchy -top <board_top_module>
 proc
 opt
-
-# TODO: Replace with synth_ecp5, synth_ice40, synth_gowin, synth_xilinx, etc.
+# Replace with synth_ecp5, synth_ice40, synth_gowin, synth_xilinx, etc.
 synth -top <board_top_module>
-
 stat

@@ -1,52 +1,16 @@
 # Board Template
 
-Copy this directory to `fpga/<board-name>/` and replace every template value with
-the selected board details.
+复制到 `fpga/<board-name>/` 后填写器件、时钟、复位、引脚、电压、memory 与 audio
+信息。Vivado、Quartus 和 Yosys 脚本模板均保留。
 
-## Board Facts To Fill In
+当前 `filelist.f` 指向 voice-major RTL；`board_top.sv.template` 只是可编译的 IO/clock
+smoke scaffold，不是完整 synthesizer。新 board top 需要完成：
 
-- Board name:
-- FPGA part/package/speed grade:
-- Toolchain and version:
-- Input oscillator frequency:
-- Required core clock frequency:
-- Audio output device:
-- Audio master clock requirement:
-- Control interface:
-- Wave-memory device:
-- Memory bus width and clocking:
-- Reset source and polarity:
-- I/O bank voltages:
+1. PLL/MMCM 与同步复位；
+2. SPI/host command 到 `block_voice_event_t` 的适配；
+3. ordered line DDR cache/arbiter；
+4. block drain、effects、compressor、PCM FIFO 和 I2S；
+5. underrun/fault/status；
+6. synthesis、post-route timing 和硬件验证。
 
-## Integration Decisions
-
-- Top-level module name:
-- Core wrapper used: `wavetable_render_core`, `wavetable_cached_render_core`,
-  `wavetable_system_core`, `wavetable_i2s_output`, or `wavetable_demo_system`
-- Clock generation method:
-- Reset sequencing method:
-- SPI mode and maximum SCLK:
-- Memory image format:
-- Codec configuration method:
-- Host/MCU/soft-core control path:
-
-## Bring-Up Order
-
-1. Build a bitstream with only clock/reset and simple pin toggles.
-2. Add I2S clocks and verify BCLK/LRCLK frequency on hardware.
-3. Add a tiny BRAM-backed waveform source and play a fixed tone.
-4. Add SPI register programming and commit one voice from the host.
-5. Add the selected external memory controller.
-6. Load a preprocessed wave-memory image and verify readback or checksum.
-7. Run one-voice audio, then increase polyphony while watching underruns.
-8. Run a longer MIDI/SF2-derived stress case through the real memory path.
-
-## Pass Criteria
-
-- Timing closes at the selected system clock.
-- Reset exits cleanly and deterministically.
-- SPI register writes and reads match `docs/register_map.md`.
-- I2S BCLK/LRCLK/data format matches the attached DAC or codec.
-- Memory line reads return correct signed 16-bit PCM words.
-- `underrun_pulse` is absent after startup.
-- `sample_drop_pulse` remains low during steady-state playback.
+不要恢复旧 `wavetable_demo_system` 来填补这些边界。

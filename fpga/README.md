@@ -1,124 +1,23 @@
-# FPGA Integration Workspace
+# FPGA Integration
 
-This directory is reserved for board-specific FPGA integration work. The RTL
-under `rtl/` is the generic synthesizable wavetable core; files here should bind
-that core to a real board, a real clock tree, real pins, and real memory/audio
-devices.
+`fpga/` 保存 vendor/board 边界，不属于 generic renderer。
 
-The current concrete target is `smart_artix/`, a Smart Artix XC7A50T board path
-for SPI control, native-SD asset loading into DDR3, DDR3-backed wavetable memory,
-and simple I2S audio. Use `board_template/` as the starting point for future board
-directories, for example:
+- `common/rtl`: SPI、register fabric、I2S、SD native 和 PCM 输出适配器。
+- `smart_artix/rtl`: SD loader、MIG adapter、DDR arbiter/debug 和平台寄存器。
+- `smart_artix/vivado/ip`: Smart Artix clock/MIG IP 配置。
+- `smart_artix/vivado/scripts`: 保留的 Vivado 工程、综合、实现和报告脚本。
 
-```text
-fpga/<board-name>/
+旧 `wavetable_system_core`、`wavetable_demo_system` 和 `smart_artix_top` 已随旧 renderer
+删除。Vivado 脚本保留作为工程脚手架，但在新的 board top 接入前不能生成完整
+bitstream。不要为让脚本暂时运行而恢复旧 renderer。
+
+独立外围验证使用：
+
+```bash
+make test-rtl-peripheral
+make smart-artix-test
 ```
 
-Do not place simulation-only models from `sim/` in synthesis projects.
-
-## Expected Board Directory
-
-```text
-fpga/<board-name>/
-├── README.md
-├── filelist.f
-├── rtl/
-│   └── <board-name>_top.sv
-├── constraints/
-│   ├── <board-name>.xdc        # Vivado, if using Xilinx
-│   └── <board-name>.sdc        # Quartus/Yosys timing constraints, if needed
-├── vivado/                     # Optional Xilinx project inputs
-│   ├── ip/                     # Versioned .xci/.prj IP configuration
-│   └── scripts/                # Project generation, synthesis, implementation
-├── scripts/                    # Optional non-Vivado board scripts
-│   ├── quartus_project.tcl     # Optional Quartus project generation
-│   └── yosys_synth.ys          # Optional open-source synthesis flow
-└── assets/
-    └── README.md
-```
-
-## Work Required Before Synthesis
-
-1. Select a board and FPGA part.
-   Record the exact FPGA part number, package, speed grade, board revision,
-   oscillator frequency, I/O bank voltages, audio device, and memory device.
-
-2. Add a board top level.
-   Instantiate the generic core, connect physical pins, define reset behavior,
-   and adapt external memory/audio/control ports to the board devices.
-
-3. Generate board clocks.
-   The current wrappers default to a `100 MHz` system clock and derive audio
-   timing with fractional phase-accumulator dividers. The board project must set
-   `SYS_CLK_HZ` to the actual core clock and verify the resulting audio clocks.
-
-4. Add constraints.
-   Define pin locations, I/O standards, drive strength where needed, primary
-   clocks, generated clocks, false paths, multicycle paths, and external device
-   timing for SPI, I2S, and memory interfaces.
-
-5. Replace abstract memory with a physical memory controller.
-   `wavetable_cached_render_core` exposes a line-read interface, not real DDR3 pins or
-   a MIG app interface. The Smart Artix path should translate line requests into
-   reads from a MIG controller configured for the Micron `MT41K256M16TW`.
-
-6. Complete the audio interface.
-   `i2s_tx` emits BCLK, LRCLK, and serial data. Many boards also need codec MCLK,
-   codec reset, mute control, and I2C/SPI codec register configuration.
-
-7. Harden the control interface.
-   Define the supported SPI mode, maximum SCLK, clock-domain assumptions,
-   chip-select timing, and read turnaround behavior. Add synchronizers or CDC
-   logic in the board wrapper when the SPI pins are not synchronous to `clk`.
-
-8. Define and load the asset image.
-   Runtime SF2/MIDI parsing is simulation-only. The Smart Artix path currently
-   expects a raw SD image with a `WTSF` header and copies the SF2 byte image into
-   DDR before playback. A board flow still needs metadata tables that the host,
-   MCU, or soft core can use to build voice commands.
-
-9. Provide control firmware or host software.
-   The RTL does not allocate voices or parse MIDI. A control-side implementation
-   must send the documented command stream for voice start, runtime updates,
-   release, and stop.
-
-10. Verify real-time timing.
-    Measure render latency, memory miss latency, I2S underruns, and sample drops.
-    Add an output FIFO or deeper prefetching if the core cannot produce each
-    48 kHz frame before the audio transmitter consumes it.
-
-## Source Files For Synthesis
-
-`rtl/filelist.f` is the single source of truth for generic synthesizable RTL.
-The root `Makefile` derives `RTL_SOURCES` from that file. Board projects must
-read it directly and keep only common/board integration sources in their local
-`filelist.f`; do not copy the generic list into each board directory.
-
-The Smart Artix `project.tcl` demonstrates the required ordering: generic RTL
-first, then `fpga/common/rtl` and Smart Artix integration RTL. Simulation models
-under `sim/` and `fpga/<board>/sim/` must never be added to either synthesis
-list.
-
-Common board/peripheral adapters live under `fpga/common/rtl`:
-
-```text
-fpga/common/rtl/fractional_tick_gen.sv
-fpga/common/rtl/spi_register_bridge.sv
-fpga/common/rtl/wavetable_register_fabric.sv
-fpga/common/rtl/wavetable_common_status_regs.sv
-fpga/common/rtl/i2s_tx.sv
-fpga/common/rtl/sd_native_block_reader.sv
-fpga/common/rtl/sd_native_pin_phy.sv
-fpga/common/rtl/wavetable_system_core.sv
-fpga/common/rtl/wavetable_i2s_output.sv
-fpga/common/rtl/wavetable_demo_system.sv
-```
-
-Use `wavetable_render_core` for the smallest datapath integration,
-`wavetable_cached_render_core` when a standalone Verilated top should include the
-line-memory adapter, `wavetable_system_core` when a board/common wrapper should
-compose the render core and line-memory adapter behind an abstract register bus,
-`wavetable_i2s_output` when adapting PCM frames to I2S,
-`sd_native_block_reader` and `sd_native_pin_phy` when a board loader needs the
-native SD command/pin layer without tying it to a specific memory controller, or
-`wavetable_demo_system` when keeping the current SPI plus I2S board demo shape.
+新板级集成应把 `voice_major_render_core` 的 ordered line 接口接到 DDR cache/arbiter，
+把 block mix drain 接到 effects/compressor/FIFO/I2S，并实现 SPI/host 到
+`block_voice_event_t` 的适配。

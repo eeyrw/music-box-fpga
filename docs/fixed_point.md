@@ -112,6 +112,11 @@ pipeline. The voice remains active, its output is exact zero, and biquad history
 is unchanged. The first frame whose advanced envelope state is Attack uses the
 normal memory and DSP path.
 
+The replacement block walker preserves that per-frame ordering: it advances
+the envelope state first, then derives the frame's Q1.15 level from the advanced
+state. A Release step that reaches the 1000 cB silence threshold deactivates the
+voice before phase or sample work for that frame.
+
 Attack advances a Q0.32 linear-amplitude accumulator. Decay, Sustain, and
 Release store Q12.20 centibel attenuation and convert it to Q1.15 with a
 generated SoundFont amplitude curve:
@@ -178,8 +183,14 @@ z2    = saturate_i34(b2 * x - a2 * y)
 
 Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
 the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
-stage. Filter state is signed 34-bit Q14 per voice and per channel, and is
-cleared when `VOICE_START` activates a new generation.
+stage. In the current mono-lane renderer, filter state is signed 34-bit Q14 per
+hardware voice and is cleared when a new generation starts.
+
+The replacement mono-lane block renderer keeps exactly one signed 34-bit Q14
+`z1/z2` pair per hardware voice. It filters the interpolated mono sample once,
+then applies independent left and right Q1.15 gains. An SF2 stereo pair uses two
+ordinary mono voices and therefore two independent filter histories. The old
+per-channel stereo renderer has been removed.
 
 ### Biquad Range Analysis
 
@@ -427,20 +438,16 @@ existing bare-core `render_sample()` contract.
 
 ## Current Voice Render Calculation
 
-At each accepted `sample_tick`, the renderer scans active voice slots in index
-order. Command-owned configuration, runtime control, and envelope state are
-stored in packed active RAM. The renderer reads one indexed synchronous snapshot
-when that voice is accepted for the current frame and accumulates each enabled,
-valid, not-completed contribution into one stereo output.
+The current renderer accepts blocks of up to eight frames. The controller reads
+one atomic voice snapshot, and tagged envelope/phase/memory/DSP stages may work
+on different voices at the same time. Each hardware voice is one mono lane; an
+SF2 stereo pair is represented by two host-owned mono lanes.
 
 For each contributing voice:
 
 ```text
-phase_l  = phase[voice]
-phase_r  = phase_right[voice]      // stereo only; mono duplicates left samples
-frame_l0 = phase_l[31:8]
-frame_r0 = phase_r[31:8]
-fraction = phase_l[7:0]
+frame_0 = phase[31:8]
+fraction = phase[7:0]
 ```
 
 Endpoint frame selection uses the active loop mode:
@@ -450,68 +457,45 @@ loop_active = (loop_mode == continuous) ||
               ((loop_mode == until_release) && (released == 0))
 
 if loop_active:
-  frame_l1 = (frame_l0 + 1 >= loop_end) ? loop_start : frame_l0 + 1
-  frame_r1 = (frame_r0 + 1 >= loop_end_r) ? loop_start_r : frame_r0 + 1
+  frame_1 = (frame_0 + 1 >= loop_end) ? loop_start : frame_0 + 1
 else:
-  frame_l1 = (frame_l0 + 1 >= length) ? frame_l0 : frame_l0 + 1
-  frame_r1 = (frame_r0 + 1 >= length_r) ? frame_r0 : frame_r0 + 1
+  frame_1 = (frame_0 + 1 >= length) ? frame_0 : frame_0 + 1
 ```
 
 The phase advances after `frame_0`, `frame_1`, and `fraction` are captured:
 
 ```text
-phase_l_sum = phase_l + phase_inc_runtime
-phase_r_sum = phase_r + phase_inc_runtime
+phase_sum = phase + phase_inc
 
-if loop_active && phase_l_sum >= (loop_end << 8):
-  phase_l_next = phase_l_sum - ((loop_end - loop_start) << 8)
+if loop_active && phase_sum >= (loop_end << 8):
+  phase_next = phase_sum - ((loop_end - loop_start) << 8)
 else:
-  phase_l_next = phase_l_sum[31:0]
-
-if stereo && loop_active && phase_r_sum >= (loop_end_r << 8):
-  phase_r_next = phase_r_sum - ((loop_end_r - loop_start_r) << 8)
-else:
-  phase_r_next = phase_r_sum[31:0]
+  phase_next = phase_sum[31:0]
 ```
 
-V1 requires `phase_inc_runtime` to be smaller than each active channel's loop
-length in Q24.8 units, so this single subtraction is sufficient. No-loop voices
-and released loop-until-release voices stop contributing when all active channels
-have reached their configured length.
+V1 requires `phase_inc` to be smaller than the active loop length in Q24.8
+units, so one subtraction is sufficient. A no-loop voice, or a released
+loop-until-release voice, stops when its phase reaches `length`.
 
 Memory addressing is in signed 16-bit words using 32-bit base addresses and
 24-bit frame offsets:
 
 ```text
-if stereo == 0:
-  l0 = mem[base_addr + frame_l0]
-  l1 = mem[base_addr + frame_l1]
-  r0 = l0
-  r1 = l1
-else:
-  l0 = mem[base_addr + frame_l0]
-  l1 = mem[base_addr + frame_l1]
-  r0 = mem[base_addr_r + frame_r0]
-  r1 = mem[base_addr_r + frame_r1]
+sample_0 = mem[base_addr + frame_0]
+sample_1 = mem[base_addr + frame_1]
 ```
 
-Interpolation is applied independently per channel:
+The mono sample is interpolated once:
 
 ```text
-interp_l = l0 + (((l1 - l0) * fraction) >>> 8)
-interp_r = r0 + (((r1 - r0) * fraction) >>> 8)
+interpolated = sample_0 + (((sample_1 - sample_0) * fraction) >>> 8)
 ```
 
-If the runtime filter is enabled, each channel then runs through the per-voice
-biquad using that channel's filter history. If disabled, the interpolated sample
-is sign-extended into the post-filter 20-bit sample path:
+If enabled, the mono interpolated sample passes through the voice's single
+biquad history. Otherwise it is sign-extended into the 20-bit sample path:
 
 ```text
-filter_in_l = interp_l
-filter_in_r = interp_r
-
-post_filter_l = filter_enable ? biquad_l(filter_in_l) : filter_in_l
-post_filter_r = filter_enable ? biquad_r(filter_in_r) : filter_in_r
+selected = filter_enable ? biquad(interpolated) : interpolated
 ```
 
 Runtime channel gain and envelope level are then applied as one output scaling
@@ -520,11 +504,11 @@ exact channel-gain samples:
 
 ```text
 if envelope_level == 0x7fff:
-  voice_l = saturate_pcm((post_filter_l * gain_l_runtime) >>> 15)
-  voice_r = saturate_pcm((post_filter_r * gain_r_runtime) >>> 15)
+  voice_l = saturate_pcm((selected * gain_l) >>> 15)
+  voice_r = saturate_pcm((selected * gain_r) >>> 15)
 else:
-  voice_l = saturate_pcm((post_filter_l * gain_l_runtime * envelope_level) >>> 30)
-  voice_r = saturate_pcm((post_filter_r * gain_r_runtime * envelope_level) >>> 30)
+  voice_l = saturate_pcm((selected * gain_l * envelope_level) >>> 30)
+  voice_r = saturate_pcm((selected * gain_r * envelope_level) >>> 30)
 ```
 
 All contributing voices are accumulated in signed 32-bit integer PCM units:
@@ -534,11 +518,12 @@ accum_l += sign_extend_32(voice_l)
 accum_r += sign_extend_32(voice_r)
 ```
 
-After the last voice slot, the final stereo output is saturated once:
+The mix bank keeps signed 32-bit accumulators and publishes their low signed
+24-bit values to the future effects/output path:
 
 ```text
-sample_l = saturate_pcm(accum_l)
-sample_r = saturate_pcm(accum_r)
+mix_l = accum_l[23:0]
+mix_r = accum_r[23:0]
 ```
 
 The implemented order is therefore:
@@ -550,5 +535,5 @@ phase/frame selection
   -> optional biquad filter
   -> combined channel gain and envelope/full-level bypass
   -> 32-bit mix accumulation
-  -> final 16-bit saturation
+  -> signed 24-bit published mix
 ```

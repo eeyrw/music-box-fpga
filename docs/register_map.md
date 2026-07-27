@@ -1,5 +1,12 @@
 # Register And Command Control Map
 
+> Integration status (2026-07-27): the generated addresses and retained
+> SPI/common peripheral registers remain the compatibility contract, but the
+> deleted command FIFO/control plane is not connected to
+> `voice_major_render_core`. New voice control currently enters through typed
+> install/parameter/block-event ports. Reconnecting this address map requires a
+> new adapter; it must not revive prepared/active legacy state semantics.
+
 `spec/register_map.json` is the source of truth for the 16-bit-address,
 32-bit-data global register bus. Run `make generate-register-map` after changing
 it. Generated consumers are `rtl/pkg/synth_register_pkg.sv` and

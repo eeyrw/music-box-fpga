@@ -1,353 +1,58 @@
-# Music Box FPGA
+# WaveTable Synth FPGA
 
-An open SystemVerilog wavetable synthesizer core. The project includes
-self-checking simulation paths for the core datapath, memory subsystem, effects,
-and board-facing SPI/I2S adapters, plus a source-controlled Smart Artix Vivado
-synthesis and implementation flow.
+当前仓库实现一条可综合的 voice-major wavetable block renderer，以及独立验证的
+effects、compressor、输出 FIFO、I2S、SPI/SD 和 Smart Artix DDR 外设模块。
 
-The current milestone implements 32 stereo output voice slots with configurable
-variable-length wavetable playback, simple loop modes, per-voice biquad IIR
-filtering, and saturated mixing.
+当前计算目标是 100 MHz、48 kHz、8-frame block 下的 256 mono voice lanes。
+256-lane filter-off/filter-on 理想 memory 测量分别为 2149/2191 cycles。
+512-lane 对应为 4197/4258 cycles，均低于 16666-cycle deadline。
 
-## Implemented
-
-- Synthesizable single-clock SystemVerilog RTL
-- Transactional command FIFO with prepared/active voice state and atomic START
-- Unsigned Q24.8 playback phase and fractional phase increments
-- Runtime phase-increment updates for pitch control without phase reload
-- Variable wave length, exclusive loop boundaries, and no-loop/loop/release-loop modes
-- Mono PCM duplication to left and right channels
-- Interleaved stereo PCM playback
-- Per-channel signed Q1.15 gain
-- FPGA-owned six-stage per-voice volume envelope
-- Per-voice biquad IIR filter with runtime coefficients
-- Linear interpolation and signed 16-bit saturated output
-- Shared multi-voice rendering pipeline and saturated stereo mixer
-- Signed-24 global chorus, eight-line FDN reverb, return mixer, look-ahead
-  compressor, and master-volume path
-- Ready/valid abstract memory interface
-- Minimal line-cache memory subsystem and external line-read interface
-- Transport-independent register bus for host, MCU, soft-core, or simulation control
-- Common board/peripheral adapters for SPI register transport and I2S output
-- Smart Artix clock/MIG integration, SD-to-DDR loader path, Tcl batch flow, and
-  post-route 100 MHz internal timing closure
-- One-cycle behavioral wave-memory model
-- Self-checking SystemVerilog regression test
-
-The generic core intentionally does not contain vendor-specific FPGA logic.
-Board-level SPI/I2S external timing constraints, schematic-verified non-DDR pin
-assignments, physical audio-codec integration, complete SF2
-preset/modulator/velocity behavior, and filter coefficient calculation remain
-open. The Smart Artix wrapper owns the current vendor clocking and DDR3 MIG path.
-See [`docs/README.md`](docs/README.md) for the current documentation map and
-[`docs/design/system_design.md`](docs/design/system_design.md) for the architecture
-and roadmap notes.
-
-## Data Path
+## 当前架构
 
 ```text
-Register Bus
-    |
-Shadow Registers -> Commit -> Active Voice Configurations
-                                    |
-                         Multi-Voice Phase/Fetch
-                                    |
-                         Abstract Wave Memory
-                                    |
-                         Linear Interpolation
-                                    |
-                         LPF + Gain + Envelope + Mixer
-                                    |
-                  sample_valid + sample_l/sample_r
+timestamped events -> prefetched voice state -> tagged envelope/phase slots
+ -> voice-block contiguous segment reader -> endpoint scoreboard
+ -> hazard-aware frame issue -> one tagged 8-stage DSP -> block mix banks
 ```
 
-Board wrappers connect the register bus to a physical control transport such as
-SPI, UART, or a soft-core bus, generate `sample_tick`, attach memory controllers,
-and serialize PCM to board audio pins when needed.
+同一 voice 的 biquad RAW hazard 由 scoreboard 和 z1/z2 forwarding 处理；不同 voice
+在同一套 DSP 中交错执行。当前 filtered 路径已出现连续 312 拍一拍一个 sample。
+没有多套完整 renderer，也没有旧 prepared-slot 路径。
 
-PCM data is signed 16-bit. Playback phase uses unsigned Q24.8 sample-frame
-units, and channel gains use signed Q1.15. Mono waves contain one word per frame;
-stereo waves use independent absolute left/right base addresses and sample-window
-metadata. Detailed contracts are documented in [`docs/`](docs/).
+当前 generic top 是 `rtl/top/voice_major_render_core.sv`。旧逐帧 renderer、旧 cache、
+旧控制 plane 和旧板级 top 已删除。Effects 和板级外设仍保留，但尚未与新 renderer
+组成可上板的完整系统。
 
-## Repository Layout
-
-```text
-rtl/                    Generic synthesizable SystemVerilog core
-  filelist.f            Ordered generic synthesis/Verilator source of truth
-  pkg/                  Shared types and constants
-  control/              Command parsing, action execution, and voice state
-  memory/               Abstract line-cache memory subsystem
-  voice/                Multi-voice phase, fetch, and render sequencing
-  dsp/                  Interpolation, filters, gain, envelope, and mixing
-  audio/                Chorus, reverb, mixing, compression, and PCM buffering
-  top/                  Register-bus and line-memory core wrappers
-
-sim/                    Simulation-only code
-  models/               Behavioral models that are not synthesis sources
-  tb/                   Self-checking SystemVerilog testbenches
-  harness/              C++ render harness code
-    apps/               C++ render executable entry points
-    formats/            SF2, MIDI, and byte-stream parsers
-    render/             Shared render types, MCU policy, and reference synth
-    control/            Register-control sequencing shared by sim and host tools
-    dut/                C++ DUT adapters around Verilated top modules
-    common/             WAV writer, memory profiles, and small shared helpers
-    board_loader/       Smart Artix SD-to-DDR loader render harness support
-    generated/          Generated C++ register-map constants
-
-fpga/                   Board-specific FPGA integration workspace
-  common/               Reusable board/peripheral adapters
-    rtl/                SPI bridge, debug regs, tick gen, I2S TX, pin wrapper
-  board_template/       Starting point for future board ports
-  smart_artix/          XC7A50T Smart Artix board path
-    rtl/                Board adapters for SD, DDR3, debug, and top level
-    constraints/        Board XDC constraints
-    vivado/             Versioned Vivado IP configs and batch scripts
-    docs/               Local pin assignment and schematic reference files
-    sim/                Smart Artix board-level simulation models/tests
-    assets/             Board asset notes; generated images stay in build/
-
-docs/                   Stable contracts and design/verification notes
-spec/                   Machine-readable register map source
-assets/                 Small checked-in SF2/MIDI inputs for simulation
-host/                   PC-side CH347/SPI control utility code
-tools/                  Python utilities for SF2/WTSF/WAV/Vivado summaries
-third_party/            External vendor support files kept separate
-build/                  Generated outputs only; ignored by Git
-```
-
-The synthesizer core lives under `rtl/` and exposes abstract register, memory,
-and PCM/tick interfaces. Reusable physical-interface adapters live under
-`fpga/common/rtl`, while concrete board tops live under `fpga/<board>/rtl`.
-Board wrappers under `fpga/` may instantiate vendor IP and physical interfaces,
-but simulation models stay under `sim/` or the board-specific
-`fpga/<board>/sim/` directory and must not be added to synthesis file lists.
-Generated Vivado projects, reports, bitstreams, render output, and SD images are
-written below `build/`.
-
-Useful learning documents start at [`docs/README.md`](docs/README.md). Key entry
-points:
-
-- [`docs/design/system_design.md`](docs/design/system_design.md): current RTL architecture and
-  board-level backlog.
-- [`docs/verification/simulation_design.md`](docs/verification/simulation_design.md): self-checking tests,
-  SoundFont render flows, C++ harness source layout, and MIDI/SF2 render
-  calculations.
-- [`docs/fixed_point.md`](docs/fixed_point.md): fixed-point arithmetic contracts.
-- [`docs/memory_format.md`](docs/memory_format.md): wave-memory layout and
-  external line-memory interface.
-- [`docs/register_map.md`](docs/register_map.md): software-visible register map.
-- [`docs/host/host_control.md`](docs/host/host_control.md): reusable host-side C++ control
-  boundary for future PC/CH347 SPI control.
-- [`fpga/smart_artix/README.md`](fpga/smart_artix/README.md): current XC7A50T
-  Smart Artix board assumptions, Vivado status, and board integration direction.
-- [`docs/board/smart_artix_bringup.md`](docs/board/smart_artix_bringup.md): practical Smart
-  Artix hardware bring-up sequence and debug checklist.
-- [`fpga/smart_artix/`](fpga/smart_artix/): Smart Artix XC7A50T synthesis and
-  bring-up skeleton.
-
-## Requirements
-
-- GNU Make
-- Verilator 5 or newer
-- A C++ compiler supported by Verilator
-
-On Debian or Ubuntu:
-
-```bash
-sudo apt install make verilator g++
-```
-
-## Build And Test
-
-Run RTL lint:
+## 验证
 
 ```bash
 make lint
-```
-
-Check that generated register-map headers match `spec/register_map.json`:
-
-```bash
-make check-register-map
-```
-
-Build and execute the self-checking simulation:
-
-```bash
 make test
+make test-voice-major-512
+make measure-voice-major-throughput
+make measure-voice-major-throughput-filtered
+make measure-voice-major-throughput-512
+make measure-voice-major-throughput-512-filtered
 ```
 
-`make test` is split into `test-cpp-unit`, `test-rtl-core`, and
-`test-rtl-peripheral`, so focused parser/control checks can run separately from
-the RTL regressions when needed. A successful core regression includes:
-
-```text
-PASS: multi-voice wavetable core
-```
-
-Generated files are written below `build/` and are ignored by Git. Use
-`make clean` to remove them.
-
-## Render A SoundFont Instrument
-
-The repository includes `assets/soundfonts/MT6276.sf2` for simulation rendering.
-List available instruments:
+真实 MIDI/SF2 的纯 C++ 整数参考路径仍可使用：
 
 ```bash
-make list-instruments
+make render-reference SF2=assets/soundfonts/example.sf2 SECONDS=1
 ```
 
-Render one instrument through the RTL core at 48 kHz:
+旧 `render-rtl-core`、`render-memory` 和 `render-board-loader` 依赖已删除架构，不再
+提供。新的 RTL harness 必须直接驱动 timestamped block events、ordered line memory
+和 block output。
 
-```bash
-make render-instrument INSTRUMENT=0 KEY=60 SECONDS=1
-```
+## 文档
 
-The flow maps the selected SF2 instrument sample to absolute addresses in the
-full SF2 file image, runs the Verilator render testbench, and writes
-`build/render/out.wav`.
+- `docs/README.md`: 文档导航。
+- `docs/design/system_design.md`: 当前整机边界和数据流。
+- `docs/design/voice_major_block_renderer_guide.md`: FPGA 初学者导向的设计解释。
+- `docs/design/optimized_render_pipeline.md`: 吞吐架构、hazard 与 effects 并行。
+- `docs/design/voice_major_block_renderer_handoff.md`: 最新测量、验证状态和下一步。
+- `docs/fixed_point.md`: 定点格式与精确算术。
+- `docs/memory_format.md`: wavetable 存储格式。
 
-Render a simple MIDI-driven score through one of the C++ harnesses:
-
-```bash
-make render-reference SECONDS=1
-make render-rtl-core SECONDS=1
-make render-memory SECONDS=2
-make render-board-loader SECONDS=0.1
-make render-memory MIDI=song.mid SECONDS=20
-make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30
-make render-memory SECONDS=1 MEMORY_PROFILE=sdram
-make render-reference SECONDS=1 CONTROL_TICK_MS=2
-make render-reference SECONDS=1 SAMPLE_ACCURATE_CONTROL=1
-make render-reference SECONDS=1 DETAILED_DIAGNOSTICS=1
-make render-reference SECONDS=10
-make render-reference SECONDS=10 COMPRESSOR_ENABLE=0
-```
-
-See [`docs/verification/render_commands.md`](docs/verification/render_commands.md)
-for complete MIDI/SF2, compressor, baseline comparison, diagnostic, RTL, and
-memory render examples.
-
-`CONTROL_TICK_MS` controls periodic MCU-side modulation and runtime-control
-updates. `SAMPLE_ACCURATE_CONTROL=1` instead performs those updates once per
-output sample and ignores `CONTROL_TICK_MS`; the synthesizer volume envelope
-already advances once per sample in either mode.
-
-`DETAILED_DIAGNOSTICS=1` enables per-voice envelope and runtime-control jumps,
-saturation events, and pre-saturation maxima. It is disabled by default because
-these checks execute in the sample loop.
-
-The `render-reference` Make target defaults to a transparent protection setting:
--2 dBFS threshold, 4:1 ratio, immediate attack, and a 5000 ms full-range release.
-Set `COMPRESSOR_ENABLE=0` for an uncompressed reference. Threshold is expressed
-as positive attenuation below full scale in centibels, so `20` means -2 dBFS.
-The parameters are translated into the same compact command payload consumed by
-RTL. `MASTER_VOLUME` is a linear post-compressor gain limited to `0..1` by the
-hardware Q1.15 format. Attack and release times describe traversal of the
-complete 100 dB control range. The render report records peak detector value,
-maximum gain reduction, active-frame count, frame counts, and final saturation
-count.
-
-Build the PC-side CH347 USB-to-SPI control tool:
-
-```bash
-make host-ch347
-```
-
-It sends the same transactional command words as the simulation harnesses and
-loads the CH347 vendor library at runtime. See
-[`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
-
-With no `MIDI` argument, the C++ harnesses use a built-in short melody. `make
-render-reference` is the pure C++ algorithm path: it parses SF2/MIDI, runs the
-shared MCU policy model, renders with `ReferenceSynth`, and writes
-`build/render_reference/out.wav` plus
-`build/render_reference/reference_render_config.json`.
-
-For MIDI renders, `START_SECONDS` selects a window inside the MIDI file. The
-harness advances pre-window non-note MIDI events such as controller, pitch-bend,
-channel-pressure, and key-pressure events to output time zero, then shifts events
-inside `[START_SECONDS, START_SECONDS + SECONDS)` down to the start of the WAV.
-It does not reconstruct notes that started before the window and are still
-sounding at `START_SECONDS`; use a full pre-roll render when exact sustained-note
-state at the cut point matters.
-
-`make render-rtl-core` is the fast algorithm/RTL comparison path: it drives
-`wavetable_render_core` with an ideal one-cycle word responder on the RTL memory
-port and compares every RTL output sample against a C++ fixed-point reference
-implementation. It does not use `MEMORY_PROFILE` or any external-memory timing
-model. It also writes `build/render_rtl_core/out.wav` for quick listening after
-the exact comparison passes.
-
-`make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
-runtime, models MCU-side note allocation and modulation policy, and drives
-`wavetable_cached_render_core` through the command stream. Wave reads pass
-through the line-cache memory subsystem before the C++ external line-memory model
-responds. The output WAV is `build/render_memory/out.wav`, and memory
-hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
-`MEMORY_PROFILE` selects a read-only external memory timing model for this target:
-`ddr`, `sdram`, or `parallel-nor`.
-
-`make render-board-loader` verifies the board asset-load path before rendering. It
-constructs a raw SD image from the selected SF2, drives the native-SD command/data
-loader RTL into a DDR byte model, checks that the loaded DDR bytes exactly match
-the SF2 image, then renders through `wavetable_cached_render_core` and compares every RTL
-sample against the C++ fixed-point reference. The output WAV is
-`build/render_board_loader/out.wav`, and the summary JSON is
-`build/render_board_loader/board_loader_render_config.json`.
-
-The C++ render harnesses handle `Ctrl+C` as a graceful interrupt. If a long run
-is stopped, the harness exits at the next sample boundary, rewrites the WAV
-header for the samples already produced, records `interrupted: true` in the
-summary when that target writes one, and exits with status 130 instead of
-reporting PASS.
-
-For board bring-up, generate and verify the raw SD image expected by the Smart
-Artix loader:
-
-```bash
-make wtsf-image SF2=assets/soundfonts/MT6276.sf2
-make verify-wtsf-image
-```
-
-To write it to an SDHC/SDXC card, pass the whole-card block device explicitly:
-
-```bash
-make flash-wtsf-sd SD_DEVICE=/dev/sdX
-```
-
-See `docs/board/smart_artix_bringup.md` for the full hardware checklist and loader
-status registers.
-
-Representative MIDI smoke-test inputs live under `assets/midi/`. The older
-Python-generated SystemVerilog MIDI render flow has been removed.
-
-## Current Control Interfaces
-
-The core bus is a single-beat 32-bit register interface with `valid`, `write`,
-`address`, `wdata`, `rdata`, `ready`, and `error` signals. It exposes global
-status, command FIFO ingress, and the read-only coherent voice snapshot. Voice
-definition, START, gain/phase/filter updates, release, and stop use a separate
-32-bit transactional command stream. `fpga/common/rtl/spi_register_bridge.sv`
-provides register transactions plus dedicated command opcode `0xa5`.
-
-See [the register map](docs/register_map.md) and
-[command-stream contract](docs/design/control_command_stream_plan.md).
-
-## Roadmap
-
-1. Fix the SPI transaction-atomicity bugs: a command DMA must commit all words
-   or none, partial final words must report framing errors, and variable-latency
-   register accesses must use a DMA-safe queued request/response protocol. See
-   [the SPI transport backlog](docs/design/spi_transport_backlog.md).
-2. Broaden multi-voice backpressure and memory-latency verification.
-3. Replace the C++ DDR/SD storage models with concrete board-memory controller
-   and pin-level long-run checks.
-4. Add board-level timing constraints for native SD, SPI control, I2S, and DDR3.
-5. Move host/MCU voice allocation and preset selection from simulation policy into
-   board-control firmware or software.
-
-Contributors and coding agents should read [AGENTS.md](AGENTS.md) before changing
-RTL interfaces or numeric behavior.
+生成物只放在 `build/`。

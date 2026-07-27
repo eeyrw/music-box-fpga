@@ -1,5 +1,10 @@
 # Envelope Backlog
 
+> Architecture status (2026-07-27): envelope behavior remains relevant, but
+> references to `VOICE_START`, `voice_dsp_pipeline`, and the old command path are
+> historical. Current production RTL uses the tagged
+> `block_interleaved_envelope_frontend` and mono voice-major renderer.
+
 This document records the open SoundFont envelope compatibility and renderer
 efficiency work. The reference points for the analysis are the local
 `docs/sfspec24.pdf` and FluidSynth `v2.5.6-110-g29a740b2` at

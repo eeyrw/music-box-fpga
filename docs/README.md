@@ -23,9 +23,9 @@ change.
 - [`fixed_point.md`](fixed_point.md): numeric formats and arithmetic rules.
 - [`memory_format.md`](memory_format.md): wave-memory layout, core memory
   handshake, line-memory adapter contract, and memory-profile assumptions.
-- [`register_map.md`](register_map.md): software-visible global registers,
-  command ingress, and the read-only voice debug snapshot. Register constants
-  are generated from
+- [`register_map.md`](register_map.md): generated compatibility addresses and
+  the explicit gap between retained board registers and the replacement typed
+  voice-control ports. Register constants are generated from
   [`../spec/register_map.json`](../spec/register_map.json).
 
 ## Architecture Notes
@@ -34,19 +34,19 @@ change.
   roadmap notes.
 - [`design/rtl_module_map.md`](design/rtl_module_map.md): concise RTL reading map
   and instantiation tree.
-- [`design/rtl_refactoring_backlog.md`](design/rtl_refactoring_backlog.md):
-  prioritized structural cleanup for executor ownership, renderer working
-  records, typed voice-layer boundaries, debug capture, and cache state, with
-  RAM-inference and timing-preservation gates.
-- [`design/system_architecture_backlog.md`](design/system_architecture_backlog.md):
-  architecture-level control, renderer, memory/cache, effects, transport, and
-  audio-timeline redesign candidates, dependency order, and acceptance gates.
-  These items may intentionally change internal or external contracts.
-- [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
-  synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
-- [`design/voice_major_block_renderer_plan.md`](design/voice_major_block_renderer_plan.md):
-  implementation plan for voice-major N-frame rendering, block accumulation,
-  event boundaries, state ownership, DDR locality, and ping-pong output.
+- [`design/voice_major_block_renderer_handoff.md`](design/voice_major_block_renderer_handoff.md):
+  current branch checkpoint, implemented replacement modules, verification
+  state, missing integration, legacy deletion boundary, and exact restart order.
+- [`design/voice_major_block_renderer_guide.md`](design/voice_major_block_renderer_guide.md):
+  beginner-oriented Chinese walkthrough of the current block renderer,
+  pipeline boundaries, state ownership, memory flow, and measured cycle budget.
+- [`design/voice_major_render_pipeline_detailed.md`](design/voice_major_render_pipeline_detailed.md):
+  detailed Chinese specification of the selected eight-slot pipeline, including
+  every stage, handshake, state owner, memory rule, hazard, mix/effects boundary,
+  throughput calculation, invariant, and remaining verification gate.
+- [`design/optimized_render_pipeline.md`](design/optimized_render_pipeline.md):
+  selected end-to-end pipeline from timestamped events through voice DSP,
+  DDR, effects, compressor, PCM reservoir, and I2S, including feasibility gates.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.
@@ -60,7 +60,8 @@ change.
   mapping from common chorus/reverb controls and listening terminology to the
   implemented fixed-point algorithms, presets, and known limitations.
 - [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
-  transactional command-stream and continuous-render contract.
+  legacy host/SPI command-word contract still used by software models. It is
+  not yet adapted to the new timestamped RTL event ingress.
 - [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):
   command-stream workload model, renderer/control-plane throughput analysis,
   SCLK target, FIFO limits, and board-qualification requirements.
@@ -73,15 +74,13 @@ change.
 ## Verification And Render Flows
 
 - [`verification/simulation_design.md`](verification/simulation_design.md):
-  self-checking tests, SoundFont/MIDI render harnesses, memory-profile renders,
-  C++ harness source layout, board-loader simulation, and generated register-map
-  consistency checks.
+  current self-checking tests, throughput measurements, C++ reference flow,
+  and remaining full-system gaps.
 - [`verification/render_commands.md`](verification/render_commands.md): common
-  reference, compressor, diagnostic, RTL, and memory render command lines.
+  C++ reference render commands and output conventions.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
-  Smart Artix source-list ownership, BRAM inference repairs, per-module timing
-  case studies, residual path clusters, run-freshness checks, and closure
-  criteria.
+  historical Smart Artix timing case studies plus the explicit requirement to
+  re-synthesize and route the replacement voice-major core.
 - [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
   local copy of the Standard MIDI File format reference used when validating the
   C++ MIDI parser.
@@ -101,16 +100,14 @@ change.
 - [`../fpga/common/README.md`](../fpga/common/README.md): reusable board-facing RTL
   boundary for transports, platform register windows, tick generation, and audio serializers.
 - [`../fpga/smart_artix/README.md`](../fpga/smart_artix/README.md): Smart Artix
-  board assumptions, current top, Vivado flow/status, resource notes, and local
-  checks.
-- [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical Smart
-  Artix hardware bring-up sequence and bring-up checklist.
+  retained memory subsystem, removed old top, and new integration boundary.
+- [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): archived bring-up
+  sequence for the deleted top; retained as input to the replacement board plan.
 - [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):
   confirmed non-DDR pin facts, SPI/SD/I2S timing analysis, open RTL and XDC
   work, and board-level signoff gates.
-- [`board/asset_loading.md`](board/asset_loading.md): SD raw-image to DDR3 asset
-  loading contract, current native-SD command policy, model boundaries, and
-  Smart Artix loader blocks.
+- [`board/asset_loading.md`](board/asset_loading.md): SD raw-image contract and
+  retained loader details, with deleted memory-integration references marked.
 - [`board/sd_native_backlog.md`](board/sd_native_backlog.md): SD Part 1 v9.10
   protocol audit history, remaining qualification work, recovery requirements,
   and focused verification gates. Use `asset_loading.md` for the current path.

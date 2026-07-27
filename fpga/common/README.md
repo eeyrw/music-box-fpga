@@ -1,31 +1,10 @@
-# Common FPGA Adapter RTL
+# Common FPGA RTL
 
-This directory holds reusable board-facing RTL that is synthesizable but is not
-part of the generic wavetable synthesizer core.
+这里仅保留可独立复用的板级外围：fractional tick、SPI register bridge、register
+fabric/status、I2S、SD native reader/PHY 和 `wavetable_i2s_output`。
 
-Use this layer for adapters that bind the core's abstract contracts to physical
-or system-integration details:
+旧 renderer 的 system/demo wrapper 已删除。当前 common RTL 不构成完整 synthesizer
+top；新 wrapper 应围绕 `voice_major_render_core`、effects graph 和 ordered line memory
+重新设计。
 
-- register transports such as SPI, UART, or soft-core buses,
-- board/common status register windows,
-- sample or serial-clock tick generation,
-- audio serializers such as I2S,
-- reusable SD native command/pin adapters that do not depend on a board memory
-  controller,
-- reusable wrappers that compose those adapters around `rtl/top` core blocks.
-
-Do not put voice allocation, MIDI/SF2 policy, DSP algorithms, wave-memory format
-logic, vendor IP, board pin constraints, or simulation-only models here. Vendor
-IP and concrete board tops belong under `fpga/<board>/`; behavioral models belong
-under `sim/`, `fpga/common/sim/`, or `fpga/<board>/sim/` depending on the RTL
-they cover.
-
-The common register-transport boundary is the core bus:
-
-```text
-bus_valid, bus_write, bus_address, bus_wdata
-bus_ready, bus_error, bus_rdata
-```
-
-New transports should adapt to that bus instead of changing
-`wavetable_render_core` or `wavetable_cached_render_core`.
+相关 focused TB 由 `make test-rtl-peripheral` 运行。
