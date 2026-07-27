@@ -39,9 +39,7 @@ module tb_block_interleaved_voice_renderer;
 
   always #5 clk = ~clk;
 
-  block_interleaved_voice_renderer #(
-    .SEGMENT_BEATS(4)
-  ) dut (.*);
+  block_interleaved_voice_renderer dut (.*);
 
   task automatic start_voice;
     begin
@@ -53,36 +51,25 @@ module tb_block_interleaved_voice_renderer;
     end
   endtask
 
-  task automatic service_segment(input logic [ADDR_WIDTH-1:0] base_addr);
-    integer beat;
+  task automatic service_line(input logic [ADDR_WIDTH-1:0] base_addr);
     integer word_index;
     begin
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        do @(posedge clk); while (!line_req_valid);
-        if (line_req.aligned_line_addr !=
-            base_addr + ADDR_WIDTH'(beat * BLOCK_LINE_WORDS)) begin
-          $fatal(1, "renderer line request mismatch");
-        end
-        @(negedge clk);
-        line_req_ready = 1'b1;
-        @(posedge clk);
-        @(negedge clk);
-        line_req_ready = 1'b0;
-      end
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        @(negedge clk);
-        line_rsp = '0;
-        for (word_index = 0;
-             word_index < BLOCK_LINE_WORDS;
-             word_index = word_index + 1) begin
-          line_rsp.words[word_index] =
-              16'(base_addr + beat * BLOCK_LINE_WORDS + word_index);
-        end
-        line_rsp_valid = 1'b1;
-        do @(posedge clk); while (!line_rsp_ready);
-        @(negedge clk);
-        line_rsp_valid = 1'b0;
-      end
+      do @(posedge clk); while (!line_req_valid);
+      if (line_req.aligned_line_addr != base_addr)
+        $fatal(1, "renderer line request mismatch");
+      @(negedge clk);
+      line_req_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      line_req_ready = 1'b0;
+      line_rsp = '0;
+      for (word_index = 0; word_index < BLOCK_LINE_WORDS;
+           word_index = word_index + 1)
+        line_rsp.words[word_index] = 16'(base_addr + word_index);
+      line_rsp_valid = 1'b1;
+      do @(posedge clk); while (!line_rsp_ready);
+      @(negedge clk);
+      line_rsp_valid = 1'b0;
     end
   endtask
 
@@ -156,7 +143,7 @@ module tb_block_interleaved_voice_renderer;
     start_voice();
     if (!start_ready)
       $fatal(1, "renderer did not expose its multi-block input window");
-    service_segment(32'd96);
+    service_line(32'd96);
     expect_contribution(BLOCK_FRAME_INDEX_WIDTH'(0), 16'sd49, 16'sd25);
     expect_contribution(BLOCK_FRAME_INDEX_WIDTH'(1), 16'sd74, 16'sd37);
 

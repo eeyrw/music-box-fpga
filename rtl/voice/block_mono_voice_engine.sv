@@ -1,5 +1,6 @@
 module block_mono_voice_engine #(
-  parameter int SEGMENT_BEATS = 4
+  parameter int CACHE_SET_COUNT = 512,
+  parameter int MSHR_DEPTH = 8
 ) (
   input  logic                                      clk,
   input  logic                                      rst,
@@ -68,7 +69,8 @@ module block_mono_voice_engine #(
   );
 
   block_interleaved_voice_renderer #(
-    .SEGMENT_BEATS(SEGMENT_BEATS)
+    .CACHE_SET_COUNT(CACHE_SET_COUNT),
+    .MSHR_DEPTH(MSHR_DEPTH)
   ) renderer (
     .clk,
     .rst,

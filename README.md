@@ -11,7 +11,7 @@ effects、compressor、输出 FIFO、I2S、SPI/SD 和 Smart Artix DDR 外设模�
 
 ```text
 timestamped events -> prefetched voice state -> tagged envelope/phase slots
- -> voice-block contiguous segment reader -> endpoint scoreboard
+ -> tagged 16 KiB line cache / 8 MSHRs -> endpoint scoreboard
  -> hazard-aware frame issue -> one tagged 8-stage DSP -> block mix banks
 ```
 
@@ -33,17 +33,21 @@ make measure-voice-major-throughput
 make measure-voice-major-throughput-filtered
 make measure-voice-major-throughput-512
 make measure-voice-major-throughput-512-filtered
+make test-ddr3-model
 ```
 
-真实 MIDI/SF2 的纯 C++ 整数参考路径仍可使用：
+真实 MIDI/SF2 可走纯 C++ 整数参考路径，或经过 production RTL、16 KiB cache 和
+controller-level DDR3 时序模型：
 
 ```bash
 make render-reference SF2=assets/soundfonts/example.sf2 SECONDS=1
+make render-rtl-ddr3 SF2=assets/soundfonts/example.sf2 \
+  MIDI=assets/midi/example.mid START_SECONDS=0 SECONDS=10
 ```
 
 旧 `render-rtl-core`、`render-memory` 和 `render-board-loader` 依赖已删除架构，不再
-提供。新的 RTL harness 必须直接驱动 timestamped block events、ordered line memory
-和 block output。
+提供。`render-rtl-ddr3` 直接驱动当前 mono-lane state/parameter、ordered line memory
+和 block output；它不是 MIG pin/CDC 仿真。
 
 ## 文档
 

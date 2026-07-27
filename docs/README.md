@@ -76,8 +76,11 @@ change.
 - [`verification/simulation_design.md`](verification/simulation_design.md):
   current self-checking tests, throughput measurements, C++ reference flow,
   and remaining full-system gaps.
-- [`verification/render_commands.md`](verification/render_commands.md): common
-  C++ reference render commands and output conventions.
+- [`verification/ddr3_timing_model.md`](verification/ddr3_timing_model.md):
+  simulation-only DDR3 bank/row/refresh timing model, C++ bin loading contract,
+  ordered-line integration, and renderer throughput command.
+- [`verification/render_commands.md`](verification/render_commands.md): C++
+  reference and production RTL+DDR3 render commands and output conventions.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
   historical Smart Artix timing case studies plus the explicit requirement to
   re-synthesize and route the replacement voice-major core.

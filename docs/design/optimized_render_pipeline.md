@@ -35,17 +35,15 @@ again on the same clock its new `z1/z2` appears.
 
 ## Memory Order
 
-Phase jobs from different blocks may be interleaved internally, but external
-memory traffic remains voice-major. The segment reader selects one planned
-voice, aligns the first uncovered endpoint to 32 words, and emits four
-consecutive 8-word line requests before choosing another segment. Returned words
-set per-endpoint valid bits in that voice's slot. A frame can issue as soon as
-both interpolation endpoints are valid, so there is no separate replay pass.
+Phase jobs from different blocks may be interleaved internally. The renderer
+requests only the 8-word lines containing uncovered endpoints. A 2-way retained
+cache services hits; eight MSHRs merge same-line requests from different work
+slots and keep different misses in flight. The cache returns a work tag
+internally, while its external DDR interface remains ordered and untagged.
+Returned words set per-endpoint valid bits, so there is no replay pass.
 
-The fixed four-line segment is a current interface contract, not a claim that it
-is optimal for every memory. Real traces must report burst starts, average burst
-length, words fetched, endpoint hits, and useful-word ratio. A future 1/2/4-line
-adaptive policy must preserve voice-major continuity.
+Real traces must report cache hits/misses, MSHR merges, conflict evictions,
+words fetched, endpoint reuse, and p50/p99/max block latency.
 
 ## Measured Throughput
 
@@ -91,15 +89,17 @@ latency distributions.
 
 ## What Is Not Proven
 
-- The current tests model ideal ordered line memory, not DDR3/MIG latency,
-  arbitration, refresh, or row behavior.
+- The controller-level DDR3 model covers bank/row timing, refresh, ordered
+  responses, and a bounded bridge. It does not cover MIG RTL, real CDC,
+  arbitration with board masters, pins, or electrical timing.
 - Vivado is unavailable in the current environment. BRAM/DSP48 inference,
   utilization, routing, and post-route 100 MHz timing are unsigned.
-- The combinational endpoint/segment scans and eight-slot descriptor arrays need
+- The combinational endpoint/line scans and eight-slot descriptor arrays need
   early synthesis review; they may require registered selection trees or RAM
   banking without changing behavior.
 - Published mix-bank drain, effects fork/join, compressor, reservoir, and I2S
   are not yet integrated into one sustained end-to-end test.
-- Long MIDI/SF2 exact comparison has not been ported to the replacement RTL top.
+- The RTL+DDR3 harness renders real MIDI/SF2 and checks accounting/deadlines, but
+  it does not yet perform a sample-by-sample comparison against the C++ reference.
 
 The 4258-cycle 512-lane result is compute headroom, not board sign-off.

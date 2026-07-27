@@ -29,7 +29,7 @@ module tb_block_mono_voice_engine;
 
   always #5 clk = ~clk;
 
-  block_mono_voice_engine #(.SEGMENT_BEATS(4)) dut (.*);
+  block_mono_voice_engine dut (.*);
 
   task automatic start_voice;
     begin
@@ -41,34 +41,25 @@ module tb_block_mono_voice_engine;
     end
   endtask
 
-  task automatic service_segment(input logic [ADDR_WIDTH-1:0] base_addr);
-    integer beat;
+  task automatic service_line(input logic [ADDR_WIDTH-1:0] base_addr);
     integer word_index;
     begin
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        do @(posedge clk); while (!line_req_valid);
-        if (line_req.aligned_line_addr !=
-            base_addr + ADDR_WIDTH'(beat * BLOCK_LINE_WORDS))
-          $fatal(1, "engine line request mismatch");
-        @(negedge clk);
-        line_req_ready = 1'b1;
-        @(posedge clk);
-        @(negedge clk);
-        line_req_ready = 1'b0;
-      end
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        @(negedge clk);
-        line_rsp = '0;
-        for (word_index = 0; word_index < BLOCK_LINE_WORDS;
-             word_index = word_index + 1) begin
-          line_rsp.words[word_index] =
-              16'(base_addr + beat * BLOCK_LINE_WORDS + word_index);
-        end
-        line_rsp_valid = 1'b1;
-        do @(posedge clk); while (!line_rsp_ready);
-        @(negedge clk);
-        line_rsp_valid = 1'b0;
-      end
+      do @(posedge clk); while (!line_req_valid);
+      if (line_req.aligned_line_addr != base_addr)
+        $fatal(1, "engine line request mismatch");
+      @(negedge clk);
+      line_req_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      line_req_ready = 1'b0;
+      line_rsp = '0;
+      for (word_index = 0; word_index < BLOCK_LINE_WORDS;
+           word_index = word_index + 1)
+        line_rsp.words[word_index] = 16'(base_addr + word_index);
+      line_rsp_valid = 1'b1;
+      do @(posedge clk); while (!line_rsp_ready);
+      @(negedge clk);
+      line_rsp_valid = 1'b0;
     end
   endtask
 
@@ -119,7 +110,7 @@ module tb_block_mono_voice_engine;
     rst = 1'b0;
 
     start_voice();
-    service_segment(32'd96);
+    service_line(32'd96);
     do @(posedge clk); while (!contribution_valid);
     if (contribution.voice_index != start_voice_index ||
         contribution.generation != 16'h0028 ||

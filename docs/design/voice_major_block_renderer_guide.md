@@ -23,7 +23,7 @@
 controller 读取 voice H 的状态
 envelope 处理 voice G 的 frame 3
 phase      处理 voice F 的 frame 5
-memory     连续读取 voice E 的 segment
+cache      合并 voice E/F 对同一 line 的 miss
 DSP S0     接收 voice D 的 sample
 DSP S4     计算 voice C 的滤波反馈
 retire     写回 voice B 的贡献和状态
@@ -50,16 +50,12 @@ slot 是小型“在途记录”，不是计算引擎。一个 renderer slot 保
 
 ## 4. 内存顺序和 DSP 顺序不同
 
-DDR 和许多 SRAM/Flash 都喜欢连续地址，所以外部访问保持 voice-major：
+renderer 只请求插值 endpoint 所在的 8-word line。内部请求带 work tag；512-set、
+2-way cache 保存 16 KiB 数据，8 个 MSHR 合并同一 line 的在途 miss，并允许不同 miss
+连续发给 DDR。外部 DDR response 没有 tag，必须保持 request 接受顺序。
 
-```text
-voice A: base+0, base+8, base+16, base+24
-voice B: base+0, base+8, base+16, base+24
-```
-
-一个 32-word segment 的四条 8-word line 发完前不会切换 voice。内部 endpoint-valid
-scoreboard 记录哪些插值端点已返回。一帧的两个端点齐全后，它就可以参加 DSP 调度，
-不再经过额外的 replay FSM。
+endpoint-valid scoreboard 记录哪些插值端点已返回。一帧的两个端点齐全后，它就可以
+参加 DSP 调度，不必等该 voice 的其他 line，也不再经过额外 replay FSM。
 
 DSP 侧则按 ready slot 交错：
 
@@ -67,8 +63,7 @@ DSP 侧则按 ready slot 交错：
 A0 B0 C0 D0 E0 F0 ... A1 B1 C1 ...
 ```
 
-因此连续 memory locality 和逐 sample DSP 吞吐可以同时得到，不需要把 DDR 请求也
-打散成随机访问。
+因此 cache/DDR 等待和逐 sample DSP 可以由不同 work slot 重叠执行。
 
 ## 5. phase 和 envelope 也需要交错
 
@@ -120,9 +115,9 @@ phase、envelope 和滤波 `z1/z2` 都会跨 block 延续。最后一个 sample 
 512 filtered 精确处理 4096 个 sample，也出现 312-clock 连续区段。filter on/off 已经
 接近，说明递归 hazard 不再决定总吞吐。
 
-这仍不是 DDR 签核。测试 memory 每拍可接收请求，并在下一拍有序返回。真实 DDR3
-还有 row、refresh、仲裁和随机 stall；Vivado 也尚未验证 slot array 是否推断为合适
-BRAM、乘法是否进入 DSP48、组合选择树是否满足 100 MHz。
+理想吞吐 TB 之外，controller-level DDR3 模型已覆盖 bank/row、refresh、BL8 和有序
+response，并能用真实 SF2/MIDI 渲染 WAV。这仍不是 MIG/板级签核；真实 CDC、其他
+master 仲裁、RAM/DSP48 推断、资源占用和 100 MHz post-route timing 尚未验证。
 
 ## 9. effects 怎样并行
 
@@ -144,11 +139,11 @@ chorus 输出发送到 reverb，该边必须保持顺序。delay、FDN、compres
 
 1. `rtl/pkg/synth_pkg.sv`：宽度、slot tag 和 token 类型。
 2. `rtl/voice/block_interleaved_envelope_frontend.sv`：带 tag 的共享 envelope 流水。
-3. `rtl/voice/block_interleaved_voice_renderer.sv`：phase、segment、scoreboard 和 issue。
+3. `rtl/voice/block_interleaved_voice_renderer.sv`：phase、cache、scoreboard 和 issue。
 4. `rtl/dsp/block_interleaved_voice_dsp.sv`：真实多级定点 DSP。
 5. `rtl/voice/voice_major_block_controller.sv`：state prefetch、outstanding 和 writeback。
-6. `sim/tb/tb_voice_major_throughput.sv`：deadline、连续 line、hazard 和 issue 统计。
+6. `sim/tb/tb_voice_major_throughput.sv`：deadline、line/cache、hazard 和 issue 统计。
 7. `docs/design/voice_major_block_renderer_handoff.md`：验证状态和下一步工作。
 
-下一阶段最重要的是带真实 memory stall 的统计、早期综合，以及把 mix/effects/I2S
+下一阶段最重要的是 Vivado 资源/时序验证、MIG/CDC 集成，以及把 mix/effects/I2S
 接成持续运行的整机流水，而不是继续增加 slot 或复制 DSP。

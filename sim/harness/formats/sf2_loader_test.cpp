@@ -638,21 +638,25 @@ int main() {
     render::Sf2Data stereo_sf2 = render::load_sf2(write_stereo_sf2());
     std::vector<int16_t> stereo_memory = stereo_sf2.file_words;
     auto stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480, stereo_memory);
-    expect_equal(int(stereo_regions.size()), 1, "linked stereo pair creates one region");
-    const auto& stereo = stereo_regions.at(0);
-    if (!stereo.stereo) throw std::runtime_error("linked stereo pair was not marked stereo");
-    expect_equal(stereo.sample_left == "Left" ? 1 : 0, 1, "linked stereo left sample name");
-    expect_equal(stereo.sample_right == "Right" ? 1 : 0, 1, "linked stereo right sample name");
-    expect_equal(int(stereo.base_addr), int(stereo_sf2.smpl_word_offset + 2),
-                 "linked stereo left zone start offset");
-    expect_equal(int(stereo.base_addr_r), int(stereo_sf2.smpl_word_offset + 69),
-                 "linked stereo right zone start offset");
-    expect_equal(int(stereo.phase_inc), render::kPhaseFracScale * 2,
-                 "linked stereo phase uses right sample pitch generators");
-    expect_equal(stereo.mod_lfo_to_pitch, 777, "linked stereo pitch generator uses right zone");
+    expect_equal(int(stereo_regions.size()), 2, "linked samples remain two mono regions");
+    const auto& stereo_left = stereo_regions.at(0);
+    const auto& stereo_right = stereo_regions.at(1);
+    if (stereo_left.stereo || stereo_right.stereo)
+      throw std::runtime_error("linked samples were merged into a stereo region");
+    expect_equal(stereo_left.sample_left == "Left" ? 1 : 0, 1, "linked left mono sample name");
+    expect_equal(stereo_right.sample_left == "Right" ? 1 : 0, 1, "linked right mono sample name");
+    expect_equal(int(stereo_left.base_addr), int(stereo_sf2.smpl_word_offset + 2),
+                 "linked left mono start offset");
+    expect_equal(int(stereo_right.base_addr), int(stereo_sf2.smpl_word_offset + 69),
+                 "linked right mono start offset");
+    expect_equal(int(stereo_left.phase_inc), render::kPhaseFracScale,
+                 "left mono region keeps left pitch generators");
+    expect_equal(int(stereo_right.phase_inc), render::kPhaseFracScale * 2,
+                 "right mono region keeps right pitch generators");
+    expect_equal(stereo_right.mod_lfo_to_pitch, 777, "right mono pitch generator");
     bool saw_cc1 = false;
     bool saw_cc10 = false;
-    for (const auto& mod : stereo.modulators) {
+    for (const auto& mod : stereo_right.modulators) {
       if (mod.src == 0x0081 && mod.dest == 6) {
         expect_equal(mod.amount, 75, "pmod CC1 adds to default vibrato modulator");
         saw_cc1 = true;
@@ -680,50 +684,38 @@ int main() {
     std::vector<int16_t> unlinked_memory = unlinked_sf2.file_words;
     auto unlinked_regions = render::make_regions_for_preset(unlinked_sf2, 0, 0, 60, 100, 48000, 480,
                                                             unlinked_memory);
-    expect_equal(int(unlinked_regions.size()), 1, "hard-panned unlinked stereo creates one preset region");
-    const auto& unlinked = unlinked_regions.at(0);
-    if (!unlinked.stereo) throw std::runtime_error("hard-panned unlinked pair was not marked stereo");
-    expect_equal(unlinked.sample_left == "BrokenLinkA" ? 1 : 0, 1, "hard-panned left sample name");
-    expect_equal(unlinked.sample_right == "BrokenLinkB" ? 1 : 0, 1, "hard-panned right sample name");
-    expect_equal(int(unlinked.base_addr), int(unlinked_sf2.smpl_word_offset), "hard-panned left base");
-    expect_equal(int(unlinked.base_addr_r), int(unlinked_sf2.smpl_word_offset + 64), "hard-panned right base");
-    expect_equal(int(unlinked.length), 64, "hard-panned left length");
-    expect_equal(int(unlinked.length_r), 68, "hard-panned right length");
-    expect_equal(int(unlinked.loop_start), 8, "hard-panned left loop start");
-    expect_equal(int(unlinked.loop_start_r), 10, "hard-panned right loop start");
-    expect_equal(int(unlinked.loop_end), 40, "hard-panned left loop end");
-    expect_equal(int(unlinked.loop_end_r), 38, "hard-panned right loop end");
-    expect_equal(int(unlinked.phase_inc), render::kPhaseFracScale * 2,
-                 "hard-panned unlinked stereo uses right zone pitch generators");
-    expect_equal(unlinked.pan, 0, "hard-panned unlinked stereo centers region pan");
-    expect_equal(unlinked.gain_l, 0x4000, "hard-panned unlinked stereo left gain");
-    expect_equal(unlinked.gain_r, 0x4000, "hard-panned unlinked stereo right gain");
+    expect_equal(int(unlinked_regions.size()), 2, "hard-panned zones remain two mono regions");
+    const auto& unlinked_left = unlinked_regions.at(0);
+    const auto& unlinked_right = unlinked_regions.at(1);
+    if (unlinked_left.stereo || unlinked_right.stereo)
+      throw std::runtime_error("hard-panned mono zones were merged");
+    expect_equal(unlinked_left.pan, -500, "left mono zone keeps hard pan");
+    expect_equal(unlinked_right.pan, 500, "right mono zone keeps hard pan");
+    expect_equal(unlinked_left.gain_r, 0, "left mono pan mutes right contribution");
+    expect_equal(unlinked_right.gain_l, 0, "right mono pan mutes left contribution");
 
     auto unlinked_inst_regions = render::make_regions_for_instrument(unlinked_sf2, 0, 60, 100, 48000, 480,
                                                                      unlinked_memory);
-    expect_equal(int(unlinked_inst_regions.size()), 1,
-                 "hard-panned unlinked stereo creates one forced-instrument region");
-    if (!unlinked_inst_regions.at(0).stereo) {
-      throw std::runtime_error("forced-instrument hard-panned pair was not marked stereo");
-    }
+    expect_equal(int(unlinked_inst_regions.size()), 2,
+                 "forced instrument keeps both hard-panned mono regions");
 
     render::Sf2Data hp_linked_sf2 = render::load_sf2(write_hard_panned_linked_stereo_sf2());
     std::vector<int16_t> hp_linked_memory = hp_linked_sf2.file_words;
     auto hp_linked_regions = render::make_regions_for_preset(hp_linked_sf2, 0, 0, 60, 100, 48000, 480,
                                                              hp_linked_memory);
-    expect_equal(int(hp_linked_regions.size()), 1,
-                 "hard-panned linked stereo pair creates one region");
-    const auto& hp_linked = hp_linked_regions.at(0);
-    if (!hp_linked.stereo) throw std::runtime_error("hard-panned linked pair was not marked stereo");
-    expect_equal(hp_linked.sample_left == "HPLeft" ? 1 : 0, 1, "hard-panned linked left sample name");
-    expect_equal(hp_linked.sample_right == "HPRight" ? 1 : 0, 1, "hard-panned linked right sample name");
+    expect_equal(int(hp_linked_regions.size()), 2,
+                 "hard-panned linked samples remain two mono regions");
+    const auto& hp_left = hp_linked_regions.at(0);
+    const auto& hp_right = hp_linked_regions.at(1);
+    if (hp_left.stereo || hp_right.stereo)
+      throw std::runtime_error("hard-panned linked samples were merged");
     int expected_right_base = int(std::round(double(0x4000) * std::pow(10.0, -40.0 / 200.0)));
-    expect_equal(hp_linked.pan, 0, "hard-panned linked stereo neutralizes per-zone pan");
-    expect_equal(hp_linked.base_gain_l, 0x4000, "linked stereo left base gain from left zone attenuation");
-    expect_equal(hp_linked.base_gain_r, expected_right_base,
-                 "linked stereo right base gain from right zone attenuation");
-    expect_equal(hp_linked.gain_l, 0x4000, "linked stereo left gain honors left side, not pan");
-    expect_equal(hp_linked.gain_r, expected_right_base, "linked stereo right gain honors right side, not pan");
+    expect_equal(hp_left.pan, -500, "linked left sample keeps zone pan");
+    expect_equal(hp_right.pan, 500, "linked right sample keeps zone pan");
+    expect_equal(hp_left.gain_r, 0, "linked left mono region mutes right contribution");
+    expect_equal(hp_right.gain_l, 0, "linked right mono region mutes left contribution");
+    expect_equal(hp_right.base_gain, expected_right_base,
+                 "right mono region keeps its attenuation");
 
     std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";
     return 0;

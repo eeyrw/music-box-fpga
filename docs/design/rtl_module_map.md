@@ -28,7 +28,7 @@ voice_major_render_core
 | `rtl/pkg` | 公共常量、定点类型、block/event/token payload。 |
 | `rtl/control` | timestamped event 执行和 voice 状态 bank。 |
 | `rtl/voice` | block 调度、phase/envelope、endpoint、DSP issue 与 mix。 |
-| `rtl/memory` | 可复用 memory adapter；当前 segment scoreboard 位于 renderer。 |
+| `rtl/memory` | 2-way ordered line cache、MSHR miss 合并和 memory adapter。 |
 | `rtl/dsp` | 一套 tagged、可停顿、带状态前递的 voice DSP。 |
 | `rtl/audio` | chorus、reverb、return mix、compressor、FIFO 和 credit。 |
 | `rtl/top` | 当前 voice-major generic composition。 |
@@ -50,4 +50,5 @@ ready/valid 不封装进 payload，方向在模块端口上保持显式。
 
 以下名称不再存在，也不应重新加入 filelist：`wavetable_render_core`、
 `wavetable_cached_render_core`、`multi_voice_pipeline`、`voice_dsp_pipeline`、
-`transactional_control_plane`、`voice_line_cache` 和 `wave_memory_subsystem`。
+`transactional_control_plane`、`voice_line_cache` 和 `wave_memory_subsystem`。当前实现名为
+`ordered_line_cache`，不要与已删除的旧 `voice_line_cache` 混淆。

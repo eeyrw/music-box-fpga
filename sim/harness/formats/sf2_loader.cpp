@@ -1028,23 +1028,12 @@ int loop_mode_from_zone(const Zone& zone) {
 }
 
 std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
-  // Stereo SF2 samples are normally stored as two mono sample headers linked to
-  // each other. Return indexes in left,right order only when the target is the
-  // opposite side and links back to the selected header; stale or non-reciprocal
-  // links are common enough in loose SoundFonts that treating them as mono is
-  // safer than pairing unrelated sample data.
+  // The RTL owns one mono sample lane per voice. Preserve each SF2 sample zone
+  // as an independent voice and use its pan-derived gain_l/gain_r for stereo.
+  // sampleLink remains metadata; it no longer merges two samples into one
+  // renderer region.
   const auto& s = sf2.samples.at(selected);
   if (s.sample_type & SAMPLE_ROM_FLAG) throw std::runtime_error("selected SF2 sample references ROM data");
-  int t = sanitize_sample_type(s.sample_type);
-  if ((t == SAMPLE_LEFT || t == SAMPLE_RIGHT) && s.sample_link >= 0 && s.sample_link < int(sf2.samples.size())) {
-    const auto& other = sf2.samples.at(s.sample_link);
-    if (other.sample_type & SAMPLE_ROM_FLAG) throw std::runtime_error("linked SF2 sample references ROM data");
-    int other_type = sanitize_sample_type(other.sample_type);
-    bool reciprocal = other.sample_link == selected;
-    if (t == SAMPLE_LEFT && other_type == SAMPLE_RIGHT && reciprocal) return {selected, s.sample_link};
-    if (t == SAMPLE_RIGHT && other_type == SAMPLE_LEFT && reciprocal) return {s.sample_link, selected};
-  }
-  if (t == SAMPLE_LINKED) throw std::runtime_error("SF2 linkedSample type is not directly playable by this renderer");
   return {selected, -1};
 }
 
@@ -1187,7 +1176,8 @@ bool compatible_unlinked_stereo_pair(const Sf2Data& sf2, const ArticulationZone&
   SampleWindow right_window = sample_window(sf2, right, right_zone.generators);
   uint32_t frames_l = left_window.end - left_window.start;
   uint32_t frames_r = right_window.end - right_window.start;
-  return frames_l != 0 && frames_r != 0;
+  constexpr bool kMergeStereoSamples = false;
+  return kMergeStereoSamples && frames_l != 0 && frames_r != 0;
 }
 
 int unlinked_stereo_partner_index(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,

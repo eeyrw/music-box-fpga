@@ -110,6 +110,13 @@ module block_interleaved_envelope_frontend (
   logic [31:0] rounded_residual;
   logic [23:0] scaled_mantissa;
   logic [24:0] rounded_mantissa;
+  logic [3:0] release_leading_zeros;
+  logic [14:0] release_normalized;
+  logic [ENV_Q15_TO_CB_MANTISSA_BITS-1:0] release_mantissa_index;
+  logic release_level_positive;
+  logic release_level_full;
+  logic [32:0] release_approximation;
+  logic [31:0] release_start_attenuation;
 
   function automatic volume_env_stage_t stage_after_attack(
     input logic [23:0] hold_samples,
@@ -164,8 +171,65 @@ module block_interleaved_envelope_frontend (
     attack_sum = {1'b0, dynamic_q[walk_slot].env_state.attack_level_q0_32} +
                  {1'b0, env_params_q[walk_slot].attack_step_q0_32};
     cb_sum = {1'b0, dynamic_q[walk_slot].env_state.attenuation_cb_q12_20};
+
+    release_leading_zeros = '0;
+    release_level_positive =
+        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] != '0;
+    release_level_full =
+        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] >= 15'h7fff;
+    begin
+      logic found;
+      found = 1'b0;
+      for (int bit_index = 14; bit_index >= 0; bit_index--) begin
+        if (!found &&
+            dynamic_q[walk_slot].env_state.attack_level_q0_32[17 + bit_index]) begin
+          release_leading_zeros = 4'(14 - bit_index);
+          found = 1'b1;
+        end
+      end
+    end
+    release_normalized =
+        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] <<
+        release_leading_zeros;
+    release_mantissa_index = ENV_Q15_TO_CB_MANTISSA_BITS'(
+        release_normalized >> (14 - ENV_Q15_TO_CB_MANTISSA_BITS));
+    release_approximation =
+        {1'b0, ENV_CB_OCTAVE_Q12_20_LUT[5'(release_leading_zeros)]} +
+        {1'b0, ENV_Q15_TO_CB_MANTISSA_LUT[release_mantissa_index]};
+    release_start_attenuation = ENV_CB_SILENCE_Q12_20;
+    if (release_level_full)
+      release_start_attenuation = '0;
+    else if (release_level_positive &&
+             (release_approximation < {1'b0, ENV_CB_SILENCE_Q12_20}))
+      release_start_attenuation = release_approximation[31:0];
+
     if (dynamic_q[walk_slot].active) begin
-      unique case (dynamic_q[walk_slot].env_state.stage)
+      if (params_q[walk_slot].released &&
+          (dynamic_q[walk_slot].env_state.stage != ENV_RELEASE)) begin
+        advanced_state.stage = ENV_RELEASE;
+        advanced_state.elapsed = '0;
+        unique case (dynamic_q[walk_slot].env_state.stage)
+          ENV_ATTACK:
+            advanced_state.attenuation_cb_q12_20 = release_start_attenuation;
+          ENV_HOLD:
+            advanced_state.attenuation_cb_q12_20 = '0;
+          ENV_DECAY, ENV_SUSTAIN:
+            advanced_state.attenuation_cb_q12_20 =
+                dynamic_q[walk_slot].env_state.attenuation_cb_q12_20;
+          default:
+            advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
+        endcase
+        cb_sum =
+            {1'b0, advanced_state.attenuation_cb_q12_20} +
+            {1'b0, env_params_q[walk_slot].release_step_cb_q12_20};
+        if ((env_params_q[walk_slot].release_step_cb_q12_20 == '0) ||
+            cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
+          advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
+          advanced_active = 1'b0;
+        end else begin
+          advanced_state.attenuation_cb_q12_20 = cb_sum[31:0];
+        end
+      end else unique case (dynamic_q[walk_slot].env_state.stage)
         ENV_DELAY: begin
           if ((dynamic_q[walk_slot].env_state.elapsed + 1'b1) >=
               env_params_q[walk_slot].delay_samples) begin
@@ -257,7 +321,8 @@ module block_interleaved_envelope_frontend (
           cb_sum =
               {1'b0, dynamic_q[walk_slot].env_state.attenuation_cb_q12_20} +
               {1'b0, env_params_q[walk_slot].release_step_cb_q12_20};
-          if (cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
+          if ((env_params_q[walk_slot].release_step_cb_q12_20 == '0) ||
+              cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
             advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
             advanced_active = 1'b0;
           end else begin

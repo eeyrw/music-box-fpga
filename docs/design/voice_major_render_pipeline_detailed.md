@@ -268,6 +268,11 @@ A0 B0 C0 D0 E0 F0 G0 H0 A1 B1 C1 ...
 - `ENV_RELEASE`：attenuation 加 release step；达到 1000 cB 后先令 active=0，本 frame
   不再 phase advance，也不发 memory/DSP 工作。
 
+runtime `released` 第一次置位时，frontend 在当前输出 frame 进入 `ENV_RELEASE`。
+release step 为 0 表示立即静音。若 release 发生在 ATTACK，先用生成的
+Q1.15-to-Q12.20 LUT 把当前 attack level 转为 attenuation，再执行第一步 release，避免
+电平跳回 full scale。
+
 每个 frame 都是先推进 state，再由新 state 产生三个输出：
 
 - `phase_advance_mask[frame]`：active 时为 1；
@@ -359,50 +364,54 @@ envelope_level
 job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 render，job 自身携带
 原始 `block_frame_index`，退休时仍会累加到正确 mix frame。
 
-## 11. Memory：voice-major 连续 segment
+## 11. Memory：line cache 与合并 miss
 
 ### 11.1 外部接口
 
-当前 renderer 面向 ordered line memory：
+renderer 与 `ordered_line_cache` 之间使用带 work ID 的内部 line 接口：
+
+- request 包含 8-word 对齐地址和 work ID；
+- response 返回地址、work ID 和 8 个连续 PCM16 word；
+- 不要求不同 work 的内部 response 保持 request 顺序。
+
+cache 面向板级 DDR 的接口仍是 ordered line memory：
 
 - request payload 只有 `aligned_line_addr`；
 - 每个 response 返回 8 个连续 16-bit word；
 - response 必须严格按已接受 request 的顺序返回；
 - response 没有 transaction ID；
-- renderer 当前只允许一个 active segment。
 
-板级 DDR adapter 必须把 DDR/MIG 的 burst、ID、重排和时钟域细节隐藏在这个接口后，
-或者未来显式扩展为带 tag 的多 outstanding 协议。不能让无 tag response 乱序返回。
+板级 DDR adapter 必须把 DDR/MIG 的 burst、重排和时钟域细节隐藏在这个接口后。
+cache 的 issued FIFO 把无 tag DDR response 关联回对应 MSHR。
 
-### 11.2 Segment 的选择
+### 11.2 按实际 endpoint 请求 line
 
-一个 segment 是 32 word，即四条 8-word line。memory scheduler round-robin 找到一个
-`WORK_MEM_WAIT` slot，从其 remaining endpoint 中取最低地址对应的 32-word 对齐基址：
-
-```text
-segment_base = floor(endpoint_addr / 32) * 32
-```
-
-然后生成该 segment 覆盖的 endpoint mask，并锁定这条 voice，依次请求：
+memory scheduler round-robin 扫描 `WORK_MEM_WAIT/WORK_MEM_FETCH` slot，从尚未 valid
+且未 pending 的 endpoint 选择一条 8-word line：
 
 ```text
-segment_base + 0
-segment_base + 8
-segment_base + 16
-segment_base + 24
+line_addr = floor(endpoint_addr / 8) * 8
 ```
 
-四条 request 没有全部 transfer 前不会换 voice。这样保留 DDR、SDRAM、SRAM burst
-adapter 和带预取存储器都能利用的连续访问特性。
+同一 work 中落在该 line 的 endpoint 一次标记为 pending。不存在固定 32-word overfetch，
+也不存在一个 voice 独占 memory scheduler 直到四条 line 返回的锁。
 
-### 11.3 Request 和 response 独立计数
+### 11.3 Cache 与 MSHR
 
-`memory_request_beat_q` 只在 `line_req_valid && line_req_ready` 时增加；
-`memory_response_beat_q` 只在 `line_rsp_valid && line_rsp_ready` 时增加。二者可以不同，
-所以 memory 可以先接受多个 line request，再稍后依次返回。
+`ordered_line_cache` 当前为 512 set、2-way、每 line 128 bit，总 data 容量 16 KiB，采用
+每 set 一位 LRU victim。line 大小恰好等于板载 x16 DDR3 的一次 BL8 payload。
 
-response 的隐含地址由锁存的 segment base 和 response beat 计算。每个返回 word 会与
-当前 segment mask 中所有 endpoint 地址比较，匹配者写入：
+cache 有 8 个 MSHR。一个 MSHR 保存未完成 line 地址和等待它的 work-ID bitmap。
+若另一个 voice 在 DDR 数据返回前请求同一 line，只增加 waiter，不重复访问 DDR。
+不同 line miss 可以连续下发；DDR response 由 issued FIFO 按序关联，填入 cache 后，
+再按 work ID 分别返回给 renderer。
+
+cache hit 和已填充 MSHR 的 waiter 共用带 backpressure 的 response register。response
+停顿时 tag、地址和整条 line 保持稳定。
+
+### 11.4 Endpoint scoreboard 与 DSP 重叠
+
+带 tag 的 cache response 与对应 work 的 pending endpoint 地址比较，匹配者写入：
 
 ```text
 work_endpoint_sample_q[work_id][endpoint]
@@ -410,18 +419,9 @@ work_endpoint_valid_q[work_id][endpoint] = 1
 ```
 
 如果一个 endpoint 地址重复出现于多个 frame，一条 response 可以同时满足多个 valid
-bit。segment 完成后，若仍有 remaining endpoint，slot 回到 `WORK_MEM_WAIT` 并选择下
-一个 segment；否则进入 `WORK_READY`。
-
-### 11.4 Scoreboard 使 memory 和 DSP 重叠
-
-slot 处于 `WORK_MEM_FETCH` 时并不必等全部四条 line 返回。如果下一个待发 job 的两个
+bit。slot 处于 `WORK_MEM_FETCH` 时不必等全部 line 返回；如果下一个待发 job 的两个
 endpoint valid 已经为 1，它可以立刻参加 DSP issue。这使 response、后续 line fetch
 和 DSP 对不同工作重叠。
-
-当前策略固定读完整 32-word segment，可能读取未使用的 word。它优先保证长连续请求，
-但不保证所有音色地址轨迹的带宽利用率最优。后续必须用真实 SF2/MIDI trace 比较固定
-4-line 和 adaptive 1/2/4-line 策略，并统计 useful-word ratio。
 
 ## 12. DSP issue scoreboard 和 RAW hazard
 
@@ -787,7 +787,7 @@ for every clock:
   env_result     = round_robin(SLOT_READY)
   free_work      = select_free_or_same_cycle_retiring_work_slot()
   plan           = round_robin(WORK_PLAN)
-  memory_start   = round_robin(WORK_MEM_WAIT) if no active segment
+  memory_line    = round_robin(uncovered endpoint without pending request)
   issue          = round_robin(endpoint_ready && dependency_ready)
   complete       = select(WORK_COMPLETE)
 
@@ -1090,7 +1090,7 @@ useful DSP jobs = active_lanes * 8
 | --- | ---: | ---: |
 | envelope walker | 2048 frame steps | 1 step/clock |
 | phase planner | 2048 frame steps | 1 step/clock |
-| memory request | 1024 lines | 1 request/clock |
+| DDR memory request | 2 lines in shared-wave trace | 1 request/clock |
 | DSP issue | 2048 tokens | 1 token/clock |
 | mix contribution | 2048 contributions | 1 contribution/clock |
 
@@ -1144,7 +1144,8 @@ TB 还在层次路径上检查：
 
 - unresolved hazard 时不得 issue；
 - forwarding token 必须拿到 update bus 的 z1/z2；
-- 每条 voice 的四 line segment 地址连续；
+- 外部请求只包含 endpoint 实际需要的 8-word 对齐 line；
+- 同地址在途 miss 被 MSHR 合并，cache response tag 回到正确 work；
 - issue 数等于 retire/contribution 数；
 - filtered 256/512 至少出现 64 拍连续 `II=1`；
 - block 必须在 deadline 前完成。
@@ -1159,12 +1160,12 @@ TB 还在层次路径上检查：
 
 | active mono lanes | filter off | filter on | DSP issues | line requests |
 | ---: | ---: | ---: | ---: | ---: |
-| 256 | 2149 clocks | 2191 clocks | 2048 | 1024 |
-| 512 | 4197 clocks | 4258 clocks | 4096 | 2048 |
+| 256 | 2149 clocks | 2191 clocks | 2048 | 2（共享 wave trace） |
+| 512 | 4197 clocks | 4258 clocks | 4096 | 需按 trace 重测 |
 
 256 filtered 和 512 filtered 都观察到最长 312 clocks 连续每拍 issue。这证明当前生产
 SV 在长稳态区间能达到 sample `II=1`。它不证明整个 block 从第一拍到最后一拍无气泡；
-fill/drain、group scan、memory segment 交接和尾部不足 8 个 ready context 都会产生空拍。
+fill/drain、group scan、cache miss 和尾部不足 8 个 ready context 都会产生空拍。
 
 相对历史架构的 256-lane 周期：
 
@@ -1182,22 +1183,23 @@ fill/drain、group scan、memory segment 交接和尾部不足 8 个 ready conte
 
 ## 21. 估算带宽时不能漏掉什么
 
-256 voices、8 frames 有 2048 个有效 sample job。理想连续 phase 的两个 endpoint 高度
-重叠，但固定 segment 策略当前测量发出 1024 条 line request：
+256 voices、8 frames 有 2048 个有效 sample job。当前吞吐 trace 让全部 voice 共享同一
+wave 和 phase，因此只有两条唯一 endpoint line。cache/MSHR 后实测发出 2 条 DDR line：
 
 ```text
-1024 lines * 8 words/line * 2 bytes/word = 16384 bytes/block
+2 lines * 8 words/line * 2 bytes/word = 32 bytes/block
 ```
 
 在 48 kHz、8-frame block 下每秒 6000 blocks：
 
 ```text
-16384 * 6000 = 98.304 MB/s
+32 * 6000 = 0.192 MB/s
 ```
 
-512 lane 对应约 196.608 MB/s。这里是当前理想 TB 请求数换算，不包含 DDR command
-overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也不保证真实音乐轨迹
-完全相同。板级设计必须基于实测 request trace 和 MIG 效率留余量。
+这个数字只证明共享 wave 的复用路径，不代表真实音乐带宽。不同 preset、随机 phase、
+大 phase increment 或 cache conflict 会提高 miss 数；同时还需计入 DDR command、refresh、
+row miss、其他 master 和 MIG 效率。板级容量规划必须基于真实 SF2/MIDI request trace 的
+p50/p99/max hit rate 和 block latency。
 
 ## 22. 必须保持的设计不变量
 
@@ -1208,8 +1210,8 @@ overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也�
 3. filtered slot 有未返回 state update 时不得使用旧 z1/z2 发下一 token。
 4. state update 与再发同拍时必须 forwarding。
 5. DSP stall 时 valid、数据和 tag 全部保持。
-6. 一个 memory segment 锁定后，四条 line request 连续且 response association 不变。
-7. 无 tag memory response 必须有序；若允许乱序，协议必须增加显式 transaction tag。
+6. 同一 work/line 最多有一个 pending 请求；同地址 MSHR waiter 不得丢失。
+7. 外部无 tag memory response 必须有序；内部 cache response 必须带正确 work tag。
 8. block 发布前所有 accepted voice 必须完成 dynamic writeback。
 9. generation 不匹配的 parameter/dynamic/control write 不得修改新 voice。
 10. mix bank 未被 consumer release 前不得重新用于 fill。
@@ -1220,7 +1222,8 @@ overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也�
 
 生产路径的 focused SV TB 包括：
 
-- `tb_block_interleaved_envelope_frontend`：8-context tag、level 和 backpressure；
+- `tb_block_interleaved_envelope_frontend`：8-context tag、level、普通/立即/Attack 中
+  release 和 backpressure；
 - `tb_block_interleaved_voice_renderer`：基础 endpoint/memory/DSP/result 和 stall；
 - `tb_block_interleaved_voice_dsp`：精确整数运算、tag、state update 和 retire stall；
 - `tb_block_mono_voice_engine`：envelope 到最终 dynamic result；
@@ -1237,8 +1240,8 @@ overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也�
 ### 24.1 Memory realism
 
 需要给 production renderer TB 增加固定和随机 request/response stall，并统计：slot
-occupancy、phase starvation、memory starvation、hazard stall、retire stall、segment
-useful words、p50/p99/max block cycles。还要补 jumped address、fractional phase 和
+occupancy、phase starvation、memory starvation、hazard stall、retire stall、cache
+hit/miss/eviction、p50/p99/max block cycles。还要补 jumped address、fractional phase 和
 loop-wrap 的直接 renderer 回归。
 
 ### 24.2 Synthesis and timing

@@ -43,7 +43,7 @@ module tb_voice_major_block_controller;
 
   always #5 clk = ~clk;
 
-  voice_major_block_controller #(.SEGMENT_BEATS(4)) dut (.*);
+  voice_major_block_controller dut (.*);
 
   task automatic send_block;
     begin
@@ -76,34 +76,25 @@ module tb_voice_major_block_controller;
     end
   endtask
 
-  task automatic service_segment(input logic [ADDR_WIDTH-1:0] base_addr);
-    integer beat;
+  task automatic service_line(input logic [ADDR_WIDTH-1:0] base_addr);
     integer word_index;
     begin
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        do @(posedge clk); while (!line_req_valid);
-        if (line_req.aligned_line_addr !=
-            base_addr + ADDR_WIDTH'(beat * BLOCK_LINE_WORDS))
-          $fatal(1, "controller line request mismatch");
-        @(negedge clk);
-        line_req_ready = 1'b1;
-        @(posedge clk);
-        @(negedge clk);
-        line_req_ready = 1'b0;
-      end
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        @(negedge clk);
-        line_rsp = '0;
-        for (word_index = 0; word_index < BLOCK_LINE_WORDS;
-             word_index = word_index + 1) begin
-          line_rsp.words[word_index] =
-              16'(base_addr + beat * BLOCK_LINE_WORDS + word_index);
-        end
-        line_rsp_valid = 1'b1;
-        do @(posedge clk); while (!line_rsp_ready);
-        @(negedge clk);
-        line_rsp_valid = 1'b0;
-      end
+      do @(posedge clk); while (!line_req_valid);
+      if (line_req.aligned_line_addr != base_addr)
+        $fatal(1, "controller line request mismatch");
+      @(negedge clk);
+      line_req_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      line_req_ready = 1'b0;
+      line_rsp = '0;
+      for (word_index = 0; word_index < BLOCK_LINE_WORDS;
+           word_index = word_index + 1)
+        line_rsp.words[word_index] = 16'(base_addr + word_index);
+      line_rsp_valid = 1'b1;
+      do @(posedge clk); while (!line_rsp_ready);
+      @(negedge clk);
+      line_rsp_valid = 1'b0;
     end
   endtask
 
@@ -182,7 +173,7 @@ module tb_voice_major_block_controller;
 
     send_block();
     provide_state(VOICE_ID_WIDTH'(1), sounding);
-    service_segment(32'd96);
+    service_line(32'd96);
     accept_dynamic_write(VOICE_ID_WIDTH'(1), 32'h0000_0100,
                          ENV_SUSTAIN, 24'd0);
 

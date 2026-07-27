@@ -42,42 +42,34 @@ module tb_voice_major_render_core;
 
   always #5 clk = ~clk;
 
-  voice_major_render_core #(.SEGMENT_BEATS(4)) dut (.*);
+  voice_major_render_core dut (.*);
 
-  task automatic service_segment(input logic [ADDR_WIDTH-1:0] base_addr);
-    integer beat;
+  task automatic service_line(input logic [ADDR_WIDTH-1:0] base_addr);
     integer word_index;
     begin
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        do @(posedge clk); while (!line_req_valid);
-        if (line_req.aligned_line_addr !=
-            base_addr + ADDR_WIDTH'(beat * BLOCK_LINE_WORDS))
-          $fatal(1, "replacement core line request mismatch");
-        @(negedge clk);
-        line_req_ready = 1'b1;
-        @(posedge clk);
-        @(negedge clk);
-        line_req_ready = 1'b0;
-      end
-      for (beat = 0; beat < 4; beat = beat + 1) begin
-        @(negedge clk);
-        line_rsp = '0;
-        for (word_index = 0; word_index < BLOCK_LINE_WORDS;
-             word_index = word_index + 1) begin
-          line_rsp.words[word_index] =
-              16'(base_addr + beat * BLOCK_LINE_WORDS + word_index);
-        end
-        line_rsp_valid = 1'b1;
-        do @(posedge clk); while (!line_rsp_ready);
-        @(negedge clk);
-        line_rsp_valid = 1'b0;
-      end
+      do @(posedge clk); while (!line_req_valid);
+      if (line_req.aligned_line_addr != base_addr)
+        $fatal(1, "replacement core line request mismatch");
+      @(negedge clk);
+      line_req_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      line_req_ready = 1'b0;
+      line_rsp = '0;
+      for (word_index = 0; word_index < BLOCK_LINE_WORDS;
+           word_index = word_index + 1)
+        line_rsp.words[word_index] = 16'(base_addr + word_index);
+      line_rsp_valid = 1'b1;
+      do @(posedge clk); while (!line_rsp_ready);
+      @(negedge clk);
+      line_rsp_valid = 1'b0;
     end
   endtask
 
   task automatic render_and_read(
       input logic [TIMELINE_FRAME_WIDTH-1:0] start_frame,
-      input logic signed [MIX_WIDTH-1:0] expected_sample);
+      input logic signed [MIX_WIDTH-1:0] expected_sample,
+      input logic service_memory);
     logic [BLOCK_BUFFER_ID_WIDTH-1:0] buffer_id;
     begin
       @(negedge clk);
@@ -87,7 +79,8 @@ module tb_voice_major_render_core;
       do @(posedge clk); while (!block_req_ready);
       @(negedge clk);
       block_req_valid = 1'b0;
-      service_segment(32'd96);
+      if (service_memory)
+        service_line(32'd96);
 
       do @(posedge clk); while (!block_complete_valid);
       buffer_id = block_complete.buffer_id;
@@ -164,8 +157,8 @@ module tb_voice_major_render_core;
     @(negedge clk);
     install_valid = 1'b0;
 
-    render_and_read(32'd20, 24'sd99);
-    render_and_read(32'd21, 24'sd100);
+    render_and_read(32'd20, 24'sd99, 1'b1);
+    render_and_read(32'd21, 24'sd100, 1'b0);
     if (stale_params_write_pulse || stale_dynamic_write_pulse)
       $fatal(1, "replacement core reported a false stale write");
 

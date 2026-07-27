@@ -1,6 +1,6 @@
 # Wave Memory And Ordered-Line Contract
 
-Updated: 2026-07-27
+Updated: 2026-07-28
 
 本文定义当前 `voice_major_render_core` 使用的波表地址、mono lane 和外部有序 line
 memory 契约。它替代已经删除的单 word renderer、`voice_line_cache` 和
@@ -52,9 +52,9 @@ right lane: right base/length/loop, gain_l normally 0, gain_r != 0
 ```
 
 两条 lane 可以共享 pitch policy，但拥有独立 phase、envelope 和 filter history。C++
-SF2 parser 目前仍能产生 collapsed stereo `Region` 供 reference renderer 使用；新的 RTL
-harness/MCU adapter 必须在提交 `block_voice_state_snapshot_t` 前完成上述 lane expansion。
-这个 adapter 尚未实现，因此不能把 C++ stereo region 支持当作新 RTL 的端到端覆盖。
+SF2 loader 现在把 linked 或 hard-panned sample zone 保留为独立 mono `Region`，每条
+region 携带 pan 派生的 `gain_l/gain_r`。reference 和 RTL harness 使用同一 region 列表，
+不再先合并成双波表 region 再拆分。
 
 ## Phase To Endpoint Addresses
 
@@ -154,68 +154,43 @@ response 返回前已经被接受，因此 adapter 至少要保持这些 request
 transaction tag，并在 renderer 中增加 issued-segment table。不能在现有无 tag 协议上
 仅放宽 ordering 文字。
 
-## Voice-Major Segment Policy
+## Voice Line Cache Policy
 
-renderer 当前参数 `SEGMENT_BEATS=4`，每个 beat 是 8 words，因此：
-
-```text
-segment_words = 4 * 8 = 32 words
-segment_base = floor(first_remaining_endpoint / 32) * 32
-```
-
-锁定一个 work slot 后，request 顺序固定为：
+renderer 按实际 interpolation endpoint 选择 8-word 对齐 line：
 
 ```text
-segment_base + 0
-segment_base + 8
-segment_base + 16
-segment_base + 24
+line_base = floor(endpoint_addr / 8) * 8
 ```
 
-四条 request 全部属于同一 voice 的一个连续 32-word window。segment 完成前 memory
-engine 不切换 voice。这个 voice-major lock 是为了利用 DDR row/burst、SDRAM、SRAM、
-parallel memory 和 cache 都常见的连续地址优势。
+同一 work 中位于该 line 的 endpoint 一起标记 pending。`ordered_line_cache` 使用 512 set、
+2-way（16 KiB data）和 8 个 MSHR；多个 work 对同一在途 line 的请求合并为一次 DDR
+read。不同 line miss 可以连续下发，不再锁定一个 voice 或固定读取四条 line。
 
-phase planner 可以交错处理不同 voice，DSP 也可以交错 issue，不影响外部 memory 保持
-voice-major。不同层使用不同顺序：
+不同层使用不同关联方式：
 
 ```text
 phase:  A0 B0 C0 D0 ...
-memory: A line0/1/2/3, then B line0/1/2/3
+cache:  tagged work requests, hit or merged MSHR completion
+DDR:    ordered untagged line request/response
 DSP:    any slot whose next frame endpoints are ready
 ```
 
 ## Endpoint Scoreboard And Response Association
 
-每个 renderer work slot 最多保存 8 个 job、16 个 endpoint sample 和 16-bit valid
-scoreboard。启动 segment 时，renderer 保存：
+每个 renderer work slot 最多保存 8 个 job、16 个 endpoint sample，以及 valid/pending
+scoreboard。cache response 带 work ID 和 line 地址；renderer 比较该 work 的 pending
+endpoint 地址高位，并从 `words[addr[2:0]]` 取 sample。相同地址可以同时满足多个 job。
 
-- `memory_work_id_q`：response 属于哪个 slot；
-- `memory_segment_base_q`：32-word window；
-- `memory_segment_mask_q`：该 window 覆盖哪些 endpoint；
-- request beat 和 response beat 独立计数器。
-
-第 `r` 个 response 的隐含 line address 为：
-
-```text
-memory_segment_base + r*8
-```
-
-renderer 比较 endpoint 地址高位，并从 `line_rsp.words[addr[2:0]]` 取出 sample。相同地址
-可以同时满足多个 job 的 endpoint bit。
-
-DSP 不必等整个 segment 完成。一个 job 的两个 endpoint valid 后，它就能参加 issue；
-与此同时 memory engine 可以继续接收该 segment 的后续 response。这是 memory fetch 与
-DSP pipeline overlap 的关键。
+DSP 不必等该 work 的全部 line 完成。一个 job 的两个 endpoint valid 后即可 issue；
+与此同时 cache 可处理其他 work 的 hit 或 miss response。
 
 刚在某上升沿写入的 sample/valid 最早下一拍被 issue 逻辑看到。设计不依赖目标 FPGA
 RAM 的 write-first/read-first 行为。
 
-## Multiple Segments, Loops And Jumps
+## Multiple Lines, Loops And Jumps
 
-若 8 个 frame 的 endpoint 跨越多个 32-word window，完成当前 segment 后 renderer 会
-重新计算 remaining mask，再锁定下一个 segment。loop wrap、较大 phase increment 或
-接近 region 边界都可能产生多个 segment。
+若 8 个 frame 的 endpoint 跨越多条 line，scheduler 会逐条选择尚未 valid/pending 的
+line。loop wrap、较大 phase increment 或接近 region 边界都可能增加唯一 line 数。
 
 V1 phase 契约要求：
 
@@ -224,7 +199,7 @@ phase_inc < (loop_end - loop_start) << 8
 ```
 
 所以一次 phase step 最多越过一个 loop boundary。该限制简化 phase wrap，但不意味着
-所有 block 只访问一个 memory segment。
+所有 block 只访问一条 memory line。
 
 当前基础 renderer/throughput TB 覆盖连续 line 和完整 request/response 数量。jumped
 address、fractional phase、loop-wrap 以及随机 memory stall 仍需直接补到生产 renderer
@@ -251,8 +226,7 @@ Smart Artix 或其他板级 adapter 至少需要处理：
 
 | lanes | frames | line requests | bytes/block | 48 kHz bandwidth |
 | ---: | ---: | ---: | ---: | ---: |
-| 256 | 8 | 1024 | 16384 | 98.304 MB/s |
-| 512 | 8 | 2048 | 32768 | 196.608 MB/s |
+| 256 shared-wave | 8 | 2 | 32 | 0.192 MB/s |
 
 换算使用：
 
@@ -262,9 +236,8 @@ blocks/second = 48000 / 8 = 6000
 ```
 
 这些是当前 ideal trace 的 payload bytes，不包含 DDR command、refresh、row miss、总线
-填充、仲裁或 CDC overhead。固定四-line segment 也会读取无用 words。真实验证必须
-统计 burst starts、average burst length、useful-word ratio 和 p50/p99/max response
-latency。
+填充、仲裁或 CDC overhead。这个共享 wave trace 会刻意产生极高 hit rate；真实验证
+必须统计 hit/miss、MSHR merge、conflict eviction 和 p50/p99/max block latency。
 
 ## Verification Commands
 

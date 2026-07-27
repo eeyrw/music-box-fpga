@@ -1,5 +1,6 @@
 module voice_major_render_core #(
-  parameter int SEGMENT_BEATS = 4
+  parameter int CACHE_SET_COUNT = 512,
+  parameter int MSHR_DEPTH = 8
 ) (
   input  logic                                      clk,
   input  logic                                      rst,
@@ -93,7 +94,8 @@ module voice_major_render_core #(
   );
 
   voice_major_block_controller #(
-    .SEGMENT_BEATS(SEGMENT_BEATS)
+    .CACHE_SET_COUNT(CACHE_SET_COUNT),
+    .MSHR_DEPTH(MSHR_DEPTH)
   ) controller (
     .clk,
     .rst,

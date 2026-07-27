@@ -9,11 +9,13 @@
 当前里程碑是可综合、单时钟的 voice-major block renderer。默认 block 上限为 8
 帧，常规验证使用 256 条 mono voice lane；立体声乐器由 host 分配两条 lane。
 512 voices 是扩展目标；当前 filter-off/filter-on 测得 4197/4258 cycles，低于保守
-16666-cycle deadline。该结论只适用于理想 line memory，尚不是板级签核。
+16666-cycle deadline。另有 256-lane 的 controller-level DDR3 和真实 MIDI/SF2 联合
+仿真；两者都不是板级 MIG/CDC 签核。
 
 旧的逐输出帧扫描架构、prepared/active 控制 RAM、word-read cache 和相应板级 top
-已经删除。它们不再是兼容路径。新的寄存器/SPI 到 `block_voice_event_t` 的适配器、
-真实 DDR cache 和新的 Smart Artix top 尚未实现，因此当前不能宣称整机已经可上板。
+已经删除。它们不再是兼容路径。production renderer 已包含 retained line cache，
+simulation harness 已连接 DDR3 周期模型；寄存器/SPI 到 `block_voice_event_t` 的适配器
+和新的 Smart Artix top 尚未实现，因此当前不能宣称整机已经可上板。
 
 ## 渲染数据流
 
@@ -31,8 +33,8 @@ timestamped voice events
    tagged interleaved envelope frontend
           |
           v
- block_interleaved_voice_renderer
-   tagged phase -> contiguous segment read -> scoreboard -> tagged DSP -> retire
+block_interleaved_voice_renderer
+   tagged phase -> line cache/MSHR -> scoreboard -> tagged DSP -> retire
           |
           v
  double-buffered block mix
@@ -70,11 +72,11 @@ S7 envelope, saturation, retire
 
 ## Memory 边界
 
-核心使用有序 line ready/valid 接口。一条 line 含 8 个 PCM16 word。每个 32-word
-对齐 segment 连续发出 4 个 8-word line 请求；segment 中不插入另一 voice 的请求。
-返回 word 直接设置 slot 内 endpoint-valid scoreboard，两个端点齐全的 frame 可立即
-进入 DSP，不再经过 replay FSM。当前吞吐 TB 使用理想一拍响应；真实 DDR cache、多
-outstanding miss、仲裁 stall 与 timeout 仍是下一阶段必须验证的系统边界。
+核心外部使用有序 line ready/valid 接口，一条 line 含 8 个 PCM16 word。renderer 按
+实际 endpoint 选择 line，通过带 work tag 的内部接口访问 512-set、2-way、16 KiB cache。
+8 个 MSHR 允许不同 line miss 在途，并把多个 voice 对同一 line 的 miss 合并。返回 word
+直接设置 slot 内 endpoint-valid scoreboard，两个端点齐全的 frame 可立即进入 DSP。
+200 MHz DDR3 cycle model 已接入吞吐测试；板级 MIG 仲裁和最终时钟比例仍需上板验证。
 
 ## Mix 与后处理
 

@@ -36,10 +36,15 @@ REVERB_ENABLE ?= auto
 EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
+RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
+RENDER_RTL_CACHE_SET_COUNT ?= 512
+RENDER_RTL_MSHR_DEPTH ?= 8
+RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3_cache$(RENDER_RTL_CACHE_SET_COUNT)_mshr$(RENDER_RTL_MSHR_DEPTH)_obj_dir
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
 WTSF_CRC ?=
 SD_DEVICE ?=
+DDR3_IMAGE ?=
 RENDER_OPT_FAST ?= -O3
 RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
@@ -168,7 +173,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-summary clean
 
 all: test
 
@@ -213,7 +218,29 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral
+test: test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-ddr3-model
+
+test-line-cache:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/ordered_line_cache_obj_dir \
+		--top-module tb_ordered_line_cache \
+		rtl/pkg/synth_pkg.sv rtl/memory/ordered_line_cache.sv \
+		sim/tb/tb_ordered_line_cache.sv
+	$(BUILD_DIR)/ordered_line_cache_obj_dir/Vtb_ordered_line_cache
+
+test-ddr3-model:
+	mkdir -p $(BUILD_DIR)/ddr3_test_image
+	printf '\000\020\001\020\002\020\003\020\004\020\005\020\006\020\007\020' > $(BUILD_DIR)/ddr3_test_image/00000000.bin
+	printf '\000\040\001\040\002\040\003\040\004\040\005\040\006\040\007\040' > $(BUILD_DIR)/ddr3_test_image/00000008.bin
+	printf '\000\060\001\060\002\060\003\060\004\060\005\060\006\060\007\060' > $(BUILD_DIR)/ddr3_test_image/00000010.bin
+	printf '\000\100\001\100\002\100\003\100\004\100\005\100\006\100\007\100' > $(BUILD_DIR)/ddr3_test_image/00000020.bin
+	$(VERILATOR) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/ddr3_timing_model_obj_dir --top-module tb_ddr3_timing_model \
+		sim/models/ddr3_timing_model.sv sim/tb/tb_ddr3_timing_model.sv \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/ddr3_timing_model_obj_dir/Vtb_ddr3_timing_model \
+		+DDR3_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
 
 test-voice-major-512:
 	mkdir -p $(BUILD_DIR)
@@ -244,6 +271,20 @@ measure-voice-major-throughput-filtered:
 		--top-module tb_voice_major_throughput \
 		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
 	$(BUILD_DIR)/voice_major_throughput_filtered_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-major-throughput-ddr3:
+	mkdir -p $(BUILD_DIR)/ddr3_render_image
+	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 -DSYNTH_DDR3_MODEL \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir/Vtb_voice_major_throughput \
+		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
 
 measure-voice-major-throughput-512:
 	mkdir -p $(BUILD_DIR)
@@ -509,6 +550,35 @@ render-reference:
 		--reverb-enable $(REVERB_ENABLE) \
 		--effects-tail-seconds $(EFFECTS_TAIL_SECONDS) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
+
+render-rtl-ddr3:
+	# Build the RTL renderer with 200 MHz MIG input, DDR3-800 timing, and C++ SF2/MIDI policy.
+	mkdir -p $(RENDER_RTL_OUT_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
+		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
+		--top-module voice_major_render_harness \
+		-GCACHE_SET_COUNT=$(RENDER_RTL_CACHE_SET_COUNT) \
+		-GMSHR_DEPTH=$(RENDER_RTL_MSHR_DEPTH) \
+		-CFLAGS "$(HARNESS_CXXFLAGS)" \
+		$(RTL_SOURCES) \
+		sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		sim/models/voice_major_render_harness.sv \
+		$(abspath sim/harness/apps/render_rtl_ddr3_main.cpp) \
+		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(HARNESS_WAV_SRC) \
+		$(HARNESS_INTERRUPT_SRC) \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(RENDER_RTL_OBJ_DIR)/Vvoice_major_render_harness \
+		--sf2 "$(SF2)" \
+		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
+		$(if $(MIDI),--midi "$(MIDI)",) \
+		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
+		--control-tick-ms $(CONTROL_TICK_MS) \
+		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
+		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
+		--out-dir $(RENDER_RTL_OUT_DIR) \
+		+DDR3_IMAGE=$(abspath $(SF2))
 
 vivado-summary:
 	python3 tools/vivado_report_summary.py show

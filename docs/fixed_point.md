@@ -117,6 +117,12 @@ the envelope state first, then derives the frame's Q1.15 level from the advanced
 state. A Release step that reaches the 1000 cB silence threshold deactivates the
 voice before phase or sample work for that frame.
 
+When the runtime `released` flag first becomes set, an active envelope enters
+Release on that same rendered frame. A zero release step means immediate silence,
+not an indefinitely held Release state. If release arrives during Attack, the
+current Q0.32 attack amplitude is converted to Q12.20 attenuation before the
+first release step so the level cannot jump to full scale.
+
 Attack advances a Q0.32 linear-amplitude accumulator. Decay, Sustain, and
 Release store Q12.20 centibel attenuation and convert it to Q1.15 with a
 generated SoundFont amplitude curve:
