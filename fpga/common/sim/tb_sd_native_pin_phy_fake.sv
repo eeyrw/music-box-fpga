@@ -1,4 +1,5 @@
 module tb_sd_native_pin_phy_fake;
+  import sd_native_pkg::*;
   logic clk;
   logic rst;
   logic [3:0] clk_div;
@@ -6,18 +7,22 @@ module tb_sd_native_pin_phy_fake;
   logic cmd_ready;
   logic [5:0] cmd_index;
   logic [31:0] cmd_arg;
-  logic [1:0] cmd_resp_type;
+  sd_response_type_t cmd_resp_type;
   logic cmd_data_read;
   logic [15:0] cmd_block_len;
   logic [15:0] cmd_block_count;
+  logic rsp_data_proceed;
+  logic rsp_data_cancel;
+  logic abort_request;
   logic rsp_valid;
-  logic [2:0] rsp_status;
+  sd_transport_status_t rsp_status;
   logic [119:0] rsp_data;
+  logic transaction_done;
   logic data_valid;
   logic data_ready;
   logic [7:0] data;
   logic data_last;
-  logic [2:0] data_status;
+  sd_transport_status_t data_status;
   logic sd_clk;
   logic sd_cmd_o;
   logic sd_cmd_oe;
@@ -47,9 +52,13 @@ module tb_sd_native_pin_phy_fake;
     .cmd_data_read,
     .cmd_block_len,
     .cmd_block_count,
+    .rsp_data_proceed,
+    .rsp_data_cancel,
+    .abort_request,
     .rsp_valid,
     .rsp_status,
     .rsp_data,
+    .transaction_done,
     .data_valid,
     .data_ready,
     .data,
@@ -111,10 +120,13 @@ module tb_sd_native_pin_phy_fake;
     cmd_valid = 1'b0;
     cmd_index = 6'd0;
     cmd_arg = 32'd0;
-    cmd_resp_type = 2'd0;
+    cmd_resp_type = SD_RESP_NONE;
     cmd_data_read = 1'b0;
     cmd_block_len = 16'd0;
     cmd_block_count = 16'd0;
+    rsp_data_proceed = 1'b0;
+    rsp_data_cancel = 1'b0;
+    abort_request = 1'b0;
     data_ready = 1'b1;
     errors = 0;
 
@@ -126,7 +138,7 @@ module tb_sd_native_pin_phy_fake;
     @(negedge clk);
     cmd_index = 6'd17;
     cmd_arg = 32'h0000_1234;
-    cmd_resp_type = 2'd1;
+    cmd_resp_type = SD_RESP_R1;
     cmd_data_read = 1'b1;
     cmd_block_len = 16'd4;
     cmd_block_count = 16'd1;
@@ -136,8 +148,13 @@ module tb_sd_native_pin_phy_fake;
     cmd_valid = 1'b0;
 
     wait (rsp_valid);
-    check(rsp_status == 3'd0, "pin fake response status mismatch");
+    check(rsp_status == SD_STATUS_OK, "pin fake response status mismatch");
     check(rsp_data[31:0] == 32'h1357_9bdf, "pin fake response payload mismatch");
+    @(negedge clk);
+    rsp_data_proceed = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    rsp_data_proceed = 1'b0;
     wait (data_seen == 4);
     repeat (2) @(posedge clk);
     check(saw_cmd17, "pin fake did not observe CMD17");
@@ -154,5 +171,5 @@ module tb_sd_native_pin_phy_fake;
 /* verilator lint_off UNUSEDSIGNAL */
   logic unused_rsp;
 /* verilator lint_on UNUSEDSIGNAL */
-  assign unused_rsp = (^rsp_data) ^ cmd_ready ^ (^data_status);
+  assign unused_rsp = (^rsp_data) ^ cmd_ready ^ (^data_status) ^ transaction_done;
 endmodule

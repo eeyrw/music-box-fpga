@@ -5,6 +5,7 @@
 ../common/rtl/wavetable_register_fabric.sv
 ../common/rtl/wavetable_common_status_regs.sv
 ../common/rtl/i2s_tx.sv
+../common/rtl/sd_native_pkg.sv
 ../common/rtl/sd_native_block_reader.sv
 ../common/rtl/sd_native_pin_phy.sv
 ../common/rtl/wavetable_system_core.sv
@@ -13,6 +14,7 @@
 
 # Board-specific RTL.
 rtl/smart_artix_pkg.sv
+rtl/smart_artix_sd_card_detect.sv
 rtl/smart_artix_mig_stub.sv
 rtl/smart_artix_ddr3_reg_access_master.sv
 rtl/smart_artix_ddr3_line_reader.sv

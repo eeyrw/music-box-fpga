@@ -338,6 +338,30 @@ changes.
 
 ## Hardware-Oriented Checks
 
+### Native SD Model Boundaries
+
+The native SD regressions deliberately keep two card-side models because they
+verify different interfaces:
+
+- `fake_sd_native_phy_model` is a command-level model. It accepts decoded
+  command descriptors and models card state, APP_CMD qualification, RCA
+  selection, ACMD42/ACMD6/ACMD51 ordering, SCR CMD23 discovery, CMD6 capability
+  and selection data, CMD18 block sequencing, CMD12 termination, delayed block
+  delivery, and transaction completion. It is used for fast
+  `sd_native_block_reader` and complete asset-loader/DDR integration tests. It
+  does not generate serial CMD frames or calculate wire CRCs.
+- `fake_sd_native_pin_model` is a pin-level model. It observes the serialized
+  command on `sd_cmd_o/sd_cmd_oe` and drives response bits and DAT nibbles into
+  `sd_native_pin_phy`. It covers command/data framing, delayed start tokens,
+  CRC7/CRC16, per-block CMD18 boundaries, R1b busy, and SD clock phase behavior.
+  It does not model the full
+  initialization policy or DDR loading flow.
+
+The command-level model must not be used as evidence for pin framing or timing,
+and the pin-level model must not be used as evidence for card-policy coverage.
+Neither model replaces post-route I/O timing analysis, oscilloscope capture, or
+tests with multiple physical SDHC/SDXC card families.
+
 Build host utilities with:
 
 ```bash

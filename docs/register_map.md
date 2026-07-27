@@ -207,3 +207,16 @@ The Smart Artix platform uses `0x9040` through `0x907c` for loader progress,
 DDR status, and the debug DDR access aperture. Exact names, fields, and masks
 are generated from `spec/register_map.json`. They are board control registers,
 not voice-control aliases.
+
+`PLATFORM_STATUS[15]` reports the debounced active-low Smart Artix SD card-detect
+switch, and bit 16 reports that CMD6 successfully selected High Speed. Bit 4
+continues to mean that initialization completed; an initialized Default
+Speed-only card therefore has bit 4 set and bit 16 clear.
+
+`PLATFORM_ERRORS` packs the SD error code in bits `7:0`, loader error code in
+bits `15:8`, loader state in bits `19:16`, and the saturating SD block-retry count
+in bits `27:20`. Bits `31:28` report SD recovery status: `0` means no secondary
+recovery failure, `1` means CMD12 transport/card-status failure, and `2` means
+CMD12 DAT0 busy timeout. When a failed CMD18 block is followed by a CMD12 failure,
+the primary SD error remains the original data error while this field records the
+stop failure.

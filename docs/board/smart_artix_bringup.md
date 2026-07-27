@@ -270,6 +270,8 @@ bits 14:11 asset-loader state
 bits 7:0    SD error code
 bits 15:8   loader error code
 bits 19:16  asset-loader state
+bits 27:20  saturating SD retry count
+bits 31:28  SD recovery error code
 ```
 
 For the current native-SD Smart Artix top, decode `SD error code` and `loader
@@ -317,10 +319,20 @@ The loader currently targets SDHC and SDXC cards:
 - SD v2 voltage/check pattern through `CMD8`.
 - high-capacity request through `CMD55/ACMD41` with HCS.
 - native-mode card identification and selection through `CMD2`, `CMD3`, and
-  `CMD7`.
-- 4-bit data mode through `CMD55/ACMD6`.
-- high-speed timing through `CMD6`, then reads through `CMD17` or
-  predeclared `CMD23/CMD18` bursts.
+  R1b-aware `CMD7`.
+- card-side DAT3 detect-pull-up removal through `CMD55/ACMD42`, followed by
+  4-bit data mode through `CMD55/ACMD6`.
+- CMD6 mode-0 capability discovery and validated mode-1 High Speed selection,
+  with 25 MHz Default Speed fallback.
+- SCR capability discovery through `CMD55/ACMD51`; multi-block `CMD18` reads use
+  optional `CMD23` only when advertised, otherwise terminate with `CMD12`.
+- bounded `CMD17` recovery from a failed CMD18 block without repeating previously
+  committed blocks.
+
+The socket's `SD_CD` switch is active low on U17. Insertion is synchronized and
+debounced, followed by a 1 ms stable-power wait and at least 80 startup clocks.
+Removal resets the SD and asset-loader session. A replacement card therefore
+starts from 400 kHz initialization even if the previous card reached 50 MHz.
 
 Do not use SDSC cards for the first bring-up path. The RTL intentionally does not
 implement the byte-addressed SDSC fallback.

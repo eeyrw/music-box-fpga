@@ -105,9 +105,15 @@ The first Smart Artix implementation provides the board-side middle of this path
   accept the write.
 - `sd_native_block_reader` implements the matching command-level
   native SD path above the pin PHY: `CMD0`, `CMD8`,
-  `CMD55`/`ACMD41`, `CMD2`, `CMD3`, `CMD7`, `CMD55`/`ACMD6` to enter 4-bit bus
-  mode, `CMD6` to switch high-speed timing, then `CMD17` single-block reads and
-  `CMD23`/`CMD18` predeclared multi-block reads.
+  `CMD55`/`ACMD41`, `CMD2`, `CMD3`, R1b-aware `CMD7`, `CMD55`/`ACMD42` to
+  disconnect the card-side DAT3 detect pull-up, and `CMD55`/`ACMD6` to enter
+  4-bit bus mode. It queries CMD6 Function Group 1 before attempting High Speed,
+  validates the switch result, and falls back to 25 MHz Default Speed when High
+  Speed is unsupported or busy. It reads SCR with `CMD55`/`ACMD51`, uses `CMD23`
+  only when CMD_SUPPORT advertises it, and transfers multi-block requests with
+  `CMD18`. Without CMD23 it terminates the requested extent using R1b-aware
+  `CMD12`. A failed middle block is stopped with CMD12 and retried from its LBA
+  using bounded `CMD17` recovery, without repeating clean output blocks.
 - `smart_artix_sd_native_asset_loader` connects the native reader to the raw
   image loader and DDR3 writer at the command/data interface.
 - `sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
@@ -118,6 +124,10 @@ The first Smart Artix implementation provides the board-side middle of this path
   emits the SD-required idle clocks before accepting commands, checks the data-block
   end bit on all four DAT lines, and emits idle clocks after each transaction so
   the card has bus-turnaround clocks before the next command.
+- `smart_artix_sd_card_detect` synchronizes and debounces the active-low `SD_CD`
+  socket switch on U17. A stable insertion waits at least 1 ms before releasing
+  the SD session reset. Removal clears SD initialization, High Speed, loader,
+  and asset-valid state; reinsertion starts a fresh power-up-clock sequence.
 - `smart_artix_ddr3_subsystem` wires the native pin layer through the native
   command/data asset loader and arbitrates the resulting DDR3 writes with runtime
   wavetable reads.
@@ -133,13 +143,20 @@ Board simulation also includes `fake_sd_native_phy_model`, a card-side behaviora
 model following the fake-card testing style used by standalone SD-reader projects.
 It maintains initialization state, app-command state, RCA selection, 4-bit bus
 mode, high-speed switch status data, OCR/CID-style responses, and delayed
-single-block or multi-block read data. This gives the
-native command reader a more realistic regression than a scripted response list,
-while still stopping at the command/data interface rather than modeling pin-level
-`CMD`/`DAT` electrical timing.
+single- and multi-block read data, including SCR capability-dependent CMD23
+behavior and CMD12 termination. This gives the native command reader a more
+realistic regression than a scripted response list, while still stopping at the
+command/data interface rather than modeling pin-level `CMD`/`DAT` electrical
+timing.
 `fake_sd_native_pin_model` complements it at the pin-transport layer by observing
 48-bit command frames from `sd_cmd_o/sd_cmd_oe`, driving `sd_cmd_i` responses, and
 driving `DAT[3:0]` data nibbles into `sd_native_pin_phy`.
+
+These models are intentionally not interchangeable. The command-level fake
+tests reader/card policy and fast asset/DDR integration without serial-wire
+overhead. The pin-level fake tests serialization, response/data framing,
+CRC7/CRC16, busy, start-token latency, and clock phase. Neither is hardware
+timing qualification or a substitute for tests with physical cards.
 
 The SD initialization sequence intentionally borrows the practical bring-up shape
 used by simple FPGA SD readers:
@@ -160,11 +177,16 @@ Native mode:
   CMD55/ACMD41    -> retry until ready, request HCS
   CMD2            -> read CID
   CMD3            -> capture RCA
-  CMD7            -> select card
+  CMD7 (R1b)      -> select card and wait for DAT0 busy release
+  CMD55/ACMD42    -> disconnect the card-side DAT3 detect pull-up
   CMD55/ACMD6     -> switch DAT bus to 4-bit mode
-  CMD6            -> switch high-speed timing while still using the init clock
+  CMD55/ACMD51    -> read SCR and discover optional CMD23 support
+  CMD6 mode 0     -> query Function Group 1 High Speed support/busy
+  CMD6 mode 1     -> request High Speed and validate the returned selection
   CMD17           -> single-block reads by LBA
-  CMD23/CMD18     -> predeclared multi-block reads by LBA
+  CMD23/CMD18     -> discovered-count optimized multi-block read
+  CMD18/CMD12     -> multi-block read when CMD23 is unsupported or rejected
+  CMD12/CMD17     -> stop a failed CMD18 and retry from the failed LBA
 ```
 
 The fake-card regression exercises the native-mode retry path by returning busy
@@ -173,16 +195,15 @@ important initialization state transitions rather than only the successful final
 responses.
 
 Some compatibility behavior from broader SD-reader examples is deliberately not
-adopted yet:
+adopted:
 
 - SDv1 and SDv2 SDSC fallback paths are not implemented.
 - `CMD16` block-length setup is not used because SDHC/SDXC cards have fixed
   512-byte block addressing for this path.
-- The reader does not switch from a slow initialization clock to a faster transfer
-  clock internally; `smart_artix_ddr3_subsystem` selects between
-  `sd_init_clk_div` and `sd_transfer_clk_div` at the pin PHY based on the reader's
-  `sd_transfer_clock_ready` state. This keeps the `CMD6` high-speed switch and
-  its 64-byte status block on the initialization clock.
+- The reader does not switch pin clocks internally. The subsystem selects 400 kHz
+  during initialization, 25 MHz after Default Speed initialization, and 50 MHz
+  only after a successful CMD6 mode-1 result and the PHY's eight old-rate guard
+  clocks have completed.
 - Pin-level pull-up behavior on `CMD` and `DAT[3:0]` is handled in the Smart Artix
   XDC skeleton with conditional `PULLUP` constraints that become active when the
   board top exposes native SD ports.
@@ -203,11 +224,10 @@ in reset until `asset_loaded` is set.
 
 ## Verification Coverage
 
-The Version 9.10 protocol audit and remaining correctness work are tracked in
+The Version 9.10 protocol audit and remaining qualification work are tracked in
 [`sd_native_backlog.md`](sd_native_backlog.md). The passing simulations below
-are the current functional baseline; they do not yet qualify R1/R6 error
-handling, R1b busy, CMD6 fallback, specification-length read latency, optional
-CMD23 support, or mid-burst error recovery.
+cover the implemented functional contracts but do not replace exhaustive fault
+injection, post-route external timing, or physical-card qualification.
 
 The board-level regression target runs all focused Smart Artix simulations:
 

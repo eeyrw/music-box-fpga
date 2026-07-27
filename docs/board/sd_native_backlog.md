@@ -7,9 +7,14 @@ closure remain tracked separately in
 
 The review basis is `docs/sdcard_spec_v9.10.pdf`, SD Specifications Part 1
 Physical Layer Simplified Specification Version 9.10, dated 2023-12-01. The
-current focused SD regressions pass, but their fake cards model only successful,
-short-latency command and data transactions. Passing those tests is not protocol
-qualification for arbitrary conforming SDHC/SDXC cards.
+current focused SD regressions cover the principal success, fallback, timeout,
+framing, CRC, busy, and multi-block recovery paths listed below. They are not
+exhaustive protocol or physical-card qualification for arbitrary conforming
+SDHC/SDXC cards.
+
+[`asset_loading.md`](asset_loading.md) is the current implementation contract.
+This file retains the original audit evidence, records how each issue was
+resolved, and tracks the qualification work that remains.
 
 ## Current Scope
 
@@ -36,11 +41,58 @@ moves them into a different priority group.
 | P1 integration | SD-006, SD-011, SD-014 | Time budgets, insertion/power assumptions, and DAT3 pull-up control |
 | P2 resilience | SD-017 | Bounded retry after correctness defects are closed |
 
+## Implementation Update
+
+The current RTL resolves the coupled defects with a revised reader/PHY contract:
+
+- `sd_native_pkg` defines semantic R1, R1b, R2, R3, R6, and R7 response types
+  plus distinct timeout, CRC, framing, wrong-index, busy-timeout, cancel, and
+  abort transport status values.
+- The PHY atomically latches the complete command descriptor and divider. It
+  searches for response and data start tokens through complete clock cycles,
+  validates response-class framing and CRC, requires all four DAT start bits,
+  waits for R1b DAT0 release, and requires the reader to approve or cancel a
+  data phase after seeing the response.
+- The default data-start timeout is 10,000,000 clocks of the 100 MHz system
+  domain, or 100 ms independent of whether SD_CLK is 400 kHz, 25 MHz, or 50 MHz.
+  Focused simulations override the system-clock count without changing the
+  hardware default.
+- The next command bit is installed when SD_CLK falls. Divider zero therefore
+  retains one 100 MHz system-clock period of logical setup before the following
+  SD_CLK rising edge. The divider is transaction-latched, and a new divider is
+  used only by a later command after the old-rate post-transaction clocks.
+- The reader validates R1/R6 errors, APP_CMD, and expected card state. CMD7 uses
+  R1b; ACMD42 precedes ACMD6; CMD6 mode 0 discovers High Speed support/busy and
+  mode 1 must report Function Group 1 selection `1` before 50 MHz is enabled.
+  Unsupported, busy, or unchanged Default Speed results initialize successfully
+  at 25 MHz. A CMD6 status-data CRC error reports power-cycle-required.
+- Initialization reads SCR with CMD55/ACMD51 and enables optional CMD23 only when
+  SCR CMD_SUPPORT advertises it. Multi-block requests use CMD18; cards without
+  CMD23 support use CMD18 followed by CMD12, while a rejected advertised CMD23
+  also falls back to that path. Single-block requests and recovery use CMD17.
+- Each physical block is buffered until all 512 bytes and the CRC/end status are
+  clean. A middle-CMD18 failure aborts the PHY transaction, issues CMD12 with
+  R1b handling, and retries the failed LBA through bounded CMD17 reads without
+  duplicating already committed bytes. The cumulative retry count is saturating
+  and visible in `PLATFORM_ERRORS[27:20]`. If CMD12 itself fails, the primary SD
+  error preserves the original data failure and `PLATFORM_ERRORS[31:28]`
+  separately reports the recovery failure.
+- Smart Artix `SD_CD` is U17, active low, with the schematic's 10 kOhm pull-up.
+  The board layer applies two-stage synchronization, 5 ms debounce, and a 1 ms
+  stable-power wait. Removal resets the SD/asset session; reinsertion repeats the
+  startup clocks and cannot inherit the previous card's speed or asset-valid
+  state.
+
+The issue descriptions below retain the original audit evidence and required
+tests. A status of implemented means the RTL path exists and focused regressions
+cover its principal behavior; it does not imply external I/O timing or physical
+card qualification.
+
 ## P0 Protocol Defects
 
 ### SD-001: Read Timeout Is Too Short At The Transfer Clock
 
-Status: open bug.
+Status: implemented; hardware qualification remains open.
 
 `sd_native_pin_phy` defaults `DATA_TIMEOUT_CYCLES` to 65,535 and counts SD clock
 sampling edges. At the Smart Artix 50 MHz transfer clock this is approximately
@@ -70,7 +122,7 @@ Required tests:
 
 ### SD-002: High Speed Is Declared Without Validating CMD6 Status
 
-Status: open bug.
+Status: implemented.
 
 `sd_native_block_reader` consumes the 64-byte CMD6 Switch Function Status block
 but checks only its length and transport status. It then asserts
@@ -104,7 +156,7 @@ Required tests:
 
 ### SD-003: Card Status And R1b Busy Are Not Enforced
 
-Status: open bug.
+Status: implemented.
 
 The pin PHY reports framing, timeout, and CRC transport status, while the block
 reader generally treats any transport-valid R1 or R6 as command success. It does
@@ -138,47 +190,54 @@ Required tests:
 
 ### SD-004: Multi-Block Loading Assumes Optional CMD23 Support
 
-Status: open compatibility bug.
+Status: implemented with SCR discovery, CMD18, and bounded error recovery.
 
-Every request larger than one block unconditionally uses `CMD23` followed by
-`CMD18`, and `smart_artix_asset_loader` normally requests bursts of up to 16
-blocks. Version 9.10 Table 4-22 and Section 4.15 make CMD23 optional for SDHC and
-SDXC cards that do not support UHS104 and do not otherwise require CMD23. The
-current documentation claims general SDHC/SDXC support, so requiring CMD23
-without discovery narrows compatibility beyond the stated contract.
+The original implementation sent `CMD23` followed by `CMD18` for every request
+larger than one block. That made an optional SDHC/SDXC command a compatibility
+requirement.
 
-Required behavior:
+The current reader decodes SCR CMD_SUPPORT during initialization. Multi-block
+requests use `CMD18`; `CMD23` is prefixed only when SCR advertises support. Cards
+without CMD23 support use an open-ended `CMD18` followed by `CMD12`. If a card
+advertises CMD23 but rejects it in R1, the reader clears the discovered capability
+and continues through the no-CMD23 CMD18 path. Recovery after a failed CMD18
+block stops the multiple read and uses bounded `CMD17` reads from the failed LBA.
+`CMD17` is not the normal fallback for a card without CMD23 support.
 
-- read and decode SCR before enabling the CMD23 path; or
-- provide a universally supported fallback that services a burst with repeated
-  `CMD17` requests;
-- use `CMD23`/`CMD18` only when support is known, unless the supported-card
-  contract is explicitly narrowed and documented;
+Implemented behavior:
+
+- read and decode SCR before enabling the CMD23 path;
+- use `CMD18` without CMD23 for cards that do not advertise CMD23;
+- fall back when an advertised CMD23 is rejected;
 - keep the output byte stream and final `last` semantics identical across the
-  optimized and fallback paths.
+  optimized and recovery paths.
 
-Required tests:
+Focused tests:
 
-- a card that accepts CMD23 and completes a 16-block burst;
-- a legal SDHC/SDXC card without CMD23 support that completes the same request
-  through fallback reads;
-- CMD23 rejection reported in R1 without waiting for nonexistent CMD18 data.
+- a card that accepts CMD23 completes multi-block asset-loader bursts;
+- a card whose SCR lacks CMD23 support completes a request through CMD18/CMD12;
+- CMD23 rejection in R1 falls back without waiting for nonexistent data.
 
 ### SD-005: A Mid-Burst Data Error Can Deadlock Recovery
 
-Status: open bug.
+Status: implemented with coordinated abort, CMD12, and failed-LBA recovery.
 
-On a data timeout or CRC failure, `sd_native_block_reader` immediately enters its
-error state and deasserts `phy_data_ready`. If the pin PHY still owns remaining
-blocks from a predeclared multiple read, it advances toward the next block and
-can stop with a held byte while the reader attempts to restart with CMD0. The PHY
-is then not command-ready, so reset recovery cannot make progress.
+The original `CMD18` path could leave the pin PHY owning remaining blocks after
+the reader stopped accepting data, preventing reset recovery from reaching a
+command-ready PHY.
+
+The current reader accepts a CRC-checked physical block boundary from the PHY and
+can backpressure between CMD18 blocks while emitting the previous block. On a
+middle-block failure it requests a PHY abort, waits for transport completion,
+issues CMD12 with R1b handling, and restarts at the failed LBA with CMD17. Clean
+blocks already emitted are not repeated. The final block of an open-ended CMD18
+is not committed until normal CMD12 completion succeeds.
 
 Version 9.10 Section 4.15 requires CMD12 recovery when an error is detected in a
 CMD18 operation. The general read rules in Section 4.3.3 also permit CMD12 to
 abort a data read.
 
-Required behavior:
+Implemented behavior:
 
 - add a coordinated abort path between the reader and pin PHY;
 - issue CMD12 with R1b handling when a CMD18 transfer fails before its declared
@@ -188,18 +247,17 @@ Required behavior:
   reaches an explicit terminal state recoverable by reset;
 - preserve the first failure cause while separately reporting abort failure.
 
-Required tests:
+Focused and remaining tests:
 
-- CRC failure in the first and middle blocks of a multi-block read;
-- inter-block data timeout;
-- successful CMD12 recovery and CMD12 busy timeout;
-- reinitialization after each failure without resetting the complete simulator.
+- middle-block CRC failure and successful CMD12 recovery are covered;
+- first-block CRC failure, inter-block timeout, CMD12 busy timeout, and repeated
+  reinitialization remain part of the exhaustive fault matrix.
 
 ## P0 Pin PHY Defects
 
 ### SD-007: Response Framing Validation Is Incomplete
 
-Status: open bug.
+Status: implemented; exhaustive response-class fault vectors remain open.
 
 For 48-bit responses, `response_crc_ok` verifies start/transmission bits, the end
 bit, and CRC7, but does not verify that R1/R6/R7 command index `[45:40]` matches
@@ -234,7 +292,7 @@ Required tests:
 
 ### SD-008: Four-Bit Data Start Token Checks Only DAT0
 
-Status: open bug.
+Status: implemented.
 
 In `STATE_DATA_WAIT`, the PHY starts a block whenever `sd_dat_i[0]` is low. In
 4-bit mode, Version 9.10 Sections 3.6.1 and 4.3.3 define one low start bit on
@@ -256,7 +314,7 @@ Required tests:
 
 ### SD-009: CMD6 Guard Clocks Switch Frequency Too Early
 
-Status: open bug.
+Status: implemented.
 
 Version 9.10 Section 4.3.10 requires the host to wait at least eight clocks after
 the CMD6 status-data end bit before using a newly selected bus behavior or
@@ -287,7 +345,7 @@ Required tests:
 
 ### SD-010: Divider-Zero Command Launch Has No Logical Setup Margin
 
-Status: open blocking hardware bug; detailed closure is owned by
+Status: RTL phase defect fixed; XDC and physical closure remain owned by
 [`smart_artix_io_constraints_backlog.md`](smart_artix_io_constraints_backlog.md).
 
 At `clk_div == 0`, `STATE_CMD_LOW` changes `sd_cmd_o` and raises `sd_clk` on the
@@ -303,7 +361,7 @@ phase and do not claim a timing-qualified 50 MHz pin interface.
 
 ### SD-012: Accepted Command Control Fields Are Not Latched
 
-Status: open interface-contract bug.
+Status: implemented.
 
 The PHY latches the generated 48-bit command frame, block length, and block
 count when `cmd_valid && cmd_ready` is accepted. It does not latch `cmd_index`,
@@ -337,7 +395,7 @@ Required tests:
 
 ### SD-013: Failed Data-Command Responses Do Not Cancel The Data Phase
 
-Status: open state-coordination bug.
+Status: implemented with an explicit response proceed/cancel handshake.
 
 After receiving any complete response to a command with `cmd_data_read` set,
 the PHY enters `STATE_DATA_WAIT` even when its own response CRC check failed.
@@ -374,7 +432,7 @@ Required tests:
 
 ### SD-015: Response Start Wait Falls Into Payload Capture After One Clock
 
-Status: open critical bug.
+Status: implemented.
 
 `STATE_RESP_WAIT` samples CMD on a rising edge. If the line is still high and
 the timeout has not expired, it increments `timeout_count` but transitions to
@@ -409,7 +467,7 @@ Required tests:
 
 ### SD-016: Data Start Wait Falls Into Payload Capture After One Clock
 
-Status: open critical bug.
+Status: implemented.
 
 `STATE_DATA_WAIT` has the analogous transition error. If DAT0 is high on the
 first sampled clock, it increments `timeout_count` and transitions to
@@ -448,7 +506,7 @@ Required tests:
 
 ### SD-006: ACMD41 Retry Limit Is Not A One-Second Time Budget
 
-Status: open compatibility bug.
+Status: implemented with a 1.1 second elapsed system-clock budget.
 
 The reader defaults to 1,024 ACMD41 attempts. At the 400 kHz initialization
 clock, fast CMD55/ACMD41 responses can exhaust that count in approximately
@@ -475,7 +533,7 @@ Required tests:
 
 ### SD-011: Startup Clocks Depend On A Preinserted, Already-Powered Card
 
-Status: open integration limitation.
+Status: implemented for the Smart Artix active-low `SD_CD` input on U17.
 
 The pin PHY emits its default 80 startup clocks once after `rst` and has no card
 detect or card-power-stable input. Version 9.10 Section 6.4.1.1 requires the
@@ -508,7 +566,7 @@ Required tests for any hot-insertion implementation:
 
 ### SD-014: Card-Side DAT3 Detect Pull-Up Is Never Disconnected
 
-Status: open compatibility/electrical-sequencing item.
+Status: implemented.
 
 Version 9.10 Section 3.6 documents the card's power-up 50 kOhm pull-up on
 CD/DAT3 and says it should be disconnected during regular data transfer with
@@ -544,14 +602,19 @@ Required tests:
 
 ### SD-017: Transient Read Errors Abort The Complete Asset Load
 
-Status: open robustness item.
+Status: partially implemented; block-data retries are bounded and buffered,
+while separate initialization-command retry classes remain open.
 
-The current command reader turns response or data transport failure into a
-terminal error and clears `initialized`. The board loader has no bounded
-per-command or per-block retry policy, so a single transient CRC or timeout can
-prevent boot until external reset/restart. Version 9.10 CRC protection makes
-detected transmission errors retryable where command/card state is known, but
-CMD6 status-data CRC is a special case that requires a card power cycle.
+The current reader buffers each block until CRC/end validation and implements a
+bounded block-data retry. A failed CMD17 is retried directly. A failed CMD18 is
+aborted, stopped with CMD12, and resumed from the failed LBA with CMD17, without
+duplicating clean blocks already committed to the loader. Retry count and a
+secondary CMD12 recovery failure are software-visible.
+
+General command-response CRC/timeout retry classes are not implemented. Such a
+failure remains terminal and clears `initialized`. CMD6 status-data CRC is also
+terminal and explicitly reports that a card power cycle is required, as required
+by Version 9.10.
 
 This work must follow SD-003, SD-005, SD-013, SD-015, and SD-016. Retrying an
 operation while reader and PHY state disagree would conceal or worsen the
@@ -582,12 +645,16 @@ Required tests:
 The Version 9.10 review found these implemented behaviors consistent with the
 current SDHC/SDXC scope:
 
-- CMD0, CMD8, CMD55/ACMD41, CMD2, CMD3, CMD7, CMD55/ACMD6 sequencing;
+- CMD0, CMD8, CMD55/ACMD41, CMD2, CMD3, R1b-aware CMD7,
+  CMD55/ACMD42, CMD55/ACMD6, and CMD55/ACMD51 sequencing;
 - CMD8 voltage/check-pattern echo validation and ACMD41 HCS/CCS handling;
+- CMD6 capability query, validated High Speed selection, and Default Speed
+  fallback;
+- optional CMD23 discovery through SCR and CMD18/CMD12 operation without CMD23;
 - block-addressed CMD17/CMD18 arguments and fixed 512-byte SDHC/SDXC blocks;
 - at least 74 startup clocks through the default 80-clock setting;
-- command CRC7 generation and short-response CRC7 checking, except R3 as
-  required, subject to the response-format gaps in SD-007;
+- command CRC7 generation and semantic short/long-response framing and CRC7
+  checking, except R3 CRC as required;
 - four-line data CRC16 and data end-bit checking;
 - 4-bit nibble-to-byte assembly and per-block final-byte status reporting;
 - pausing SD_CLK low for downstream backpressure, which is permitted by Section
@@ -607,29 +674,34 @@ tb_sd_native_pin_phy
 tb_sd_native_pin_phy_fake
 ```
 
-They currently do not cover R1/R6 error bits, R1b busy, CMD6 refusal or fallback,
-100 ms latency, optional CMD23, a mid-burst data error, response-index/R2
-framing, malformed 4-bit start tokens, CMD6 guard-clock frequency, command
-descriptor changes after handshake, failed-response/data-phase coordination,
-delayed response/data start tokens, genuine response/data timeouts, ACMD42
-pull-up control, or command setup at `clk_div == 0`.
+The updated focused tests cover delayed response/data starts, genuine timeouts,
+wrong response indices, valid R2 CRC, R1b busy release, malformed four-bit start
+tokens, command-descriptor mutation after acceptance, divider-zero command setup,
+ACMD42 ordering, ACMD51 SCR discovery, CMD6 query/selection, Default Speed
+fallback, accepted and rejected CMD23 paths, CMD18 without CMD23, per-block PHY
+boundaries, and middle-CMD18 CRC recovery through CMD12 plus failed-LBA CMD17.
+Remaining test expansion includes exhaustive R1/R6 error-bit injection, every
+malformed framing bit for every response class, exact 100 ms boundary tests at
+all three board dividers, CMD6 guard-clock period measurement, first-block and
+inter-block failures, CMD12 busy timeout, initialization deadline boundaries,
+removal during active I/O, and retry exhaustion.
 
 Protocol backlog completion requires:
 
 - [ ] SD-001 through SD-005, SD-007 through SD-010, SD-012, SD-013, SD-015,
   and SD-016 have focused self-checking regressions and are closed.
 - [ ] SD-006 uses a measured time budget and has boundary tests.
-- [ ] SD-011 is closed by either an explicit preinserted-card contract or tested
+- [x] SD-011 is closed by either an explicit preinserted-card contract or tested
   card-detect/power sequencing.
-- [ ] SD-014 disconnects the card-side DAT3 detect pull-up before regular
+- [x] SD-014 disconnects the card-side DAT3 detect pull-up before regular
   transfer, or a documented board decision justifies retaining it.
 - [ ] SD-017 has a bounded retry policy after all prerequisite recovery-state
   defects are closed.
 - [ ] Fake command-level and pin-level cards can inject response status, busy,
   long data latency, capability differences, response framing faults, malformed
   data tokens, and per-block CRC errors.
-- [ ] `make smart-artix-test`, `make lint`, and `make test` pass.
-- [ ] The supported-card statement explicitly matches implemented discovery,
+- [x] `make smart-artix-test`, `make lint`, and `make test` pass.
+- [x] The supported-card statement explicitly matches implemented discovery,
   fallback, addressing, voltage, and speed behavior.
 - [ ] Hardware qualification uses at least one Default Speed-only path and more
   than one SDHC/SDXC card family after the timing backlog is closed.

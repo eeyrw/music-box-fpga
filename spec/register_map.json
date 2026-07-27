@@ -121,10 +121,22 @@
               {"name": "DDR_CALIBRATED", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
               {"name": "DDR_UI_RESET", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
               {"name": "SD_INITIALIZED", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
-              {"name": "ASSET_LOADED", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"}
+              {"name": "ASSET_LOADED", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"},
+              {"name": "SD_CARD_PRESENT", "bitOffset": 15, "bitWidth": 1, "mask": "0x00008000"},
+              {"name": "SD_HIGH_SPEED_ACTIVE", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
             ]
           },
-          {"name": "PLATFORM_ERRORS", "addressOffset": "0x0044"},
+          {
+            "name": "PLATFORM_ERRORS",
+            "addressOffset": "0x0044",
+            "fields": [
+              {"name": "SD_ERROR_CODE", "bitOffset": 0, "bitWidth": 8},
+              {"name": "LOADER_ERROR_CODE", "bitOffset": 8, "bitWidth": 8},
+              {"name": "LOADER_STATE", "bitOffset": 16, "bitWidth": 4},
+              {"name": "SD_RETRY_COUNT", "bitOffset": 20, "bitWidth": 8},
+              {"name": "SD_RECOVERY_ERROR_CODE", "bitOffset": 28, "bitWidth": 4}
+            ]
+          },
           {"name": "PLATFORM_BYTES_LOADED", "addressOffset": "0x0048"},
           {"name": "PLATFORM_SF2_SIZE", "addressOffset": "0x0050"},
           {"name": "PLATFORM_CURRENT_LBA", "addressOffset": "0x0058"},

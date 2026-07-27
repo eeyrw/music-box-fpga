@@ -58,7 +58,6 @@ module fake_sd_native_pin_model (
     begin
       @(negedge sd_clk);
       sd_dat_i = nibble;
-      @(negedge sd_clk);
       for (int line = 0; line < 4; line++)
         crc_dat[line] = crc16_next(crc_dat[line], nibble[line]);
     end
@@ -80,7 +79,6 @@ module fake_sd_native_pin_model (
         @(negedge sd_clk);
         for (int line = 0; line < 4; line++)
           sd_dat_i[line] = crc_dat[line][bit_index];
-        @(negedge sd_clk);
       end
       @(negedge sd_clk);
       sd_dat_i = 4'hf;

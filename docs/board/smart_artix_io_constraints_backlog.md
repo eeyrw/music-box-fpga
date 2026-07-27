@@ -51,6 +51,8 @@ assumptions.
 
 - Native SD uses `V20` for CLK, `Y22` for CMD, and
   `U20/V18/V22/Y21` for DAT[0:3].
+- The card socket exposes active-low `SD_CD` on U17. The schematic shows a
+  10 kohm pull-up and 100 ohm series resistor on this mechanical switch input.
 - The schematic provides external 10 kohm pull-ups on CMD and DAT[3:0]. FPGA
   `PULLUP` properties are optional redundancy, not a board requirement.
 - SPI and I2S use project-selected BANK15 expansion-header pins. The current
@@ -103,24 +105,24 @@ specification:
 | CMD/DAT output delay, `tODLY` | 14 ns maximum |
 | CMD/DAT output hold, `tOH` | 2.5 ns minimum |
 
-### Blocking RTL Issue
+### RTL Phase Fix And Remaining Physical Closure
 
-With `SD_TRANSFER_CLK_DIV = 0`, `sd_native_pin_phy` updates `sd_cmd_o` and
-raises `sd_clk` on the same 100 MHz system edge in `STATE_CMD_LOW`. The FPGA
-therefore provides approximately zero logical setup time at the card. A correct
-6 ns output-setup constraint should expose this failure; XDC cannot repair the
-phase relationship.
+`sd_native_pin_phy` now installs the next command bit when SD_CLK falls, including
+at `SD_TRANSFER_CLK_DIV = 0`. The following rising edge is one 100 MHz system
+period later, removing the former same-edge launch defect. Focused simulation
+checks positive logical setup at dividers zero and one. Post-route I/O delay,
+PCB skew, and physical-card timing are still not qualified.
 
 Required work:
 
 - [ ] For initial hardware bring-up, set `SD_TRANSFER_CLK_DIV = 1` for a
   25 MHz transfer clock and confirm the resulting CMD margin after routing.
-- [ ] Before claiming 50 MHz support, update CMD on the falling SD phase and
+- [x] Before claiming 50 MHz support, update CMD on the falling SD phase and
   sample CMD/DAT on the rising phase through an explicit I/O-register boundary.
 - [ ] Evaluate ODDR for forwarded SD_CLK and CMD output, plus IOB input
   registers or IDDR where appropriate. Keep vendor primitives in the Smart
   Artix board layer.
-- [ ] Add a self-checking pin-PHY regression that checks CMD setup relative to
+- [x] Add a self-checking pin-PHY regression that checks CMD setup relative to
   every SD_CLK rising edge at divider 1 and divider 0.
 - [ ] Model the fastest transfer clock with a generated clock on the SD_CLK
   output only after confirming the post-synthesis clock source object.

@@ -105,11 +105,12 @@ change.
 - [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):
   confirmed non-DDR pin facts, SPI/SD/I2S timing analysis, open RTL and XDC
   work, and board-level signoff gates.
-- [`board/sd_native_backlog.md`](board/sd_native_backlog.md): SD Part 1 v9.10
-  protocol review, prioritized correctness and compatibility defects, required
-  recovery behavior, and focused verification gates.
 - [`board/asset_loading.md`](board/asset_loading.md): SD raw-image to DDR3 asset
-  loading contract and Smart Artix loader blocks.
+  loading contract, current native-SD command policy, model boundaries, and
+  Smart Artix loader blocks.
+- [`board/sd_native_backlog.md`](board/sd_native_backlog.md): SD Part 1 v9.10
+  protocol audit history, remaining qualification work, recovery requirements,
+  and focused verification gates. Use `asset_loading.md` for the current path.
 
 ## Local Notes
 

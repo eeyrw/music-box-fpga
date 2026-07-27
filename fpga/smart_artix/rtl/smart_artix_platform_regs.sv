@@ -71,9 +71,13 @@ module smart_artix_platform_regs (
         bus_rdata[9] = platform_status.mig_app_rd_data_valid;
         bus_rdata[10] = platform_status.mig_app_rd_data_end;
         bus_rdata[14:11] = platform_status.asset_loader_state;
+        bus_rdata[15] = platform_status.sd_card_present;
+        bus_rdata[16] = platform_status.sd_high_speed_active;
       end
       ADDR_PLATFORM_ERRORS: begin
-        bus_rdata = {12'd0, platform_status.asset_loader_state,
+        bus_rdata = {platform_status.sd_recovery_error_code,
+                       platform_status.sd_retry_count,
+                       platform_status.asset_loader_state,
                        platform_status.loader_error_code,
                        platform_status.sd_error_code};
       end

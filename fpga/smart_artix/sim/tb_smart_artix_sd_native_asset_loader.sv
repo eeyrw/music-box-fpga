@@ -1,4 +1,5 @@
 module tb_smart_artix_sd_native_asset_loader;
+  import sd_native_pkg::*;
   localparam int LBA_WIDTH = 32;
   localparam int BEAT_BYTES = smart_artix_pkg::MIG_MASK_WIDTH;
 
@@ -10,6 +11,8 @@ module tb_smart_artix_sd_native_asset_loader;
   logic asset_loaded;
   logic sd_initialized;
   logic sd_transfer_clock_ready;
+  logic [7:0] sd_retry_count;
+  logic [3:0] sd_recovery_error_code;
   logic [3:0] status_state;
   logic [7:0] sd_error_code;
   logic [7:0] loader_error_code;
@@ -20,18 +23,22 @@ module tb_smart_artix_sd_native_asset_loader;
   logic sd_cmd_ready;
   logic [5:0] sd_cmd_index;
   logic [31:0] sd_cmd_arg;
-  logic [1:0] sd_cmd_resp_type;
+  sd_response_type_t sd_cmd_resp_type;
   logic sd_cmd_data_read;
   logic [15:0] sd_cmd_block_len;
   logic [15:0] sd_cmd_block_count;
+  logic sd_rsp_data_proceed;
+  logic sd_rsp_data_cancel;
+  logic sd_abort_request;
   logic sd_rsp_valid;
-  logic [2:0] sd_rsp_status;
+  sd_transport_status_t sd_rsp_status;
   logic [119:0] sd_rsp_data;
+  logic sd_transaction_done;
   logic sd_data_valid;
   logic sd_data_ready;
   logic [7:0] sd_data;
   logic sd_data_last;
-  logic [2:0] sd_data_status;
+  sd_transport_status_t sd_data_status;
   smart_artix_pkg::mig_app_command_t mig_app_command;
   smart_artix_pkg::mig_app_write_data_t mig_app_write_data;
   smart_artix_pkg::mig_app_response_t mig_app_response;
@@ -53,6 +60,8 @@ module tb_smart_artix_sd_native_asset_loader;
     .asset_loaded,
     .sd_initialized,
     .sd_transfer_clock_ready,
+    .sd_retry_count,
+    .sd_recovery_error_code,
     .status_state,
     .sd_error_code,
     .loader_error_code,
@@ -67,9 +76,13 @@ module tb_smart_artix_sd_native_asset_loader;
     .sd_cmd_data_read,
     .sd_cmd_block_len,
     .sd_cmd_block_count,
+    .sd_rsp_data_proceed,
+    .sd_rsp_data_cancel,
+    .sd_abort_request,
     .sd_rsp_valid,
     .sd_rsp_status,
     .sd_rsp_data,
+    .sd_transaction_done,
     .sd_data_valid,
     .sd_data_ready,
     .sd_data,
@@ -94,9 +107,13 @@ module tb_smart_artix_sd_native_asset_loader;
     .cmd_data_read(sd_cmd_data_read),
     .cmd_block_len(sd_cmd_block_len),
     .cmd_block_count(sd_cmd_block_count),
+    .rsp_data_proceed(sd_rsp_data_proceed),
+    .rsp_data_cancel(sd_rsp_data_cancel),
+    .abort_request(sd_abort_request),
     .rsp_valid(sd_rsp_valid),
     .rsp_status(sd_rsp_status),
     .rsp_data(sd_rsp_data),
+    .transaction_done(sd_transaction_done),
     .data_valid(sd_data_valid),
     .data_ready(sd_data_ready),
     .data(sd_data),
@@ -181,6 +198,9 @@ module tb_smart_artix_sd_native_asset_loader;
     check(wide_bus, "native asset loader did not switch SD card to 4-bit mode");
     check(illegal_command_count == 8'd0, "native asset loader sent illegal SD command");
     check(sd_error_code == 8'd0, "native asset loader reported SD error");
+    check(sd_retry_count == 8'd0, "native asset loader unexpectedly retried SD reads");
+    check(sd_recovery_error_code == 4'd0,
+          "native asset loader unexpectedly reported SD recovery failure");
     check(loader_error_code == 8'd0, "native asset loader reported loader error");
     check(bytes_loaded == 32'd20, "native asset loader bytes_loaded mismatch");
     check(sf2_size_bytes == 32'd20, "native asset loader sf2_size_bytes mismatch");

@@ -60,6 +60,7 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/wavetable_register_fabric.sv \
 	fpga/common/rtl/wavetable_common_status_regs.sv \
 	fpga/common/rtl/i2s_tx.sv \
+	fpga/common/rtl/sd_native_pkg.sv \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/common/rtl/wavetable_system_core.sv \
@@ -149,9 +150,11 @@ HARNESS_BOARD_LOADER_SRCS := \
 
 SMART_ARTIX_RTL_SOURCES := \
 	rtl/pkg/synth_register_pkg.sv \
+	fpga/common/rtl/sd_native_pkg.sv \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/smart_artix/rtl/smart_artix_pkg.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_card_detect.sv \
 	fpga/smart_artix/rtl/smart_artix_asset_loader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_asset_writer.sv \
 	fpga/smart_artix/rtl/smart_artix_sd_native_asset_loader.sv \
@@ -177,6 +180,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_ddr3_rw_arbiter \
 	tb_smart_artix_mig_stub \
 	tb_smart_artix_platform_regs \
+	tb_smart_artix_sd_card_detect \
 	tb_smart_artix_sd_native_asset_loader \
 	tb_sd_native_block_reader \
 	tb_sd_native_block_reader_fake \
@@ -225,6 +229,12 @@ lint:
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module sd_native_block_reader \
+		fpga/common/rtl/sd_native_pkg.sv fpga/common/rtl/sd_native_block_reader.sv
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module sd_native_pin_phy \
+		fpga/common/rtl/sd_native_pkg.sv fpga/common/rtl/sd_native_pin_phy.sv
+	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
+		$(SMART_ARTIX_RTL_SOURCES)
 
 test: test-cpp-unit test-rtl-core test-rtl-peripheral
 

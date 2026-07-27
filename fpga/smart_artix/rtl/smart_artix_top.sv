@@ -29,6 +29,7 @@ module smart_artix_top (
   output logic sd_clk,
   inout  wire  sd_cmd,
   input  logic [3:0] sd_dat,
+  input  logic sd_cd_n,
 
   output logic led_spi_error,
   output logic led_underrun,
@@ -44,6 +45,7 @@ module smart_artix_top (
   localparam int SYS_CLK_HZ = 100_000_000;
   localparam int SAMPLE_RATE_HZ = 48_000;
   localparam logic [SD_DIV_WIDTH-1:0] SD_INIT_CLK_DIV = SD_DIV_WIDTH'(124);
+  localparam logic [SD_DIV_WIDTH-1:0] SD_DEFAULT_CLK_DIV = SD_DIV_WIDTH'(1);
   localparam logic [SD_DIV_WIDTH-1:0] SD_TRANSFER_CLK_DIV = SD_DIV_WIDTH'(0);
 
   logic clk_sys;
@@ -148,6 +150,7 @@ module smart_artix_top (
     .core_rst(core_rst_sys),
     .start(mig_init_calib_complete),
     .sd_init_clk_div(SD_INIT_CLK_DIV),
+    .sd_default_clk_div(SD_DEFAULT_CLK_DIV),
     .sd_transfer_clk_div(SD_TRANSFER_CLK_DIV),
     .ddr_init_calib_complete(mig_init_calib_complete),
     .ddr_ui_rst(mig_ui_clk_sync_rst),
@@ -157,6 +160,7 @@ module smart_artix_top (
     .sd_cmd_oe,
     .sd_cmd_i,
     .sd_dat_i(sd_dat),
+    .sd_card_detect_n(sd_cd_n),
     .line_req(core_line_req),
     .line_req_ready(core_line_req_ready),
     .line_rsp(core_line_rsp),

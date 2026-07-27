@@ -46,6 +46,13 @@ set_property PACKAGE_PIN V22 [get_ports {sd_dat[2]}]
 set_property PACKAGE_PIN Y21 [get_ports {sd_dat[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {sd_dat[*]}]
 set_property PULLUP true [get_ports {sd_dat[*]}]
+set_property PACKAGE_PIN U17 [get_ports sd_cd_n]
+set_property IOSTANDARD LVCMOS33 [get_ports sd_cd_n]
+set_property PULLUP true [get_ports sd_cd_n]
+# SD_CD is an asynchronous mechanical switch. Only the first synchronizer stage
+# is exempted; debounce and all consumers use the second-stage system-clock value.
+set_false_path -from [get_ports sd_cd_n] \
+  -to [get_pins -hier -quiet -regexp {.*card_detect/detect_sync_reg\[0\]/D}]
 
 # Status outputs on BANK15 header pins.
 set_property PACKAGE_PIN J15 [get_ports led_spi_error]
