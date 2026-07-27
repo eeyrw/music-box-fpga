@@ -710,23 +710,448 @@ stream。当前已有模块边界：
 后续连接必须使用 bounded FIFO 或明确的 ready/valid fork/join。不能简单把一个 valid
 同时连到两个分支，却只用其中一个 ready；否则一个分支可能重复消费或另一个分支丢帧。
 
-## 19. 一段稳态时序示例
+## 19. 整条流水线的运行时模拟
 
-以下只表示并行关系，不代表固定 voice ID：
+本节不再只画概念框图，而是用可以逐拍对照 RTL 的方式模拟一次运行。先定义时钟记法，
+再分别模拟每个局部流水，最后把它们叠加成整机稳态。局部表中的拍序按当前 RTL 精确
+描述；最后的全局叠加表用于说明并行关系，不承诺某个真实 block 中 voice 字母固定落在
+该列，因为 ready/valid 和 round-robin 会随地址、envelope 和 stall 改变选择。
 
-| clock | state read | envelope | phase | memory | DSP issue | DSP middle | retire |
+### 19.1 给所有环节统一编号
+
+为了避免“frontend”“DSP 中段”这类模糊说法，本文给运行环节使用以下名字：
+
+| 编号 | RTL 所有者 | 每拍最多完成的工作 | 主要持久状态 |
+| --- | --- | --- | --- |
+| B0 | `block_mix_buffer` | 接受一个 block request | fill bank、frame count |
+| B1 | `block_mix_buffer` | 清零一个 mix frame | clear index、32-bit accumulators |
+| C0 | controller | 选择一个非空 32-voice group | group bitmap |
+| C1 | controller | 从 group 选择一条 voice | active bitmap、voice ID |
+| C2 | state store | 接受一个 snapshot read request | read voice、read pending |
+| C3 | state store/controller | 返回并缓存一个 snapshot | pending snapshot register |
+| E0 | envelope scheduler | 选择一个 slot，推进一帧 envelope | per-slot envelope state |
+| E1 | envelope L0 | 锁存 zero/direct/cB token | slot/frame/last tag |
+| E2 | envelope L1 | 求 attenuation octave | tagged level token |
+| E3 | envelope L2 | 求 residual LUT index | tagged level token |
+| E4 | envelope L3 | 读取 mantissa LUT | tagged mantissa token |
+| E5 | envelope writeback | 舍入 Q1.15，写 slot/frame | level array、slot READY |
+| P0 | phase scheduler | 选择一个 WORK_PLAN slot | plan round-robin pointer |
+| P1 | phase datapath | 生成 endpoint job 并更新 phase | job array、phase、cursor |
+| M0 | memory scheduler | 锁定一个 voice segment | work ID、base、mask |
+| M1 | request engine | 接受一条 8-word line request | request beat counter |
+| M2 | response gather | 接受一条 ordered line response | sample scratch、valid bits |
+| I0 | DSP issue scheduler | 选择一个 ready、无 hazard job | issue index、hazard |
+| D0 | DSP S0 | interpolation difference multiply | interpolation product |
+| D1 | DSP S1 | 完成 interpolation | signed sample `x` |
+| D2 | DSP S2 | 计算 `b0*x/b1*x/b2*x` | feed-forward products |
+| D3 | DSP S3 | 计算和饱和 `y` | 20-bit filter output |
+| D4 | DSP S4 | 计算 `a1*y/a2*y` | feedback products |
+| D5 | DSP S5 | 生成新 z1/z2，filter/bypass 选择 | early state update |
+| D6 | DSP S6 | 左右 channel gain multiply | gain products |
+| D7 | DSP retire | envelope multiply、sat16 | contribution、final state |
+| R0 | renderer/engine | last result 合并 | phase/env/filter final state |
+| R1 | state store | generation 检查和 dynamic write | next-block voice state |
+| B2 | mix buffer | contribution 累加 | selected frame accumulator |
+| B3 | controller/mix | 发布并转移 bank ownership | complete descriptor |
+
+这些编号不是 24 个串行等待的 FSM 状态。B、C、E、P、M、I/D 和 R 是不同硬件，能在
+同一拍处理不同 voice。只有表中属于同一共享资源的工作才互斥。
+
+### 19.2 一拍到底发生什么
+
+SystemVerilog 的一拍应按下面顺序理解：
+
+```text
+1. 寄存器保持上一上升沿提交的值。
+2. always_comb 根据这些旧寄存器计算：
+   - round-robin winner
+   - ready/valid
+   - endpoint-ready
+   - hazard 是否在本拍由 forwarding 解除
+   - 下一份 payload
+3. 若 valid && ready，本拍末尾的上升沿发生 transfer。
+4. always_ff 中所有非阻塞赋值在同一上升沿共同提交。
+5. 下一拍组合逻辑看到新的寄存器值。
+```
+
+因此“response 在 clock 10 返回”表示 clock 10 上升沿写 sample scratch。issue 组合逻辑
+在该上升沿之前仍看到旧 valid，最早在 clock 11 上升沿接受这个 sample token。
+
+为了逐拍模拟，可以把 RTL 抽象成下面的伪代码。各个 `select` 并行计算，不是按文本
+先后串行执行：
+
+```text
+for every clock:
+  free_env       = select_free_envelope_slot()
+  walk           = round_robin(SLOT_WALK)
+  env_result     = round_robin(SLOT_READY)
+  free_work      = select_free_or_same_cycle_retiring_work_slot()
+  plan           = round_robin(WORK_PLAN)
+  memory_start   = round_robin(WORK_MEM_WAIT) if no active segment
+  issue          = round_robin(endpoint_ready && dependency_ready)
+  complete       = select(WORK_COMPLETE)
+
+  compute every ready/valid handshake
+  compute phase, addresses, DSP arithmetic and forwarding muxes
+
+  at rising edge:
+    commit all accepted starts, requests, responses, issues and retires
+    advance all non-stalled DSP valid/payload registers together
+```
+
+### 19.3 模拟输入条件
+
+先用一个容易手算的 block：
+
+```text
+block frames       = 8
+active voices      = A, B, C, D, E, F, G, H
+all voices         = active, ENV_SUSTAIN, envelope level 0x7fff
+phase              = 0.0
+phase_inc          = 1.0 = 0x0000_0100
+length             > 8, no loop boundary in this block
+base addresses     = different 32-word-aligned regions
+filter             = enabled
+line_req_ready     = always 1
+line response      = accepted request order, one-cycle return latency
+contribution_ready = always 1
+result_ready       = always 1
+```
+
+字母表示 voice/work context，数字表示这个 block 内的 frame，例如 `A3` 是 voice A 的
+第 3 个输出 frame。真实 controller 的 slot ID 可以复用，不能假设 voice A 永远等于
+work ID 0；这里只为阅读方便使用字母。
+
+### 19.4 Block 接收、mix clear 和第一条 voice dispatch
+
+以下以 block request transfer 的上升沿为 `b0`。这是 controller/mix 的精确初始拍序，
+假设 bank 0 原来为 FREE、state store 和 envelope 都 ready：
+
+| edge | controller 状态在沿前 | mix 动作 | state 动作 | 沿后主要结果 |
+| ---: | --- | --- | --- | --- |
+| b0 | IDLE | 接受 block，bank0 -> CLEARING | - | 锁存 frame_count/active bitmap |
+| b1 | WAIT_FILL | clear frame 0 | - | clear index=1 |
+| b2 | WAIT_FILL | clear frame 1 | - | clear index=2 |
+| b3 | WAIT_FILL | clear frame 2 | - | clear index=3 |
+| b4 | WAIT_FILL | clear frame 3 | - | clear index=4 |
+| b5 | WAIT_FILL | clear frame 4 | - | clear index=5 |
+| b6 | WAIT_FILL | clear frame 5 | - | clear index=6 |
+| b7 | WAIT_FILL | clear frame 6 | - | clear index=7 |
+| b8 | WAIT_FILL | clear frame 7 | - | bank0 -> FILLING |
+| b9 | WAIT_FILL | fill ready | - | controller -> SELECT_GROUP |
+| b10 | SELECT_GROUP | - | 选择 A 所在 group | -> SELECT_VOICE |
+| b11 | SELECT_VOICE | - | 选择 A，清 active bit | -> REQUEST_STATE |
+| b12 | REQUEST_STATE | - | A read request transfer | store `read_pending=1` |
+| b13 | WAIT_STATE | - | 同步读取 A 四组 memory | response valid=1 |
+| b14 | WAIT_STATE | - | A response transfer | pending snapshot=A |
+| b15 | SELECT_VOICE | - | engine 接受 A snapshot | envelope slot0 -> WALK |
+
+下一条 voice 可以继续经过 C1/C2/C3。无 backpressure 时，早期 dispatch 受 controller
+状态转换和同步 state read 限制；运行一段时间后，更常见的限制是 envelope/renderer
+是否有 free slot。pending register 支持旧 snapshot 被 engine 消费的同拍接收新
+response，但当前 controller FSM 并没有每拍发一个 state read request。
+
+### 19.5 Envelope 的精确流水模拟
+
+为了单独展示 E0-E5 的满流水，假设 A-H 已经都处于 `SLOT_WALK`。E0 round-robin 每拍
+选一个 frame，后面四级 conversion 同时处理之前的 token：
+
+| edge | E0/L0 新 token | L1 | L2 | L3 | E5 writeback |
+| ---: | --- | --- | --- | --- | --- |
+| e0 | A0 | - | - | - | - |
+| e1 | B0 | A0 | - | - | - |
+| e2 | C0 | B0 | A0 | - | - |
+| e3 | D0 | C0 | B0 | A0 | - |
+| e4 | E0 | D0 | C0 | B0 | A0 level |
+| e5 | F0 | E0 | D0 | C0 | B0 level |
+| e6 | G0 | F0 | E0 | D0 | C0 level |
+| e7 | H0 | G0 | F0 | E0 | D0 level |
+| e8 | A1 | H0 | G0 | F0 | E0 level |
+| e9 | B1 | A1 | H0 | G0 | F0 level |
+
+一旦灌满，E5 每拍写回一个 level，即 envelope sample throughput 为一拍一个。每条
+voice 仍每 8 拍才递归推进一次，所以写回 A0 后，A1 使用的是 E0 已经写入 slot 的新
+envelope state。
+
+对 8 voices x 8 frames：
+
+```text
+A0 在 e0 发入，e4 写回
+A7 在 e56 发入，e60 写回并令 A slot READY
+H7 在 e63 发入，e67 写回并令 H slot READY
+```
+
+所以不需要等所有 voice 的 envelope 完成才启动 renderer。A 在 e60 可以通过 result
+handshake 进入 renderer，而 B-H 仍在 envelope drain/ready 路径中。
+
+### 19.6 Phase planner 的精确模拟
+
+假设 A-H renderer slot 均为 `WORK_PLAN`。P0 每拍选一个 slot，P1 是组合 phase datapath
+加上升沿 job/phase 写回：
+
+| edge | selected slot/frame | 写入 job | slot phase 沿后值 |
+| ---: | --- | --- | --- |
+| p0 | A0 | addr A+0/A+1, frac 0 | A=1.0 |
+| p1 | B0 | addr B+0/B+1, frac 0 | B=1.0 |
+| p2 | C0 | addr C+0/C+1, frac 0 | C=1.0 |
+| p3 | D0 | addr D+0/D+1, frac 0 | D=1.0 |
+| p4 | E0 | addr E+0/E+1, frac 0 | E=1.0 |
+| p5 | F0 | addr F+0/F+1, frac 0 | F=1.0 |
+| p6 | G0 | addr G+0/G+1, frac 0 | G=1.0 |
+| p7 | H0 | addr H+0/H+1, frac 0 | H=1.0 |
+| p8 | A1 | addr A+1/A+2, frac 0 | A=2.0 |
+
+A7 在 `p56` 规划。该沿同时保存最后一个 job、最终 phase result，并把 A 从
+`WORK_PLAN` 转到 `WORK_MEM_WAIT`。如果 memory engine 空闲，它在下一拍组合逻辑看到
+A 已等待，并在 `p57`/`m0` 上升沿锁定 A segment。H7 在 `p63` 才完成规划，因此 phase
+planning 和 A 的 memory fetch 已经重叠。
+
+若 `phase_inc` 有 fraction，例如 1.5=`0x180`，A 的 endpoint 会依次为：
+
+```text
+frame0: addr 0/1, fraction 0x00, next phase 1.5
+frame1: addr 1/2, fraction 0x80, next phase 3.0
+frame2: addr 3/4, fraction 0x00, next phase 4.5
+```
+
+这只改变 job 内容，不改变 planner 每拍一个 slot step 的调度方式。
+
+### 19.7 一个 32-word memory segment 的精确模拟
+
+把锁定 A segment 的上升沿记为 `m0`。请求 always-ready，response 对每个 accepted
+request 延迟一拍：
+
+| edge | request transfer | response transfer | renderer 沿后动作 |
+| ---: | --- | --- | --- |
+| m0 | - | - | lock A, base=A+0, req/rsp beat=0 |
+| m1 | A+0 | - | request beat=1 |
+| m2 | A+8 | words A+0..7 | 写覆盖 endpoint valid，request beat=2 |
+| m3 | A+16 | words A+8..15 | 写 valid；A0 最早可在本沿 issue |
+| m4 | A+24 | words A+16..23 | request beat=4 |
+| m5 | - | words A+24..31 | segment complete，A -> WORK_READY |
+
+`m3` 的 A0 issue 是否发生，取决于两个 endpoint 是否都在第一条 line 内。它们在 m2
+上升沿被写入，m2 后的组合逻辑看到 valid=1，所以可在 m3 上升沿与 A+16 request、
+A+8 response 同时 transfer。
+
+如果 A 的后续 endpoint 位于另一个 32-word window，m5 后 slot 回到
+`WORK_MEM_WAIT`，memory scheduler 先按 round-robin 给其他等待 voice 机会，然后再锁
+定 A 的下一个 segment。一个 segment 的四条 request 内绝不切换 voice。
+
+### 19.8 DSP 的精确 token latency
+
+把 A0 被 `token_valid && token_ready` 接受的上升沿记为 `d0`。无 backpressure 时：
+
+| edge 后 | A0 所在寄存级 | 本级得到的结果 | 对 renderer 可见事件 |
+| ---: | --- | --- | --- |
+| d0 | S0 | interpolation product | A hazard 置 1 |
+| d1 | S1 | interpolated `x` | - |
+| d2 | S2 | b0/b1/b2 products | - |
+| d3 | S3 | saturated filter `y` | - |
+| d4 | S4 | a1/a2 products，新 z1/z2 组合值 | `state_update_valid(A0)` |
+| d5 | S5 | selected sample、注册新 state | renderer 在沿上写 A z1/z2 |
+| d6 | S6 | left/right gain products | - |
+| d7 | retire register | envelope 和 sat16 结果 | `retire_valid(A0)` 拉高 |
+| d8 | - | - | contribution transfer；若 last，同时发布 result |
+
+因此当前语义是：
+
+```text
+accept 到 early state-update 可用：约 4 个寄存级，下一接受沿可 forwarding
+accept 到 retire transfer：8 clocks
+```
+
+这里把 `d4` 称为 state update “可见周期”：A0 在 d4 上升沿进入 S4 后，d4-d5 周期的
+组合输出有效；renderer 和下一 token 在 d5 上升沿共同消费它。
+
+### 19.9 Filter hazard 和 forwarding 的逐拍模拟
+
+为了让 forwarding 必然出现，暂时只让 A、B 两个 slot 的 endpoint ready：
+
+| edge | issue 选择 | A hazard | B hazard | state update | 说明 |
+| ---: | --- | :---: | :---: | --- | --- |
+| h0 | A0 | 1 | 0 | - | A0 使用旧 A z1/z2 |
+| h1 | B0 | 1 | 1 | - | B0 使用旧 B z1/z2 |
+| h2 | bubble | 1 | 1 | - | A/B 都有 unresolved RAW |
+| h3 | bubble | 1 | 1 | - | 同上 |
+| h4 | bubble | 1 | 1 | A0 | A 在本周期 dependency-ready |
+| h5 | A1 | 1 | 1 | B0 | A1 forwarding A0 新 state；B 也已可选 |
+| h6 | B1 | 1 | 1 | - | B1 使用已经写回的 B0 state |
+
+h5 上升沿同时发生三件事：
+
+1. renderer 把 A0 的新 z1/z2 写进 `work_z1_q/work_z2_q[A]`；
+2. A1 token 从 forwarding mux 取得同一份新 state；
+3. A1 是 filtered token，所以 A hazard 保持为 1，等待 A1 update。
+
+如果 A-H 八个 slot 都 ready，round-robin 通常会先发：
+
+```text
+A0 B0 C0 D0 E0 F0 G0 H0 A1 B1 ...
+```
+
+再次轮到 A 时，A0 update 已经返回，所以不出现 h2-h4 的 bubble。真实吞吐测试仍会
+记录 forwarding，因为 memory ready 分布、slot completion 和尾部 context 数量会让
+某 slot 恰好在 update 周期再次被选择。
+
+### 19.10 DSP backpressure 的逐拍模拟
+
+假设 A0 已在 retire register，`contribution_ready=0`：
+
+| cycle | retire_valid | retire_ready | advance/token_ready | 所有 DSP stage |
+| ---: | :---: | :---: | :---: | --- |
+| s0 | 1 | 0 | 0 | 保持 payload 和 valid |
+| s1 | 1 | 0 | 0 | 仍保持，不重复 transfer |
+| s2 | 1 | 1 | 1 | A0 transfer，所有级同时前进一格 |
+
+stall 时不是只停 retire register，而是 D0-D7 整体冻结。否则上游 token 会覆盖下游，
+或者 tag 与 sample 错位。memory response 仍可继续填 endpoint scratch，直到 slot 容量和
+上游状态自然形成 backpressure；它不需要跟 DSP 每级锁步。
+
+### 19.11 Contribution、last result 和动态状态写回
+
+对 A0-A7，普通 contribution 可以按以下顺序与其他 voice 交错：
+
+```text
+A0 B0 C0 ... H0 A1 B1 ...
+```
+
+每个 token 携带原始 `block_frame_index`，所以 B0 即使在 A1 后退休，也只更新 frame0
+accumulator，不会混入 frame1。
+
+A7 的 issue token 带 `last=1`。其 retire transfer 沿必须同时满足：
+
+```text
+contribution_ready
+&& (!result_valid_q || result_ready)
+```
+
+该沿发生：
+
+```text
+mix[A7.block_frame_index] += A7 contribution
+result_q = {A final phase, A final z1/z2}
+result_env_* = A final envelope state
+A work slot -> FREE，或同拍直接被新 start 重用
+```
+
+下一拍 engine 把 phase/env/filter 合成 `voice_dynamic_state_t`，state store 做 generation
+比较后写回 A。controller 的 outstanding 只有在这次 result handshake 后才减一，而不是
+在 A7 contribution 出现时提前减一。
+
+### 19.12 Block drain 和 mix bank 发布
+
+controller 清完 active bitmap 后进入 `CTRL_DRAIN`。假设最后一条 voice H 的 last result
+在 `r0` 写回：
+
+| edge | outstanding/ports | controller 动作 | mix bank 动作 |
+| ---: | --- | --- | --- |
+| r0 | H result transfer | outstanding 减一 | 接收 H last contribution |
+| r1 | outstanding=0，无 pending/result | DRAIN -> FINISH | bank 仍 FILLING |
+| r2 | finish valid && ready | FINISH -> IDLE | bank -> PUBLISHED，complete valid=1 |
+| r3+ | consumer 接受 complete | 可接下一 block | bank -> OWNED，可逐 frame 读取 |
+
+consumer 读完全部 frame 后必须 release bank，bank 才回到 FREE。另一个 bank 可以被下一
+block 清零和填充；同一 bank 绝不能在 OWNED 时被 renderer 覆盖。
+
+### 19.13 全局稳态叠加示意
+
+把前面的独立局部时序叠加后，一个稳态窗口可能如下。此表只表示同拍并行，不作为
+精确 testbench waveform：
+
+| clock | C: state | E: envelope | P: phase | M: memory | I/D0: issue | D4: update | D7/R: retire |
 | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 0 | voice H | G0 | F0 | E line0 | A0 | - | - |
-| 1 | voice I | H0 | G0 | E line1 | B0 | A interp | - |
-| 2 | voice J | I0 | H0 | E line2 | C0 | B interp | - |
-| 3 | voice K | J0 | I0 | E line3 | D0 | C coeff | - |
-| 4 | voice L | K0 | J0 | F line0 | E0 | D filter | - |
-| 5 | voice M | L0 | K0 | F line1 | A1 forwarded | A state update | - |
-| 7+ | ... | ... | ... | ... | ... | ... | A0/B0/... |
+| t0 | req H | G0 | F0 | E req line0 | A0 | - | - |
+| t1 | store read H | H0 | G0 | E req1/rsp0 | B0 | - | - |
+| t2 | rsp H | I0 | H0 | E req2/rsp1 | C0 | - | - |
+| t3 | start H/select I | J0 | I0 | E req3/rsp2 | D0 | - | - |
+| t4 | req I | K0 | J0 | E rsp3 | E0 | A0 update | - |
+| t5 | store read I | L0 | K0 | F req line0 | F0 | B0 update | - |
+| t6 | rsp I | M0 | L0 | F req1/rsp0 | G0 | C0 update | - |
+| t7 | start I/select J | N0 | M0 | F req2/rsp1 | H0 | D0 update | A0 valid |
+| t8 | req J | G1 | N0 | F req3/rsp2 | A1 | E0 update | A0 transfer/B0 valid |
 
-同一拍可以有多个模块各完成一次 transfer，因为它们是独立硬件。每个共享模块内部仍
-每拍最多选择一项：一个 envelope step、一个 phase step、一个 line request、一个 DSP
-token 和一个 retire。
+同一拍中可能同时有 state response、envelope step、phase job、line request、line response、
+DSP issue、state update 和 retire。它们通过 tag 关联数据，通过 ready/valid 独立停顿。
+
+### 19.14 为什么总周期接近 voice 数乘 frame 数
+
+对所有 active voice 都 render 8 frames 的理想负载：
+
+```text
+useful DSP jobs = active_lanes * 8
+256 lanes -> 2048 jobs
+512 lanes -> 4096 jobs
+```
+
+各共享资源的有效工作量大致是：
+
+| 资源 | 256-lane 工作量 | 理想稳态能力 |
+| --- | ---: | ---: |
+| envelope walker | 2048 frame steps | 1 step/clock |
+| phase planner | 2048 frame steps | 1 step/clock |
+| memory request | 1024 lines | 1 request/clock |
+| DSP issue | 2048 tokens | 1 token/clock |
+| mix contribution | 2048 contributions | 1 contribution/clock |
+
+它们彼此重叠，所以不能把 `2048+2048+1024+2048+2048` 相加。理想下限由最忙的
+一拍一个资源决定，约为 2048 clocks，再加 block clear、初始 state/envelope/phase/
+memory/DSP fill、尾部 drain 和调度气泡。
+
+实测 filter-off：
+
+```text
+256: 2149 = 2048 useful jobs + 101 clocks overhead
+512: 4197 = 4096 useful jobs + 101 clocks overhead
+```
+
+filter-on 因尾部 ready context 减少、RAW 等待和调度交接增加一些 bubble：
+
+```text
+256: 2191 = 2048 + 143
+512: 4258 = 4096 + 162
+```
+
+这也是为什么当前架构比 2-slot 好：大部分 block 时间都由必要的 sample 数决定，而不再
+由 filter feedback latency 乘以 sample 数决定。
+
+### 19.15 如何从 SV 复现这套运行模拟
+
+生产吞吐仿真入口是 `sim/tb/tb_voice_major_throughput.sv`。运行：
+
+```bash
+make measure-voice-major-throughput
+make measure-voice-major-throughput-filtered
+make measure-voice-major-throughput-512
+make measure-voice-major-throughput-512-filtered
+```
+
+输出字段解释：
+
+| 字段 | 含义 |
+| --- | --- |
+| `cycles` | block render 完成耗时 |
+| `deadline` | 100 MHz/48 kHz/8-frame 的 16666-clock 上限 |
+| `max_outstanding` | controller 同时 dispatch、尚未写回的 voice 峰值 |
+| `frontend_dsp_overlap` | `(plan_found || memory_active)` 与任一 DSP stage/retire 同时有效的拍数 |
+| `line_requests` | accepted 8-word line request 数 |
+| `dsp_issues` | accepted sample token 数 |
+| `max_issue_run` | 最长连续每拍 issue 区间 |
+| `forwards` | state update 与同 work ID issue 同周期次数 |
+| `contributions` | accepted mix contribution 数 |
+
+TB 还在层次路径上检查：
+
+- unresolved hazard 时不得 issue；
+- forwarding token 必须拿到 update bus 的 z1/z2；
+- 每条 voice 的四 line segment 地址连续；
+- issue 数等于 retire/contribution 数；
+- filtered 256/512 至少出现 64 拍连续 `II=1`；
+- block 必须在 deadline 前完成。
+
+如果需要生成 waveform，应只把它作为定位工具；PASS/FAIL 仍必须来自这些 self-checking
+条件。增加 waveform 后，建议按本节编号给观察信号分组：C、E、P、M、I、D0-D7、R、B，
+并同时显示 `work_id`、`frame_index`、valid/ready 和 slot state。
 
 ## 20. 当前测量和含义
 
