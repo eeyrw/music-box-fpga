@@ -131,6 +131,9 @@ module tb_ordered_line_cache;
     return_line(16'h3000);
     expect_response(32'd32, 2'd0, 16'h3000);
     request_line(32'd16, 2'd0);
+    for (int wait_cycle = 0;
+         (wait_cycle < 4) && (memory_request_count != 4); wait_cycle++)
+      @(posedge clk);
     if (memory_request_count != 4)
       $fatal(1, "two-way conflict did not evict the LRU line");
     return_line(16'h2000);

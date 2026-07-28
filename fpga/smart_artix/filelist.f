@@ -21,3 +21,4 @@ rtl/smart_artix_platform_regs.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
 rtl/smart_artix_sd_native_asset_loader.sv
+rtl/smart_artix_voice_major_synth_top.sv

@@ -13,7 +13,7 @@ audio/global_audio_effects_chain.sv
 audio/lookahead_compressor.sv
 audio/output_sample_fifo.sv
 audio/render_credit_scheduler.sv
-memory/ordered_line_cache.sv
+memory/voice_sample_window.sv
 voice/mono_phase_frame.sv
 voice/block_interleaved_envelope_frontend.sv
 voice/block_mix_buffer.sv

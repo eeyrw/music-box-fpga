@@ -218,7 +218,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-ddr3-model
+test: test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-sample-window test-ddr3-model
 
 test-line-cache:
 	mkdir -p $(BUILD_DIR)
@@ -228,6 +228,15 @@ test-line-cache:
 		rtl/pkg/synth_pkg.sv rtl/memory/ordered_line_cache.sv \
 		sim/tb/tb_ordered_line_cache.sv
 	$(BUILD_DIR)/ordered_line_cache_obj_dir/Vtb_ordered_line_cache
+
+test-sample-window:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_sample_window_obj_dir \
+		--top-module tb_voice_sample_window \
+		rtl/pkg/synth_pkg.sv rtl/memory/voice_sample_window.sv \
+		sim/tb/tb_voice_sample_window.sv
+	$(BUILD_DIR)/voice_sample_window_obj_dir/Vtb_voice_sample_window
 
 test-ddr3-model:
 	mkdir -p $(BUILD_DIR)/ddr3_test_image

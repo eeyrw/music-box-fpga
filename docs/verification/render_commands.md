@@ -17,7 +17,7 @@ make render-reference \
 
 ## Production RTL With DDR3 Timing
 
-当前 production mono-lane renderer、line cache 和 controller-level DDR3 模型的
+当前 production mono-lane renderer、per-voice sample window 和 controller-level DDR3 模型的
 长音频入口：
 
 ```bash
@@ -31,9 +31,9 @@ make render-rtl-ddr3 \
 C++ 在运行时解析 SF2/MIDI、执行 MCU policy、voice allocation 和 WAV 写出；SV 负责
 envelope、phase、cache、DSP、mix 和 DDR3 周期。输出默认写到
 `build/render_rtl_ddr3/out.wav`。`RENDER_RTL_OUT_DIR` 可指定独立输出目录；
-`RENDER_RTL_CACHE_SET_COUNT` 和 `RENDER_RTL_MSHR_DEPTH` 可用于 cache sweep。
+当前 window 固定为 32 samples/voice；遗留的 cache-set/MSHR 构建参数不再改变该结构。
 
-该流程检查非零输出、DDR request/response 计数、deadline miss，并报告 cache、MSHR、
+该流程检查非零输出、DDR request/response 计数、deadline miss，并报告 window hit/refill/fallback、
 bank/row 和 refresh 统计。它不是 MIG pin model，也不替代 Vivado 时序和板级验证。
 
 旧 `render-rtl-core`、`render-memory`、`render-board-loader` 和

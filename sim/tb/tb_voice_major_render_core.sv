@@ -46,23 +46,26 @@ module tb_voice_major_render_core;
 
   task automatic service_line(input logic [ADDR_WIDTH-1:0] base_addr);
     integer word_index;
+    logic [ADDR_WIDTH-1:0] line_addr;
     begin
-      do @(posedge clk); while (!line_req_valid);
-      if (line_req.aligned_line_addr != base_addr)
-        $fatal(1, "replacement core line request mismatch");
-      @(negedge clk);
-      line_req_ready = 1'b1;
-      @(posedge clk);
-      @(negedge clk);
-      line_req_ready = 1'b0;
-      line_rsp = '0;
-      for (word_index = 0; word_index < BLOCK_LINE_WORDS;
-           word_index = word_index + 1)
-        line_rsp.words[word_index] = 16'(base_addr + word_index);
-      line_rsp_valid = 1'b1;
-      do @(posedge clk); while (!line_rsp_ready);
-      @(negedge clk);
-      line_rsp_valid = 1'b0;
+      for (int line = 0; line < 4; line++) begin
+        line_addr = base_addr + ADDR_WIDTH'(line * BLOCK_LINE_WORDS);
+        while (!line_req_valid) @(negedge clk);
+        if (line_req.aligned_line_addr != line_addr)
+          $fatal(1, "replacement core line request mismatch");
+        line_req_ready = 1'b1;
+        @(posedge clk);
+        @(negedge clk);
+        line_req_ready = 1'b0;
+        line_rsp = '0;
+        for (word_index = 0; word_index < BLOCK_LINE_WORDS;
+             word_index = word_index + 1)
+          line_rsp.words[word_index] = 16'(line_addr + word_index);
+        line_rsp_valid = 1'b1;
+        do @(posedge clk); while (!line_rsp_ready);
+        @(negedge clk);
+        line_rsp_valid = 1'b0;
+      end
     end
   endtask
 

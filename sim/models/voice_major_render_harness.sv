@@ -95,9 +95,19 @@ module voice_major_render_harness #(
   output logic [63:0]                              cache_misses,
   output logic [63:0]                              cache_evictions,
   output logic [63:0]                              cache_miss_stall_cycles,
+  output logic [63:0]                              window_refills,
+  output logic [63:0]                              window_fallback_reads,
   output logic [31:0]                              configured_cache_sets,
   output logic [31:0]                              configured_cache_bytes,
-  output logic [15:0]                              active_voice_count
+  output logic [31:0]                              configured_window_words,
+  output logic [15:0]                              active_voice_count,
+
+  output logic                                     debug_plan_valid,
+  output logic [synth_pkg::VOICE_ID_WIDTH-1:0]     debug_plan_voice,
+  output logic                                     debug_plan_first,
+  output logic                                     debug_plan_last,
+  output logic [31:0]                              debug_plan_addr_0,
+  output logic [31:0]                              debug_plan_addr_1
 );
   import synth_pkg::*;
 
@@ -117,6 +127,34 @@ module voice_major_render_harness #(
   logic stale_params_write_internal;
   logic stale_dynamic_write;
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr_rsp_data;
+
+  // Simulation-only trace of the unfiltered sample-address stream. Registering
+  // it here makes each planner event visible for one complete core cycle.
+  always_ff @(posedge core_clk) begin
+    if (rst) begin
+      debug_plan_valid <= 1'b0;
+      debug_plan_voice <= '0;
+      debug_plan_first <= 1'b0;
+      debug_plan_last <= 1'b0;
+      debug_plan_addr_0 <= '0;
+      debug_plan_addr_1 <= '0;
+    end else begin
+      debug_plan_valid <= core.controller.engine.renderer.plan_store_job;
+      if (core.controller.engine.renderer.plan_store_job) begin
+        debug_plan_voice <= core.controller.engine.renderer.work_context_q[
+            core.controller.engine.renderer.plan_q.work_id].voice_index;
+        debug_plan_first <=
+            core.controller.engine.renderer.plan_q.job_count == '0;
+        debug_plan_last <= core.controller.engine.renderer.plan_step_finishes;
+        debug_plan_addr_0 <=
+            core.controller.engine.renderer.plan_q.region.base_addr +
+            32'(core.controller.engine.renderer.plan_frame_0);
+        debug_plan_addr_1 <=
+            core.controller.engine.renderer.plan_q.region.base_addr +
+            32'(core.controller.engine.renderer.plan_frame_1);
+      end
+    end
+  end
 
   always_comb begin
     install_state = '0;
@@ -180,9 +218,12 @@ module voice_major_render_harness #(
     cache_evictions = core.controller.engine.renderer.cache_stat_evictions;
     cache_miss_stall_cycles =
         core.controller.engine.renderer.cache_stat_miss_stall_cycles;
-    configured_cache_sets = 32'(CACHE_SET_COUNT);
-    configured_cache_bytes = 32'(CACHE_SET_COUNT * 2 * BLOCK_LINE_WORDS *
-                                 (PCM_WIDTH / 8));
+    window_refills = core.controller.engine.renderer.cache_stat_window_refills;
+    window_fallback_reads =
+        core.controller.engine.renderer.cache_stat_fallback_reads;
+    configured_cache_sets = '0;
+    configured_cache_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
+    configured_window_words = 32'd32;
     active_voice_count = 16'($countones(core.active_bitmap));
   end
 

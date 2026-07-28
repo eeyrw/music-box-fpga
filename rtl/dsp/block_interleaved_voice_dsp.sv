@@ -118,8 +118,11 @@ module block_interleaved_voice_dsp (
   stage4_t s4_q;
   stage5_t s5_q;
   stage6_t s6_q;
-  block_dsp_retire_t retire_q;
-  logic retire_valid_q;
+  block_dsp_retire_t retire_fifo_q [0:1];
+  block_dsp_retire_t retire_next;
+  logic [1:0] retire_count_q;
+  logic retire_push;
+  logic retire_pop;
   logic advance;
 
   logic signed [16:0] input_difference;
@@ -192,6 +195,10 @@ module block_interleaved_voice_dsp (
     end
   endfunction
 
+  assign retire_valid = retire_count_q != 0;
+  assign retire = retire_fifo_q[0];
+  assign retire_pop = retire_valid && retire_ready;
+
   always_comb begin
     input_difference = $signed(token.sample.sample_1) -
                        $signed(token.sample.sample_0);
@@ -226,46 +233,56 @@ module block_interleaved_voice_dsp (
     next_z2 = s4_q.voice_context.filter_enable ?
         saturate_filter_state(next_z2_raw) : s4_q.filter_z2;
 
-    advance = !retire_valid_q || retire_ready;
+    retire_next = '0;
+    retire_next.work_id = s6_q.work_id;
+    retire_next.last = s6_q.last;
+    retire_next.contribution.generation = s6_q.generation;
+    retire_next.contribution.voice_index = s6_q.voice_index;
+    retire_next.contribution.block_frame_index = s6_q.frame_index;
+    retire_next.contribution.contribution_l = finish_output_gain(
+        s6_q.gain_product_l, s6_q.envelope_level);
+    retire_next.contribution.contribution_r = finish_output_gain(
+        s6_q.gain_product_r, s6_q.envelope_level);
+    retire_next.filter_z1 = s6_q.filter_z1;
+    retire_next.filter_z2 = s6_q.filter_z2;
+
+    advance = retire_count_q != 2;
     token_ready = advance;
     state_update_valid = advance && valid_q[4];
     state_update.work_id = s4_q.work_id;
     state_update.filter_z1 = next_z1;
     state_update.filter_z2 = next_z2;
-    retire_valid = retire_valid_q;
-    retire = retire_q;
+    retire_push = advance && valid_q[6];
   end
 
   always_ff @(posedge clk) begin
     if (rst) begin
       valid_q <= '0;
-      s0_q <= '0;
-      s1_q <= '0;
-      s2_q <= '0;
-      s3_q <= '0;
-      s4_q <= '0;
-      s5_q <= '0;
-      s6_q <= '0;
-      retire_q <= '0;
-      retire_valid_q <= 1'b0;
-    end else if (advance) begin
-      retire_valid_q <= valid_q[6];
-      if (valid_q[6]) begin
-        retire_q.work_id <= s6_q.work_id;
-        retire_q.last <= s6_q.last;
-        retire_q.contribution.generation <= s6_q.generation;
-        retire_q.contribution.voice_index <= s6_q.voice_index;
-        retire_q.contribution.block_frame_index <= s6_q.frame_index;
-        retire_q.contribution.contribution_l <= finish_output_gain(
-            s6_q.gain_product_l, s6_q.envelope_level);
-        retire_q.contribution.contribution_r <= finish_output_gain(
-            s6_q.gain_product_r, s6_q.envelope_level);
-        retire_q.filter_z1 <= s6_q.filter_z1;
-        retire_q.filter_z2 <= s6_q.filter_z2;
-      end
+      retire_count_q <= '0;
+    end else begin
+      unique case ({retire_push, retire_pop})
+        2'b10: begin
+          if (retire_count_q == 0)
+            retire_fifo_q[0] <= retire_next;
+          else
+            retire_fifo_q[1] <= retire_next;
+          retire_count_q <= retire_count_q + 1'b1;
+        end
+        2'b01: begin
+          if (retire_count_q == 2)
+            retire_fifo_q[0] <= retire_fifo_q[1];
+          retire_count_q <= retire_count_q - 1'b1;
+        end
+        2'b11: begin
+          retire_fifo_q[0] <= retire_next;
+          retire_count_q <= retire_count_q;
+        end
+        default: retire_count_q <= retire_count_q;
+      endcase
 
-      valid_q[6:1] <= valid_q[5:0];
-      valid_q[0] <= token_valid && token_ready;
+      if (advance) begin
+        valid_q[6:1] <= valid_q[5:0];
+        valid_q[0] <= token_valid && token_ready;
 
       if (valid_q[5]) begin
         s6_q.work_id <= s5_q.work_id;
@@ -366,6 +383,7 @@ module block_interleaved_voice_dsp (
             $signed(input_difference) * $signed(input_fraction));
         s0_q.filter_z1 <= token.filter_z1;
         s0_q.filter_z2 <= token.filter_z2;
+      end
       end
     end
   end

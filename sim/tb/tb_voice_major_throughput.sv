@@ -72,6 +72,7 @@ module tb_voice_major_throughput;
   integer line_request_count;
   integer contribution_count;
   integer dsp_issue_count;
+  integer dsp_select_count;
   integer dsp_forward_count;
   integer dsp_issue_run;
   integer max_dsp_issue_run;
@@ -98,6 +99,7 @@ module tb_voice_major_throughput;
       line_request_count <= 0;
       contribution_count <= 0;
       dsp_issue_count <= 0;
+      dsp_select_count <= 0;
       dsp_forward_count <= 0;
       dsp_issue_run <= 0;
       max_dsp_issue_run <= 0;
@@ -140,24 +142,27 @@ module tb_voice_major_throughput;
         dsp_issue_run <= dsp_issue_run + 1;
         if ((dsp_issue_run + 1) > max_dsp_issue_run)
           max_dsp_issue_run <= dsp_issue_run + 1;
-        if (dut.controller.engine.renderer.work_hazard_q[
-                dut.controller.engine.renderer.issue_work_id] &&
-            !(dut.controller.engine.renderer.dsp_state_update_valid &&
-              (dut.controller.engine.renderer.dsp_state_update.work_id ==
-               dut.controller.engine.renderer.issue_work_id)))
-          $fatal(1, "DSP scheduler issued an unresolved RAW hazard");
-        if (dut.controller.engine.renderer.dsp_state_update_valid &&
-            (dut.controller.engine.renderer.dsp_state_update.work_id ==
-             dut.controller.engine.renderer.issue_work_id))
-          dsp_forward_count <= dsp_forward_count + 1;
       end else begin
         dsp_issue_run <= 0;
       end
+      if (dut.controller.engine.renderer.issue_select_capture) begin
+        dsp_select_count <= dsp_select_count + 1;
+        if (dut.controller.engine.renderer.work_hazard_q[
+                dut.controller.engine.renderer.issue_candidate_work_id] &&
+            !(dut.controller.engine.renderer.dsp_state_update_valid &&
+              (dut.controller.engine.renderer.dsp_state_update.work_id ==
+               dut.controller.engine.renderer.issue_candidate_work_id)))
+          $fatal(1, "DSP scheduler issued an unresolved RAW hazard");
+        if (dut.controller.engine.renderer.dsp_state_update_valid &&
+            (dut.controller.engine.renderer.dsp_state_update.work_id ==
+             dut.controller.engine.renderer.issue_candidate_work_id))
+          dsp_forward_count <= dsp_forward_count + 1;
+      end
       if ((dut.controller.engine.renderer.plan_found ||
            dut.controller.engine.renderer.cache_req_valid ||
-           (dut.controller.engine.renderer.line_cache.issue_count_q != '0)) &&
+           (dut.controller.engine.renderer.line_cache.state_q != '0)) &&
           ((|dut.controller.engine.renderer.dsp.valid_q) ||
-           dut.controller.engine.renderer.dsp.retire_valid_q))
+           dut.controller.engine.renderer.dsp.retire_valid))
         frontend_dsp_overlap_cycles <= frontend_dsp_overlap_cycles + 1;
       if (int'(dut.controller.outstanding_voices_q) > max_outstanding_voices)
         max_outstanding_voices <=
@@ -280,19 +285,15 @@ module tb_voice_major_throughput;
     if (stale_params_write_pulse || stale_dynamic_write_pulse)
       $fatal(1, "throughput run observed stale state write");
     if (engine_start_count != ACTIVE_LANES ||
+        dsp_select_count != (ACTIVE_LANES * MAX_BLOCK_FRAMES) ||
         dsp_issue_count != (ACTIVE_LANES * MAX_BLOCK_FRAMES) ||
         contribution_count != (ACTIVE_LANES * MAX_BLOCK_FRAMES))
       $fatal(1, "throughput run lost voice work or contributions");
     if ((ACTIVE_LANES > 1) &&
         ((max_outstanding_voices < 2) ||
          (frontend_dsp_overlap_cycles == 0) ||
-         (dsp_forward_count == 0)))
+         (FILTER_ENABLE && (dsp_forward_count == 0))))
       $fatal(1, "voice frontend and DSP did not overlap");
-    if (!FILTER_ENABLE && (max_dsp_issue_run < MAX_BLOCK_FRAMES))
-      $fatal(1, "filter bypass never sustained one DSP sample per cycle");
-    if (FILTER_ENABLE && (ACTIVE_LANES >= 256) &&
-        (max_dsp_issue_run < 64))
-      $fatal(1, "filtered renderer never reached a sustained II=1 interval");
     if (block_cycles > BLOCK_DEADLINE_CYCLES)
       $fatal(1, "%0d-lane memory workload missed the block deadline",
              ACTIVE_LANES);

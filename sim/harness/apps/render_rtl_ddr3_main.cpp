@@ -10,8 +10,10 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -35,6 +37,156 @@ int16_t saturate16(int32_t value) {
   return int16_t(std::clamp(value, int32_t(-32768), int32_t(32767)));
 }
 
+class WindowPrefetchAnalyzer {
+ public:
+  static constexpr std::array<uint32_t, 5> kWindowWords = {8, 16, 32, 64, 128};
+
+  void observe(uint16_t voice, bool first, bool last, uint32_t addr_0,
+               uint32_t addr_1) {
+    if (voice >= render::kNumVoices) return;
+    Block& block = blocks_.at(voice);
+    if (first) {
+      if (block.active) finish_block(voice);
+      block = {};
+      block.active = true;
+    }
+    if (!block.active) return;
+    block.addresses.push_back(addr_0);
+    block.addresses.push_back(addr_1);
+    if (last) finish_block(voice);
+  }
+
+  void finish() {
+    for (uint32_t voice = 0; voice < blocks_.size(); ++voice) {
+      if (blocks_[voice].active) finish_block(voice);
+    }
+  }
+
+  void print(std::ostream& out) const {
+    out << "WINDOW_PREFETCH_TRACE blocks=" << total_blocks_
+        << " endpoints=" << total_endpoints_
+        << " ideal_demand_lines=" << ideal_demand_lines_ << '\n';
+    out << std::fixed << std::setprecision(3);
+    for (size_t index = 0; index < kWindowWords.size(); ++index) {
+      const Result& result = results_[index];
+      const double endpoint_pct = total_endpoints_ == 0 ? 0.0 :
+          100.0 * double(result.block_endpoint_hits) / double(total_endpoints_);
+      const double block_pct = total_blocks_ == 0 ? 0.0 :
+          100.0 * double(result.block_full_hits) / double(total_blocks_);
+      // A RAMB36 configured as an 18-bit sample memory stores 2048 words.
+      const uint64_t sample_words = uint64_t(kWindowWords[index]) *
+                                    uint64_t(render::kNumVoices);
+      const uint64_t bram36 = (sample_words + 2047u) / 2048u;
+      out << "WINDOW_PREFETCH words=" << kWindowWords[index]
+          << " bram36=" << bram36
+          << " block_endpoint_coverage_pct=" << endpoint_pct
+          << " block_full_coverage_pct=" << block_pct
+          << " block_reload_lines=" << result.block_reload_lines
+          << " persistent_lines=" << result.persistent_lines
+          << " adaptive_lines=" << result.adaptive_lines << '\n';
+    }
+    out.unsetf(std::ios::floatfield);
+  }
+
+ private:
+  static constexpr uint32_t kLineWords = 8;
+
+  struct Block {
+    bool active = false;
+    std::vector<uint32_t> addresses;
+  };
+
+  struct Window {
+    bool valid = false;
+    uint32_t base = 0;
+  };
+
+  struct Result {
+    uint64_t block_endpoint_hits = 0;
+    uint64_t block_full_hits = 0;
+    uint64_t block_reload_lines = 0;
+    uint64_t persistent_lines = 0;
+    uint64_t adaptive_lines = 0;
+  };
+
+  static uint32_t align_line(uint32_t addr) {
+    return addr & ~(kLineWords - 1u);
+  }
+
+  static bool contains(uint32_t base, uint32_t words, uint32_t addr) {
+    return addr >= base && uint64_t(addr) < uint64_t(base) + words;
+  }
+
+  static uint64_t unique_lines(const std::vector<uint32_t>& addresses) {
+    std::set<uint32_t> lines;
+    for (uint32_t addr : addresses) lines.insert(align_line(addr));
+    return lines.size();
+  }
+
+  void finish_block(uint32_t voice) {
+    Block& block = blocks_.at(voice);
+    if (!block.active || block.addresses.empty()) {
+      block = {};
+      return;
+    }
+    ++total_blocks_;
+    total_endpoints_ += block.addresses.size();
+    ideal_demand_lines_ += unique_lines(block.addresses);
+
+    for (size_t index = 0; index < kWindowWords.size(); ++index) {
+      const uint32_t words = kWindowWords[index];
+      const uint64_t refill_lines = words / kLineWords;
+      Result& result = results_[index];
+
+      const uint32_t block_base = align_line(block.addresses.front());
+      std::vector<uint32_t> block_fallback;
+      bool block_full = true;
+      for (uint32_t addr : block.addresses) {
+        const bool hit = contains(block_base, words, addr);
+        result.block_endpoint_hits += hit;
+        block_full &= hit;
+        if (!hit) block_fallback.push_back(addr);
+      }
+      result.block_full_hits += block_full;
+      result.block_reload_lines += refill_lines + unique_lines(block_fallback);
+
+      Window& persistent = persistent_windows_[index][voice];
+      if (!persistent.valid ||
+          !contains(persistent.base, words, block.addresses.front())) {
+        persistent.valid = true;
+        persistent.base = block_base;
+        result.persistent_lines += refill_lines;
+      }
+      std::vector<uint32_t> persistent_fallback;
+      for (uint32_t addr : block.addresses) {
+        if (!contains(persistent.base, words, addr))
+          persistent_fallback.push_back(addr);
+      }
+      result.persistent_lines += unique_lines(persistent_fallback);
+
+      Window& adaptive = adaptive_windows_[index][voice];
+      for (uint32_t addr : block.addresses) {
+        if (!adaptive.valid || !contains(adaptive.base, words, addr)) {
+          adaptive.valid = true;
+          adaptive.base = align_line(addr);
+          result.adaptive_lines += refill_lines;
+        }
+      }
+    }
+    block = {};
+  }
+
+  std::array<Block, render::kNumVoices> blocks_{};
+  std::array<std::array<Window, render::kNumVoices>, kWindowWords.size()>
+      persistent_windows_{};
+  std::array<std::array<Window, render::kNumVoices>, kWindowWords.size()>
+      adaptive_windows_{};
+  std::array<Result, kWindowWords.size()> results_{};
+  uint64_t total_blocks_ = 0;
+  uint64_t total_endpoints_ = 0;
+  uint64_t ideal_demand_lines_ = 0;
+};
+
 class RtlDriver {
  public:
   RtlDriver(VerilatedContext& context, int sample_rate)
@@ -50,7 +202,7 @@ class RtlDriver {
 
   void install(int voice, uint16_t generation, const render::Region& region,
                uint32_t phase_inc, bool active) {
-    dut_.install_voice = uint8_t(voice);
+    dut_.install_voice = uint16_t(voice);
     dut_.install_base_addr = region.base_addr;
     dut_.install_length = region.length;
     dut_.install_loop_start = region.loop_start;
@@ -74,7 +226,7 @@ class RtlDriver {
   bool update(int voice, uint16_t generation, const render::Region& region,
               uint32_t phase_inc, int gain_l, int gain_r, bool released,
               const render::FilterConfig& filter, uint32_t release_step) {
-    dut_.params_voice = uint8_t(voice);
+    dut_.params_voice = uint16_t(voice);
     dut_.params_generation = generation;
     dut_.params_phase_inc = phase_inc;
     dut_.params_gain_l = uint16_t(gain_l);
@@ -106,6 +258,7 @@ class RtlDriver {
                                                         uint32_t frame_count) {
     dut_.block_start_frame = start_frame;
     dut_.block_frame_count = uint8_t(frame_count);
+    const uint16_t block_active_voices = active_voice_count();
     const uint64_t start_cycle = cycles_;
     pulse_until_ready(dut_.block_req_valid, dut_.block_req_ready, "block request");
     wait_valid(dut_.block_complete_valid, "block completion");
@@ -139,6 +292,13 @@ class RtlDriver {
       pulse_until_ready(dut_.block_read_req_valid, dut_.block_read_req_ready,
                         "block read request");
       wait_valid(dut_.block_read_rsp_valid, "block read response");
+      if (!first_output_frame_seen_ && block_active_voices != 0) {
+        first_output_frame_seen_ = true;
+        first_output_frame_core_cycle_ = cycles_;
+        first_output_frame_latency_cycles_ = cycles_ - start_cycle;
+        first_output_frame_index_ = start_frame + index;
+        first_output_active_voices_ = block_active_voices;
+      }
       samples.emplace_back(saturate16(signed24(dut_.block_read_sample_l)),
                            saturate16(signed24(dut_.block_read_sample_r)));
       dut_.block_read_rsp_ready = 1;
@@ -161,6 +321,18 @@ class RtlDriver {
     return max_deadline_utilization_ppm_;
   }
   uint64_t deadline_misses() const { return deadline_misses_; }
+  uint64_t first_output_frame_core_cycle() const {
+    return first_output_frame_core_cycle_;
+  }
+  uint64_t first_output_frame_latency_cycles() const {
+    return first_output_frame_latency_cycles_;
+  }
+  uint32_t first_output_frame_index() const {
+    return first_output_frame_index_;
+  }
+  uint16_t first_output_active_voices() const {
+    return first_output_active_voices_;
+  }
   uint64_t ddr_accepted() const { return dut_.ddr_accepted; }
   uint64_t ddr_returned() const { return dut_.ddr_returned; }
   uint64_t ddr_row_hits() const { return dut_.ddr_row_hits; }
@@ -176,12 +348,24 @@ class RtlDriver {
   uint64_t cache_miss_stall_cycles() const {
     return dut_.cache_miss_stall_cycles;
   }
+  uint64_t window_refills() const { return dut_.window_refills; }
+  uint64_t window_fallback_reads() const {
+    return dut_.window_fallback_reads;
+  }
   uint32_t configured_cache_sets() const { return dut_.configured_cache_sets; }
   uint32_t configured_cache_bytes() const {
     return dut_.configured_cache_bytes;
   }
+  uint32_t configured_window_words() const {
+    return dut_.configured_window_words;
+  }
   uint64_t stale_parameter_updates() const { return stale_parameter_updates_; }
   uint16_t active_voice_count() const { return dut_.active_voice_count; }
+
+  void print_window_prefetch_analysis(std::ostream& out) {
+    window_analyzer_.finish();
+    window_analyzer_.print(out);
+  }
 
  private:
   void clear_inputs() {
@@ -218,6 +402,13 @@ class RtlDriver {
       if (ddr_cycle == 2) dut_.core_clk = 1;
       dut_.ddr_clk = 1;
       dut_.eval();
+      if (ddr_cycle == 2 && dut_.debug_plan_valid) {
+        window_analyzer_.observe(dut_.debug_plan_voice,
+                                 dut_.debug_plan_first,
+                                 dut_.debug_plan_last,
+                                 dut_.debug_plan_addr_0,
+                                 dut_.debug_plan_addr_1);
+      }
       context_.timeInc(1);
     }
     dut_.ddr_clk = 0;
@@ -260,7 +451,13 @@ class RtlDriver {
   uint64_t max_render_cycles_ = 0;
   uint64_t max_deadline_utilization_ppm_ = 0;
   uint64_t deadline_misses_ = 0;
+  bool first_output_frame_seen_ = false;
+  uint64_t first_output_frame_core_cycle_ = 0;
+  uint64_t first_output_frame_latency_cycles_ = 0;
+  uint32_t first_output_frame_index_ = 0;
+  uint16_t first_output_active_voices_ = 0;
   uint64_t stale_parameter_updates_ = 0;
+  WindowPrefetchAnalyzer window_analyzer_;
 };
 
 class RtlVoiceSink : public render::VoiceCommandSink {
@@ -390,9 +587,12 @@ int main(int argc, char** argv) {
 
     uint32_t frame = 0;
     uint64_t nonzero_words = 0;
+    uint16_t peak_active_voices = 0;
     const uint32_t end_frame = uint32_t(inputs.sample_count);
     while (frame < end_frame && !render::interrupt_requested()) {
       timeline.advance_to(int(frame));
+      peak_active_voices = std::max(peak_active_voices,
+                                   driver.active_voice_count());
       const uint32_t boundary = next_boundary(frame, end_frame,
                                               inputs.control_tick_samples,
                                               inputs.events);
@@ -412,6 +612,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("DDR request/response accounting mismatch");
     }
 
+    driver.print_window_prefetch_analysis(std::cout);
     std::cout << "PASS: RTL DDR3 render frames=" << frame
               << " regions=" << regions.size()
               << " nonzero_words=" << nonzero_words
@@ -423,8 +624,19 @@ int main(int argc, char** argv) {
               << " max_deadline_utilization_ppm="
               << driver.max_deadline_utilization_ppm()
               << " deadline_misses=" << driver.deadline_misses()
+              << " first_output_frame_index="
+              << driver.first_output_frame_index()
+              << " first_output_active_voices="
+              << driver.first_output_active_voices()
+              << " first_output_frame_core_cycle="
+              << driver.first_output_frame_core_cycle()
+              << " first_output_frame_latency_cycles="
+              << driver.first_output_frame_latency_cycles()
+              << " first_output_frame_latency_ns="
+              << driver.first_output_frame_latency_cycles() * 10u
               << " cache_sets=" << driver.configured_cache_sets()
               << " cache_bytes=" << driver.configured_cache_bytes()
+              << " window_words=" << driver.configured_window_words()
               << " cache_requests=" << driver.cache_requests()
               << " cache_hits=" << driver.cache_hits()
               << " cache_mshr_merges=" << driver.cache_mshr_merges()
@@ -432,8 +644,12 @@ int main(int argc, char** argv) {
               << " cache_evictions=" << driver.cache_evictions()
               << " cache_miss_stall_cycles="
               << driver.cache_miss_stall_cycles()
+              << " window_refills=" << driver.window_refills()
+              << " window_fallback_reads="
+              << driver.window_fallback_reads()
               << " stale_parameter_updates="
               << driver.stale_parameter_updates()
+              << " peak_active_voices=" << peak_active_voices
               << " active_voices_at_end=" << driver.active_voice_count()
               << " ddr_reads=" << driver.ddr_accepted()
               << " row_hits=" << driver.ddr_row_hits()

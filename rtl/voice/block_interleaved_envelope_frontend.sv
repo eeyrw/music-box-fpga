@@ -30,7 +30,26 @@ module block_interleaved_envelope_frontend (
   localparam logic [1:0] LEVEL_DIRECT = 2'd1;
   localparam logic [1:0] LEVEL_CB = 2'd2;
 
-  typedef enum logic [1:0] {SLOT_FREE, SLOT_WALK, SLOT_DRAIN, SLOT_READY} slot_state_t;
+  typedef enum logic [2:0] {
+    SLOT_FREE,
+    SLOT_WALK,
+    SLOT_ADVANCE_CALC,
+    SLOT_ADVANCE_APPLY,
+    SLOT_RELEASE_VALUE,
+    SLOT_RELEASE_APPLY,
+    SLOT_DRAIN,
+    SLOT_READY
+  } slot_state_t;
+  typedef struct packed {
+    logic valid;
+    logic [SLOT_ID_WIDTH-1:0] slot;
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
+    logic last;
+    logic released;
+    volume_env_params_t env_params;
+    volume_env_state_t state;
+    logic active;
+  } walk_stage_t;
   typedef struct packed {
     logic valid;
     logic [SLOT_ID_WIDTH-1:0] slot;
@@ -70,6 +89,24 @@ module block_interleaved_envelope_frontend (
     logic [4:0] octave;
     logic [23:0] mantissa;
   } level_stage3_t;
+  typedef struct packed {
+    logic valid;
+    logic [SLOT_ID_WIDTH-1:0] slot;
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
+    logic last;
+    volume_env_state_t state;
+    logic active;
+    logic render_frame;
+    logic phase_advance_frame;
+  } advance_stage_t;
+  typedef struct packed {
+    logic valid;
+    logic [SLOT_ID_WIDTH-1:0] slot;
+    logic level_positive;
+    logic level_full;
+    logic [4:0] octave;
+    logic [ENV_Q15_TO_CB_MANTISSA_BITS-1:0] mantissa_index;
+  } release_stage_t;
 
   slot_state_t slot_state_q [0:SLOT_COUNT-1];
   logic [VOICE_ID_WIDTH-1:0] voice_index_q [0:SLOT_COUNT-1];
@@ -80,6 +117,7 @@ module block_interleaved_envelope_frontend (
   voice_dynamic_state_t dynamic_q [0:SLOT_COUNT-1];
   logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index_q [0:SLOT_COUNT-1];
   block_envelope_result_t envelope_q [0:SLOT_COUNT-1];
+  logic [31:0] release_attenuation_q [0:SLOT_COUNT-1];
 
   logic [SLOT_ID_WIDTH-1:0] walk_rr_q;
   logic walk_found;
@@ -105,6 +143,9 @@ module block_interleaved_envelope_frontend (
   level_stage1_t level_s1_q;
   level_stage2_t level_s2_q;
   level_stage3_t level_s3_q;
+  walk_stage_t walk_q;
+  advance_stage_t advance_q;
+  release_stage_t release_q;
   logic [4:0] octave_next;
   logic [31:0] residual;
   logic [31:0] rounded_residual;
@@ -117,6 +158,8 @@ module block_interleaved_envelope_frontend (
   logic release_level_full;
   logic [32:0] release_approximation;
   logic [31:0] release_start_attenuation;
+  logic release_attack_start;
+  logic walk_process_frame;
 
   function automatic volume_env_stage_t stage_after_attack(
     input logic [23:0] hold_samples,
@@ -137,7 +180,8 @@ module block_interleaved_envelope_frontend (
     for (int offset = 0; offset < SLOT_COUNT; offset++) begin
       logic [SLOT_ID_WIDTH-1:0] candidate;
       candidate = walk_rr_q + SLOT_ID_WIDTH'(offset);
-      if (!walk_found && (slot_state_q[candidate] == SLOT_WALK)) begin
+      if (!walk_found && ((slot_state_q[candidate] == SLOT_WALK) ||
+                          (slot_state_q[candidate] == SLOT_RELEASE_APPLY))) begin
         walk_found = 1'b1;
         walk_slot = candidate;
       end
@@ -166,89 +210,89 @@ module block_interleaved_envelope_frontend (
   assign start_fire = start_valid && start_ready;
 
   always_comb begin
-    advanced_state = dynamic_q[walk_slot].env_state;
-    advanced_active = dynamic_q[walk_slot].active;
-    attack_sum = {1'b0, dynamic_q[walk_slot].env_state.attack_level_q0_32} +
-                 {1'b0, env_params_q[walk_slot].attack_step_q0_32};
-    cb_sum = {1'b0, dynamic_q[walk_slot].env_state.attenuation_cb_q12_20};
+    advanced_state = walk_q.state;
+    advanced_active = walk_q.active;
+    attack_sum = {1'b0, walk_q.state.attack_level_q0_32} +
+                 {1'b0, walk_q.env_params.attack_step_q0_32};
+    cb_sum = {1'b0, walk_q.state.attenuation_cb_q12_20};
 
     release_leading_zeros = '0;
     release_level_positive =
-        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] != '0;
+        walk_q.state.attack_level_q0_32[31:17] != '0;
     release_level_full =
-        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] >= 15'h7fff;
+        walk_q.state.attack_level_q0_32[31:17] >= 15'h7fff;
     begin
       logic found;
       found = 1'b0;
       for (int bit_index = 14; bit_index >= 0; bit_index--) begin
         if (!found &&
-            dynamic_q[walk_slot].env_state.attack_level_q0_32[17 + bit_index]) begin
+            walk_q.state.attack_level_q0_32[17 + bit_index]) begin
           release_leading_zeros = 4'(14 - bit_index);
           found = 1'b1;
         end
       end
     end
     release_normalized =
-        dynamic_q[walk_slot].env_state.attack_level_q0_32[31:17] <<
+        walk_q.state.attack_level_q0_32[31:17] <<
         release_leading_zeros;
     release_mantissa_index = ENV_Q15_TO_CB_MANTISSA_BITS'(
         release_normalized >> (14 - ENV_Q15_TO_CB_MANTISSA_BITS));
     release_approximation =
-        {1'b0, ENV_CB_OCTAVE_Q12_20_LUT[5'(release_leading_zeros)]} +
-        {1'b0, ENV_Q15_TO_CB_MANTISSA_LUT[release_mantissa_index]};
+        {1'b0, ENV_CB_OCTAVE_Q12_20_LUT[release_q.octave]} +
+        {1'b0,
+         ENV_Q15_TO_CB_MANTISSA_LUT[release_q.mantissa_index]};
     release_start_attenuation = ENV_CB_SILENCE_Q12_20;
-    if (release_level_full)
+    if (release_q.level_full)
       release_start_attenuation = '0;
-    else if (release_level_positive &&
+    else if (release_q.level_positive &&
              (release_approximation < {1'b0, ENV_CB_SILENCE_Q12_20}))
       release_start_attenuation = release_approximation[31:0];
 
-    if (dynamic_q[walk_slot].active) begin
-      if (params_q[walk_slot].released &&
-          (dynamic_q[walk_slot].env_state.stage != ENV_RELEASE)) begin
+    if (walk_q.active) begin
+      if (walk_q.released &&
+          (walk_q.state.stage != ENV_RELEASE) &&
+          (walk_q.state.stage != ENV_ATTACK)) begin
         advanced_state.stage = ENV_RELEASE;
         advanced_state.elapsed = '0;
-        unique case (dynamic_q[walk_slot].env_state.stage)
-          ENV_ATTACK:
-            advanced_state.attenuation_cb_q12_20 = release_start_attenuation;
+        unique case (walk_q.state.stage)
           ENV_HOLD:
             advanced_state.attenuation_cb_q12_20 = '0;
           ENV_DECAY, ENV_SUSTAIN:
             advanced_state.attenuation_cb_q12_20 =
-                dynamic_q[walk_slot].env_state.attenuation_cb_q12_20;
+                walk_q.state.attenuation_cb_q12_20;
           default:
             advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
         endcase
         cb_sum =
             {1'b0, advanced_state.attenuation_cb_q12_20} +
-            {1'b0, env_params_q[walk_slot].release_step_cb_q12_20};
-        if ((env_params_q[walk_slot].release_step_cb_q12_20 == '0) ||
+            {1'b0, walk_q.env_params.release_step_cb_q12_20};
+        if ((walk_q.env_params.release_step_cb_q12_20 == '0) ||
             cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
           advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
           advanced_active = 1'b0;
         end else begin
           advanced_state.attenuation_cb_q12_20 = cb_sum[31:0];
         end
-      end else unique case (dynamic_q[walk_slot].env_state.stage)
+      end else unique case (walk_q.state.stage)
         ENV_DELAY: begin
-          if ((dynamic_q[walk_slot].env_state.elapsed + 1'b1) >=
-              env_params_q[walk_slot].delay_samples) begin
+          if ((walk_q.state.elapsed + 1'b1) >=
+              walk_q.env_params.delay_samples) begin
             advanced_state.elapsed = '0;
-            if (env_params_q[walk_slot].attack_step_q0_32 == '0) begin
+            if (walk_q.env_params.attack_step_q0_32 == '0) begin
               advanced_state.attack_level_q0_32 = 32'hffff_ffff;
               advanced_state.stage = stage_after_attack(
-                  env_params_q[walk_slot].hold_samples,
-                  env_params_q[walk_slot].sustain_cb_q12_20,
-                  env_params_q[walk_slot].decay_step_cb_q12_20);
+                  walk_q.env_params.hold_samples,
+                  walk_q.env_params.sustain_cb_q12_20,
+                  walk_q.env_params.decay_step_cb_q12_20);
               if (advanced_state.stage == ENV_SUSTAIN)
                 advanced_state.attenuation_cb_q12_20 =
-                    env_params_q[walk_slot].sustain_cb_q12_20;
+                    walk_q.env_params.sustain_cb_q12_20;
             end else begin
               advanced_state.stage = ENV_ATTACK;
             end
           end else begin
             advanced_state.elapsed =
-                dynamic_q[walk_slot].env_state.elapsed + 1'b1;
+                walk_q.state.elapsed + 1'b1;
           end
         end
         ENV_ATTACK: begin
@@ -256,59 +300,59 @@ module block_interleaved_envelope_frontend (
             advanced_state.attack_level_q0_32 = 32'hffff_ffff;
             advanced_state.elapsed = '0;
             advanced_state.stage = stage_after_attack(
-                env_params_q[walk_slot].hold_samples,
-                env_params_q[walk_slot].sustain_cb_q12_20,
-                env_params_q[walk_slot].decay_step_cb_q12_20);
+                walk_q.env_params.hold_samples,
+                walk_q.env_params.sustain_cb_q12_20,
+                walk_q.env_params.decay_step_cb_q12_20);
             if (advanced_state.stage == ENV_SUSTAIN)
               advanced_state.attenuation_cb_q12_20 =
-                  env_params_q[walk_slot].sustain_cb_q12_20;
+                  walk_q.env_params.sustain_cb_q12_20;
           end else begin
             advanced_state.attack_level_q0_32 = attack_sum[31:0];
           end
         end
         ENV_HOLD: begin
-          if ((dynamic_q[walk_slot].env_state.elapsed + 1'b1) >=
-              env_params_q[walk_slot].hold_samples) begin
+          if ((walk_q.state.elapsed + 1'b1) >=
+              walk_q.env_params.hold_samples) begin
             advanced_state.elapsed = '0;
-            if ((env_params_q[walk_slot].sustain_cb_q12_20 != '0) &&
-                (env_params_q[walk_slot].decay_step_cb_q12_20 != '0))
+            if ((walk_q.env_params.sustain_cb_q12_20 != '0) &&
+                (walk_q.env_params.decay_step_cb_q12_20 != '0))
               advanced_state.stage = ENV_DECAY;
             else begin
               advanced_state.stage = ENV_SUSTAIN;
               advanced_state.attenuation_cb_q12_20 =
-                  env_params_q[walk_slot].sustain_cb_q12_20;
+                  walk_q.env_params.sustain_cb_q12_20;
             end
           end else begin
             advanced_state.elapsed =
-                dynamic_q[walk_slot].env_state.elapsed + 1'b1;
+                walk_q.state.elapsed + 1'b1;
           end
         end
         ENV_DECAY: begin
-          if (dynamic_q[walk_slot].env_state.attenuation_cb_q12_20 <
-              env_params_q[walk_slot].sustain_cb_q12_20) begin
+          if (walk_q.state.attenuation_cb_q12_20 <
+              walk_q.env_params.sustain_cb_q12_20) begin
             cb_sum =
-                {1'b0, dynamic_q[walk_slot].env_state.attenuation_cb_q12_20} +
-                {1'b0, env_params_q[walk_slot].decay_step_cb_q12_20};
+                {1'b0, walk_q.state.attenuation_cb_q12_20} +
+                {1'b0, walk_q.env_params.decay_step_cb_q12_20};
             if (cb_sum[32] ||
-                (cb_sum[31:0] >= env_params_q[walk_slot].sustain_cb_q12_20)) begin
+                (cb_sum[31:0] >= walk_q.env_params.sustain_cb_q12_20)) begin
               advanced_state.attenuation_cb_q12_20 =
-                  env_params_q[walk_slot].sustain_cb_q12_20;
+                  walk_q.env_params.sustain_cb_q12_20;
               advanced_state.stage = ENV_SUSTAIN;
             end else begin
               advanced_state.attenuation_cb_q12_20 = cb_sum[31:0];
             end
-          end else if (dynamic_q[walk_slot].env_state.attenuation_cb_q12_20 >
-                       env_params_q[walk_slot].sustain_cb_q12_20) begin
-            if ((dynamic_q[walk_slot].env_state.attenuation_cb_q12_20 -
-                 env_params_q[walk_slot].sustain_cb_q12_20) <=
-                env_params_q[walk_slot].decay_step_cb_q12_20) begin
+          end else if (walk_q.state.attenuation_cb_q12_20 >
+                       walk_q.env_params.sustain_cb_q12_20) begin
+            if ((walk_q.state.attenuation_cb_q12_20 -
+                 walk_q.env_params.sustain_cb_q12_20) <=
+                walk_q.env_params.decay_step_cb_q12_20) begin
               advanced_state.attenuation_cb_q12_20 =
-                  env_params_q[walk_slot].sustain_cb_q12_20;
+                  walk_q.env_params.sustain_cb_q12_20;
               advanced_state.stage = ENV_SUSTAIN;
             end else begin
               advanced_state.attenuation_cb_q12_20 =
-                  dynamic_q[walk_slot].env_state.attenuation_cb_q12_20 -
-                  env_params_q[walk_slot].decay_step_cb_q12_20;
+                  walk_q.state.attenuation_cb_q12_20 -
+                  walk_q.env_params.decay_step_cb_q12_20;
             end
           end else begin
             advanced_state.stage = ENV_SUSTAIN;
@@ -316,12 +360,12 @@ module block_interleaved_envelope_frontend (
         end
         ENV_SUSTAIN:
           advanced_state.attenuation_cb_q12_20 =
-              env_params_q[walk_slot].sustain_cb_q12_20;
+              walk_q.env_params.sustain_cb_q12_20;
         ENV_RELEASE: begin
           cb_sum =
-              {1'b0, dynamic_q[walk_slot].env_state.attenuation_cb_q12_20} +
-              {1'b0, env_params_q[walk_slot].release_step_cb_q12_20};
-          if ((env_params_q[walk_slot].release_step_cb_q12_20 == '0) ||
+              {1'b0, walk_q.state.attenuation_cb_q12_20} +
+              {1'b0, walk_q.env_params.release_step_cb_q12_20};
+          if ((walk_q.env_params.release_step_cb_q12_20 == '0) ||
               cb_sum[32] || (cb_sum[31:0] >= ENV_CB_SILENCE_Q12_20)) begin
             advanced_state.attenuation_cb_q12_20 = ENV_CB_SILENCE_Q12_20;
             advanced_active = 1'b0;
@@ -333,19 +377,23 @@ module block_interleaved_envelope_frontend (
       endcase
     end
 
+    release_attack_start = walk_q.valid && walk_q.active &&
+        walk_q.released && (walk_q.state.stage == ENV_ATTACK);
+    walk_process_frame = walk_q.valid && !release_attack_start;
+
     render_frame = advanced_active && (advanced_state.stage != ENV_DELAY);
     phase_advance_frame = advanced_active;
     next_level_kind = LEVEL_ZERO;
     next_direct_level = '0;
-    if (advanced_active && (advanced_state.stage == ENV_ATTACK)) begin
+    if (advance_q.active && (advance_q.state.stage == ENV_ATTACK)) begin
       next_level_kind = LEVEL_DIRECT;
       next_direct_level = $signed(
-          {1'b0, advanced_state.attack_level_q0_32[31:17]});
-    end else if (advanced_active && (advanced_state.stage == ENV_HOLD)) begin
+          {1'b0, advance_q.state.attack_level_q0_32[31:17]});
+    end else if (advance_q.active && (advance_q.state.stage == ENV_HOLD)) begin
       next_level_kind = LEVEL_DIRECT;
       next_direct_level = 16'sh7fff;
-    end else if (advanced_active && (advanced_state.stage != ENV_DELAY) &&
-                 (advanced_state.attenuation_cb_q12_20 <
+    end else if (advance_q.active && (advance_q.state.stage != ENV_DELAY) &&
+                 (advance_q.state.attenuation_cb_q12_20 <
                   ENV_CB_SILENCE_Q12_20)) begin
       next_level_kind = LEVEL_CB;
     end
@@ -394,46 +442,94 @@ module block_interleaved_envelope_frontend (
     if (rst) begin
       walk_rr_q <= '0;
       result_rr_q <= '0;
-      level_s0_q <= '0;
-      level_s1_q <= '0;
-      level_s2_q <= '0;
-      level_s3_q <= '0;
+      level_s0_q.valid <= 1'b0;
+      level_s1_q.valid <= 1'b0;
+      level_s2_q.valid <= 1'b0;
+      level_s3_q.valid <= 1'b0;
+      walk_q.valid <= 1'b0;
+      advance_q.valid <= 1'b0;
+      release_q.valid <= 1'b0;
       for (int slot = 0; slot < SLOT_COUNT; slot++) begin
         slot_state_q[slot] <= SLOT_FREE;
-        voice_index_q[slot] <= '0;
-        frame_count_q[slot] <= '0;
-        region_q[slot] <= '0;
-        params_q[slot] <= '0;
-        env_params_q[slot] <= '0;
-        dynamic_q[slot] <= '0;
-        frame_index_q[slot] <= '0;
-        envelope_q[slot] <= '0;
       end
     end else begin
-      level_s0_q.valid <= walk_found;
+      walk_q.valid <= walk_found &&
+          (slot_state_q[walk_slot] == SLOT_WALK);
+      advance_q.valid <= walk_process_frame;
+      release_q.valid <= release_attack_start;
+      level_s0_q.valid <= advance_q.valid;
       if (walk_found) begin
-        level_s0_q.slot <= walk_slot;
-        level_s0_q.frame_index <= frame_index_q[walk_slot];
-        level_s0_q.last <=
-            (BLOCK_FRAME_COUNT_WIDTH'(frame_index_q[walk_slot]) + 1'b1) >=
-            frame_count_q[walk_slot];
+        walk_rr_q <= walk_slot + 1'b1;
+        unique case (slot_state_q[walk_slot])
+          SLOT_RELEASE_APPLY: begin
+            dynamic_q[walk_slot].env_state.stage <= ENV_RELEASE;
+            dynamic_q[walk_slot].env_state.elapsed <= '0;
+            dynamic_q[walk_slot].env_state.attenuation_cb_q12_20 <=
+                release_attenuation_q[walk_slot];
+            slot_state_q[walk_slot] <= SLOT_WALK;
+          end
+          default: begin
+            walk_q.slot <= walk_slot;
+            walk_q.frame_index <= frame_index_q[walk_slot];
+            walk_q.last <=
+                (BLOCK_FRAME_COUNT_WIDTH'(frame_index_q[walk_slot]) + 1'b1) >=
+                frame_count_q[walk_slot];
+            walk_q.released <= params_q[walk_slot].released;
+            walk_q.env_params <= env_params_q[walk_slot];
+            walk_q.state <= dynamic_q[walk_slot].env_state;
+            walk_q.active <= dynamic_q[walk_slot].active;
+            slot_state_q[walk_slot] <= SLOT_ADVANCE_CALC;
+          end
+        endcase
+      end
+
+      if (walk_q.valid) begin
+        if (release_attack_start) begin
+          release_q.slot <= walk_q.slot;
+          release_q.level_positive <= release_level_positive;
+          release_q.level_full <= release_level_full;
+          release_q.octave <= 5'(release_leading_zeros);
+          release_q.mantissa_index <= release_mantissa_index;
+          slot_state_q[walk_q.slot] <= SLOT_RELEASE_VALUE;
+        end else begin
+          advance_q.slot <= walk_q.slot;
+          advance_q.frame_index <= walk_q.frame_index;
+          advance_q.last <= walk_q.last;
+          advance_q.state <= advanced_state;
+          advance_q.active <= advanced_active;
+          advance_q.phase_advance_frame <= phase_advance_frame;
+          advance_q.render_frame <= render_frame;
+          slot_state_q[walk_q.slot] <= SLOT_ADVANCE_APPLY;
+        end
+      end
+
+      if (release_q.valid) begin
+        release_attenuation_q[release_q.slot] <= release_start_attenuation;
+        slot_state_q[release_q.slot] <= SLOT_RELEASE_APPLY;
+      end
+
+      if (advance_q.valid) begin
+        level_s0_q.slot <= advance_q.slot;
+        level_s0_q.frame_index <= advance_q.frame_index;
+        level_s0_q.last <= advance_q.last;
         level_s0_q.level_kind <= next_level_kind;
         level_s0_q.direct_level <= next_direct_level;
-        level_s0_q.attenuation <= advanced_state.attenuation_cb_q12_20;
-        walk_rr_q <= walk_slot + 1'b1;
-        dynamic_q[walk_slot].env_state <= advanced_state;
-        dynamic_q[walk_slot].active <= advanced_active;
-        envelope_q[walk_slot].phase_advance_mask[frame_index_q[walk_slot]] <=
-            phase_advance_frame;
-        envelope_q[walk_slot].render_mask[frame_index_q[walk_slot]] <=
-            render_frame;
-        if ((BLOCK_FRAME_COUNT_WIDTH'(frame_index_q[walk_slot]) + 1'b1) >=
-            frame_count_q[walk_slot]) begin
-          envelope_q[walk_slot].active <= advanced_active;
-          envelope_q[walk_slot].env_state <= advanced_state;
-          slot_state_q[walk_slot] <= SLOT_DRAIN;
+        level_s0_q.attenuation <=
+            advance_q.state.attenuation_cb_q12_20;
+        dynamic_q[advance_q.slot].env_state <= advance_q.state;
+        dynamic_q[advance_q.slot].active <= advance_q.active;
+        envelope_q[advance_q.slot]
+            .phase_advance_mask[advance_q.frame_index] <=
+            advance_q.phase_advance_frame;
+        envelope_q[advance_q.slot].render_mask[advance_q.frame_index] <=
+            advance_q.render_frame;
+        if (advance_q.last) begin
+          envelope_q[advance_q.slot].active <= advance_q.active;
+          envelope_q[advance_q.slot].env_state <= advance_q.state;
+          slot_state_q[advance_q.slot] <= SLOT_DRAIN;
         end else begin
-          frame_index_q[walk_slot] <= frame_index_q[walk_slot] + 1'b1;
+          frame_index_q[advance_q.slot] <= advance_q.frame_index + 1'b1;
+          slot_state_q[advance_q.slot] <= SLOT_WALK;
         end
       end
 
