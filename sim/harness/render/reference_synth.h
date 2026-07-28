@@ -47,7 +47,7 @@ class ReferenceSynth : public CommandWordSink {
     int64_t filter_z1_r = 0;
     int64_t filter_z2_r = 0;
     int loop_mode = 0;
-    uint8_t seq = 0;
+    uint16_t generation = 0;
   };
 
   struct EnvelopeState {
@@ -80,9 +80,6 @@ class ReferenceSynth : public CommandWordSink {
   static int16_t envelope_level(const VoiceConfig& voice, const EnvelopeState& envelope);
 
   const std::vector<int16_t>& memory_;
-  std::vector<VoiceConfig> prepared_;
-  std::vector<uint8_t> prepared_seq_;
-  std::vector<bool> prepared_valid_;
   std::vector<VoiceConfig> voices_;
   std::vector<EnvelopeState> envelopes_;
   uint32_t sample_counter_ = 0;

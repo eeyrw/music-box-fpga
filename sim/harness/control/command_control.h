@@ -74,15 +74,16 @@ class CommandVoiceControl : public VoiceCommandSink {
 
  private:
   struct VoiceMirror {
-    uint8_t seq = 0;
+    uint16_t generation = 0;
     bool active = false;
+    bool released = false;
     int gain_l = 0;
     int gain_r = 0;
     uint32_t phase_inc = 0;
     FilterConfig filter;
   };
 
-  void emit(uint8_t opcode, int voice, uint8_t seq,
+  void emit(uint8_t opcode, int voice,
             std::initializer_list<uint32_t> payload);
   CommandWordSink& sink_;
   std::array<VoiceMirror, kNumVoices> voices_{};

@@ -2,6 +2,8 @@
 pkg/synth_pkg.sv
 pkg/synth_register_pkg.sv
 generated/synth_dsp_lut_pkg.sv
+control/control_word_fifo.sv
+control/voice_major_command_plane.sv
 control/block_voice_event_executor.sv
 control/block_voice_state_store.sv
 dsp/block_interleaved_voice_dsp.sv

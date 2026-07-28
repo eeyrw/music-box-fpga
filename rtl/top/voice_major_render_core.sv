@@ -2,19 +2,13 @@ module voice_major_render_core (
   input  logic                                      clk,
   input  logic                                      rst,
 
-  input  logic                                      install_valid,
-  output logic                                      install_ready,
-  input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]      install_voice,
-  input  synth_pkg::block_voice_state_snapshot_t   install_state,
-  input  logic                                      params_write_valid,
-  output logic                                      params_write_ready,
-  input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]      params_write_voice,
-  input  logic [synth_pkg::VOICE_GENERATION_WIDTH-1:0]
-                                                    params_write_generation,
-  input  synth_pkg::voice_event_params_t            params_write_event,
-  input  synth_pkg::volume_env_params_t             params_write_env,
-  output logic                                      stale_params_write_pulse,
-  output logic                                      stale_dynamic_write_pulse,
+  input  synth_pkg::reg_bus_req_t                   bus_req,
+  output synth_pkg::reg_bus_rsp_t                   bus_rsp,
+  input  logic                                      cmd_stream_valid,
+  input  logic [31:0]                               cmd_stream_data,
+  output logic                                      cmd_stream_ready,
+  output logic [31:0]                               command_error_count,
+  output logic [31:0]                               stale_generation_count,
 
   input  logic                                      block_req_valid,
   output logic                                      block_req_ready,
@@ -55,26 +49,66 @@ module voice_major_render_core (
   logic dynamic_write_ready;
   logic [VOICE_ID_WIDTH-1:0] dynamic_write_voice;
   voice_dynamic_state_t dynamic_write_data;
+  logic command_install_valid;
+  logic command_install_ready;
+  logic [VOICE_ID_WIDTH-1:0] command_install_voice;
+  block_voice_state_snapshot_t command_install_state;
+  logic command_control_event_valid;
+  logic command_control_event_ready;
+  block_voice_event_t command_control_event;
+  logic command_control_event_done;
+  logic stale_control_event;
+  logic stale_params_write;
+  logic stale_dynamic_write;
+  logic [$clog2(1024+1)-1:0] command_word_level;
+  logic command_action_pending;
+  logic [TIMELINE_FRAME_WIDTH-1:0] current_frame_q;
+  logic controller_block_req_ready;
+
+  voice_major_command_plane command_plane (
+    .clk,
+    .rst,
+    .bus_req,
+    .bus_rsp,
+    .cmd_stream_valid,
+    .cmd_stream_data,
+    .cmd_stream_ready,
+    .render_busy,
+    .current_frame(current_frame_q),
+    .install_valid(command_install_valid),
+    .install_ready(command_install_ready),
+    .install_voice(command_install_voice),
+    .install_state(command_install_state),
+    .control_event_valid(command_control_event_valid),
+    .control_event_ready(command_control_event_ready),
+    .control_event(command_control_event),
+    .control_event_done_pulse(command_control_event_done),
+    .stale_control_event_pulse(stale_control_event),
+    .command_error_count,
+    .stale_generation_count,
+    .word_level(command_word_level),
+    .action_pending(command_action_pending)
+  );
 
   block_voice_state_store state_store (
     .clk,
     .rst,
     .render_busy,
-    .install_valid,
-    .install_ready,
-    .install_voice,
-    .install_state,
-    .params_write_valid,
-    .params_write_ready,
-    .params_write_voice,
-    .params_write_generation,
-    .params_write_event,
-    .params_write_env,
-    .control_event_valid(1'b0),
-    .control_event_ready(),
-    .control_event('0),
-    .control_event_done_pulse(),
-    .stale_control_event_pulse(),
+    .install_valid(command_install_valid),
+    .install_ready(command_install_ready),
+    .install_voice(command_install_voice),
+    .install_state(command_install_state),
+    .params_write_valid(1'b0),
+    .params_write_ready(),
+    .params_write_voice('0),
+    .params_write_generation('0),
+    .params_write_event('0),
+    .params_write_env('0),
+    .control_event_valid(command_control_event_valid),
+    .control_event_ready(command_control_event_ready),
+    .control_event(command_control_event),
+    .control_event_done_pulse(command_control_event_done),
+    .stale_control_event_pulse(stale_control_event),
     .state_read_req_valid,
     .state_read_req_ready,
     .state_read_req_voice,
@@ -86,15 +120,15 @@ module voice_major_render_core (
     .dynamic_write_voice,
     .dynamic_write_data,
     .active_bitmap,
-    .stale_params_write_pulse,
-    .stale_dynamic_write_pulse
+    .stale_params_write_pulse(stale_params_write),
+    .stale_dynamic_write_pulse(stale_dynamic_write)
   );
 
   voice_major_block_controller controller (
     .clk,
     .rst,
-    .block_req_valid,
-    .block_req_ready,
+    .block_req_valid(block_req_valid && !command_action_pending),
+    .block_req_ready(controller_block_req_ready),
     .block_req,
     .active_bitmap,
     .render_busy,
@@ -127,4 +161,17 @@ module voice_major_render_core (
     .block_release_ready,
     .block_release_buffer_id
   );
+
+  assign block_req_ready = controller_block_req_ready && !command_action_pending;
+
+  always_ff @(posedge clk) begin
+    if (rst)
+      current_frame_q <= '0;
+    else if (block_req_valid && block_req_ready)
+      current_frame_q <= block_req.start_frame;
+  end
+
+  logic unused_control_status;
+  assign unused_control_status = stale_params_write ^ stale_dynamic_write ^
+      (^command_word_level) ^ command_action_pending;
 endmodule

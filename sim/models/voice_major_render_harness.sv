@@ -3,52 +3,9 @@ module voice_major_render_harness (
   input  logic                                     ddr_clk,
   input  logic                                     rst,
 
-  input  logic                                     install_valid,
-  output logic                                     install_ready,
-  input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]     install_voice,
-  input  logic [31:0]                              install_base_addr,
-  input  logic [23:0]                              install_length,
-  input  logic [23:0]                              install_loop_start,
-  input  logic [23:0]                              install_loop_end,
-  input  logic [1:0]                               install_loop_mode,
-  input  logic [31:0]                              install_phase_inc,
-  input  logic signed [15:0]                       install_gain_l,
-  input  logic signed [15:0]                       install_gain_r,
-  input  logic                                     install_filter_enable,
-  input  logic signed [15:0]                       install_filter_b0,
-  input  logic signed [15:0]                       install_filter_b1,
-  input  logic signed [15:0]                       install_filter_b2,
-  input  logic signed [15:0]                       install_filter_a1,
-  input  logic signed [15:0]                       install_filter_a2,
-  input  logic [23:0]                              install_env_delay_samples,
-  input  logic [31:0]                              install_env_attack_step,
-  input  logic [23:0]                              install_env_hold_samples,
-  input  logic [31:0]                              install_env_decay_step,
-  input  logic [31:0]                              install_env_sustain_cb,
-  input  logic [31:0]                              install_env_release_step,
-  input  logic                                     install_active,
-  input  logic [15:0]                              install_generation,
-
-  input  logic                                     params_valid,
-  output logic                                     params_ready,
-  input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]     params_voice,
-  input  logic [15:0]                              params_generation,
-  input  logic [31:0]                              params_phase_inc,
-  input  logic signed [15:0]                       params_gain_l,
-  input  logic signed [15:0]                       params_gain_r,
-  input  logic                                     params_released,
-  input  logic                                     params_filter_enable,
-  input  logic signed [15:0]                       params_filter_b0,
-  input  logic signed [15:0]                       params_filter_b1,
-  input  logic signed [15:0]                       params_filter_b2,
-  input  logic signed [15:0]                       params_filter_a1,
-  input  logic signed [15:0]                       params_filter_a2,
-  input  logic [23:0]                              params_env_delay_samples,
-  input  logic [31:0]                              params_env_attack_step,
-  input  logic [23:0]                              params_env_hold_samples,
-  input  logic [31:0]                              params_env_decay_step,
-  input  logic [31:0]                              params_env_sustain_cb,
-  input  logic [31:0]                              params_env_release_step,
+  input  logic                                     cmd_stream_valid,
+  output logic                                     cmd_stream_ready,
+  input  logic [31:0]                              cmd_stream_data,
 
   input  logic                                     block_req_valid,
   output logic                                     block_req_ready,
@@ -78,7 +35,8 @@ module voice_major_render_harness (
                                                    block_release_buffer,
 
   output logic                                     render_busy,
-  output logic                                     stale_params_write,
+  output logic [31:0]                              command_error_count,
+  output logic [31:0]                              stale_generation_count,
   output logic [63:0]                              ddr_accepted,
   output logic [63:0]                              ddr_returned,
   output logic [63:0]                              ddr_row_hits,
@@ -108,9 +66,8 @@ module voice_major_render_harness (
 );
   import synth_pkg::*;
 
-  block_voice_state_snapshot_t install_state;
-  voice_event_params_t params_event;
-  volume_env_params_t params_env;
+  reg_bus_req_t bus_req;
+  reg_bus_rsp_t bus_rsp;
   render_block_req_t block_req;
   render_block_complete_t block_complete;
   render_block_read_req_t block_read_req;
@@ -121,8 +78,6 @@ module voice_major_render_harness (
   logic line_rsp_valid;
   logic line_rsp_ready;
   ordered_line_rsp_t line_rsp;
-  logic stale_params_write_internal;
-  logic stale_dynamic_write;
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr_rsp_data;
 
   // Simulation-only trace of the unfiltered sample-address stream. Registering
@@ -154,48 +109,7 @@ module voice_major_render_harness (
   end
 
   always_comb begin
-    install_state = '0;
-    install_state.region.base_addr = install_base_addr;
-    install_state.region.length = install_length;
-    install_state.region.loop_start = install_loop_start;
-    install_state.region.loop_end = install_loop_end;
-    install_state.region.loop_mode = install_loop_mode;
-    install_state.event_params.phase_inc = install_phase_inc;
-    install_state.event_params.gain_l = install_gain_l;
-    install_state.event_params.gain_r = install_gain_r;
-    install_state.event_params.filter_enable = install_filter_enable;
-    install_state.event_params.filter_b0 = install_filter_b0;
-    install_state.event_params.filter_b1 = install_filter_b1;
-    install_state.event_params.filter_b2 = install_filter_b2;
-    install_state.event_params.filter_a1 = install_filter_a1;
-    install_state.event_params.filter_a2 = install_filter_a2;
-    install_state.env_params.delay_samples = install_env_delay_samples;
-    install_state.env_params.attack_step_q0_32 = install_env_attack_step;
-    install_state.env_params.hold_samples = install_env_hold_samples;
-    install_state.env_params.decay_step_cb_q12_20 = install_env_decay_step;
-    install_state.env_params.sustain_cb_q12_20 = install_env_sustain_cb;
-    install_state.env_params.release_step_cb_q12_20 = install_env_release_step;
-    install_state.dynamic.active = install_active;
-    install_state.dynamic.generation = install_generation;
-    install_state.dynamic.env_state.stage = ENV_DELAY;
-
-    params_event = '0;
-    params_event.phase_inc = params_phase_inc;
-    params_event.gain_l = params_gain_l;
-    params_event.gain_r = params_gain_r;
-    params_event.released = params_released;
-    params_event.filter_enable = params_filter_enable;
-    params_event.filter_b0 = params_filter_b0;
-    params_event.filter_b1 = params_filter_b1;
-    params_event.filter_b2 = params_filter_b2;
-    params_event.filter_a1 = params_filter_a1;
-    params_event.filter_a2 = params_filter_a2;
-    params_env.delay_samples = params_env_delay_samples;
-    params_env.attack_step_q0_32 = params_env_attack_step;
-    params_env.hold_samples = params_env_hold_samples;
-    params_env.decay_step_cb_q12_20 = params_env_decay_step;
-    params_env.sustain_cb_q12_20 = params_env_sustain_cb;
-    params_env.release_step_cb_q12_20 = params_env_release_step;
+    bus_req = '0;
 
     block_req.start_frame = block_start_frame;
     block_req.frame_count = block_frame_count;
@@ -207,7 +121,6 @@ module voice_major_render_harness (
     block_read_sample_l = block_read_rsp.sample.l;
     block_read_sample_r = block_read_rsp.sample.r;
     line_rsp.words = ddr_rsp_data;
-    stale_params_write = stale_params_write_internal;
     cache_requests = core.controller.engine.renderer.cache_stat_client_requests;
     cache_hits = core.controller.engine.renderer.cache_stat_cache_hits;
     cache_mshr_merges = core.controller.engine.renderer.cache_stat_mshr_merges;
@@ -227,18 +140,13 @@ module voice_major_render_harness (
   voice_major_render_core core (
     .clk(core_clk),
     .rst,
-    .install_valid,
-    .install_ready,
-    .install_voice,
-    .install_state,
-    .params_write_valid(params_valid),
-    .params_write_ready(params_ready),
-    .params_write_voice(params_voice),
-    .params_write_generation(params_generation),
-    .params_write_event(params_event),
-    .params_write_env(params_env),
-    .stale_params_write_pulse(stale_params_write_internal),
-    .stale_dynamic_write_pulse(stale_dynamic_write),
+    .bus_req,
+    .bus_rsp,
+    .cmd_stream_valid,
+    .cmd_stream_data,
+    .cmd_stream_ready,
+    .command_error_count,
+    .stale_generation_count,
     .block_req_valid,
     .block_req_ready,
     .block_req,

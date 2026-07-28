@@ -20,19 +20,14 @@ uint8_t opcode(const std::vector<uint32_t>& command) {
   return uint8_t(command.at(0) >> 24);
 }
 
-void test_stereo_start_and_runtime_actions() {
+void test_mono_start_and_runtime_actions() {
   CaptureSink sink;
   CommandVoiceControl control(sink);
   Region r;
-  r.stereo = true;
   r.base_addr = 0x1234;
-  r.base_addr_r = 0x5678;
   r.length = 0x200;
-  r.length_r = 0x240;
   r.loop_start = 0x20;
-  r.loop_start_r = 0x30;
   r.loop_end = 0x180;
-  r.loop_end_r = 0x190;
   r.gain_l = 0x2000;
   r.gain_r = 0x1000;
   r.filter_enable = true;
@@ -56,25 +51,25 @@ void test_stereo_start_and_runtime_actions() {
   control.release_voice(3, 0x12345678);
   control.stop_voice(3);
 
-  if (sink.commands.size() != 5) throw std::runtime_error("wrong command count");
-  if (opcode(sink.commands[0]) != 0x11 || sink.commands[0].size() != 16)
-    throw std::runtime_error("stereo DEFINE framing mismatch");
-  if (opcode(sink.commands[1]) != 0x12 || sink.commands[1].size() != 9)
-    throw std::runtime_error("START framing mismatch");
-  if (sink.commands[1][3] != 96 || sink.commands[1][4] != 0x01555556u ||
-      sink.commands[1][5] != 144 || sink.commands[1][7] != (60u << 20))
+  if (sink.commands.size() != 6) throw std::runtime_error("wrong command count");
+  if (opcode(sink.commands[0]) != 0x10 || sink.commands[0].size() != 18)
+    throw std::runtime_error("mono START framing mismatch");
+  if (sink.commands[0][12] != 96 || sink.commands[0][13] != 0x01555556u ||
+      sink.commands[0][14] != 144 || sink.commands[0][16] != (60u << 20))
     throw std::runtime_error("envelope duration conversion mismatch");
-  if (opcode(sink.commands[2]) != 0x16 || sink.commands[2][1] != 0x22221111)
-    throw std::runtime_error("GAIN_PHASE packing mismatch");
-  if (opcode(sink.commands[3]) != 0x17 || sink.commands[3][3] != 0x00010400)
+  if (opcode(sink.commands[1]) != 0x16 || sink.commands[1][2] != 0x22221111)
+    throw std::runtime_error("GAIN packing mismatch");
+  if (opcode(sink.commands[2]) != 0x18 || sink.commands[2][2] != 0x0001a000)
+    throw std::runtime_error("PITCH packing mismatch");
+  if (opcode(sink.commands[3]) != 0x17 || sink.commands[3][4] != 0x00010400)
     throw std::runtime_error("FILTER packing mismatch");
-  if (opcode(sink.commands[4]) != 0x14 || sink.commands[4][1] != 0x12345678)
+  if (opcode(sink.commands[4]) != 0x14 || sink.commands[4][2] != 0x12345678)
     throw std::runtime_error("RELEASE packing mismatch");
-  if (opcode(sink.commands.back()) != 0x14)
-    throw std::runtime_error("released voice accepted a later STOP");
+  if (opcode(sink.commands[5]) != 0x15)
+    throw std::runtime_error("released voice did not accept STOP");
 }
 
-void test_mono_word_count_and_seq_generation() {
+void test_mono_word_count_and_generation() {
   CaptureSink sink;
   CommandVoiceControl control(sink);
   Region r;
@@ -82,13 +77,28 @@ void test_mono_word_count_and_seq_generation() {
   r.loop_end = 8;
   control.start_voice(0, 0x100, r);
   control.start_voice(0, 0x200, r);
-  if (sink.commands.size() != 4 || sink.commands[0].size() != 12 ||
-      sink.commands[1].size() != 9)
-    throw std::runtime_error("mono Note On must emit 21 words");
-  const uint8_t first_seq = uint8_t(sink.commands[0][0] >> 8);
-  const uint8_t second_seq = uint8_t(sink.commands[2][0] >> 8);
-  if (first_seq == 0 || second_seq != uint8_t(first_seq + 1))
-    throw std::runtime_error("voice sequence did not advance");
+  if (sink.commands.size() != 2 || sink.commands[0].size() != 18 ||
+      sink.commands[1].size() != 18)
+    throw std::runtime_error("mono Note On must emit one 18-word command");
+  const uint16_t first_generation = uint16_t(sink.commands[0][1]);
+  const uint16_t second_generation = uint16_t(sink.commands[1][1]);
+  if (first_generation == 0 || second_generation != uint16_t(first_generation + 1))
+    throw std::runtime_error("voice generation did not advance");
+}
+
+void test_stereo_region_is_rejected() {
+  CaptureSink sink;
+  CommandVoiceControl control(sink);
+  Region r;
+  r.stereo = true;
+  r.length = 8;
+  r.loop_end = 8;
+  try {
+    control.start_voice(0, 0x100, r);
+  } catch (const std::invalid_argument&) {
+    return;
+  }
+  throw std::runtime_error("stereo Region reached mono command protocol");
 }
 
 void test_long_envelope_durations_produce_nonzero_steps() {
@@ -103,10 +113,10 @@ void test_long_envelope_durations_produce_nonzero_steps() {
   r.volume_envelope.release_samples = 20'318'733;
 
   control.start_voice(0, 0x100, r);
-  const auto& start = sink.commands.at(1);
-  if (start[4] == 0 || start[6] == 0 || start[8] == 0)
+  const auto& start = sink.commands.at(0);
+  if (start[13] == 0 || start[15] == 0 || start[17] == 0)
     throw std::runtime_error("long envelope duration produced a zero step");
-  if (start[4] != 212u || start[6] != 52u || start[8] != 52u)
+  if (start[13] != 212u || start[15] != 52u || start[17] != 52u)
     throw std::runtime_error("long envelope duration did not use ceiling division");
 }
 
@@ -130,7 +140,7 @@ void test_redundant_start_runtime_actions_are_suppressed() {
   control.update_gain_phase(0, r.gain_l, r.gain_r, phase_inc);
   control.update_filter(0, {r.filter_enable, r.filter_b0, r.filter_b1,
                             r.filter_b2, r.filter_a1, r.filter_a2});
-  if (sink.commands.size() != 2) {
+  if (sink.commands.size() != 1) {
     throw std::runtime_error("START-equivalent runtime commands were not suppressed");
   }
 
@@ -138,8 +148,8 @@ void test_redundant_start_runtime_actions_are_suppressed() {
   FilterConfig changed{r.filter_enable, r.filter_b0 + 1, r.filter_b1,
                        r.filter_b2, r.filter_a1, r.filter_a2};
   control.update_filter(0, changed);
-  if (sink.commands.size() != 4 || opcode(sink.commands[2]) != 0x16 ||
-      opcode(sink.commands[3]) != 0x17) {
+  if (sink.commands.size() != 3 || opcode(sink.commands[1]) != 0x16 ||
+      opcode(sink.commands[2]) != 0x17) {
     throw std::runtime_error("changed runtime commands were suppressed");
   }
 }
@@ -232,8 +242,9 @@ void test_global_audio_commands() {
 
 int main() {
   try {
-    render::test_stereo_start_and_runtime_actions();
-    render::test_mono_word_count_and_seq_generation();
+    render::test_mono_start_and_runtime_actions();
+    render::test_mono_word_count_and_generation();
+    render::test_stereo_region_is_rejected();
     render::test_long_envelope_durations_produce_nonzero_steps();
     render::test_redundant_start_runtime_actions_are_suppressed();
     render::test_frame_batched_command_sink();

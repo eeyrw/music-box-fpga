@@ -499,22 +499,22 @@ int main() {
     envelope_region.volume_envelope.attack_samples = 4;
     render::CommandVoiceControl envelope_control(envelope_synth);
     envelope_control.start_voice(0, envelope_region.phase_inc, envelope_region);
-    envelope_synth.write_command_words({0x13000102u, 0x00000002u, 0x80000000u});
+    envelope_synth.write_command_words(
+        {0x13000007u, 1u, 0u, 0x80000000u, 0u, 0u, 0u,
+         render::envelope_release_step(envelope_region)});
     auto envelope_sample = envelope_synth.render_sample();
     if (envelope_sample.first < 16000 || envelope_sample.first > 17000)
       throw std::runtime_error("reference ENV_UPDATE did not replace attack step");
-    envelope_synth.write_command_words({0x14000101u, 0x00000000u});
+    envelope_synth.write_command_words({0x14000002u, 1u, 0u});
     if (envelope_synth.render_sample().first != 0)
       throw std::runtime_error("reference zero-step RELEASE did not stop immediately");
 
     std::vector<int16_t> delay_memory{0, 1000, 3000, 6000};
     render::ReferenceSynth delay_synth(delay_memory);
     delay_synth.write_command_words(
-        {0x1000690bu, 0u, 4u, 1u, 3u, 0x00000240u, 1u,
-         0x00002000u, 0x00002000u, 0x00010000u, 0u, 0u});
-    delay_synth.write_command_words(
-        {0x12006908u, 0x7fff7fffu, 0x00000100u, 2u, 0x80000000u,
-         0u, 0u, 0u, 0x01000000u});
+        {0x10000011u, 0x00010001u, 0u, 4u, 1u, 3u, 0x00000240u,
+         0x00000100u, 0x7fff7fffu, 0x00002000u, 0x00002000u,
+         0x00010000u, 2u, 0x80000000u, 0u, 0u, 0u, 0x01000000u});
     int delay_first = delay_synth.render_sample().first;
     int delay_transition = delay_synth.render_sample().first;
     int delay_attack = delay_synth.render_sample().first;
@@ -533,7 +533,8 @@ int main() {
     reverse_decay_control.start_voice(0, reverse_decay_region.phase_inc, reverse_decay_region);
     reverse_decay_synth.render_sample();
     reverse_decay_synth.write_command_words(
-        {0x13000103u, 0x00000018u, 10u << 20, 20u << 20});
+        {0x13000007u, 1u, 0u, 0xffffffffu, 0u, 10u << 20,
+         20u << 20, render::envelope_release_step(reverse_decay_region)});
     int reverse_decay_first = reverse_decay_synth.render_sample().first;
     int reverse_decay_second = reverse_decay_synth.render_sample().first;
     if (reverse_decay_second <= reverse_decay_first) {
