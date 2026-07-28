@@ -32,12 +32,13 @@ holds both `rsp_valid` and `rsp_data` stable.
 The SV model implements:
 
 - configurable initialization delay and request queue capacity;
-- row/bank/column decoding with an open-page policy;
+- MIG-compatible bank/row/column decoding with an open-page policy;
 - row-hit-first read scheduling;
 - activate, precharge, CAS/read and read-to-read spacing;
 - x16 BL8 transfer occupancy: eight DQ beats on both CK edges occupy four DDR
   clocks, and a 128-bit line is published only after all beats arrive;
 - `tRCD`, `tRP`, `tCL`, `tRAS`, `tRC`, `tCCD`, and `tRTP` constraints;
+- rank-level `tRRD` spacing and the rolling four-ACT `tFAW` window;
 - periodic refresh with `tREFI` and `tRFC` request blocking;
 - multiple accepted requests and an ordered response reorder boundary;
 - counters for requests, responses, per-request row hits/misses, physical
@@ -49,7 +50,9 @@ The Smart Artix profile is derived from the checked-in MIG project for
 (400 MHz CK / DDR3-800), the PHY ratio is 4:1, and `ui_clk` is 100 MHz. At the
 400 MHz model clock the profile uses `tRCD=6`, `tRP=6`, `tCL=6`, `tRAS=14`,
 `tRC=20`, `tCCD=4`, `tRTP=3`, `tRFC=104`, and `tREFI=3120`. Integer cycle
-values round the MIG nanosecond constraints upward.
+values round the MIG nanosecond constraints upward. The x16 device additionally
+uses `tRRD=4` and `tFAW=20` at DDR3-800. Micron specifies the x16 part as eight
+banks, 15 row bits, 10 column bits, and a 2 KiB page.
 
 The Smart Artix board routes an MT41K256M16 x16 device. With BL8, one read
 command transfers `16 bits * 8 beats = 128 bits`, exactly one renderer line.
@@ -65,17 +68,25 @@ at the MIG 100 MHz UI rate, while the physical timing scheduler advances four
 400 MHz CK cycles per renderer cycle. A simulation-only bounded bridge carries
 ordered requests and responses between these clock domains. It represents the
 controller boundary, not a board-level asynchronous CDC in the real design.
-Address mapping is:
+The checked-in MIG project selects `BANK_ROW_COLUMN`. After removing the three
+within-BL8 word bits from the physical 10-bit column, address mapping is:
 
 ```text
 line   = word_addr / LINE_WORDS
-column = line[COLUMN_BITS-1:0]
-bank   = line[COLUMN_BITS +: log2(BANK_COUNT)]
-row    = line >> (COLUMN_BITS + log2(BANK_COUNT))
+column = line[6:0]
+row    = line[21:7]
+bank   = line[24:22]
 ```
 
-This mapping is configurable because the final mapping depends on the board,
-MIG configuration, and any cache/controller address transform.
+The generic parameters are `COLUMN_BITS=7`, `ROW_BITS=15`, `BANK_COUNT=8`, and
+`BANK_ROW_COLUMN=1`. Clearing `BANK_ROW_COLUMN` retains a configurable
+row-bank-column profile for other controllers. The mapping must follow the
+board MIG configuration and any adapter-side address transform.
+
+Refresh due times remain anchored to the initialization epoch. If an open bank
+or data burst delays a refresh, the following due time is still advanced by one
+`tREFI` from the previous due time, rather than from the delayed issue cycle.
+This models refresh debt and preserves the required long-term average rate.
 
 ## Binary Images
 
@@ -116,52 +127,34 @@ make measure-voice-major-throughput-ddr3 DDR3_IMAGE=/absolute/path/to/bin_direct
 
 The integration reports the 100 MHz renderer cycles, while all DDR timing
 counters advance at 400 MHz. The current shared-wave 256-lane trace completes
-in 2148 core cycles, accepts and returns 2 lines, and includes periodic refresh.
-The retained cache and MSHRs merge the other voice requests. The
-ideal-memory result remains a separate test; the two measurements must not be
-compared without preserving their clocks, timing parameters, and address trace.
+in 4532 core cycles, accepts and returns 1024 lines, records 1017 row hits and 7
+row misses, and services 6 refreshes. The ideal-memory result remains a separate
+test; the two measurements must not be compared without preserving their
+clocks, timing parameters, and address trace.
 
-## Renderer Cache Boundary
+## Renderer Window Boundary
 
 The production renderer requests only lines containing required interpolation
-endpoints. `rtl/memory/ordered_line_cache.sv` provides a 16 KiB two-way retained
-cache and eight MSHRs. Work IDs are tags only on the internal renderer/cache
-boundary; the external DDR boundary remains ordered and untagged. The real
-render harness reports client requests, hits, MSHR merges, external misses,
-evictions, miss-allocation stalls, row behavior, refreshes, and worst render
-deadline utilization. It also reports render block/frame counts and total render
-cycles, allowing pure renderer average cycles per block or frame to be computed
-without including control writes and block readout. A miss-allocation stall is
-one 100 MHz core cycle where a
-presented request is neither a cache hit nor an existing-MSHR merge, but cannot
-be accepted because no MSHR/issue slot is available or downstream request
-`ready` is low. It does not include the latency after an accepted miss while its
-DDR data is in flight.
+endpoints. `rtl/memory/voice_sample_window.sv` retains one 32-word window per
+voice, for 16 KiB of PCM data at 256 voices. Work and voice IDs exist only on
+the internal renderer/window boundary; the external DDR boundary remains
+ordered and untagged.
 
-The 2026-07-28 ten-second real trace using SGM v2.01 and `我的舞台.mid` from
-10 seconds compared otherwise identical 2 KiB and 16 KiB caches. Both produced
-bit-identical WAV output and 2,761,938 cache requests. Increasing the cache from
-64 to 512 sets reduced external 128-bit reads from 1,387,110 to 1,141,075
-(17.74%), evictions from 1,386,982 to 1,140,051, and miss-allocation stalls from
-337 to 4 cycles. Renderer cycles fell from 21,162,164 to 20,851,713 (1.47%), and
-the worst render block fell from 548 to 521 cycles with no deadline miss. The
-16 KiB configuration is therefore the production default; the render Make
-target retains `RENDER_RTL_CACHE_SET_COUNT` for reproducible size sweeps.
+The first out-of-window request in a work refills four consecutive 8-word DDR
+lines. Later out-of-window requests in the same work perform one-line fallback
+reads without replacing the persistent window. This protects sequential
+locality across blocks while avoiding a four-line refill for a loop-wrap
+endpoint. The window handles one client transaction at a time, but all four
+requests in a refill may be queued before their ordered responses return.
 
-The comparison can be reproduced with identical audio windows by changing only
-the cache set count and output directory:
-
-```bash
-make render-rtl-ddr3 SF2=/path/to/bank.sf2 MIDI=/path/to/song.mid \
-  START_SECONDS=10 SECONDS=10 RENDER_RTL_CACHE_SET_COUNT=64 \
-  RENDER_RTL_OUT_DIR=build/render_cache2k
-make render-rtl-ddr3 SF2=/path/to/bank.sf2 MIDI=/path/to/song.mid \
-  START_SECONDS=10 SECONDS=10 RENDER_RTL_CACHE_SET_COUNT=512 \
-  RENDER_RTL_OUT_DIR=build/render_cache16k
-```
-
-Object directories include the cache and MSHR parameters, so separate size
-sweeps cannot accidentally reuse a Verilated binary built for another size.
+The render harness reports client requests, window hits, four-line refills,
+fallback reads, external DDR reads, evictions, stall cycles, row behavior,
+refreshes, and worst render deadline utilization. The output field names that
+still begin with `cache_` are compatibility labels for these window counters;
+MSHR merges are always zero. Cache-set and MSHR build parameters were removed
+with the unused `ordered_line_cache` experiment. Current window performance and
+the retained historical cache comparison are documented in
+[`design/voice_major_render_pipeline_detailed.md`](../design/voice_major_render_pipeline_detailed.md).
 
 ## Primary References
 
@@ -172,3 +165,5 @@ sweeps cannot accidentally reuse a Verilated binary built for another size.
   and double data rate.
 - [AMD UG586, configurable memory address mapping](https://docs.amd.com/r/en-US/ug586_7Series_MIS/User-Interface):
   bank/row/column ordering is a controller configuration choice.
+- [Micron 4Gb x4/x8/x16 DDR3L SDRAM](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/791/MT41K256M16-MT41K512M8-MT41K1G4-_2800_4Gb-DDR3L-SDRAM_2900_.pdf):
+  x16 geometry, `tRRD`, `tFAW`, refresh, and speed-bin timing constraints.

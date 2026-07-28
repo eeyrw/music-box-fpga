@@ -37,9 +37,7 @@ EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
 RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
-RENDER_RTL_CACHE_SET_COUNT ?= 512
-RENDER_RTL_MSHR_DEPTH ?= 8
-RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3_cache$(RENDER_RTL_CACHE_SET_COUNT)_mshr$(RENDER_RTL_MSHR_DEPTH)_obj_dir
+RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3_obj_dir
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
 WTSF_CRC ?=
@@ -173,7 +171,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-summary clean
 
 all: test
 
@@ -218,16 +216,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral test-line-cache test-sample-window test-ddr3-model
-
-test-line-cache:
-	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/ordered_line_cache_obj_dir \
-		--top-module tb_ordered_line_cache \
-		rtl/pkg/synth_pkg.sv rtl/memory/ordered_line_cache.sv \
-		sim/tb/tb_ordered_line_cache.sv
-	$(BUILD_DIR)/ordered_line_cache_obj_dir/Vtb_ordered_line_cache
+test: test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -566,8 +555,6 @@ render-rtl-ddr3:
 	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
 		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
 		--top-module voice_major_render_harness \
-		-GCACHE_SET_COUNT=$(RENDER_RTL_CACHE_SET_COUNT) \
-		-GMSHR_DEPTH=$(RENDER_RTL_MSHR_DEPTH) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)" \
 		$(RTL_SOURCES) \
 		sim/models/ddr3_timing_model.sv \

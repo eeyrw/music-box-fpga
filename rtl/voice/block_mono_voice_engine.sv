@@ -1,7 +1,4 @@
-module block_mono_voice_engine #(
-  parameter int CACHE_SET_COUNT = 512,
-  parameter int MSHR_DEPTH = 8
-) (
+module block_mono_voice_engine (
   input  logic                                      clk,
   input  logic                                      rst,
   input  logic                                      start_valid,
@@ -68,10 +65,7 @@ module block_mono_voice_engine #(
     .result_envelope(envelope_result)
   );
 
-  block_interleaved_voice_renderer #(
-    .CACHE_SET_COUNT(CACHE_SET_COUNT),
-    .MSHR_DEPTH(MSHR_DEPTH)
-  ) renderer (
+  block_interleaved_voice_renderer renderer (
     .clk,
     .rst,
     .start_valid(envelope_result_valid),

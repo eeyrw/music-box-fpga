@@ -1,7 +1,4 @@
-module block_interleaved_voice_renderer #(
-  parameter int CACHE_SET_COUNT = 512,
-  parameter int MSHR_DEPTH = 8
-) (
+module block_interleaved_voice_renderer (
   input  logic                                      clk,
   input  logic                                      rst,
 

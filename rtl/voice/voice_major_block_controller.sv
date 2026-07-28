@@ -1,7 +1,4 @@
-module voice_major_block_controller #(
-  parameter int CACHE_SET_COUNT = 512,
-  parameter int MSHR_DEPTH = 8
-) (
+module voice_major_block_controller (
   input  logic                                      clk,
   input  logic                                      rst,
 
@@ -172,10 +169,7 @@ module voice_major_block_controller #(
     if (bit_found) selected_group_after_pick[selected_bit_next] = 1'b0;
   end
 
-  block_mono_voice_engine #(
-    .CACHE_SET_COUNT(CACHE_SET_COUNT),
-    .MSHR_DEPTH(MSHR_DEPTH)
-  ) engine (
+  block_mono_voice_engine engine (
     .clk,
     .rst,
     .start_valid(engine_start_valid),

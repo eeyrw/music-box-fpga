@@ -1,7 +1,4 @@
-module voice_major_render_harness #(
-  parameter int CACHE_SET_COUNT = 512,
-  parameter int MSHR_DEPTH = 8
-) (
+module voice_major_render_harness (
   input  logic                                     core_clk,
   input  logic                                     ddr_clk,
   input  logic                                     rst,
@@ -227,10 +224,7 @@ module voice_major_render_harness #(
     active_voice_count = 16'($countones(core.active_bitmap));
   end
 
-  voice_major_render_core #(
-    .CACHE_SET_COUNT(CACHE_SET_COUNT),
-    .MSHR_DEPTH(MSHR_DEPTH)
-  ) core (
+  voice_major_render_core core (
     .clk(core_clk),
     .rst,
     .install_valid,

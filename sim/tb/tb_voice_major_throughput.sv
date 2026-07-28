@@ -181,7 +181,9 @@ module tb_voice_major_throughput;
     .DQ_WIDTH(16),
     .BURST_LENGTH(8),
     .BANK_COUNT(8),
+    .ROW_BITS(15),
     .COLUMN_BITS(7),
+    .BANK_ROW_COLUMN(1'b1),
     .REQUEST_QUEUE_DEPTH(8),
     .INIT_CYCLES(40),
     .T_RCD(6),
@@ -191,6 +193,8 @@ module tb_voice_major_throughput;
     .T_RC(20),
     .T_CCD(4),
     .T_RTP(3),
+    .T_RRD(4),
+    .T_FAW(20),
     .T_RFC(104),
     .T_REFI(3120)
   ) ddr3_memory (

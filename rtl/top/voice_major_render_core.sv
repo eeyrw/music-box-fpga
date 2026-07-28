@@ -1,7 +1,4 @@
-module voice_major_render_core #(
-  parameter int CACHE_SET_COUNT = 512,
-  parameter int MSHR_DEPTH = 8
-) (
+module voice_major_render_core (
   input  logic                                      clk,
   input  logic                                      rst,
 
@@ -93,10 +90,7 @@ module voice_major_render_core #(
     .stale_dynamic_write_pulse
   );
 
-  voice_major_block_controller #(
-    .CACHE_SET_COUNT(CACHE_SET_COUNT),
-    .MSHR_DEPTH(MSHR_DEPTH)
-  ) controller (
+  voice_major_block_controller controller (
     .clk,
     .rst,
     .block_req_valid,

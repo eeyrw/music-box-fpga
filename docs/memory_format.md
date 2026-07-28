@@ -154,7 +154,7 @@ response 返回前已经被接受，因此 adapter 至少要保持这些 request
 transaction tag，并在 renderer 中增加 issued-segment table。不能在现有无 tag 协议上
 仅放宽 ordering 文字。
 
-## Voice Line Cache Policy
+## Voice Sample Window Policy
 
 renderer 按实际 interpolation endpoint 选择 8-word 对齐 line：
 
@@ -162,27 +162,29 @@ renderer 按实际 interpolation endpoint 选择 8-word 对齐 line：
 line_base = floor(endpoint_addr / 8) * 8
 ```
 
-同一 work 中位于该 line 的 endpoint 一起标记 pending。`ordered_line_cache` 使用 512 set、
-2-way（16 KiB data）和 8 个 MSHR；多个 work 对同一在途 line 的请求合并为一次 DDR
-read。不同 line miss 可以连续下发，不再锁定一个 voice 或固定读取四条 line。
+同一 work 中位于该 line 的 endpoint 一起标记 pending。生产路径使用
+`voice_sample_window`：每个 voice 保留一个 32-word 连续窗口。一个 work 的第一次越界
+访问顺序 refill 四条 DDR line；同一 work 后续越界只读取一条 fallback line，避免 loop
+wrap 替换刚装入的主窗口。window 同一时刻只维护一个 client transaction，refill 内的
+四条 ordered DDR request 可以连续下发。
 
 不同层使用不同关联方式：
 
 ```text
-phase:  A0 B0 C0 D0 ...
-cache:  tagged work requests, hit or merged MSHR completion
-DDR:    ordered untagged line request/response
-DSP:    any slot whose next frame endpoints are ready
+phase:   A0 B0 C0 D0 ...
+window:  tagged work/voice request, hit/refill/fallback completion
+DDR:     ordered untagged line request/response
+DSP:     any slot whose next frame endpoints are ready
 ```
 
 ## Endpoint Scoreboard And Response Association
 
 每个 renderer work slot 最多保存 8 个 job、16 个 endpoint sample，以及 valid/pending
-scoreboard。cache response 带 work ID 和 line 地址；renderer 比较该 work 的 pending
+scoreboard。window response 带 work ID 和 line 地址；renderer 比较该 work 的 pending
 endpoint 地址高位，并从 `words[addr[2:0]]` 取 sample。相同地址可以同时满足多个 job。
 
 DSP 不必等该 work 的全部 line 完成。一个 job 的两个 endpoint valid 后即可 issue；
-与此同时 cache 可处理其他 work 的 hit 或 miss response。
+与此同时 window 可完成其他 work 的 hit、refill 或 fallback response。
 
 刚在某上升沿写入的 sample/valid 最早下一拍被 issue 逻辑看到。设计不依赖目标 FPGA
 RAM 的 write-first/read-first 行为。

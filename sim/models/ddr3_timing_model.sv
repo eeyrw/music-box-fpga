@@ -6,7 +6,9 @@ module ddr3_timing_model #(
   parameter int DQ_WIDTH = 16,
   parameter int BURST_LENGTH = 8,
   parameter int BANK_COUNT = 8,
+  parameter int ROW_BITS = 15,
   parameter int COLUMN_BITS = 7,
+  parameter bit BANK_ROW_COLUMN = 1'b1,
   parameter int REQUEST_QUEUE_DEPTH = 32,
   parameter int INIT_CYCLES = 40,
   parameter int T_RCD = 6,
@@ -16,6 +18,8 @@ module ddr3_timing_model #(
   parameter int T_RC = 20,
   parameter int T_CCD = 4,
   parameter int T_RTP = 3,
+  parameter int T_RRD = 4,
+  parameter int T_FAW = 20,
   parameter int T_RFC = 104,
   parameter int T_REFI = 3120,
   parameter string IMAGE_PATH = ""
@@ -72,6 +76,9 @@ module ddr3_timing_model #(
   logic [63:0] next_sequence_q;
   logic [63:0] response_sequence_q;
   logic [63:0] next_read_cycle_q;
+  logic [63:0] next_activate_cycle_q;
+  logic [63:0] activate_history_q [0:3];
+  logic [2:0] activate_history_count_q;
   logic [63:0] data_bus_busy_until_q;
   logic [63:0] next_refresh_cycle_q;
   logic [63:0] refresh_block_until_q;
@@ -87,12 +94,15 @@ module ddr3_timing_model #(
   int refresh_precharge_bank;
   logic all_banks_closed;
   logic all_banks_refresh_ready;
+  logic rank_activate_ready;
   logic initialized;
 
   function automatic logic [BANK_BITS-1:0] decode_bank(
       input logic [ADDR_WIDTH-1:0] address);
     logic [63:0] line_index;
     line_index = 64'(address) >> LINE_SHIFT;
+    if (BANK_ROW_COLUMN)
+      return BANK_BITS'(line_index >> (COLUMN_BITS + ROW_BITS));
     return BANK_BITS'(line_index >> COLUMN_BITS);
   endfunction
 
@@ -100,6 +110,8 @@ module ddr3_timing_model #(
       input logic [ADDR_WIDTH-1:0] address);
     logic [63:0] line_index;
     line_index = 64'(address) >> LINE_SHIFT;
+    if (BANK_ROW_COLUMN)
+      return (line_index >> COLUMN_BITS) & ((64'd1 << ROW_BITS) - 1'b1);
     return line_index >> (COLUMN_BITS + BANK_BITS);
   endfunction
 
@@ -108,6 +120,9 @@ module ddr3_timing_model #(
       $fatal(1, "ddr3_timing_model LINE_WORDS must be a power of two");
     if (BANK_COUNT < 1 || (BANK_COUNT & (BANK_COUNT - 1)) != 0)
       $fatal(1, "ddr3_timing_model BANK_COUNT must be a power of two");
+    if (ROW_BITS < 1 || COLUMN_BITS < 1 ||
+        (ROW_BITS + COLUMN_BITS + BANK_BITS) > (ADDR_WIDTH - LINE_SHIFT))
+      $fatal(1, "ddr3_timing_model address geometry is invalid");
     if (REQUEST_QUEUE_DEPTH < 1)
       $fatal(1, "ddr3_timing_model REQUEST_QUEUE_DEPTH must be positive");
     if (DQ_WIDTH < 1 || BURST_LENGTH < 2 || (BURST_LENGTH & 1) != 0)
@@ -116,6 +131,8 @@ module ddr3_timing_model #(
       $fatal(1, "ddr3_timing_model line must equal one physical DDR burst");
     if (T_REFI <= T_RFC)
       $fatal(1, "ddr3_timing_model T_REFI must exceed T_RFC");
+    if (T_RRD < 1 || T_FAW < 4)
+      $fatal(1, "ddr3_timing_model requires positive ACT timing constraints");
 
     if (!$value$plusargs("DDR3_IMAGE=%s", selected_image_path))
       selected_image_path = IMAGE_PATH;
@@ -140,6 +157,9 @@ module ddr3_timing_model #(
     all_banks_closed = 1'b1;
     all_banks_refresh_ready = 1'b1;
     initialized = cycle_q >= 64'(INIT_CYCLES);
+    rank_activate_ready = cycle_q >= next_activate_cycle_q &&
+                          (activate_history_count_q < 3'd4 ||
+                           cycle_q >= activate_history_q[0] + 64'(T_FAW));
     if (cycle_q < data_bus_busy_until_q)
       all_banks_refresh_ready = 1'b0;
 
@@ -171,6 +191,7 @@ module ddr3_timing_model #(
           row_hit_index = index;
         if (!bank_open[request_bank[index]] &&
             cycle_q >= bank_next_activate[request_bank[index]] &&
+            rank_activate_ready &&
             (activate_index < 0 ||
              request_sequence[index] < request_sequence[activate_index]))
           activate_index = index;
@@ -193,6 +214,8 @@ module ddr3_timing_model #(
       next_sequence_q <= '0;
       response_sequence_q <= '0;
       next_read_cycle_q <= '0;
+      next_activate_cycle_q <= '0;
+      activate_history_count_q <= '0;
       data_bus_busy_until_q <= '0;
       next_refresh_cycle_q <= 64'(INIT_CYCLES) + 64'(T_REFI);
       refresh_block_until_q <= '0;
@@ -206,6 +229,8 @@ module ddr3_timing_model #(
       stat_activates <= '0;
       stat_precharges <= '0;
       stat_refreshes <= '0;
+      for (int history = 0; history < 4; history++)
+        activate_history_q[history] <= '0;
       for (int index = 0; index < REQUEST_QUEUE_DEPTH; index++) begin
         request_valid[index] <= 1'b0;
         request_state[index] <= REQ_WAIT;
@@ -273,7 +298,9 @@ module ddr3_timing_model #(
         end else if (all_banks_closed && all_banks_refresh_ready) begin
           refresh_pending_q <= 1'b0;
           refresh_block_until_q <= cycle_q + 64'(T_RFC);
-          next_refresh_cycle_q <= cycle_q + 64'(T_REFI);
+          // Keep refreshes on the original average-tREFI timeline. Delaying a
+          // refresh therefore creates debt instead of silently lowering rate.
+          next_refresh_cycle_q <= next_refresh_cycle_q + 64'(T_REFI);
           stat_refreshes <= stat_refreshes + 1'b1;
           for (int bank = 0; bank < BANK_COUNT; bank++)
             bank_next_activate[bank] <= cycle_q + 64'(T_RFC);
@@ -309,6 +336,13 @@ module ddr3_timing_model #(
           bank_next_read[request_bank[activate_index]] <= cycle_q + 64'(T_RCD);
           bank_next_precharge[request_bank[activate_index]] <= cycle_q + 64'(T_RAS);
           bank_next_activate[request_bank[activate_index]] <= cycle_q + 64'(T_RC);
+          next_activate_cycle_q <= cycle_q + 64'(T_RRD);
+          activate_history_q[0] <= activate_history_q[1];
+          activate_history_q[1] <= activate_history_q[2];
+          activate_history_q[2] <= activate_history_q[3];
+          activate_history_q[3] <= cycle_q;
+          if (activate_history_count_q < 3'd4)
+            activate_history_count_q <= activate_history_count_q + 1'b1;
           if (!request_had_activate[activate_index])
             stat_row_misses <= stat_row_misses + 1'b1;
           request_had_activate[activate_index] <= 1'b1;

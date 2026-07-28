@@ -18,6 +18,7 @@ voice_major_render_core
       +- block_interleaved_voice_renderer
          +- mono_phase_frame (current and look-ahead phase)
          +- block_interleaved_voice_dsp
+         +- voice_sample_window
    +- block_mix_buffer
 ```
 
@@ -28,7 +29,7 @@ voice_major_render_core
 | `rtl/pkg` | 公共常量、定点类型、block/event/token payload。 |
 | `rtl/control` | timestamped event 执行和 voice 状态 bank。 |
 | `rtl/voice` | block 调度、phase/envelope、endpoint、DSP issue 与 mix。 |
-| `rtl/memory` | 2-way ordered line cache、MSHR miss 合并和 memory adapter。 |
+| `rtl/memory` | per-voice 连续 sample window 和 ordered line memory adapter。 |
 | `rtl/dsp` | 一套 tagged、可停顿、带状态前递的 voice DSP。 |
 | `rtl/audio` | chorus、reverb、return mix、compressor、FIFO 和 credit。 |
 | `rtl/top` | 当前 voice-major generic composition。 |
@@ -51,4 +52,4 @@ ready/valid 不封装进 payload，方向在模块端口上保持显式。
 以下名称不再存在，也不应重新加入 filelist：`wavetable_render_core`、
 `wavetable_cached_render_core`、`multi_voice_pipeline`、`voice_dsp_pipeline`、
 `transactional_control_plane`、`voice_line_cache` 和 `wave_memory_subsystem`。当前实现名为
-`ordered_line_cache`，不要与已删除的旧 `voice_line_cache` 混淆。
+`voice_sample_window`；旧实验模块 `ordered_line_cache` 也已删除，不应重新加入 filelist。

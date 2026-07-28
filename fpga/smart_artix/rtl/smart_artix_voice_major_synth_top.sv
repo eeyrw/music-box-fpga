@@ -200,10 +200,7 @@ module smart_artix_voice_major_synth_top (
     .mig_app_response
   );
 
-  voice_major_render_core #(
-    .CACHE_SET_COUNT(512),
-    .MSHR_DEPTH(8)
-  ) core (.*);
+  voice_major_render_core core (.*);
 
   logic unused_status;
   assign unused_status = ddr_reg_access_status.ready ^ ddr_reg_access_status.busy ^
