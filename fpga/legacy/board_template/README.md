@@ -1,4 +1,8 @@
-# Board Template
+# Legacy Board Template
+
+This template targets the superseded renderer under `rtl/legacy`. It is retained
+for historical ports and is not the starting point for a new voice-major board.
+Use the Smart Artix integration as the current architectural reference.
 
 Copy this directory to `fpga/<board-name>/` and replace every template value with
 the selected board details.
