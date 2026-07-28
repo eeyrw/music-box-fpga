@@ -51,7 +51,7 @@ access master.
 
 | Area | Production owners |
 | --- | --- |
-| Control | `rtl/control/voice_major_command_plane.sv`, `block_voice_state_store.sv`, `block_voice_event_executor.sv` |
+| Control | `rtl/control/voice_major_command_plane.sv`, `block_voice_state_store.sv` |
 | Render | `rtl/top/voice_major_render_core.sv`, `rtl/voice/voice_major_block_controller.sv`, block mono/interleaved modules |
 | Memory | `rtl/memory/voice_sample_window.sv`, ordered request/response types in `synth_pkg.sv` |
 | Effects/output | existing `global_audio_effects_chain`, `wavetable_i2s_output`, and new `fpga/common/rtl/voice_major_demo_system.sv` |

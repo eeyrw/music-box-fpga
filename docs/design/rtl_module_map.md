@@ -25,7 +25,6 @@ voice_major_render_core
 +- voice_major_command_plane
 |  +- control_word_fifo
 +- block_voice_state_store
-|  +- block_voice_event_executor
 +- voice_major_block_controller
    +- block_mono_voice_engine
       +- block_interleaved_envelope_frontend

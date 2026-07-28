@@ -3,6 +3,7 @@ control/voice_bram_1r1w.sv
 control/control_action_fifo.sv
 control/control_action_parser.sv
 control/control_action_executor.sv
+control/block_voice_event_executor.sv
 control/transactional_control_plane.sv
 control/synth_control_plane.sv
 memory/wave_memory_subsystem.sv
@@ -15,3 +16,4 @@ voice/voice_endpoint_fetch.sv
 voice/multi_voice_pipeline.sv
 top/wavetable_render_core.sv
 top/wavetable_cached_render_core.sv
+audio/render_credit_scheduler.sv

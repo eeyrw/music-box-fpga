@@ -34,7 +34,6 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | --- | --- |
 | `tb_voice_major_render_core` | Compact command framing, mono START, global audio dispatch, block render, memory traffic, and state continuity. |
 | `tb_block_voice_state_store` | Active state banks, generation arbitration, snapshots, and writeback. |
-| `tb_block_voice_event_executor` | Runtime ENV/RELEASE/STOP/GAIN/FILTER/PITCH actions and stale generations. |
 | `tb_voice_major_throughput` | 256/512 voice IDs, block deadline, DSP issue, and optional DDR3 timing. |
 | `tb_voice_sample_window` | 32-word per-voice hits, ordered 8-word refills, fallback reads, and backpressure. |
 | `tb_ddr3_timing_model` | Row hit/miss, activate/precharge, refresh, and request/response accounting. |
@@ -52,7 +51,6 @@ the model also publishes those fields through the existing render JSON report.
 accumulator for system-path composition. Existing bare-core comparisons continue
 to use `render_sample()`, which preserves their direct PCM16 saturation and has
 no look-ahead delay.
-| `tb_render_credit_scheduler` | Target-level credits and inflight accounting. |
 | `tb_wavetable_i2s_output` | Startup fill, FIFO flow, played/render counters, and underrun gating. |
 | `tb_spi_register_bridge` | Register frames, dedicated `0xa5` command stream, and backpressure errors. |
 | `tb_i2s_tx` | Exact I2S bit and channel timing. |

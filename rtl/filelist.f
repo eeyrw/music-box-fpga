@@ -4,7 +4,6 @@ pkg/synth_register_pkg.sv
 generated/synth_dsp_lut_pkg.sv
 control/control_word_fifo.sv
 control/voice_major_command_plane.sv
-control/block_voice_event_executor.sv
 control/block_voice_state_store.sv
 dsp/block_interleaved_voice_dsp.sv
 audio/stereo_chorus.sv
@@ -14,7 +13,6 @@ audio/global_effects_chain.sv
 audio/global_audio_effects_chain.sv
 audio/lookahead_compressor.sv
 audio/output_sample_fifo.sv
-audio/render_credit_scheduler.sv
 memory/voice_sample_window.sv
 voice/mono_phase_frame.sv
 voice/block_interleaved_envelope_frontend.sv

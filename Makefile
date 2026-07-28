@@ -88,9 +88,6 @@ GLOBAL_EFFECTS_SIM_SOURCES := \
 GLOBAL_AUDIO_EFFECTS_SIM_SOURCES := \
 	sim/tb/tb_global_audio_effects_chain.sv
 
-RENDER_SCHEDULER_SIM_SOURCES := \
-	sim/tb/tb_render_credit_scheduler.sv
-
 BLOCK_MIX_BUFFER_SIM_SOURCES := \
 	sim/tb/tb_block_mix_buffer.sv
 
@@ -111,9 +108,6 @@ VOICE_MAJOR_CONTROLLER_SIM_SOURCES := \
 
 BLOCK_VOICE_STATE_STORE_SIM_SOURCES := \
 	sim/tb/tb_block_voice_state_store.sv
-
-BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES := \
-	sim/tb/tb_block_voice_event_executor.sv
 
 VOICE_MAJOR_RENDER_CORE_SIM_SOURCES := \
 	sim/tb/tb_voice_major_render_core.sv
@@ -244,11 +238,6 @@ test-ddr3-model:
 
 test-voice-major-512:
 	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) -DSYNTH_NUM_VOICES=512 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/block_voice_event_executor_512_obj_dir \
-		--top-module tb_block_voice_event_executor \
-		$(RTL_SOURCES) $(BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES)
-	$(BUILD_DIR)/block_voice_event_executor_512_obj_dir/Vtb_block_voice_event_executor
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_render_core_512_obj_dir \
 		--top-module tb_voice_major_render_core \
@@ -388,11 +377,6 @@ test-rtl-core:
 		$(RTL_SOURCES) $(BLOCK_VOICE_STATE_STORE_SIM_SOURCES)
 	$(BUILD_DIR)/block_voice_state_store_obj_dir/Vtb_block_voice_state_store
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/block_voice_event_executor_obj_dir \
-		--top-module tb_block_voice_event_executor \
-		$(RTL_SOURCES) $(BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES)
-	$(BUILD_DIR)/block_voice_event_executor_obj_dir/Vtb_block_voice_event_executor
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_controller_obj_dir --top-module tb_voice_major_block_controller \
 		$(RTL_SOURCES) $(VOICE_MAJOR_CONTROLLER_SIM_SOURCES)
 	$(BUILD_DIR)/voice_major_controller_obj_dir/Vtb_voice_major_block_controller
@@ -456,10 +440,6 @@ test-rtl-peripheral:
 		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
 		rtl/audio/lookahead_compressor.sv $(COMPRESSOR_SIM_SOURCES)
 	$(BUILD_DIR)/compressor_obj_dir/Vtb_lookahead_compressor
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_scheduler_obj_dir --top-module tb_render_credit_scheduler \
-		rtl/audio/render_credit_scheduler.sv $(RENDER_SCHEDULER_SIM_SOURCES)
-	$(BUILD_DIR)/render_scheduler_obj_dir/Vtb_render_credit_scheduler
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/i2s_output_obj_dir --top-module tb_wavetable_i2s_output \
 		rtl/pkg/synth_pkg.sv rtl/audio/output_sample_fifo.sv \

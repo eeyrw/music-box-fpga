@@ -17,7 +17,7 @@
 ../../../rtl/legacy/dsp/voice_dsp_pipeline.sv
 ../../../rtl/audio/lookahead_compressor.sv
 ../../../rtl/audio/output_sample_fifo.sv
-../../../rtl/audio/render_credit_scheduler.sv
+../../../rtl/legacy/audio/render_credit_scheduler.sv
 ../../../rtl/legacy/voice/voice_phase_frame.sv
 ../../../rtl/legacy/voice/voice_endpoint_fetch.sv
 ../../../rtl/legacy/voice/multi_voice_pipeline.sv
