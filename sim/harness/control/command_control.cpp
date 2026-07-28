@@ -75,13 +75,22 @@ std::size_t FrameBatchedCommandSink::apply_frame() {
 CommandVoiceControl::CommandVoiceControl(CommandWordSink& sink) : sink_(sink) {}
 
 void CommandVoiceControl::emit(uint8_t opcode, int voice,
-                               std::initializer_list<uint32_t> payload) {
+                               std::initializer_list<uint32_t> payload,
+                               uint8_t flags) {
+  emit(opcode, voice, std::vector<uint32_t>(payload), flags);
+}
+
+void CommandVoiceControl::emit(uint8_t opcode, int voice,
+                               const std::vector<uint32_t>& payload,
+                               uint8_t flags) {
   if (voice < 0 || voice >= kNumVoices) throw std::out_of_range("voice command slot");
+  if (flags > 0x3f) throw std::out_of_range("voice command flags");
   std::vector<uint32_t> words;
   words.reserve(payload.size() + 1);
-  words.push_back((uint32_t(opcode) << 24) | (uint32_t(uint8_t(voice)) << 16) |
-                  uint32_t(payload.size()));
-  words.insert(words.end(), payload.begin(), payload.end());
+  words.push_back((uint32_t(opcode) << 24) |
+                  (uint32_t(voice & 0x3ff) << 14) |
+                  (uint32_t(flags) << 8) | uint32_t(payload.size()));
+  words.insert(words.end(), payload.cbegin(), payload.cend());
   sink_.write_command_words(words);
 }
 
@@ -94,19 +103,39 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
         "voice-major command protocol requires one mono Region per voice");
   }
 
-  const uint32_t filter0 = pack_pair(r.filter_b1, r.filter_b0);
-  const uint32_t filter1 = pack_pair(r.filter_a1, r.filter_b2);
-  const uint32_t filter2 = uint32_t(uint16_t(r.filter_a2)) |
-                           (r.filter_enable ? 0x00010000u : 0u);
   const VolumeEnvelopeParams& env = r.volume_envelope;
   const uint32_t attack_step = ceil_step(0xffffffffu, env.attack_samples);
   const uint32_t decay_step = ceil_step(env.sustain_cb_q12_20, env.decay_samples);
-  emit(kDefineMono, voice,
-       {uint32_t(mirror.generation) | (uint32_t(r.loop_mode & 3) << 16),
-        r.base_addr, r.length, r.loop_start, r.loop_end, 0, phase_inc,
-        pack_pair(r.gain_r, r.gain_l), filter0, filter1, filter2,
-        env.delay_samples, attack_step, env.hold_samples, decay_step,
-        env.sustain_cb_q12_20, envelope_release_step(r)});
+  const bool has_loop = r.loop_mode != 0;
+  const bool has_filter = r.filter_enable;
+  const bool has_envelope = env.delay_samples != 0 || env.attack_samples != 0 ||
+      env.hold_samples != 0 || env.decay_samples != 0 ||
+      env.sustain_cb_q12_20 != 0 || env.release_samples != 0;
+  uint8_t flags = uint8_t(r.loop_mode & 3);
+  if (has_filter) flags |= 1u << 2;
+  if (has_envelope) flags |= 1u << 3;
+  std::vector<uint32_t> payload{
+      uint32_t(mirror.generation), r.base_addr, r.length};
+  if (has_loop) {
+    payload.push_back(r.loop_start);
+    payload.push_back(r.loop_end);
+  }
+  payload.push_back(phase_inc);
+  payload.push_back(pack_pair(r.gain_r, r.gain_l));
+  if (has_filter) {
+    payload.push_back(pack_pair(r.filter_b1, r.filter_b0));
+    payload.push_back(pack_pair(r.filter_a1, r.filter_b2));
+    payload.push_back(uint32_t(uint16_t(r.filter_a2)) | 0x00010000u);
+  }
+  if (has_envelope) {
+    payload.push_back(env.delay_samples);
+    payload.push_back(attack_step);
+    payload.push_back(env.hold_samples);
+    payload.push_back(decay_step);
+    payload.push_back(env.sustain_cb_q12_20);
+    payload.push_back(envelope_release_step(r));
+  }
+  emit(kDefineMono, voice, payload, flags);
   mirror.active = true;
   mirror.released = false;
   mirror.gain_l = r.gain_l;
@@ -131,7 +160,8 @@ void CommandVoiceControl::update_gain_phase(int voice, int gain_l, int gain_r,
          {uint32_t(mirror.generation), pack_pair(next_gain_r, next_gain_l)});
   }
   if (phase_inc != mirror.phase_inc) {
-    emit(kPitch, voice, {uint32_t(mirror.generation), phase_inc});
+    emit(kPitch, voice,
+         {uint32_t(mirror.generation), phase_inc});
   }
   VoiceMirror& updated = voices_.at(voice);
   updated.gain_l = next_gain_l;
@@ -148,7 +178,8 @@ void CommandVoiceControl::update_filter(int voice, const FilterConfig& filter) {
     return;
   }
   emit(kFilter, voice,
-       {uint32_t(mirror.generation), pack_pair(filter.b1, filter.b0),
+       {uint32_t(mirror.generation),
+        pack_pair(filter.b1, filter.b0),
         pack_pair(filter.a1, filter.b2),
         uint32_t(uint16_t(filter.a2)) | (filter.enable ? 0x00010000u : 0u)});
   mirror.filter = filter;

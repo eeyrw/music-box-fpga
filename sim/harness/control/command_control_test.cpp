@@ -52,10 +52,12 @@ void test_mono_start_and_runtime_actions() {
   control.stop_voice(3);
 
   if (sink.commands.size() != 6) throw std::runtime_error("wrong command count");
-  if (opcode(sink.commands[0]) != 0x10 || sink.commands[0].size() != 18)
+  if (opcode(sink.commands[0]) != 0x10 || sink.commands[0].size() != 17 ||
+      ((sink.commands[0][0] >> 14) & 0x3ffu) != 3u ||
+      ((sink.commands[0][0] >> 8) & 0x3fu) != 0x0eu)
     throw std::runtime_error("mono START framing mismatch");
-  if (sink.commands[0][12] != 96 || sink.commands[0][13] != 0x01555556u ||
-      sink.commands[0][14] != 144 || sink.commands[0][16] != (60u << 20))
+  if (sink.commands[0][11] != 96 || sink.commands[0][12] != 0x01555556u ||
+      sink.commands[0][13] != 144 || sink.commands[0][15] != (60u << 20))
     throw std::runtime_error("envelope duration conversion mismatch");
   if (opcode(sink.commands[1]) != 0x16 || sink.commands[1][2] != 0x22221111)
     throw std::runtime_error("GAIN packing mismatch");
@@ -77,9 +79,9 @@ void test_mono_word_count_and_generation() {
   r.loop_end = 8;
   control.start_voice(0, 0x100, r);
   control.start_voice(0, 0x200, r);
-  if (sink.commands.size() != 2 || sink.commands[0].size() != 18 ||
-      sink.commands[1].size() != 18)
-    throw std::runtime_error("mono Note On must emit one 18-word command");
+  if (sink.commands.size() != 2 || sink.commands[0].size() != 6 ||
+      sink.commands[1].size() != 6)
+    throw std::runtime_error("default mono Note On must emit one 6-word command");
   const uint16_t first_generation = uint16_t(sink.commands[0][1]);
   const uint16_t second_generation = uint16_t(sink.commands[1][1]);
   if (first_generation == 0 || second_generation != uint16_t(first_generation + 1))
@@ -114,9 +116,9 @@ void test_long_envelope_durations_produce_nonzero_steps() {
 
   control.start_voice(0, 0x100, r);
   const auto& start = sink.commands.at(0);
-  if (start[13] == 0 || start[15] == 0 || start[17] == 0)
+  if (start[7] == 0 || start[9] == 0 || start[11] == 0)
     throw std::runtime_error("long envelope duration produced a zero step");
-  if (start[13] != 212u || start[15] != 52u || start[17] != 52u)
+  if (start[7] != 212u || start[9] != 52u || start[11] != 52u)
     throw std::runtime_error("long envelope duration did not use ceiling division");
 }
 

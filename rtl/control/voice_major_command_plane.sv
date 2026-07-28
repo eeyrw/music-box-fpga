@@ -21,6 +21,9 @@ module voice_major_command_plane #(
   input  logic                                      control_event_done_pulse,
   input  logic                                      stale_control_event_pulse,
 
+  output synth_pkg::global_audio_config_t           audio_config,
+  output logic [1:0]                                effect_clear,
+
   output logic [31:0]                               command_error_count,
   output logic [31:0]                               stale_generation_count,
   output logic [$clog2(WORD_FIFO_DEPTH+1)-1:0]      word_level,
@@ -28,6 +31,7 @@ module voice_major_command_plane #(
 );
   import synth_pkg::*;
   import synth_register_pkg::*;
+  import synth_dsp_lut_pkg::*;
 
   localparam logic [7:0] CMD_VOICE_START_MONO = 8'h10;
   localparam logic [7:0] CMD_VOICE_ENV = 8'h13;
@@ -36,8 +40,13 @@ module voice_major_command_plane #(
   localparam logic [7:0] CMD_VOICE_GAIN = 8'h16;
   localparam logic [7:0] CMD_VOICE_FILTER = 8'h17;
   localparam logic [7:0] CMD_VOICE_PITCH = 8'h18;
+  localparam logic [7:0] CMD_COMPRESSOR_CONFIG = 8'h20;
+  localparam logic [7:0] CMD_MASTER_VOLUME = 8'h21;
+  localparam logic [7:0] CMD_CHORUS_CONFIG = 8'h22;
+  localparam logic [7:0] CMD_REVERB_CONFIG = 8'h23;
+  localparam logic [7:0] CMD_EFFECT_CLEAR = 8'h24;
   localparam logic [7:0] CMD_STREAM_FLUSH = 8'h7f;
-  localparam int MAX_PAYLOAD_WORDS = 17;
+  localparam int MAX_PAYLOAD_WORDS = 16;
 
   typedef enum logic [2:0] {
     READ_HEADER,
@@ -48,7 +57,8 @@ module voice_major_command_plane #(
 
   parser_state_t parser_state_q;
   logic [7:0] opcode_q;
-  logic [7:0] voice_q;
+  logic [9:0] command_voice_q;
+  logic [5:0] command_flags_q;
   logic [7:0] payload_count_q;
   logic [7:0] payload_index_q;
   logic [31:0] payload_q [0:MAX_PAYLOAD_WORDS-1];
@@ -63,19 +73,45 @@ module voice_major_command_plane #(
   logic bus_cmd_write;
   logic action_valid_format;
   logic action_fire;
+  logic [15:0] command_voice;
+  logic voice_action;
+  logic audio_action;
+  logic audio_action_valid_format;
+  logic voice_action_valid_format;
+  logic [3:0] start_phase_inc_index;
+  logic [3:0] start_gain_index;
+  logic [3:0] start_filter_index;
+  logic [3:0] start_env_index;
+
+  function automatic logic [7:0] start_payload_words(
+    input logic [5:0] flags
+  );
+    start_payload_words = 8'd5 +
+        ((flags[1:0] != 2'b00) ? 8'd2 : 8'd0) +
+        (flags[2] ? 8'd3 : 8'd0) +
+        (flags[3] ? 8'd6 : 8'd0);
+  endfunction
 
   function automatic logic payload_length_valid(
     input logic [7:0] opcode,
-    input logic [7:0] count
+    input logic [7:0] count,
+    input logic [5:0] flags
   );
     unique case (opcode)
-      CMD_VOICE_START_MONO: payload_length_valid = count == 8'd17;
+      CMD_VOICE_START_MONO: payload_length_valid =
+          (flags[5:4] == 2'b00) && (flags[1:0] != 2'b11) &&
+          (count == start_payload_words(flags));
       CMD_VOICE_ENV:        payload_length_valid = count == 8'd7;
       CMD_VOICE_RELEASE:    payload_length_valid = count == 8'd2;
       CMD_VOICE_STOP:       payload_length_valid = count == 8'd1;
       CMD_VOICE_GAIN:       payload_length_valid = count == 8'd2;
       CMD_VOICE_FILTER:     payload_length_valid = count == 8'd4;
       CMD_VOICE_PITCH:      payload_length_valid = count == 8'd2;
+      CMD_COMPRESSOR_CONFIG: payload_length_valid = count == 8'd4;
+      CMD_MASTER_VOLUME:     payload_length_valid = count == 8'd1;
+      CMD_CHORUS_CONFIG:     payload_length_valid = count == 8'd6;
+      CMD_REVERB_CONFIG:     payload_length_valid = count == 8'd9;
+      CMD_EFFECT_CLEAR:      payload_length_valid = count == 8'd1;
       CMD_STREAM_FLUSH:     payload_length_valid = count == 8'd0;
       default:              payload_length_valid = 1'b0;
     endcase
@@ -86,16 +122,128 @@ module voice_major_command_plane #(
   assign fifo_push = cmd_stream_valid || bus_cmd_write;
   assign cmd_stream_ready = fifo_push_ready;
   assign action_pending = (parser_state_q != READ_HEADER) || !fifo_empty;
-  assign action_valid_format = (voice_q < NUM_VOICES) &&
-      payload_length_valid(opcode_q, payload_count_q);
+  assign command_voice = {6'd0, command_voice_q};
+  assign voice_action = (opcode_q == CMD_VOICE_START_MONO) ||
+      ((opcode_q >= CMD_VOICE_ENV) && (opcode_q <= CMD_VOICE_PITCH));
+  assign audio_action = (opcode_q >= CMD_COMPRESSOR_CONFIG) &&
+                        (opcode_q <= CMD_EFFECT_CLEAR);
+  always_comb begin
+    start_phase_inc_index = command_flags_q[1:0] != 2'b00 ? 4'd5 : 4'd3;
+    start_gain_index = start_phase_inc_index + 1'b1;
+    start_filter_index = start_gain_index + 1'b1;
+    start_env_index = start_filter_index + (command_flags_q[2] ? 4'd3 : 4'd0);
+  end
+  always_comb begin
+    audio_action_valid_format = 1'b1;
+    unique case (opcode_q)
+      CMD_COMPRESSOR_CONFIG: begin
+        audio_action_valid_format = (payload_q[0][31:17] == '0) &&
+            (payload_q[1] <= ENV_CB_SILENCE_Q12_20) &&
+            (payload_q[2] <= ENV_CB_SILENCE_Q12_20) &&
+            (payload_q[3] <= ENV_CB_SILENCE_Q12_20);
+      end
+      CMD_MASTER_VOLUME:
+        audio_action_valid_format = payload_q[0][31:15] == '0;
+      CMD_CHORUS_CONFIG: begin
+        audio_action_valid_format = (payload_q[0][15:1] == '0) &&
+            (payload_q[1][31:24] == '0) &&
+            (payload_q[2][31:24] == '0) &&
+            ($signed(payload_q[0][31:16]) <= 16'sh6000) &&
+            ($signed(payload_q[0][31:16]) >= -16'sh6000) &&
+            (payload_q[4][15:0] <= 16'h7fff) &&
+            (payload_q[4][31:16] <= 16'h7fff);
+      end
+      CMD_REVERB_CONFIG: begin
+        audio_action_valid_format = (payload_q[0][31:12] == '0) &&
+            (payload_q[1][31:16] == '0) &&
+            (payload_q[2][31:16] == '0) &&
+            (payload_q[3][31:16] == '0) &&
+            (payload_q[4][31:16] == '0) &&
+            (payload_q[1][15:0] <= 16'h7fff) &&
+            (payload_q[2][15:0] <= 16'h7fff) &&
+            (payload_q[3][15:0] <= 16'h7fff) &&
+            (payload_q[4][15:0] <= 16'h7fff);
+        for (int word = 5; word < 9; word++) begin
+          audio_action_valid_format = audio_action_valid_format &&
+              (payload_q[word][15:0] <= 16'h2d41) &&
+              (payload_q[word][31:16] <= 16'h2d41);
+        end
+      end
+      CMD_EFFECT_CLEAR:
+        audio_action_valid_format = (payload_q[0][31:2] == '0) &&
+                                    (payload_q[0][1:0] != 2'b00);
+      default: audio_action_valid_format = 1'b1;
+    endcase
+  end
+  always_comb begin
+    voice_action_valid_format = payload_q[0][31:16] == '0;
+    unique case (opcode_q)
+      CMD_VOICE_START_MONO: begin
+        voice_action_valid_format = voice_action_valid_format &&
+            (payload_q[2][31:PHASE_FRAME_WIDTH] == '0) &&
+            (payload_q[2][PHASE_FRAME_WIDTH-1:0] != '0) &&
+            !payload_q[start_gain_index][15] &&
+            !payload_q[start_gain_index][31];
+        if (command_flags_q[1:0] != 2'b00) begin
+          voice_action_valid_format = voice_action_valid_format &&
+              (payload_q[3][31:PHASE_FRAME_WIDTH] == '0) &&
+              (payload_q[4][31:PHASE_FRAME_WIDTH] == '0) &&
+              (payload_q[3][PHASE_FRAME_WIDTH-1:0] <
+               payload_q[4][PHASE_FRAME_WIDTH-1:0]) &&
+              (payload_q[4][PHASE_FRAME_WIDTH-1:0] <=
+               payload_q[2][PHASE_FRAME_WIDTH-1:0]);
+        end
+        if (command_flags_q[2]) begin
+          voice_action_valid_format = voice_action_valid_format &&
+              (payload_q[start_filter_index + 4'd2][31:17] == '0);
+        end
+        if (command_flags_q[3]) begin
+          voice_action_valid_format = voice_action_valid_format &&
+              (payload_q[start_env_index][31:PHASE_FRAME_WIDTH] == '0) &&
+              (payload_q[start_env_index + 4'd2][31:PHASE_FRAME_WIDTH] == '0) &&
+              (payload_q[start_env_index + 4'd3] <= ENV_CB_SILENCE_Q12_20) &&
+              (payload_q[start_env_index + 4'd4] <= ENV_CB_SILENCE_Q12_20) &&
+              (payload_q[start_env_index + 4'd5] <= ENV_CB_SILENCE_Q12_20);
+        end
+      end
+      CMD_VOICE_ENV: begin
+        voice_action_valid_format = voice_action_valid_format &&
+            (payload_q[1][31:PHASE_FRAME_WIDTH] == '0) &&
+            (payload_q[3][31:PHASE_FRAME_WIDTH] == '0) &&
+            (payload_q[4] <= ENV_CB_SILENCE_Q12_20) &&
+            (payload_q[5] <= ENV_CB_SILENCE_Q12_20) &&
+            (payload_q[6] <= ENV_CB_SILENCE_Q12_20);
+      end
+      CMD_VOICE_RELEASE:
+        voice_action_valid_format = voice_action_valid_format &&
+            (payload_q[1] <= ENV_CB_SILENCE_Q12_20);
+      CMD_VOICE_GAIN:
+        voice_action_valid_format = voice_action_valid_format &&
+            !payload_q[1][15] && !payload_q[1][31];
+      CMD_VOICE_FILTER:
+        voice_action_valid_format = voice_action_valid_format &&
+            (payload_q[3][31:17] == '0);
+      default: begin end
+    endcase
+  end
+  assign action_valid_format = payload_length_valid(
+      opcode_q, payload_count_q, command_flags_q) &&
+      (((opcode_q == CMD_STREAM_FLUSH) && (command_voice_q == '0) &&
+        (command_flags_q == '0)) ||
+       (audio_action && (command_voice_q == '0) &&
+        (command_flags_q == '0) && audio_action_valid_format) ||
+       (voice_action && (int'(command_voice) < NUM_VOICES) &&
+        ((opcode_q == CMD_VOICE_START_MONO) || (command_flags_q == '0)) &&
+        voice_action_valid_format));
   assign install_valid = (parser_state_q == DISPATCH_ACTION) &&
                          action_valid_format &&
                          (opcode_q == CMD_VOICE_START_MONO);
   assign control_event_valid = (parser_state_q == DISPATCH_ACTION) &&
-      action_valid_format && (opcode_q != CMD_VOICE_START_MONO) &&
-      (opcode_q != CMD_STREAM_FLUSH);
+      action_valid_format && voice_action &&
+      (opcode_q != CMD_VOICE_START_MONO);
   assign action_fire = (install_valid && install_ready) ||
-                       (control_event_valid && control_event_ready);
+                       (control_event_valid && control_event_ready) ||
+                       (audio_action && !render_busy);
 
   always_comb begin
     bus_rsp = '0;
@@ -136,36 +284,55 @@ module voice_major_command_plane #(
       endcase
     end
 
-    install_voice = voice_q[VOICE_ID_WIDTH-1:0];
+    install_voice = command_voice[VOICE_ID_WIDTH-1:0];
     install_state = '0;
     install_state.region.base_addr = payload_q[1];
     install_state.region.length = payload_q[2][PHASE_FRAME_WIDTH-1:0];
-    install_state.region.loop_start = payload_q[3][PHASE_FRAME_WIDTH-1:0];
-    install_state.region.loop_end = payload_q[4][PHASE_FRAME_WIDTH-1:0];
-    install_state.region.loop_mode = payload_q[0][17:16];
-    install_state.event_params.phase_inc = payload_q[6];
-    install_state.event_params.gain_l = payload_q[7][15:0];
-    install_state.event_params.gain_r = payload_q[7][31:16];
-    install_state.event_params.filter_b0 = payload_q[8][15:0];
-    install_state.event_params.filter_b1 = payload_q[8][31:16];
-    install_state.event_params.filter_b2 = payload_q[9][15:0];
-    install_state.event_params.filter_a1 = payload_q[9][31:16];
-    install_state.event_params.filter_a2 = payload_q[10][15:0];
-    install_state.event_params.filter_enable = payload_q[10][16];
-    install_state.env_params.delay_samples = payload_q[11][PHASE_FRAME_WIDTH-1:0];
-    install_state.env_params.attack_step_q0_32 = payload_q[12];
-    install_state.env_params.hold_samples = payload_q[13][PHASE_FRAME_WIDTH-1:0];
-    install_state.env_params.decay_step_cb_q12_20 = payload_q[14];
-    install_state.env_params.sustain_cb_q12_20 = payload_q[15];
-    install_state.env_params.release_step_cb_q12_20 = payload_q[16];
+    install_state.region.loop_start = command_flags_q[1:0] != 2'b00 ?
+        payload_q[3][PHASE_FRAME_WIDTH-1:0] : '0;
+    install_state.region.loop_end = command_flags_q[1:0] != 2'b00 ?
+        payload_q[4][PHASE_FRAME_WIDTH-1:0] :
+        payload_q[2][PHASE_FRAME_WIDTH-1:0];
+    install_state.region.loop_mode = command_flags_q[1:0];
+    install_state.event_params.phase_inc = payload_q[start_phase_inc_index];
+    install_state.event_params.gain_l = payload_q[start_gain_index][15:0];
+    install_state.event_params.gain_r = payload_q[start_gain_index][31:16];
+    if (command_flags_q[2]) begin
+      install_state.event_params.filter_b0 =
+          payload_q[start_filter_index][15:0];
+      install_state.event_params.filter_b1 =
+          payload_q[start_filter_index][31:16];
+      install_state.event_params.filter_b2 =
+          payload_q[start_filter_index + 1'b1][15:0];
+      install_state.event_params.filter_a1 =
+          payload_q[start_filter_index + 1'b1][31:16];
+      install_state.event_params.filter_a2 =
+          payload_q[start_filter_index + 4'd2][15:0];
+      install_state.event_params.filter_enable =
+          payload_q[start_filter_index + 4'd2][16];
+    end
+    if (command_flags_q[3]) begin
+      install_state.env_params.delay_samples =
+          payload_q[start_env_index][PHASE_FRAME_WIDTH-1:0];
+      install_state.env_params.attack_step_q0_32 =
+          payload_q[start_env_index + 1'b1];
+      install_state.env_params.hold_samples =
+          payload_q[start_env_index + 4'd2][PHASE_FRAME_WIDTH-1:0];
+      install_state.env_params.decay_step_cb_q12_20 =
+          payload_q[start_env_index + 4'd3];
+      install_state.env_params.sustain_cb_q12_20 =
+          payload_q[start_env_index + 4'd4];
+      install_state.env_params.release_step_cb_q12_20 =
+          payload_q[start_env_index + 4'd5];
+    end
     install_state.dynamic.active = 1'b1;
     install_state.dynamic.generation = payload_q[0][15:0];
-    install_state.dynamic.phase = payload_q[5];
+    install_state.dynamic.phase = '0;
     install_state.dynamic.env_state.stage = ENV_DELAY;
 
     control_event = '0;
     control_event.target_frame = current_frame;
-    control_event.host_voice_id = 16'(voice_q);
+    control_event.host_voice_id = command_voice;
     control_event.generation = payload_q[0][15:0];
     unique case (opcode_q)
       CMD_VOICE_STOP: control_event.kind = BLOCK_VOICE_STOP;
@@ -228,17 +395,23 @@ module voice_major_command_plane #(
     if (rst) begin
       parser_state_q <= READ_HEADER;
       opcode_q <= '0;
-      voice_q <= '0;
+      command_voice_q <= '0;
+      command_flags_q <= '0;
       payload_count_q <= '0;
       payload_index_q <= '0;
       command_error_count <= '0;
       stale_generation_count <= '0;
+      audio_config <= '0;
+      audio_config.master_volume <= 16'sh7fff;
+      effect_clear <= '0;
     end else begin
+      effect_clear <= '0;
       unique case (parser_state_q)
         READ_HEADER: begin
           if (fifo_head_valid) begin
             opcode_q <= fifo_head_word[31:24];
-            voice_q <= fifo_head_word[23:16];
+            command_voice_q <= fifo_head_word[23:14];
+            command_flags_q <= fifo_head_word[13:8];
             payload_count_q <= fifo_head_word[7:0];
             payload_index_q <= '0;
             parser_state_q <= fifo_head_word[7:0] == 0 ?
@@ -247,8 +420,8 @@ module voice_major_command_plane #(
         end
         READ_PAYLOAD: begin
           if (fifo_head_valid) begin
-            if (payload_index_q < MAX_PAYLOAD_WORDS)
-              payload_q[payload_index_q] <= fifo_head_word;
+            if (payload_index_q < 8'(MAX_PAYLOAD_WORDS))
+              payload_q[payload_index_q[3:0]] <= fifo_head_word;
             payload_index_q <= payload_index_q + 1'b1;
             if ((payload_index_q + 1'b1) >= payload_count_q)
               parser_state_q <= DISPATCH_ACTION;
@@ -262,8 +435,45 @@ module voice_major_command_plane #(
           end else if (opcode_q == CMD_STREAM_FLUSH) begin
             parser_state_q <= READ_HEADER;
           end else if (action_fire) begin
+            unique case (opcode_q)
+              CMD_COMPRESSOR_CONFIG: begin
+                audio_config.compressor.enable <= payload_q[0][0];
+                audio_config.compressor.ratio_slope_q0_16 <= payload_q[0][16:1];
+                audio_config.compressor.threshold_cb_q12_20 <= payload_q[1];
+                audio_config.compressor.attack_step_cb_q12_20 <= payload_q[2];
+                audio_config.compressor.release_step_cb_q12_20 <= payload_q[3];
+              end
+              CMD_MASTER_VOLUME:
+                audio_config.master_volume <= $signed(payload_q[0][15:0]);
+              CMD_CHORUS_CONFIG: begin
+                audio_config.chorus.enable <= payload_q[0][0];
+                audio_config.chorus.feedback_q1_15 <= $signed(payload_q[0][31:16]);
+                audio_config.chorus.base_delay_q16_8 <= payload_q[1][23:0];
+                audio_config.chorus.depth_q16_8 <= payload_q[2][23:0];
+                audio_config.chorus.lfo_phase_inc_q0_32 <= payload_q[3];
+                audio_config.chorus.input_send_q1_15 <= payload_q[4][15:0];
+                audio_config.chorus.return_gain_q1_15 <= payload_q[4][31:16];
+                audio_config.chorus.stereo_phase_offset_q0_32 <= payload_q[5];
+              end
+              CMD_REVERB_CONFIG: begin
+                audio_config.reverb.enable <= payload_q[0][0];
+                audio_config.reverb.pre_delay_frames <= payload_q[0][11:1];
+                audio_config.reverb.input_send_q1_15 <= payload_q[1][15:0];
+                audio_config.reverb.return_gain_q1_15 <= payload_q[2][15:0];
+                audio_config.reverb.damping_q1_15 <= payload_q[3][15:0];
+                audio_config.reverb.chorus_to_reverb_q1_15 <= payload_q[4][15:0];
+                for (int pair = 0; pair < 4; pair++) begin
+                  audio_config.reverb.feedback_gain_q1_15[pair * 2] <=
+                      payload_q[5 + pair][15:0];
+                  audio_config.reverb.feedback_gain_q1_15[pair * 2 + 1] <=
+                      payload_q[5 + pair][31:16];
+                end
+              end
+              CMD_EFFECT_CLEAR: effect_clear <= payload_q[0][1:0];
+              default: begin end
+            endcase
             parser_state_q <= opcode_q == CMD_VOICE_START_MONO ?
-                              READ_HEADER : WAIT_CONTROL_EVENT;
+                READ_HEADER : (audio_action ? READ_HEADER : WAIT_CONTROL_EVENT);
           end
         end
         WAIT_CONTROL_EVENT: begin
@@ -278,7 +488,4 @@ module voice_major_command_plane #(
       endcase
     end
   end
-
-  logic unused_render_busy;
-  assign unused_render_busy = render_busy;
 endmodule

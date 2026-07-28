@@ -9,6 +9,8 @@ module voice_major_render_core (
   output logic                                      cmd_stream_ready,
   output logic [31:0]                               command_error_count,
   output logic [31:0]                               stale_generation_count,
+  output synth_pkg::global_audio_config_t           audio_config,
+  output logic [1:0]                                effect_clear,
 
   input  logic                                      block_req_valid,
   output logic                                      block_req_ready,
@@ -60,6 +62,7 @@ module voice_major_render_core (
   logic stale_control_event;
   logic stale_params_write;
   logic stale_dynamic_write;
+  logic unused_params_write_ready;
   logic [$clog2(1024+1)-1:0] command_word_level;
   logic command_action_pending;
   logic [TIMELINE_FRAME_WIDTH-1:0] current_frame_q;
@@ -84,6 +87,8 @@ module voice_major_render_core (
     .control_event(command_control_event),
     .control_event_done_pulse(command_control_event_done),
     .stale_control_event_pulse(stale_control_event),
+    .audio_config,
+    .effect_clear,
     .command_error_count,
     .stale_generation_count,
     .word_level(command_word_level),
@@ -99,7 +104,7 @@ module voice_major_render_core (
     .install_voice(command_install_voice),
     .install_state(command_install_state),
     .params_write_valid(1'b0),
-    .params_write_ready(),
+    .params_write_ready(unused_params_write_ready),
     .params_write_voice('0),
     .params_write_generation('0),
     .params_write_event('0),

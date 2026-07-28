@@ -79,6 +79,8 @@ module voice_major_render_harness (
   logic line_rsp_ready;
   ordered_line_rsp_t line_rsp;
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr_rsp_data;
+  global_audio_config_t audio_config;
+  logic [1:0] effect_clear;
 
   // Simulation-only trace of the unfiltered sample-address stream. Registering
   // it here makes each planner event visible for one complete core cycle.
@@ -147,6 +149,8 @@ module voice_major_render_harness (
     .cmd_stream_ready,
     .command_error_count,
     .stale_generation_count,
+    .audio_config,
+    .effect_clear,
     .block_req_valid,
     .block_req_ready,
     .block_req,
@@ -170,6 +174,9 @@ module voice_major_render_harness (
     .block_release_ready,
     .block_release_buffer_id(block_release_buffer)
   );
+
+  logic unused_audio_control;
+  assign unused_audio_control = (|audio_config) | (|effect_clear);
 
   ordered_line_ddr3_bridge_model #(
     .ADDR_WIDTH(ADDR_WIDTH),

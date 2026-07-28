@@ -12,6 +12,8 @@ module tb_voice_major_render_core;
   logic cmd_stream_ready;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+  global_audio_config_t audio_config;
+  logic [1:0] effect_clear;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
@@ -52,24 +54,35 @@ module tb_voice_major_render_core;
 
   task automatic start_mono_voice;
     begin
-      send_command_word({8'h10, 8'(300 % NUM_VOICES), 8'd0, 8'd17});
+      send_command_word(32'h1000_0005 |
+                        (32'(300 % NUM_VOICES) << 14));
       send_command_word(32'h0000_1234);
       send_command_word(32'd100);
       send_command_word(32'd8);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
       send_command_word(32'h0000_0100);
       send_command_word(32'h7fff_7fff);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
-      send_command_word(32'd0);
+    end
+  endtask
+
+  task automatic configure_audio;
+    logic clear_seen;
+    begin
+      if (audio_config.master_volume != 16'sh7fff)
+        $fatal(1, "voice-major audio control reset value mismatch");
+      send_command_word(32'h2100_0001);
+      send_command_word(32'h0000_4000);
+      do @(posedge clk); while (audio_config.master_volume != 16'sh4000);
+
+      clear_seen = 1'b0;
+      send_command_word(32'h2400_0001);
+      send_command_word(32'h0000_0003);
+      repeat (20) begin
+        @(posedge clk);
+        if (effect_clear == 2'b11)
+          clear_seen = 1'b1;
+      end
+      if (!clear_seen)
+        $fatal(1, "voice-major effect-clear command was not dispatched");
     end
   endtask
 
@@ -170,6 +183,7 @@ module tb_voice_major_render_core;
     @(negedge clk);
     rst = 1'b0;
 
+    configure_audio();
     start_mono_voice();
 
     render_and_read(32'd20, 24'sd99, 1'b1);

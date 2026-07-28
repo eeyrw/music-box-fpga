@@ -30,31 +30,47 @@ ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnos
 void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
   if (words.empty()) return;
   const uint8_t opcode = uint8_t(words[0] >> 24);
-  const int voice = int((words[0] >> 16) & 0xffu);
   const size_t payload_words = size_t(words[0] & 0xffu);
+  const uint8_t flags = uint8_t((words[0] >> 8) & 0x3fu);
+  const bool voice_opcode = opcode == 0x10 ||
+      (opcode >= 0x13 && opcode <= 0x18);
+  const int voice = voice_opcode ? int((words[0] >> 14) & 0x3ffu) : 0;
   if (voice < 0 || voice >= kNumVoices || words.size() != payload_words + 1) return;
 
-  if (opcode == 0x10 && payload_words == 17) {
+  const bool has_loop = (flags & 3u) != 0;
+  const bool has_filter = (flags & 4u) != 0;
+  const bool has_envelope = (flags & 8u) != 0;
+  const size_t expected_start_words = 5u + (has_loop ? 2u : 0u) +
+      (has_filter ? 3u : 0u) + (has_envelope ? 6u : 0u);
+  if (opcode == 0x10 && (flags & 0x30u) == 0 && (flags & 3u) != 3u &&
+      payload_words == expected_start_words) {
     VoiceConfig v{};
     v.valid = true;
     v.enable = true;
     v.released = false;
     v.generation = uint16_t(words[1]);
-    v.loop_mode = int((words[1] >> 16) & 3u);
+    v.loop_mode = int(flags & 3u);
     v.base_addr = words[2];
     v.length = words[3] & kPhaseFrameMask;
-    v.loop_start = words[4] & kPhaseFrameMask;
-    v.loop_end = words[5] & kPhaseFrameMask;
-    v.phase = words[6];
-    v.phase_inc = words[7];
-    v.gain_l = int16_t(words[8] & 0xffffu);
-    v.gain_r = int16_t(words[8] >> 16);
-    v.filter_b0 = int16_t(words[9] & 0xffffu);
-    v.filter_b1 = int16_t(words[9] >> 16);
-    v.filter_b2 = int16_t(words[10] & 0xffffu);
-    v.filter_a1 = int16_t(words[10] >> 16);
-    v.filter_a2 = int16_t(words[11] & 0xffffu);
-    v.filter_enable = (words[11] & 0x00010000u) != 0;
+    size_t index = 4;
+    if (has_loop) {
+      v.loop_start = words[index++] & kPhaseFrameMask;
+      v.loop_end = words[index++] & kPhaseFrameMask;
+    } else {
+      v.loop_end = v.length;
+    }
+    v.phase = 0;
+    v.phase_inc = words[index++];
+    v.gain_l = int16_t(words[index] & 0xffffu);
+    v.gain_r = int16_t(words[index++] >> 16);
+    if (has_filter) {
+      v.filter_b0 = int16_t(words[index] & 0xffffu);
+      v.filter_b1 = int16_t(words[index++] >> 16);
+      v.filter_b2 = int16_t(words[index] & 0xffffu);
+      v.filter_a1 = int16_t(words[index++] >> 16);
+      v.filter_a2 = int16_t(words[index] & 0xffffu);
+      v.filter_enable = (words[index++] & 0x00010000u) != 0;
+    }
     v.valid = v.length != 0 &&
               (v.loop_mode == 0 ||
                (v.loop_start < v.loop_end && v.loop_end <= v.length));
@@ -62,12 +78,14 @@ void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
     v.envelope = 0;
     voices_[voice] = v;
     EnvelopeState e{};
-    e.delay_samples = words[12] & 0x00ffffffu;
-    e.attack_step = words[13];
-    e.hold_samples = words[14] & 0x00ffffffu;
-    e.decay_step = words[15];
-    e.sustain_cb = words[16];
-    e.release_step = words[17];
+    if (has_envelope) {
+      e.delay_samples = words[index++] & 0x00ffffffu;
+      e.attack_step = words[index++];
+      e.hold_samples = words[index++] & 0x00ffffffu;
+      e.decay_step = words[index++];
+      e.sustain_cb = words[index++];
+      e.release_step = words[index++];
+    }
     e.stage = e.delay_samples != 0 ? EnvelopeState::kDelay : EnvelopeState::kAttack;
     if (e.delay_samples == 0 && e.attack_step == 0) {
       e.attack_level = 0xffffffffu;

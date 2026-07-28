@@ -58,7 +58,8 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/sd_native_pkg.sv \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
-	fpga/common/rtl/wavetable_i2s_output.sv
+	fpga/common/rtl/wavetable_i2s_output.sv \
+	fpga/common/rtl/voice_major_demo_system.sv
 
 SPI_SIM_SOURCES := \
 	sim/tb/tb_spi_register_bridge.sv
@@ -207,6 +208,7 @@ lint:
 		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
 		rtl/audio/lookahead_compressor.sv rtl/audio/global_audio_effects_chain.sv
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_render_core $(RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module sd_native_block_reader \

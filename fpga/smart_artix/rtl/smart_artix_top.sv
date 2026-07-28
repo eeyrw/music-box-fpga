@@ -187,7 +187,7 @@ module smart_artix_top (
     .ddr_reg_access_status
   );
 
-  wavetable_demo_system #(
+  voice_major_demo_system #(
     .LINE_WORDS(LINE_WORDS),
     .OUTPUT_FIFO_DEPTH(OUTPUT_FIFO_DEPTH),
     .TARGET_LEVEL(OUTPUT_FIFO_TARGET_LEVEL),

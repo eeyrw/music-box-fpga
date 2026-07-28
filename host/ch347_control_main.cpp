@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cctype>
-#include <array>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -28,10 +27,6 @@ struct RegisterRead {
 };
 
 struct ReleaseVoice {
-  int voice = 0;
-};
-
-struct SnapshotVoice {
   int voice = 0;
 };
 
@@ -63,7 +58,6 @@ struct Action {
     DdrAccessWriteAction,
     DdrAccessReadAction,
     ReadLoadProgressAction,
-    SnapshotVoiceAction,
   } type = WriteRegisterAction;
 
   RegisterWrite write;
@@ -72,7 +66,6 @@ struct Action {
   StartVoice start;
   DdrAccessWrite ddr_write;
   DdrAccessRead ddr_read;
-  SnapshotVoice snapshot;
 };
 
 struct Args {
@@ -198,7 +191,6 @@ void print_usage(const char* argv0) {
       << "  " << argv0 << " [transport options] --read ADDR [--read ADDR ...]\n"
       << "  " << argv0 << " [transport options] --read-load-progress\n"
       << "  " << argv0 << " [transport options] --start-voice VOICE [voice options]\n"
-      << "  " << argv0 << " [transport options] --snapshot-voice VOICE\n"
       << "\nTransport options:\n"
       << "  --lib PATH              CH347 shared library path, default third_party/ch347_linux/lib/x64/libch347.so\n"
       << "  --device PATH|N         CH347 device path, default /dev/ch34x_pis0; N maps to /dev/ch34x_pisN\n"
@@ -209,15 +201,10 @@ void print_usage(const char* argv0) {
       << "  --ddr-byte-enable MASK  Byte-enable mask for later --ddr-write, default 0xffff\n"
       << "  --ddr-timeout N         Poll limit for later DDR register access commands, default 10000\n"
       << "\nVoice options for --start-voice:\n"
-      << "  --stereo 0|1            Default 0\n"
       << "  --base ADDR             Left/mono wave-memory base word address\n"
-      << "  --base-r ADDR           Right-channel wave-memory base word address\n"
       << "  --length FRAMES         Sample-frame length\n"
-      << "  --length-r FRAMES       Right-channel sample-frame length, default length\n"
       << "  --loop-start FRAME      Default 0\n"
-      << "  --loop-start-r FRAME    Right-channel loop start, default loop-start\n"
       << "  --loop-end FRAME        Default length\n"
-      << "  --loop-end-r FRAME      Right-channel loop end, default length-r\n"
       << "  --loop-mode MODE        0 none, 1 continuous, 2 until release\n"
       << "  --phase-inc Q24_8       Default 0x00000100\n"
       << "  --gain-l Q1_15          Default 0x4000\n"
@@ -225,7 +212,6 @@ void print_usage(const char* argv0) {
       << "\nOther operations:\n"
       << "  --release VOICE         Enter the command-stream release stage\n"
       << "  --stop-voice VOICE      Stop a voice immediately\n"
-      << "  --snapshot-voice VOICE  Capture and print one voice's internal state\n"
       << "  --read-load-progress  Read SD asset bytes-loaded progress\n"
       << "  --ddr-write ADDR D0 D1 D2 D3\n"
       << "                          Write one 16-byte DDR beat through the platform register window\n"
@@ -242,9 +228,6 @@ Args parse_args(int argc, char** argv) {
   auto flush_start = [&]() {
     if (!have_start) return;
     if (current_start.region.loop_end == 0) current_start.region.loop_end = current_start.region.length;
-    if (current_start.region.length_r == 0) current_start.region.length_r = current_start.region.length;
-    if (current_start.region.loop_start_r == 0) current_start.region.loop_start_r = current_start.region.loop_start;
-    if (current_start.region.loop_end_r == 0) current_start.region.loop_end_r = current_start.region.length_r;
     Action action;
     action.type = Action::StartAction;
     action.start = current_start;
@@ -330,43 +313,22 @@ Args parse_args(int argc, char** argv) {
       action.type = a == "--release" ? Action::ReleaseAction : Action::StopAction;
       action.release = release;
       args.actions.push_back(action);
-    } else if (a == "--snapshot-voice") {
-      flush_start();
-      Action action;
-      action.type = Action::SnapshotVoiceAction;
-      action.snapshot.voice = parse_int(need_arg(argc, argv, i, "--snapshot-voice"), "voice");
-      args.actions.push_back(action);
     } else if (a == "--start-voice") {
       flush_start();
       have_start = true;
       current_start.voice = parse_int(need_arg(argc, argv, i, "--start-voice"), "voice");
-    } else if (a == "--stereo") {
-      have_start = true;
-      current_start.region.stereo = parse_int(need_arg(argc, argv, i, "--stereo"), "stereo") != 0;
     } else if (a == "--base") {
       have_start = true;
       current_start.region.base_addr = parse_u32(need_arg(argc, argv, i, "--base"), "base");
-    } else if (a == "--base-r") {
-      have_start = true;
-      current_start.region.base_addr_r = parse_u32(need_arg(argc, argv, i, "--base-r"), "base-r");
     } else if (a == "--length") {
       have_start = true;
       current_start.region.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");
-    } else if (a == "--length-r") {
-      have_start = true;
-      current_start.region.length_r = parse_u32(need_arg(argc, argv, i, "--length-r"), "length-r");
     } else if (a == "--loop-start") {
       have_start = true;
       current_start.region.loop_start = parse_u32(need_arg(argc, argv, i, "--loop-start"), "loop-start");
-    } else if (a == "--loop-start-r") {
-      have_start = true;
-      current_start.region.loop_start_r = parse_u32(need_arg(argc, argv, i, "--loop-start-r"), "loop-start-r");
     } else if (a == "--loop-end") {
       have_start = true;
       current_start.region.loop_end = parse_u32(need_arg(argc, argv, i, "--loop-end"), "loop-end");
-    } else if (a == "--loop-end-r") {
-      have_start = true;
-      current_start.region.loop_end_r = parse_u32(need_arg(argc, argv, i, "--loop-end-r"), "loop-end-r");
     } else if (a == "--loop-mode") {
       have_start = true;
       current_start.region.loop_mode = parse_int(need_arg(argc, argv, i, "--loop-mode"), "loop-mode");
@@ -500,55 +462,6 @@ void execute_ddr_read(host::RegisterIo& sink, host::Ch347RegisterTransport* tran
             << " status=0x" << std::setw(8) << status << std::dec << std::setfill(' ') << "\n";
 }
 
-void execute_voice_snapshot(host::RegisterIo& registers, int voice, bool dry_run) {
-  validate_voice(voice);
-  registers.write_register(render::regs::kDebugVoiceIndex, uint32_t(voice));
-  registers.write_register(render::regs::kDebugVoiceCapture, 1);
-
-  uint32_t status = registers.read_register(render::regs::kDebugVoiceStatus);
-  if (!dry_run) {
-    for (int poll = 0; (status & 1u) != 0 && poll < 10000; ++poll)
-      status = registers.read_register(render::regs::kDebugVoiceStatus);
-    if ((status & 1u) != 0) throw std::runtime_error("voice snapshot timed out");
-    if ((status & 2u) == 0) throw std::runtime_error("voice snapshot is not valid");
-  }
-
-  std::cout << "voice-snapshot voice=" << voice << " status=0x" << std::hex
-            << std::setw(8) << std::setfill('0') << status << "\n";
-  constexpr std::array<std::pair<const char*, uint16_t>, 24> fields{{
-      {"base_l", render::regs::kDebugVoiceBaseL},
-      {"base_r", render::regs::kDebugVoiceBaseR},
-      {"length_l", render::regs::kDebugVoiceLengthL},
-      {"length_r", render::regs::kDebugVoiceLengthR},
-      {"loop_start_l", render::regs::kDebugVoiceLoopStartL},
-      {"loop_start_r", render::regs::kDebugVoiceLoopStartR},
-      {"loop_end_l", render::regs::kDebugVoiceLoopEndL},
-      {"loop_end_r", render::regs::kDebugVoiceLoopEndR},
-      {"phase_init", render::regs::kDebugVoicePhaseInit},
-      {"phase_inc", render::regs::kDebugVoicePhaseInc},
-      {"gain", render::regs::kDebugVoiceGain},
-      {"envelope", render::regs::kDebugVoiceEnvelope},
-      {"filter_control", render::regs::kDebugVoiceFilterControl},
-      {"filter_b0_b1", render::regs::kDebugVoiceFilterB0B1},
-      {"filter_b2_a1", render::regs::kDebugVoiceFilterB2A1},
-      {"env_delay", render::regs::kDebugEnvDelay},
-      {"env_attack_step", render::regs::kDebugEnvAttackStep},
-      {"env_hold", render::regs::kDebugEnvHold},
-      {"env_decay_step", render::regs::kDebugEnvDecayStep},
-      {"env_sustain", render::regs::kDebugEnvSustain},
-      {"env_release_step", render::regs::kDebugEnvReleaseStep},
-      {"env_elapsed", render::regs::kDebugEnvElapsed},
-      {"env_attack_level", render::regs::kDebugEnvAttackLevel},
-      {"env_attenuation", render::regs::kDebugEnvAttenuation},
-  }};
-  for (const auto& field : fields) {
-    uint32_t value = registers.read_register(field.second);
-    std::cout << "  " << std::left << std::setw(20) << std::setfill(' ') << field.first
-              << " 0x" << std::right << std::setw(8) << std::setfill('0') << value << "\n";
-  }
-  std::cout << std::dec << std::setfill(' ');
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -600,8 +513,6 @@ int main(int argc, char** argv) {
         execute_ddr_read(registers, transport.get(), dry_run, args.dry_run, action.ddr_read);
       } else if (action.type == Action::ReadLoadProgressAction) {
         execute_load_progress(transport.get(), dry_run, args.dry_run);
-      } else if (action.type == Action::SnapshotVoiceAction) {
-        execute_voice_snapshot(registers, action.snapshot.voice, args.dry_run);
       }
     }
   } catch (const std::exception& e) {

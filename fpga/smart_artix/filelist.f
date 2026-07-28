@@ -8,9 +8,8 @@
 ../common/rtl/sd_native_pkg.sv
 ../common/rtl/sd_native_block_reader.sv
 ../common/rtl/sd_native_pin_phy.sv
-../common/rtl/wavetable_system_core.sv
 ../common/rtl/wavetable_i2s_output.sv
-../common/rtl/wavetable_demo_system.sv
+../common/rtl/voice_major_demo_system.sv
 
 # Board-specific RTL.
 rtl/smart_artix_pkg.sv

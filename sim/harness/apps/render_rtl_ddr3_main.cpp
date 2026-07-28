@@ -8,12 +8,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -425,6 +427,8 @@ int main(int argc, char** argv) {
     }
     render::Args args = render::parse_args(int(render_argv.size()),
                                            render_argv.data());
+    using Clock = std::chrono::steady_clock;
+    const auto total_start = Clock::now();
     render::RenderPreparationTiming timing;
     render::RenderInputs inputs = render::load_render_inputs(args, &timing);
     std::vector<int16_t> wave_memory = render::take_sf2_wave_memory(inputs);
@@ -445,6 +449,7 @@ int main(int argc, char** argv) {
     uint64_t nonzero_words = 0;
     uint16_t peak_active_voices = 0;
     const uint32_t end_frame = uint32_t(inputs.sample_count);
+    const auto render_start = Clock::now();
     while (frame < end_frame && !render::interrupt_requested()) {
       timeline.advance_to(int(frame));
       peak_active_voices = std::max(peak_active_voices,
@@ -460,6 +465,7 @@ int main(int argc, char** argv) {
       }
       frame = boundary;
     }
+    const auto render_end = Clock::now();
 
     if (!render::interrupt_requested() && nonzero_words == 0) {
       throw std::runtime_error("RTL render produced all-zero PCM");
@@ -467,6 +473,49 @@ int main(int argc, char** argv) {
     if (driver.ddr_accepted() != driver.ddr_returned()) {
       throw std::runtime_error("DDR request/response accounting mismatch");
     }
+
+    auto elapsed_ms = [](Clock::time_point start, Clock::time_point end) {
+      return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+    std::ostringstream stats;
+    stats << "  \"render_target\": \"render-rtl-ddr3\""
+          << ",\n  \"algorithm\": \"rtl_voice_major_window_ddr3\""
+          << ",\n" << render::render_input_json_fields(
+                 args, inputs.control_tick_samples)
+          << ",\n" << render::diagnostics_json_fields(diagnostics)
+          << ",\n  \"timing_sf2_load_ms\": " << timing.sf2_load_ms
+          << ",\n  \"timing_event_parse_ms\": " << timing.event_parse_ms
+          << ",\n  \"timing_prepare_ms\": " << timing.region_prepare_ms
+          << ",\n  \"timing_render_ms\": " << elapsed_ms(render_start, render_end)
+          << ",\n  \"timing_total_ms\": " << elapsed_ms(total_start, render_end)
+          << ",\n  \"interrupted\": "
+          << (render::interrupt_requested() ? "true" : "false")
+          << ",\n  \"nonzero_output_words\": " << nonzero_words
+          << ",\n  \"rtl_core_cycles\": " << driver.cycles()
+          << ",\n  \"rtl_render_blocks\": " << driver.render_blocks()
+          << ",\n  \"rtl_render_frames\": " << driver.render_frames()
+          << ",\n  \"rtl_total_render_cycles\": " << driver.total_render_cycles()
+          << ",\n  \"rtl_max_render_cycles\": " << driver.max_render_cycles()
+          << ",\n  \"rtl_max_deadline_utilization_ppm\": "
+          << driver.max_deadline_utilization_ppm()
+          << ",\n  \"rtl_deadline_misses\": " << driver.deadline_misses()
+          << ",\n  \"rtl_window_words\": " << driver.configured_window_words()
+          << ",\n  \"rtl_window_refills\": " << driver.window_refills()
+          << ",\n  \"rtl_window_fallback_reads\": "
+          << driver.window_fallback_reads()
+          << ",\n  \"rtl_stale_parameter_updates\": "
+          << driver.stale_parameter_updates()
+          << ",\n  \"rtl_peak_active_voices\": " << peak_active_voices
+          << ",\n  \"ddr_reads\": " << driver.ddr_accepted()
+          << ",\n  \"ddr_row_hits\": " << driver.ddr_row_hits()
+          << ",\n  \"ddr_row_misses\": " << driver.ddr_row_misses()
+          << ",\n  \"ddr_activates\": " << driver.ddr_activates()
+          << ",\n  \"ddr_precharges\": " << driver.ddr_precharges()
+          << ",\n  \"ddr_refreshes\": " << driver.ddr_refreshes()
+          << ",\n  \"wav_path\": " << render::json_string(wav_path);
+    render::write_summary(args.out_dir + "/rtl_ddr3_render_config.json",
+                          regions, args.sample_rate, int(frame),
+                          int(inputs.events.size()), stats.str());
 
     driver.print_window_prefetch_analysis(std::cout);
     std::cout << "PASS: RTL DDR3 render frames=" << frame

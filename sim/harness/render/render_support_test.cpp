@@ -512,13 +512,13 @@ int main() {
     std::vector<int16_t> delay_memory{0, 1000, 3000, 6000};
     render::ReferenceSynth delay_synth(delay_memory);
     delay_synth.write_command_words(
-        {0x10000011u, 0x00010001u, 0u, 4u, 1u, 3u, 0x00000240u,
-         0x00000100u, 0x7fff7fffu, 0x00002000u, 0x00002000u,
+        {0x10000d10u, 1u, 0u, 4u, 1u, 3u,
+         0x00000180u, 0x7fff7fffu, 0x00002000u, 0x00002000u,
          0x00010000u, 2u, 0x80000000u, 0u, 0u, 0u, 0x01000000u});
     int delay_first = delay_synth.render_sample().first;
     int delay_transition = delay_synth.render_sample().first;
     int delay_attack = delay_synth.render_sample().first;
-    if (delay_first != 0 || delay_transition != 0 || delay_attack != 624) {
+    if (delay_first != 0 || delay_transition != 0 || delay_attack != 249) {
       throw std::runtime_error("reference silent Delay outputs were " +
                                std::to_string(delay_first) + ", " +
                                std::to_string(delay_transition) + ", " +

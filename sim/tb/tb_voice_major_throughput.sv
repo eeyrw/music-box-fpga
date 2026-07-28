@@ -21,18 +21,15 @@ module tb_voice_major_throughput;
   logic ddr3_clk = 1'b0;
 `endif
   logic rst = 1'b1;
-  logic install_valid;
-  logic install_ready;
-  logic [VOICE_ID_WIDTH-1:0] install_voice;
-  block_voice_state_snapshot_t install_state;
-  logic params_write_valid;
-  logic params_write_ready;
-  logic [VOICE_ID_WIDTH-1:0] params_write_voice;
-  logic [VOICE_GENERATION_WIDTH-1:0] params_write_generation;
-  voice_event_params_t params_write_event;
-  volume_env_params_t params_write_env;
-  logic stale_params_write_pulse;
-  logic stale_dynamic_write_pulse;
+  reg_bus_req_t bus_req;
+  reg_bus_rsp_t bus_rsp;
+  logic cmd_stream_valid;
+  logic [31:0] cmd_stream_data;
+  logic cmd_stream_ready;
+  logic [31:0] command_error_count;
+  logic [31:0] stale_generation_count;
+  global_audio_config_t audio_config;
+  logic [1:0] effect_clear;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
@@ -172,6 +169,17 @@ module tb_voice_major_throughput;
 
   voice_major_render_core dut (.*);
 
+  task automatic send_command_word(input logic [31:0] word);
+    begin
+      @(negedge clk);
+      cmd_stream_data = word;
+      cmd_stream_valid = 1'b1;
+      do @(posedge clk); while (!cmd_stream_ready);
+      @(negedge clk);
+      cmd_stream_valid = 1'b0;
+    end
+  endtask
+
 `ifdef SYNTH_DDR3_MODEL
   assign line_rsp.words = ddr3_rsp_data;
 
@@ -219,14 +227,25 @@ module tb_voice_major_throughput;
 `endif
 
   task automatic install_lane(input int lane);
+    logic [5:0] flags;
+    logic [7:0] payload_words;
     begin
-      @(negedge clk);
-      install_voice = VOICE_ID_WIDTH'(lane);
-      install_state.dynamic.generation = VOICE_GENERATION_WIDTH'(lane + 1);
-      install_valid = 1'b1;
-      do @(posedge clk); while (!install_ready);
-      @(negedge clk);
-      install_valid = 1'b0;
+      flags = FILTER_ENABLE ? 6'b000101 : 6'b000001;
+      payload_words = FILTER_ENABLE ? 8'd10 : 8'd7;
+      send_command_word(32'h1000_0000 | (32'(lane) << 14) |
+                        (32'(flags) << 8) | 32'(payload_words));
+      send_command_word(32'(lane + 1));
+      send_command_word(32'd96);
+      send_command_word(32'd4096);
+      send_command_word(32'd0);
+      send_command_word(32'd4096);
+      send_command_word(32'h0000_0100);
+      send_command_word(32'h7fff_7fff);
+      if (FILTER_ENABLE) begin
+        send_command_word(32'h0000_2000);
+        send_command_word(32'd0);
+        send_command_word(32'h0001_0000);
+      end
     end
   endtask
 
@@ -236,26 +255,9 @@ module tb_voice_major_throughput;
     if (MAX_BLOCK_FRAMES != 8)
       $fatal(1, "throughput baseline is defined for eight-frame blocks");
 
-    install_valid = 1'b0;
-    install_voice = '0;
-    install_state = '0;
-    install_state.region.base_addr = 32'd96;
-    install_state.region.length = 24'd4096;
-    install_state.region.loop_start = 24'd0;
-    install_state.region.loop_end = 24'd4096;
-    install_state.region.loop_mode = LOOP_MODE_CONTINUOUS;
-    install_state.event_params.phase_inc = 32'h0000_0100;
-    install_state.event_params.gain_l = 16'sh7fff;
-    install_state.event_params.gain_r = 16'sh7fff;
-    install_state.event_params.filter_enable = FILTER_ENABLE;
-    install_state.event_params.filter_b0 = 16'sh2000;
-    install_state.dynamic.active = 1'b1;
-    install_state.dynamic.env_state.stage = ENV_SUSTAIN;
-    params_write_valid = 1'b0;
-    params_write_voice = '0;
-    params_write_generation = '0;
-    params_write_event = '0;
-    params_write_env = '0;
+    bus_req = '0;
+    cmd_stream_valid = 1'b0;
+    cmd_stream_data = '0;
     block_req_valid = 1'b0;
     block_req = '0;
 `ifndef SYNTH_DDR3_MODEL
@@ -286,7 +288,7 @@ module tb_voice_major_throughput;
     block_cycles = cycle_count - start_cycle;
     if (block_complete.frame_count != BLOCK_FRAME_COUNT_WIDTH'(MAX_BLOCK_FRAMES))
       $fatal(1, "throughput block metadata mismatch");
-    if (stale_params_write_pulse || stale_dynamic_write_pulse)
+    if (command_error_count != 0 || stale_generation_count != 0)
       $fatal(1, "throughput run observed stale state write");
     if (engine_start_count != ACTIVE_LANES ||
         dsp_select_count != (ACTIVE_LANES * MAX_BLOCK_FRAMES) ||

@@ -84,7 +84,9 @@ class CommandVoiceControl : public VoiceCommandSink {
   };
 
   void emit(uint8_t opcode, int voice,
-            std::initializer_list<uint32_t> payload);
+            std::initializer_list<uint32_t> payload, uint8_t flags = 0);
+  void emit(uint8_t opcode, int voice, const std::vector<uint32_t>& payload,
+            uint8_t flags = 0);
   CommandWordSink& sink_;
   std::array<VoiceMirror, kNumVoices> voices_{};
 };
