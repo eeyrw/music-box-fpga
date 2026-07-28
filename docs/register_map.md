@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x00090000`. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000a0000`. Version 10 introduces the mono voice-major command payloads below. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x9018` | `AUDIO_STATUS` | platform | Audio FIFO and playback state. |
@@ -24,14 +24,11 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9028` | `SAMPLE_DROP_COUNT` | platform | Saturating dropped-sample counter. |
 | `0x902c` | `RENDER_DEADLINE_MISS_COUNT` | platform | Saturating deadline counter. |
 | `0x9030` | `CURRENT_SAMPLE` | RO | Accepted renderer-output timeline. |
-| `0x9034` | `CMD_FIFO_STATUS` | RO | Word/action FIFO state and error flags. |
+| `0x9034` | `CMD_FIFO_STATUS` | RO | Command-word FIFO, parser state, and error flags. |
 | `0x9038` | `MEM_RESPONSE_COUNT` | platform | Saturating memory response counter. |
 | `0x903c` | `CMD_FIFO_DATA` | WO | One 32-bit command word. |
 | `0x9094` | `CMD_ERROR_STATUS` | RO | Command and stale-sequence error summary. |
-| `0x909c` | `CMD_ACTION_STATUS` | RO | Decoded action FIFO state. |
-| `0x90a0` | `DEBUG_VOICE_INDEX` | RW | Voice selected for the next debug capture. |
-| `0x90a4` | `DEBUG_VOICE_CAPTURE` | WO | Write exactly `1` to request a capture. |
-| `0x90a8` | `DEBUG_VOICE_STATUS` | RO | Capture state and selected voice metadata. |
+| `0x909c` | `CMD_ACTION_STATUS` | RO | Parser/dispatcher execution state. |
 | `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
 | `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
 | `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
@@ -66,15 +63,15 @@ window.
 | `0` | command word FIFO empty |
 | `1` | command word FIFO full / not ready |
 | `15:2` | command word FIFO level |
-| `16` | decoded action FIFO empty |
-| `17` | decoded action FIFO full |
-| `29:18` | decoded action FIFO level |
+| `16` | parser and dispatcher idle |
+| `17` | a command is buffered, being parsed, or waiting for execution |
+| `29:18` | reserved, zero |
 | `30` | `command_error_count != 0` |
 | `31` | `stale_seq_count != 0` |
 
 `CMD_ERROR_STATUS[0]` reports malformed or semantically invalid commands;
-bit 1 reports stale sequences. `CMD_ACTION_STATUS` repeats the action FIFO
-empty, full, and level fields in bits `0`, `1`, and `15:2`.
+bit 1 reports stale generations. `CMD_ACTION_STATUS[0]` is one only when the
+parser/dispatcher is idle; bit 1 reports pending work. Bits `31:2` are zero.
 
 ### Compressor Diagnostics
 
@@ -124,82 +121,49 @@ three saturation counters count clamped channels, not frames, and stop at
 `0xffffffff`. `EFFECT_CLEAR` clears spatial histories and their diagnostics,
 including these counters and maxima; compressor diagnostics are unchanged.
 
-## Voice Debug Snapshot
-
-The debug aperture provides low-cost, read-only inspection without restoring a
-random-access per-voice register bank. Write a voice number to
-`DEBUG_VOICE_INDEX`, write `1` to `DEBUG_VOICE_CAPTURE`, then poll
-`DEBUG_VOICE_STATUS[0]` until it clears. `DEBUG_VOICE_STATUS[1]` then indicates
-that all snapshot words belong to one completed capture.
-
-Capture waits until the renderer and command executor are idle, reuses their
-existing prepared/active RAM read ports, and copies one word per clock into a
-24-by-32-bit distributed RAM. A capture can therefore briefly defer the next
-render frame or control batch, but adds no voice-state BRAM read port and no
-full-width snapshot register bank. Snapshot data remains stable until the next
-capture.
-
-`DEBUG_VOICE_STATUS` fields are:
-
-| Bits | Meaning |
-| ---: | --- |
-| `0` | capture busy |
-| `1` | completed snapshot valid |
-| `2` | selected voice has prepared state |
-| `3` | selected voice has active state |
-| `4` | active state is audible |
-| `5` | active state has been released |
-| `8:6` | envelope stage |
-| `16:9` | prepared sequence number |
-| `24:17` | active sequence number |
-
-The snapshot data registers are:
-
-| Address | Name | Contents |
-| ---: | --- | --- |
-| `0x90ac` | `DEBUG_VOICE_BASE_L` | left/mono base word address |
-| `0x90b0` | `DEBUG_VOICE_BASE_R` | right base word address |
-| `0x90b4` | `DEBUG_VOICE_LENGTH_L` | left/mono length, low 24 bits |
-| `0x90b8` | `DEBUG_VOICE_LENGTH_R` | right length, low 24 bits |
-| `0x90bc` | `DEBUG_VOICE_LOOP_START_L` | left/mono loop start, low 24 bits |
-| `0x90c0` | `DEBUG_VOICE_LOOP_START_R` | right loop start, low 24 bits |
-| `0x90c4` | `DEBUG_VOICE_LOOP_END_L` | left/mono exclusive loop end, low 24 bits |
-| `0x90c8` | `DEBUG_VOICE_LOOP_END_R` | right exclusive loop end, low 24 bits |
-| `0x90cc` | `DEBUG_VOICE_PHASE_INIT` | configured initial phase, unsigned Q24.8 |
-| `0x90d0` | `DEBUG_VOICE_PHASE_INC` | active phase increment, unsigned Q24.8 |
-| `0x90d4` | `DEBUG_VOICE_GAIN` | `{gain_r, gain_l}`, signed Q1.15 each |
-| `0x90d8` | `DEBUG_VOICE_ENVELOPE` | control flags and envelope stage; bits `15:0` are reserved zero |
-| `0x90dc` | `DEBUG_VOICE_FILTER_CONTROL` | bit 16 enable, bits `15:0` signed Q2.14 `a2` |
-| `0x90e0` | `DEBUG_VOICE_FILTER_B0_B1` | `{b1, b0}`, signed Q2.14 each |
-| `0x90e4` | `DEBUG_VOICE_FILTER_B2_A1` | `{a1, b2}`, signed Q2.14 each |
-| `0x90e8` | `DEBUG_ENV_DELAY` | delay samples, low 24 bits |
-| `0x90ec` | `DEBUG_ENV_ATTACK_STEP` | attack step, unsigned Q0.32 |
-| `0x90f0` | `DEBUG_ENV_HOLD` | hold samples, low 24 bits |
-| `0x90f4` | `DEBUG_ENV_DECAY_STEP` | decay step, unsigned centibel Q12.20 |
-| `0x90f8` | `DEBUG_ENV_SUSTAIN` | sustain attenuation, unsigned centibel Q12.20 |
-| `0x90fc` | `DEBUG_ENV_RELEASE_STEP` | release step, unsigned centibel Q12.20 |
-| `0x9100` | `DEBUG_ENV_ELAPSED` | current stage elapsed samples, low 24 bits |
-| `0x9104` | `DEBUG_ENV_ATTACK_LEVEL` | attack accumulator, unsigned Q0.32 |
-| `0x9108` | `DEBUG_ENV_ATTENUATION` | current attenuation, unsigned centibel Q12.20 |
-
-`DEBUG_VOICE_ENVELOPE` packs stage in bits `18:16`, audible in bit 19, released
-in bit 20, stereo in bit 21, and loop mode in `23:22`; bits `15:0` and `31:24`
-are reserved zero. Read `DEBUG_ENV_ATTACK_LEVEL` or `DEBUG_ENV_ATTENUATION` for
-the authoritative envelope value. Keeping the raw state avoids a second
-centibel-to-Q1.15 converter solely for debug.
-
-This aperture captures command/control-owned active state. `PHASE_INIT` is the
-configured restart position; it is not the renderer's advancing phase. Biquad
-history is likewise renderer-private and is not included. Those high-rate
-datapath states can be added later behind a separate trace/debug build if board
-debugging proves they are necessary.
-
 ## Command Ingress
 
 Software may write individual words through `CMD_FIFO_DATA`, but normal voice
 traffic uses SPI opcode `0xa5` followed by consecutive big-endian 32-bit words.
 Both paths feed the same FIFO and parser. The direct stream has priority; a
 simultaneous `CMD_FIFO_DATA` write is rejected.
+
+### Voice-Major Mono Commands (Version 10)
+
+The production voice-major renderer accepts one complete mono sample lane per
+voice. A command header is `{opcode[7:0], voice_id[9:0], flags[5:0],
+payload_words[7:0]}` from most- to least-significant field. Every voice command
+carries its generation in payload word 0:
+
+| Bits | Meaning |
+| ---: | --- |
+| `15:0` | 16-bit generation |
+| `31:16` | reserved, zero |
+
+This layout supports the 512-voice configuration without truncating IDs 256
+through 511. A stale generation is rejected and counted in
+`CMD_ERROR_STATUS[1]`.
+
+For `VOICE_START_MONO`, flags `[1:0]` are loop mode, bit 2 includes the
+three-word filter group, bit 3 includes the six-word envelope group, and bits
+`5:4` are zero. Other voice commands require zero flags.
+
+| Opcode | Name | Payload words | Payload after generation word |
+| ---: | --- | ---: | --- |
+| `0x10` | `VOICE_START_MONO` | 5 to 16 | base, length, optional loop pair, Q24.8 phase increment, `{gain_r,gain_l}`, optional filter group, optional envelope group |
+| `0x13` | `VOICE_ENV_UPDATE` | 7 | delay, attack step, hold, decay step, sustain attenuation, release step |
+| `0x14` | `VOICE_RELEASE` | 2 | release step |
+| `0x15` | `VOICE_STOP` | 1 | none |
+| `0x16` | `VOICE_GAIN` | 2 | `{gain_r,gain_l}` |
+| `0x17` | `VOICE_FILTER` | 4 | B0/B1, B2/A1, A2/control |
+| `0x18` | `VOICE_PITCH` | 2 | Q24.8 phase increment |
+| `0x7f` | `STREAM_FLUSH` | 0 | none |
+
+There is no stereo-definition opcode in version 10 and `START` is not split
+from definition. Linked SF2 stereo samples and compatible hard-panned pairs are
+expanded by the C++ loader into two mono regions. Each region receives its own
+voice and channel gains, so the renderer never combines two sample streams in
+one voice. START always clears that voice's phase accumulator to zero.
 
 ## Board Platform Window
 

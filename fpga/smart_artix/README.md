@@ -41,8 +41,8 @@ Still required from peripheral documentation or hardware measurements:
 
 ## Current Top
 
-`rtl/smart_artix_top.sv` instantiates `wavetable_demo_system` with SPI control,
-line-memory caching, output FIFO, and I2S output. Board-specific SD loading, DDR3
+`rtl/smart_artix_top.sv` instantiates `voice_major_demo_system` with SPI control,
+the per-voice sample window, global effects, output FIFO, and I2S output. Board-specific SD loading, DDR3
 read/write arbitration, line reads, and DDR register access traffic are grouped behind
 `smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
 `smart_artix_platform_regs` through the common wrapper's platform register window
@@ -64,7 +64,7 @@ SD native pins: CLK, CMD, DAT[3:0], active-low CD
   -> Xilinx MIG app write interface
   -> MT41K256M16TW
 
-wavetable_demo_system external line-read pins
+voice_major_demo_system ordered window-refill pins
   -> smart_artix_ddr3_subsystem
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
@@ -319,8 +319,8 @@ vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl
 The synthesis script writes the flat utilization, hierarchical utilization, and
 timing reports under `../../build/fpga/smart_artix/vivado/reports/`. Use
 `post_synth_utilization_hier_depth4.rpt` first when checking resource ownership;
-it shows the major split between `core_system`, `multi_voice_pipeline`,
-`synth_control_plane`, memory, and the MIG wrapper without the full IP hierarchy
+it shows the major split between `core_system`, the voice-major block renderer,
+sample windows, effects, memory, and the MIG wrapper without the full IP hierarchy
 noise. Use `post_synth_utilization_hier.rpt` when a deeper instance-level trace is
 needed.
 
@@ -362,18 +362,9 @@ raw-image asset loader, DDR3 asset writer, DDR3 line reader, DDR3 read/write
 arbiter, MIG stub, native SD command reader, native fake-card model, native pin
 PHY, and native asset-loader path.
 
-Run the board-loader render harness from the repository root:
-
-```bash
-make render-board-loader SECONDS=0.1
-```
-
-This C++ harness constructs a raw SD image from the selected SF2, drives the
-native-SD command/data loader RTL into a DDR byte model, checks the loaded DDR
-bytes against the source SF2, then renders through `wavetable_cached_render_core` and
-compares every output sample against the C++ fixed-point reference. It uses a
-command-level SD model for speed; pin-level SD behavior is covered by the focused
-native pin PHY tests inside `make smart-artix-test`.
+Run `make render-rtl-ddr3 SECONDS=0.1` for the current voice-major/window DDR3
+render path. SD loading remains covered by the focused Smart Artix tests in
+`make smart-artix-test`.
 
 For board-top checking, `smart_artix_top` instantiates Vivado-generated clock and
 MIG IP directly. Use the Vivado batch synthesis command above for that path; pure

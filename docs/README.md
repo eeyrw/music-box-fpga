@@ -24,8 +24,7 @@ change.
 - [`memory_format.md`](memory_format.md): wave-memory layout, core memory
   handshake, line-memory adapter contract, and memory-profile assumptions.
 - [`register_map.md`](register_map.md): software-visible global registers,
-  command ingress, and the read-only voice debug snapshot. Register constants
-  are generated from
+  compact command ingress, and status/diagnostic fields. Register constants are generated from
   [`../spec/register_map.json`](../spec/register_map.json).
 
 ## Architecture Notes
@@ -78,6 +77,9 @@ change.
   consistency checks.
 - [`verification/render_commands.md`](verification/render_commands.md): common
   reference, compressor, diagnostic, RTL, and memory render command lines.
+- [`verification/render_window_ddr3_merge_inventory.md`](verification/render_window_ddr3_merge_inventory.md):
+  selective voice-major/window/DDR3 merge boundary, preserved main content,
+  production top wiring, and acceptance targets.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
   Smart Artix source-list ownership, BRAM inference repairs, per-module timing
   case studies, residual path clusters, run-freshness checks, and closure

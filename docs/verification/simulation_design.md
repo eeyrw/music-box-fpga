@@ -22,7 +22,7 @@ checked by the same build flow.
 
 ```text
 test-cpp-unit       C++ MIDI, SF2, command, reference, and MCU-policy tests
-test-rtl-core       control parser/executor, renderer, memory, and cache tests
+test-rtl-core       compact command plane, voice state, block renderer, and DSP tests
 test-rtl-peripheral SPI command transport, credit/FIFO, I2S, and common status
 ```
 
@@ -32,8 +32,12 @@ All RTL tests are self-checking and return a nonzero result on failure.
 
 | Test | Main coverage |
 | --- | --- |
-| `tb_control_cmd_parser` | Header framing, payload length, reserved fields, flush, malformed commands. |
-| `tb_transactional_control_plane` | DEFINE isolation, START promotion, sequence rejection, all runtime actions, envelope stages, and 16+1 action batching. |
+| `tb_voice_major_render_core` | Compact command framing, mono START, global audio dispatch, block render, memory traffic, and state continuity. |
+| `tb_block_voice_state_store` | Active state banks, generation arbitration, snapshots, and writeback. |
+| `tb_block_voice_event_executor` | Runtime ENV/RELEASE/STOP/GAIN/FILTER/PITCH actions and stale generations. |
+| `tb_voice_major_throughput` | 256/512 voice IDs, block deadline, DSP issue, and optional DDR3 timing. |
+| `tb_voice_sample_window` | 32-word per-voice hits, ordered 8-word refills, fallback reads, and backpressure. |
+| `tb_ddr3_timing_model` | Row hit/miss, activate/precharge, refresh, and request/response accounting. |
 | `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |
 
 `sim/harness/render/lookahead_compressor_model` is the bit-exact C++ model of
@@ -48,16 +52,10 @@ the model also publishes those fields through the existing render JSON report.
 accumulator for system-path composition. Existing bare-core comparisons continue
 to use `render_sample()`, which preserves their direct PCM16 saturation and has
 no look-ahead delay.
-| `tb_wavetable_render_core` | Exact mono/stereo PCM, phase, loops, filter/gain changes, highest voice, mixing, and debug snapshot. |
-| `tb_voice_phase_frame` | Exact Q24.8 endpoint, loop, and done calculations. |
-| `tb_wave_memory_subsystem` | Word-to-line adaptation and ready/valid behavior. |
-| `tb_voice_line_cache` | Hits, misses, stream/voice isolation, prefetch, and backpressure. |
-| `tb_wavetable_cached_render_core_counters` | Cache and renderer diagnostic counters. |
 | `tb_render_credit_scheduler` | Target-level credits and inflight accounting. |
 | `tb_wavetable_i2s_output` | Startup fill, FIFO flow, played/render counters, and underrun gating. |
 | `tb_spi_register_bridge` | Register frames, dedicated `0xa5` command stream, and backpressure errors. |
 | `tb_i2s_tx` | Exact I2S bit and channel timing. |
-| `tb_wavetable_demo_common_status` | Common/platform register routing and sticky diagnostics. |
 
 Waveforms may aid diagnosis but are not pass criteria.
 
@@ -68,15 +66,15 @@ sim/harness/
   apps/          render executable entry points
   formats/       MIDI, SF2, and byte-stream parsing
   render/        MCU policy, shared types, and integer reference synthesizer
-  control/       transactional command construction and sinks
-  dut/           adapters around Verilated RTL
+  control/       compact command construction and sinks
   common/        WAV and memory-profile helpers
-  board_loader/  Smart Artix raw-image loader simulation support
   generated/     generated C++ hardware constants
+sim/legacy/      superseded renderer harnesses and their testbenches
 ```
 
 `CommandWordSink` is the voice-control transport boundary. RTL, the integer
-reference, CH347, and board-loader adapters consume the same command words.
+reference, and CH347 consume the same command words; the superseded board-loader
+adapter is retained only under `sim/legacy`.
 There is no C++ per-voice register compatibility adapter.
 
 ## Render Targets
@@ -87,16 +85,14 @@ diagnostic extraction, and output-directory conventions.
 
 ```bash
 make render-reference SECONDS=1
-make render-rtl-core SECONDS=1
-make render-memory SECONDS=2 MEMORY_PROFILE=sdram
-make render-board-loader SECONDS=0.1
+make render-rtl-ddr3 SECONDS=1
 ```
 
 Common overrides include:
 
 ```bash
-make render-rtl-core MIDI=assets/midi/example.mid SECONDS=10
-make render-memory MIDI=assets/midi/example.mid START_SECONDS=30 SECONDS=10
+make render-rtl-ddr3 MIDI=assets/midi/example.mid SECONDS=10
+make render-rtl-ddr3 MIDI=assets/midi/example.mid START_SECONDS=30 SECONDS=10
 make render-reference SF2=assets/soundfonts/example.sf2 INSTRUMENT=0
 make render-reference MIDI=assets/midi/example.mid SECONDS=10 \
   COMPRESSOR_ENABLE=0
@@ -108,23 +104,12 @@ modulation envelopes, LFOs, and dynamic gain, pitch, and filter commands. Set
 in that mode `CONTROL_TICK_MS` is ignored. The reference synthesizer's volume
 envelope itself always advances once per output sample in both modes.
 
-`render-reference` uses only the C++ integer synthesizer. `render-rtl-core`
-fans identical command words to RTL and the reference and compares every output
-sample exactly. Its reference branch queues complete commands and applies at
-most 16 actions before each sample, matching `MAX_ACTION_BATCH` in the RTL
-control plane. This distinction matters for simultaneous layered notes: actions
-beyond the snapshot limit take effect on later frame boundaries, including the
-START-defined envelope and phase origin. `render-memory` uses the cached RTL
-path with a selectable external-memory timing profile. `render-board-loader`
-also exercises the raw SD image and board-loader path.
-
-`rtl_core_render_config.json` is written even when comparison mismatches cause
-the executable to fail. Its `comparison_*` fields report the configured action
-limit, reference actions enqueued/applied/pending, maximum queue depth, maximum
-deferral in frames, mismatch count, first mismatch sample, and maximum absolute
-left/right differences. A successful uninterrupted run has zero pending actions
-and zero mismatches. These diagnostics separate control-boundary divergence
-from arithmetic divergence without relying on waveform inspection.
+`render-reference` uses only the C++ integer synthesizer. `render-rtl-ddr3`
+drives the compact command stream into the current Verilated voice-major core,
+uses the 32-word sample window and timed DDR3 model, and writes
+`rtl_ddr3_render_config.json`. The report includes shared input/session data,
+region diagnostics, RTL cycle counts, window/refill statistics, DDR timing, and
+render timing.
 
 The `render-reference` Make target enables transparent peak protection by
 default: -2 dBFS, 4:1, immediate attack, and a 5000 ms full-range release. Set
@@ -177,14 +162,13 @@ The host side owns:
   centibel units;
 - FluidSynth-compatible default CC10 pan amount `500`, resolving the SF2 text's
   inconsistent `1000` amount against the pan generator's `-500..+500` range;
-- sine-table equal-power panning for mono regions. Collapsed stereo regions use
-  the same curve normalized to unity at center because their samples are already
-  hard-routed to independent left and right outputs;
+- sine-table equal-power panning for mono regions. Linked stereo and compatible
+  hard-panned pairs remain two mono regions with independent channel gains;
 - voice allocation, layering, exclusive class, sustain, and stealing;
 - fixed and real-time SF2 modulator evaluation;
 - conversion of durations, gains, pitch, and filter coefficients to FPGA fields.
 
-The FPGA owns prepared/active lifecycle, sample-rate volume-envelope progression,
+The FPGA owns active voice lifecycle, sample-rate volume-envelope progression,
 phase, filtering, mixing, and audio scheduling.
 
 The Standard MIDI File parser accepts format 0 and format 1 files with PPQ time
@@ -240,10 +224,13 @@ scale in the SF2 specification. It matches FluidSynth's
 `EMU_ATTENUATION_FACTOR` loader behavior and prevents EMU-authored banks from
 rendering some presets tens of decibels quieter than intended.
 
-On Note On, the MCU model sends DEFINE followed by START with a matching sequence.
-Mono START traffic is 21 total words and stereo START traffic is 25. START carries
-independent Q1.15 left/right gains, Q24.8 phase increment, and all six volume
-envelope parameters.
+On Note On, the MCU model sends one compact `VOICE_START_MONO` command. Its
+payload is 5 to 16 words depending on loop, filter, and envelope groups. Linked
+stereo and compatible hard-panned SF2 pairs are
+two mono regions and therefore consume two commands and two voices. START carries
+the 10-bit voice ID, 16-bit generation, independent Q1.15 left/right gains,
+Q24.8 phase increment and only the filter/envelope groups that are needed. START
+clears the phase accumulator to zero.
 
 On Note Off, the MCU model sends `VOICE_RELEASE` with the release step calculated
 from the current region/controller state. Natural release completion is owned by
@@ -369,12 +356,10 @@ make host-ch347
 make host-smart-artix-bringup
 ```
 
-The low-level tool can exercise command transport and the coherent debug snapshot
-without hardware:
+The low-level tool can exercise the mono command transport without hardware:
 
 ```bash
 build/ch347_control --dry-run --start-voice 0 --base 0 --length 1024
-build/ch347_control --dry-run --snapshot-voice 0
 ```
 
 Simulation does not replace post-route qualification. Before declaring the

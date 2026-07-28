@@ -426,7 +426,7 @@ The implemented command path crosses:
 - C++ command builders, sinks, and bit-exact reference model;
 - command parser and transactional-control self-checking tests.
 
-The command contract advances the interface version to `0x00090000`. Exact
+The command contract is included in interface version `0x000a0000`. Exact
 payload fields and validation rules are documented in
 [`control_command_stream_plan.md`](control_command_stream_plan.md).
 

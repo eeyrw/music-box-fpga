@@ -230,52 +230,34 @@ Use sample-accurate updates when isolating control-rate artifacts. This ignores
 make render-reference SECONDS=10 SAMPLE_ACCURATE_CONTROL=1
 ```
 
-## RTL And Memory Renders
+## RTL DDR3 Render
 
-Compare the integer reference against the direct RTL renderer sample by sample:
+Render the current voice-major RTL with its 32-word sample window and timed DDR3
+model:
 
 ```bash
-make render-rtl-core \
+make render-rtl-ddr3 \
   SF2='/path/to/soundfont.sf2' \
   MIDI='/path/to/song.mid' \
   SECONDS=10 \
   CONTROL_TICK_MS=1 \
-  RENDER_RTL_CORE_OUT_DIR=build/song_rtl_core
+  RENDER_RTL_OUT_DIR=build/song_rtl_ddr3
 ```
 
-This comparison sends the same complete command vectors to both branches. The
-reference branch applies at most 16 actions before each output sample so that a
-large command burst observes the same frame-boundary batching as RTL. Inspect
-the comparison diagnostics with:
+Inspect the integrated report with:
 
 ```bash
-jq 'with_entries(select(.key | startswith("comparison_")))' \
-  build/song_rtl_core/rtl_core_render_config.json
+jq '{render_target, output_samples, region_count:(.regions | length),
+     rtl_core_cycles, rtl_render_blocks, rtl_render_frames,
+     rtl_window_words, rtl_window_refills, ddr_reads,
+     timing_render_ms}' \
+  build/song_rtl_ddr3/rtl_ddr3_render_config.json
 ```
 
-The JSON file is retained on mismatch and includes the first mismatching sample
-and maximum channel differences, as well as action queue depth and deferral.
-
-Exercise the cached RTL memory path with a timing profile:
-
-```bash
-make render-memory \
-  SF2='/path/to/soundfont.sf2' \
-  MIDI='/path/to/song.mid' \
-  SECONDS=10 \
-  MEMORY_PROFILE=ddr \
-  RENDER_MEMORY_OUT_DIR=build/song_memory_ddr
-```
-
-Other supported memory profiles include `sdram`. The board-loader flow is:
-
-```bash
-make render-board-loader SECONDS=0.1
-```
-
-The compressor command-line switches currently belong to `render-reference`.
-RTL compressor behavior is covered by the self-checking RTL tests and is
-configured through the global command stream in integrated hardware flows.
+This target uses the shared `render_session` input preparation and
+`render_report` schema, then appends RTL, sample-window, DDR3, deadline, and
+render-timing statistics. Superseded direct-core, cached-memory, and board-loader
+renderer sources are retained under `sim/legacy` without current Make targets.
 
 ## Output Files
 
@@ -285,7 +267,7 @@ configured through the global command stream in integrated hardware flows.
 - `reference_render_config.json`: inputs, timing, output counts, synthesizer
   diagnostics, and compressor diagnostics.
 
-`render-rtl-core` produces `out.wav` and `rtl_core_render_config.json`, including
-the RTL cycle/memory statistics and the `comparison_*` fields described above.
+`render-rtl-ddr3` produces `out.wav` and `rtl_ddr3_render_config.json`, including
+shared session diagnostics plus RTL/window/DDR3 timing statistics.
 
 Generated render output belongs under `build/` and must not be committed.

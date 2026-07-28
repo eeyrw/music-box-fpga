@@ -7,14 +7,16 @@ devices.
 
 The current concrete target is `smart_artix/`, a Smart Artix XC7A50T board path
 for SPI control, native-SD asset loading into DDR3, DDR3-backed wavetable memory,
-and simple I2S audio. Use `board_template/` as the starting point for future board
-directories, for example:
+and simple I2S audio. Use its common-wrapper and DDR arbiter boundaries as the
+starting point for future board directories, for example:
 
 ```text
 fpga/<board-name>/
 ```
 
 Do not place simulation-only models from `sim/` in synthesis projects.
+The old generic board template is preserved under `legacy/board_template` and
+still targets the superseded renderer.
 
 ## Expected Board Directory
 
@@ -57,10 +59,9 @@ fpga/<board-name>/
    clocks, generated clocks, false paths, multicycle paths, and external device
    timing for SPI, I2S, and memory interfaces.
 
-5. Replace abstract memory with a physical memory controller.
-   `wavetable_cached_render_core` exposes a line-read interface, not real DDR3 pins or
-   a MIG app interface. The Smart Artix path should translate line requests into
-   reads from a MIG controller configured for the Micron `MT41K256M16TW`.
+5. Connect the ordered refill interface to physical memory.
+   `voice_major_render_core` exposes ordered eight-word refills. The Smart Artix
+   path translates them through its line reader and existing arbiter to MIG.
 
 6. Complete the audio interface.
    `i2s_tx` emits BCLK, LRCLK, and serial data. Many boards also need codec MCLK,
@@ -109,16 +110,12 @@ fpga/common/rtl/wavetable_common_status_regs.sv
 fpga/common/rtl/i2s_tx.sv
 fpga/common/rtl/sd_native_block_reader.sv
 fpga/common/rtl/sd_native_pin_phy.sv
-fpga/common/rtl/wavetable_system_core.sv
 fpga/common/rtl/wavetable_i2s_output.sv
-fpga/common/rtl/wavetable_demo_system.sv
+fpga/common/rtl/voice_major_demo_system.sv
 ```
 
-Use `wavetable_render_core` for the smallest datapath integration,
-`wavetable_cached_render_core` when a standalone Verilated top should include the
-line-memory adapter, `wavetable_system_core` when a board/common wrapper should
-compose the render core and line-memory adapter behind an abstract register bus,
+Use `voice_major_render_core` for the generic block renderer,
+`voice_major_demo_system` for SPI/register/effects/I2S composition,
 `wavetable_i2s_output` when adapting PCM frames to I2S,
 `sd_native_block_reader` and `sd_native_pin_phy` when a board loader needs the
-native SD command/pin layer without tying it to a specific memory controller, or
-`wavetable_demo_system` when keeping the current SPI plus I2S board demo shape.
+native SD command/pin layer without tying it to a specific memory controller.

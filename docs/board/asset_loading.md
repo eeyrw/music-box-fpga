@@ -27,7 +27,7 @@ SD raw image
 MCU / host control
   -> SF2 or preprocessed metadata
   -> transactional voice commands over SPI
-  -> wavetable_render_core reads PCM from DDR3
+  -> voice_major_render_core reads PCM through its sample windows
 ```
 
 ## Raw SD Image Format
@@ -88,7 +88,7 @@ ddr3_arbiter
 ```
 
 These blocks belong under a concrete board directory such as `fpga/smart_artix/`.
-The generic `wavetable_render_core`, `wave_memory_subsystem`, and register map should not
+The generic `voice_major_render_core`, `voice_sample_window`, and register map should not
 depend on SD, MIG, or board clocking signals.
 
 The first Smart Artix implementation provides the board-side middle of this path:
@@ -240,19 +240,9 @@ DDR3 read/write arbitration, native SD command reader, native fake-card
 initialization and reads, native pin PHY command/data/CRC behavior, and the
 command-level native SD asset-loader path.
 
-The full SF2 load-and-render check is:
-
-```bash
-make render-board-loader SECONDS=0.1
-```
-
-That C++ harness constructs a raw SD image from the selected SF2, drives the
-native-SD command/data loader RTL into a DDR byte model, verifies that the loaded
-DDR bytes exactly match the source SF2 file, then renders from the loaded DDR
-contents through `wavetable_cached_render_core` and compares every output sample against
-the C++ fixed-point reference. It intentionally uses a command-level SD model for
-large SF2 images; pin-level SD behavior is kept in focused small tests because a
-full multi-megabyte pin-level SD load would be much slower.
+Use `make smart-artix-test` for the focused loader/DDR writer/arbiter checks and
+`make render-rtl-ddr3` for the current voice-major render path. A combined
+multi-megabyte pin-level SD load and render is not a current target.
 
 ## Host Image Tools
 
@@ -292,8 +282,8 @@ card is an asset source only; DDR3 remains the audio read memory.
 
 The wavetable core addresses signed 16-bit PCM words. The loader writes the SF2
 file bytes into DDR3 without changing the SF2 byte order. The board DDR line
-reader is responsible for returning the requested little-endian 16-bit sample
-word to `wave_memory_subsystem`.
+reader returns aligned 8-word little-endian refill data to
+`voice_sample_window`.
 
 ```text
 ddr_byte_addr = ddr_base_byte_addr + wave_word_addr * 2
@@ -306,10 +296,9 @@ For SF2 sample playback, software calculates:
 base_addr = (smpl_payload_byte_offset / 2) + sample_start_frame
 ```
 
-For linked stereo samples, `BASE_ADDR` and `BASE_ADDR_R` are independent absolute
-word addresses for the left and right sample data. Software also writes the
-right-channel `LENGTH_R`, `LOOP_START_R`, and `LOOP_END_R` from the linked right
-sample header; the left channel uses `LENGTH`, `LOOP_START`, and `LOOP_END`.
+For linked SF2 stereo samples, software allocates two mono hardware voices. Each
+voice has its own `BASE_ADDR`, `LENGTH`, loop points, gains, envelope, and filter
+state. There are no right-channel sample-address fields in one voice command.
 
 ## Capacity Policy
 
@@ -372,8 +361,8 @@ The intended hardware bring-up order is:
 3. Implement SD block reads and validate sector 0 header fields.
 4. Stream a small image from SD to DDR3 and verify the copied bytes through a test
    readback path.
-5. Connect the DDR line reader to `wave_memory_subsystem` and play a known sample
-   from DDR3 through I2S.
+5. Connect `voice_sample_window` to the DDR line reader and existing DDR3
+   arbiter, then play a known sample from DDR3 through the effects chain and I2S.
 6. Increase image size and measure full-load time, CRC behavior, and error paths.
 7. Increase native 4-bit SD clock rate once board timing constraints are
    schematic-verified.

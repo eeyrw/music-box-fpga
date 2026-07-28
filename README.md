@@ -5,28 +5,27 @@ self-checking simulation paths for the core datapath, memory subsystem, effects,
 and board-facing SPI/I2S adapters, plus a source-controlled Smart Artix Vivado
 synthesis and implementation flow.
 
-The current milestone implements 32 stereo output voice slots with configurable
-variable-length wavetable playback, simple loop modes, per-voice biquad IIR
-filtering, and saturated mixing.
+The current milestone implements a configurable mono voice-major block renderer.
+Linked SF2 stereo notes use two mono voices. The default 256-voice path uses
+per-voice sample windows and timed DDR3 simulation.
 
 ## Implemented
 
 - Synthesizable single-clock SystemVerilog RTL
-- Transactional command FIFO with prepared/active voice state and atomic START
+- Compact transactional command FIFO with active voice state and atomic START
 - Unsigned Q24.8 playback phase and fractional phase increments
 - Runtime phase-increment updates for pitch control without phase reload
 - Variable wave length, exclusive loop boundaries, and no-loop/loop/release-loop modes
 - Mono PCM duplication to left and right channels
-- Interleaved stereo PCM playback
+- Linked SF2 stereo expansion into two mono voices
 - Per-channel signed Q1.15 gain
 - FPGA-owned six-stage per-voice volume envelope
 - Per-voice biquad IIR filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
-- Shared multi-voice rendering pipeline and saturated stereo mixer
+- Voice-major block rendering and signed-24 stereo mixing
 - Signed-24 global chorus, eight-line FDN reverb, return mixer, look-ahead
   compressor, and master-volume path
-- Ready/valid abstract memory interface
-- Minimal line-cache memory subsystem and external line-read interface
+- Ready/valid 32-word per-voice windows with ordered 8-word DDR refills
 - Transport-independent register bus for host, MCU, soft-core, or simulation control
 - Common board/peripheral adapters for SPI register transport and I2S output
 - Smart Artix clock/MIG integration, SD-to-DDR loader path, Tcl batch flow, and
@@ -91,15 +90,14 @@ sim/                    Simulation-only code
     formats/            SF2, MIDI, and byte-stream parsers
     render/             Shared render types, MCU policy, and reference synth
     control/            Register-control sequencing shared by sim and host tools
-    dut/                C++ DUT adapters around Verilated top modules
     common/             WAV writer, memory profiles, and small shared helpers
-    board_loader/       Smart Artix SD-to-DDR loader render harness support
     generated/          Generated C++ register-map constants
+  legacy/               Superseded renderer harnesses and testbenches
 
 fpga/                   Board-specific FPGA integration workspace
   common/               Reusable board/peripheral adapters
     rtl/                SPI bridge, debug regs, tick gen, I2S TX, pin wrapper
-  board_template/       Starting point for future board ports
+  legacy/               Superseded wrappers and board template
   smart_artix/          XC7A50T Smart Artix board path
     rtl/                Board adapters for SD, DDR3, debug, and top level
     constraints/        Board XDC constraints
@@ -199,26 +197,23 @@ List available instruments:
 make list-instruments
 ```
 
-Render one instrument through the RTL core at 48 kHz:
+Render one instrument through the current RTL plus DDR3 model at 48 kHz:
 
 ```bash
-make render-instrument INSTRUMENT=0 KEY=60 SECONDS=1
+make render-rtl-ddr3 INSTRUMENT=0 KEY=60 SECONDS=1
 ```
 
-The flow maps the selected SF2 instrument sample to absolute addresses in the
-full SF2 file image, runs the Verilator render testbench, and writes
-`build/render/out.wav`.
+The flow maps mono SF2 samples to absolute DDR word addresses, runs the compact
+control stream through the Verilated voice-major renderer and timed DDR3 model,
+and writes `build/render_rtl_ddr3/out.wav` plus its JSON report.
 
 Render a simple MIDI-driven score through one of the C++ harnesses:
 
 ```bash
 make render-reference SECONDS=1
-make render-rtl-core SECONDS=1
-make render-memory SECONDS=2
-make render-board-loader SECONDS=0.1
-make render-memory MIDI=song.mid SECONDS=20
-make render-memory MIDI=song.mid START_SECONDS=144 SECONDS=30
-make render-memory SECONDS=1 MEMORY_PROFILE=sdram
+make render-rtl-ddr3 SECONDS=1
+make render-rtl-ddr3 MIDI=song.mid SECONDS=20
+make render-rtl-ddr3 MIDI=song.mid START_SECONDS=144 SECONDS=30
 make render-reference SECONDS=1 CONTROL_TICK_MS=2
 make render-reference SECONDS=1 SAMPLE_ACCURATE_CONTROL=1
 make render-reference SECONDS=1 DETAILED_DIAGNOSTICS=1
@@ -227,8 +222,7 @@ make render-reference SECONDS=10 COMPRESSOR_ENABLE=0
 ```
 
 See [`docs/verification/render_commands.md`](docs/verification/render_commands.md)
-for complete MIDI/SF2, compressor, baseline comparison, diagnostic, RTL, and
-memory render examples.
+for complete MIDI/SF2, compressor, diagnostics, and RTL DDR3 render examples.
 
 `CONTROL_TICK_MS` controls periodic MCU-side modulation and runtime-control
 updates. `SAMPLE_ACCURATE_CONTROL=1` instead performs those updates once per
@@ -256,7 +250,7 @@ Build the PC-side CH347 USB-to-SPI control tool:
 make host-ch347
 ```
 
-It sends the same transactional command words as the simulation harnesses and
+It sends the same compact command words as the simulation harnesses and
 loads the CH347 vendor library at runtime. See
 [`docs/host/host_control.md`](docs/host/host_control.md) for usage and integration notes.
 
@@ -274,29 +268,12 @@ It does not reconstruct notes that started before the window and are still
 sounding at `START_SECONDS`; use a full pre-roll render when exact sustained-note
 state at the cut point matters.
 
-`make render-rtl-core` is the fast algorithm/RTL comparison path: it drives
-`wavetable_render_core` with an ideal one-cycle word responder on the RTL memory
-port and compares every RTL output sample against a C++ fixed-point reference
-implementation. It does not use `MEMORY_PROFILE` or any external-memory timing
-model. It also writes `build/render_rtl_core/out.wav` for quick listening after
-the exact comparison passes.
-
-`make render-memory` is the memory-profile render path. It parses SF2 and MIDI at
-runtime, models MCU-side note allocation and modulation policy, and drives
-`wavetable_cached_render_core` through the command stream. Wave reads pass
-through the line-cache memory subsystem before the C++ external line-memory model
-responds. The output WAV is `build/render_memory/out.wav`, and memory
-hit/miss/latency counters are written to `build/render_memory/memory_stats.json`.
-`MEMORY_PROFILE` selects a read-only external memory timing model for this target:
-`ddr`, `sdram`, or `parallel-nor`.
-
-`make render-board-loader` verifies the board asset-load path before rendering. It
-constructs a raw SD image from the selected SF2, drives the native-SD command/data
-loader RTL into a DDR byte model, checks that the loaded DDR bytes exactly match
-the SF2 image, then renders through `wavetable_cached_render_core` and compares every RTL
-sample against the C++ fixed-point reference. The output WAV is
-`build/render_board_loader/out.wav`, and the summary JSON is
-`build/render_board_loader/board_loader_render_config.json`.
+`make render-rtl-ddr3` parses the same SF2/MIDI inputs and MCU policy, drives the
+compact production command stream into `voice_major_render_core`, serves its
+32-word sample windows through the timed DDR3 model, and writes
+`build/render_rtl_ddr3/out.wav` plus `rtl_ddr3_render_config.json`. The report
+uses the same session and reporting code as the C++ reference and adds RTL
+deadline, window, and DDR row statistics.
 
 The C++ render harnesses handle `Ctrl+C` as a graceful interrupt. If a long run
 is stopped, the harness exits at the next sample boundary, rewrites the WAV

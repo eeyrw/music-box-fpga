@@ -28,34 +28,36 @@ physical SPI timing constraint, or FPGA pin constraint. Those belong under
 `fpga/`.
 
 The voice count is parameterized. The package default is 32 voices; normal
-regressions override it to 256 to cover the complete 8-bit command voice field.
+regressions use 256 voices and the capacity regression uses 512. Version 10
+commands carry an authoritative 10-bit voice ID in payload word zero.
 
 ## Architecture
 
 ```text
-register bus ---------> synth_control_plane -----------+
-dedicated command ---> command FIFO/parser/executor    |
-                                                       v
-sample/frame request ------------------------> multi_voice_pipeline
-                                                       |
-                                                       v
-                                       word memory request/response
-                                                       |
-                                                       v
-                                      signed 24-bit stereo mix
-                                                       |
-                                                       v
-                                      look-ahead compressor + master
-                                                       |
-                                                       v
-                                      final PCM16 FIFO and serializer
+register bus / SPI command stream
+              |
+              v
+voice_major_command_plane -> block_voice_state_store
+              |                       |
+              +-----------------------+
+                                      v
+voice_major_block_controller -> mono engine -> 32-word/voice sample window
+                                      |                    |
+                                      v                    v
+                           signed 24-bit block mix   ordered DDR burst adapter
+                                      |
+                                      v
+                       chorus/reverb -> compressor/master
+                                      |
+                                      v
+                              PCM FIFO -> I2S
 ```
 
-`wavetable_render_core` composes the control plane and renderer.
-`wavetable_cached_render_core` adds the per-voice line cache.
-`wavetable_system_core` adds the common line-memory adapter and a held
-ready/valid PCM output. `wavetable_i2s_output` places a PCM FIFO between that
-output and the I2S serializer.
+`voice_major_render_core` is the production generic top. The Smart Artix top
+uses `voice_major_demo_system` to retain main's SPI bridge, register fabric,
+platform/common status windows, effects, PCM FIFO, and I2S serializer. Legacy
+single-frame tops remain in the tree for reference and board-template migration
+but are not in the production Smart Artix filelist.
 
 See `rtl_module_map.md` for file ownership and the full instantiation tree.
 
@@ -64,40 +66,36 @@ See `rtl_module_map.md` for file ownership and the full instantiation tree.
 Voice control is a transactional command stream. There is no writable per-voice
 register window and no compatibility register bank.
 
-The control plane contains:
+The control plane contains a 1024-word FIFO, a length/semantic-checking parser,
+the block state store, generation validation, and command/stale-generation
+counters. Direct SPI command traffic and register writes to `CMD_FIFO_DATA`
+enter the same FIFO. A render block is admitted only after pending commands have
+drained, so state changes occur at an output-block boundary.
 
-- a 1024-word command FIFO implemented by one synchronous simple-dual-port
-  block RAM;
-- a parser that emits only complete, length-checked actions;
-- a 32-entry decoded action FIFO;
-- a bounded executor that applies at most 16 actions before releasing a waiting
-  render frame;
-- one packed prepared RAM and one packed active RAM;
-- sequence validation and command/stale-sequence error counters.
-
-`VOICE_DEFINE_MONO` and `VOICE_DEFINE_STEREO` replace prepared state only.
-`VOICE_START` with a matching sequence atomically promotes the prepared
-configuration and installs gain, phase increment, filter, and fresh envelope
-state. Runtime commands replace complete logical fields and never reload phase.
+`VOICE_START_MONO` installs a complete descriptor, runtime parameters, and fresh
+envelope state in a 5-to-16-word compact payload. Runtime ENV, RELEASE, STOP, GAIN, FILTER,
+and PITCH commands carry the same 16-bit generation and never reload phase.
+Global compressor, master-volume, chorus, reverb, and effect-clear commands are
+decoded by the same plane.
 
 The active record contains command-owned state:
 
-- audibility and sequence;
-- wave addresses, lengths, loop points, initial phase, stereo and loop mode;
+- active state and 16-bit generation;
+- one mono wave address, length, optional loop points, and loop mode;
 - Q24.8 phase increment;
 - independent Q1.15 left/right gains;
 - filter coefficients and enable;
 - six-stage volume-envelope parameters and state.
 
-The renderer owns advancing phase and biquad history. A START activation pulse
-reloads phase from `phase_init` and clears filter history at the next frame.
+The renderer owns advancing phase and biquad history. A start clears phase to
+zero and clears filter history before its first block.
 
 ## Volume Envelope
 
 The FPGA advances one voice envelope when that voice is snapshotted for an
 output frame. Stages are Delay, Attack, Hold, Decay, Sustain, and Release.
 
-The host converts SF2 durations and levels into the fixed-point START fields.
+The host converts SF2 durations and levels into the fixed-point START_MONO fields.
 The FPGA owns subsequent volume-envelope progression, including release and
 automatic deactivation at silence. `VOICE_ENV_UPDATE` changes selected envelope
 parameters without reloading phase or restarting the envelope.
@@ -107,41 +105,28 @@ or filter values through runtime commands.
 
 ## Rendering
 
-`multi_voice_pipeline` renders one stereo frame at a time:
+The controller renders up to eight output frames per request. It snapshots the
+active bitmap, scans only active voice groups, reads each mono voice state,
+advances its envelope and phase across the block, gathers interpolation
+endpoints through tagged work slots, and retires filtered/gained contributions
+into a ping-pong signed-24 block mix buffer. Published buffers are read by the
+top while the other bank can be filled.
 
-1. Latch START activation pulses for the frame.
-2. Scan the active bitmap in voice-index order.
-3. Read one packed active record through the synchronous control RAM port.
-4. Snapshot command-owned state and renderer-owned phase/filter history.
-5. Compute interpolation endpoints and next phase.
-6. For Delay, advance and store phase without issuing word reads; otherwise,
-   queue mono or stereo word reads through `voice_endpoint_fetch`.
-7. For non-Delay voices, run interpolation, optional biquad filtering,
-   independent left/right gain,
-   envelope gain, and saturation in `voice_dsp_pipeline`.
-8. Retire contributions into signed 32-bit stereo accumulators.
-9. Emit both the exact signed 24-bit mix and the compatibility saturated PCM16
-   frame after all work drains.
-
-The renderer overlaps the next valid-voice scan and envelope snapshot with the
-current voice's endpoint traffic. Four fetch slots plus independent 16-entry
-request and response-metadata queues keep several voices in flight while the
-fixed-latency DSP accepts one completed context per clock. Memory remains the
-main variable-latency and throughput boundary: the single word-request port
-needs at least two accepted cycles per mono voice and four per stereo voice.
-
-Detailed state and arithmetic ownership are documented in `voice_pipeline.md`.
+Linked SF2 stereo is represented by two host-owned mono voices. Each voice
+fetches two interpolation endpoints per audible output frame, duplicates the
+interpolated mono sample, and applies independent left/right gain.
 
 ## Memory
 
-The bare core uses ordered ready/valid word reads. A request carries voice,
-left/right stream ID, and absolute 16-bit word address. Responses are returned
-in accepted-request order.
+`voice_sample_window` owns one persistent 32-word window per voice. A miss chosen
+for refill issues four aligned 8-word requests; later out-of-window endpoint
+reads can use a single-line fallback without replacing the main window. The
+generic external contract is ordered, untagged, 8-word/128-bit ready/valid.
 
-`voice_endpoint_fetch` tracks outstanding endpoint metadata and assembles a
-complete DSP context. `voice_line_cache` converts word reads to external line
-reads and preserves per-voice/per-stream locality. Board-specific DDR control is
-outside the generic core.
+On Smart Artix this request enters `smart_artix_ddr3_line_reader`, then the
+existing `smart_artix_ddr3_rw_arbiter`, which shares MIG `app_*` with SD asset
+writes and the register debug aperture. The simulation-only DDR bridge and
+timing model exercise the same ordered contract but are not synthesis sources.
 
 ## RTL Interface Bundles
 
@@ -201,11 +186,13 @@ level reduces total latency but also reduces tolerance for renderer and memory
 service jitter.
 
 Each voice contribution is already saturated to signed 16-bit PCM. With the
-8-bit voice index limiting the design to 256 voices, the exact worst-case mix
+normal production configuration of 256 voices, the exact worst-case mix
 range is `-8,388,608..8,388,352`, so a signed 24-bit sample preserves the mix
 without loss. The look-ahead storage therefore uses two signed 24-bit
 channels. Gain multiplication widens explicitly before the only final PCM16
-rounding and saturation.
+rounding and saturation. The 512-voice target is a capacity and cycle-budget
+regression; a 512-voice product configuration must enforce mix headroom or widen
+the post-mix contract.
 
 Compressor parameters use the dedicated command stream rather than the register
 window. One four-word global compressor action replaces enable, threshold,
@@ -219,17 +206,6 @@ target and applied gain reduction, delay prime state, maxima, input/output and
 compressed-frame counts, and final channel-saturation count. Maxima and 32-bit
 saturating counters clear with core reset. These diagnostics use only registers,
 comparators, and carry-chain incrementers; they add no sample RAM or multiplier.
-
-## Debug Snapshot
-
-The global debug aperture captures one selected voice's coherent command/control
-state. It waits for the renderer and action executor to become idle, reuses the
-prepared/active RAM read ports, and serializes 24 words into a 768-bit
-distributed RAM.
-
-It intentionally excludes renderer-private advancing phase and biquad history.
-This keeps the default build inexpensive. Add a separate datapath trace aperture
-only if hardware bring-up demonstrates that those states are necessary.
 
 ## Board Boundary
 

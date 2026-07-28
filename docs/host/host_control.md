@@ -1,8 +1,8 @@
 # Host Control And CH347 Integration
 
 The host owns MIDI/SF2 parsing, voice allocation, modulation policy, and
-conversion to the fixed-point command fields. The FPGA owns prepared/active
-voice state, the per-sample volume envelope, rendering, and audio scheduling.
+conversion to the fixed-point command fields. The FPGA owns active mono voice
+state, the per-sample volume envelope, rendering, and audio scheduling.
 
 ## Reusable C++ Layers
 
@@ -25,8 +25,8 @@ class CommandWordSink {
 };
 ```
 
-`CommandVoiceControl` implements DEFINE+START, atomic gain/phase replacement,
-filter replacement, RELEASE, and STOP. `CommandFanout` sends identical words to
+`CommandVoiceControl` implements `VOICE_START_MONO`, independent gain and pitch
+replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identical words to
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
 Global status and board control remain separate behind `host::RegisterIo`.
@@ -63,10 +63,7 @@ Examples:
 # Inspect a global register without opening hardware.
 build/ch347_control --dry-run --read 0x9000
 
-# Exercise the coherent per-voice debug snapshot sequence.
-build/ch347_control --dry-run --snapshot-voice 3
-
-# Emit one mono DEFINE+START command pair.
+# Emit one complete mono START command.
 build/ch347_control --dry-run \
   --start-voice 0 --base 0x1000 --length 48000 \
   --loop-start 0 --loop-end 48000 --loop-mode 1 \
@@ -83,12 +80,6 @@ build/ch347_control --dry-run \
 release stage. The standalone low-level CLI keeps sequence state only for its
 own process lifetime; a real-time application must retain one
 `CommandVoiceControl` instance.
-
-`--snapshot-voice` selects a voice, starts a coherent control-state capture,
-polls for completion on hardware, and prints the 24 snapshot words. The captured
-fields are active configuration, gain, phase increment, filter coefficients,
-and envelope parameters/state. The renderer's advancing phase and biquad
-history are intentionally outside this low-cost aperture.
 
 ## Smart Artix Bring-Up
 

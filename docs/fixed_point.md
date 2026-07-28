@@ -13,6 +13,10 @@ The upper 24 bits select a frame and the lower 8 bits are the interpolation
 fraction. For example, `0x0000_0180` identifies the point halfway between frame
 1 and frame 2.
 
+`VOICE_START_MONO` initializes the phase accumulator to zero. Software writes
+only `phase_inc`; runtime pitch updates change the increment without reloading
+the accumulator.
+
 At each accepted sample request, the current phase is rendered and then
 `phase_inc` is added. In continuous loop mode, or loop-until-release before the
 released flag is set, reaching the exclusive loop end subtracts the loop length
@@ -99,7 +103,8 @@ scaled by channel gain only with a wide signed product shifted right by 15.
 
 Each voice has a signed Q1.15 `envelope_level` folded into the per-channel output
 gain before mixing. The FPGA derives it once per rendered sample from the packed
-Delay, Attack, Hold, Decay, Sustain, and Release state installed by `VOICE_START`.
+Delay, Attack, Hold, Decay, Sustain, and Release state is installed by
+`VOICE_START_MONO`.
 SoundFont timecent, modulator, and region-policy calculations remain
 software-owned. `VOICE_ENV_UPDATE` changes envelope parameters without reloading
 playback phase.
@@ -179,7 +184,7 @@ z2    = saturate_i34(b2 * x - a2 * y)
 Software writes normalized coefficients as `b0`, `b1`, `b2`, `a1`, and `a2`, where
 the denominator is `1 + a1*z^-1 + a2*z^-2`. Disabling the filter bypasses this
 stage. Filter state is signed 34-bit Q14 per voice and per channel, and is
-cleared when `VOICE_START` activates a new generation.
+cleared when `VOICE_START_MONO` activates a new generation.
 
 ### Biquad Range Analysis
 

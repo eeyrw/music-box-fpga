@@ -1,274 +1,136 @@
 # RTL Module Map
 
-This note is a reading map for `rtl/`. It answers two questions:
+This is the reading map for the current mono voice-major implementation.
+Behavioral contracts remain in `../fixed_point.md`, `../memory_format.md`, and
+`../register_map.md`.
 
-- Which module is the top of each RTL area?
-- Which modules instantiate or depend on which other modules?
+## Entry Points
 
-It is descriptive only. Stable behavior contracts still live in
-`../fixed_point.md`, `../memory_format.md`, and `../register_map.md`.
-
-## Main Entry Points
-
-Use one of these modules as the integration top, depending on how much of the
-generic core you want to include:
-
-| Top module | File | Use when |
+| Top | File | Role |
 | --- | --- | --- |
-| `wavetable_render_core` | `rtl/top/wavetable_render_core.sv` | You want the smallest generic audio render core. It exposes the register bus, `sample_tick`, mixed PCM output, and a one-word wave-memory read interface. |
-| `wavetable_cached_render_core` | `rtl/top/wavetable_cached_render_core.sv` | You want the generic render core plus the current one-line wave-memory cache. It exposes the register bus, `sample_tick`, mixed PCM output, and an external line-read interface. |
-| `wavetable_system_core` | `fpga/common/rtl/wavetable_system_core.sv` | You want the render core and line-memory adapter as a reusable board-facing system block with an abstract register bus and PCM frame output, but without SPI or I2S. |
-| `wavetable_i2s_output` | `fpga/common/rtl/wavetable_i2s_output.sv` | You want to adapt a PCM frame stream to the current FIFO-backed I2S transmitter. |
-| `wavetable_demo_system` | `fpga/common/rtl/wavetable_demo_system.sv` | You want the current pin-level demo composition that wires SPI control, common status registers, the reusable system core, and I2S output together. |
+| `voice_major_render_core` | `rtl/top/voice_major_render_core.sv` | Generic command-controlled block renderer with ordered line-memory traffic. |
+| `voice_major_demo_system` | `fpga/common/rtl/voice_major_demo_system.sv` | SPI/register fabric, render scheduling, global effects, FIFO, and I2S composition. |
+| `smart_artix_top` | `fpga/smart_artix/rtl/smart_artix_top.sv` | Board top connecting the common system to SD loading and the MIG DDR3 app interface. |
+| `voice_major_render_harness` | `sim/models/voice_major_render_harness.sv` | Verilator top using the same command plane plus the behavioral DDR3 model. |
 
-For most generic RTL work, start at `wavetable_render_core`. For memory-adapter
-work, start at `wavetable_cached_render_core` or `voice_line_cache`. For
-pin-level SPI/I2S integration, start in `fpga/common/rtl/` instead of `rtl/`.
+The former `wavetable_render_core` family is not a production or compatibility
+target. It is excluded from `rtl/filelist.f` and the Smart Artix synthesis
+filelist and is preserved under `rtl/legacy`; its old common wrappers and
+simulation harnesses are under `fpga/common/legacy` and `sim/legacy`.
 
-## Directory Ownership
-
-| Directory | Directory top | Contents | Instantiated by |
-| --- | --- | --- | --- |
-| `rtl/pkg` | none | Shared packages, constants, packed structs, and generated register constants. Packages are imported, not instantiated. | Imported throughout `rtl/`, `fpga/common/rtl`, and simulation code. |
-| `rtl/top` | `wavetable_render_core`, `wavetable_cached_render_core` | Generic core composition modules. | Testbenches, C++ Verilator harnesses, and common board wrappers. |
-| `rtl/control` | `synth_control_plane` | Global command/status decode, transactional parsing, bounded action batching, and packed prepared/active voice state. | `wavetable_render_core`. |
-| `rtl/voice` | `multi_voice_pipeline` | Per-output-frame voice scheduler, phase/loop calculation, endpoint request sequencing, phase/filter-state writeback, and stereo accumulation. | `wavetable_render_core`. |
-| `rtl/dsp` | `voice_dsp_pipeline` | Fixed-latency per-voice sample interpolation, optional filter arithmetic, gain, envelope, saturation, and result formatting. | `multi_voice_pipeline`. |
-| `rtl/memory` | `voice_line_cache`, `wave_memory_subsystem` | Adapters from the core's one-word PCM read interface to an external line-read interface. `voice_line_cache` is the current cached render path; `wave_memory_subsystem` is the older single-line baseline used by some common/board wrappers. | `wavetable_cached_render_core`, `wavetable_system_core`, focused memory tests, and render testbenches. |
-| `rtl/audio` | `stereo_chorus`, `fdn_reverb`, `effect_return_mixer`, `global_effects_chain`, `global_audio_effects_chain`, `lookahead_compressor`, `output_sample_fifo`, `render_credit_scheduler` | Wet-effect processing, signed-24 routing and return mixing, unified spatial-effects plus compressor/master processing, PCM buffering, and target-level render-credit generation. | `wavetable_system_core` places `global_audio_effects_chain` between the renderer and output FIFO. The FIFO and scheduler serve common I2S/demo wrappers. |
-
-There is currently no `rtl/bus` source file. The generic register and memory
-handshakes remain explicit rather than using a shared SystemVerilog interface.
-Their related payloads use packed structs from `synth_pkg`: `reg_bus_req_t` and
-`reg_bus_rsp_t` cross the common register fabric, while `wave_word_req_t` and
-`wave_word_rsp_t` cross the renderer/memory boundary. Global audio configuration,
-effect/compressor diagnostics, cache diagnostics, voice-pipeline diagnostics,
-and render timing diagnostics are also passed as named packed structs instead of
-repeated scalar port lists. Physical SPI, I2S, and external line-memory pins stay
-flat at the wrapper boundary.
-
-## Generic Core Tree
-
-The generic render core is composed like this:
+## Production Tree
 
 ```text
-wavetable_render_core
-+- synth_control_plane
-|  +- transactional_control_plane
-|     +- control_word_fifo
-|     +- control_action_parser
-|     +- control_action_fifo
-|     +- control_action_executor
-|        +- voice_bram_1r1w (prepared)
-|        +- voice_bram_1r1w (active/runtime/envelope)
-+- multi_voice_pipeline
-   +- voice_phase_frame
-   +- voice_endpoint_fetch
-   +- voice_dsp_pipeline
-      +- linear_interpolator
-      +- linear_interpolator
+voice_major_render_core
++- voice_major_command_plane
+|  +- control_word_fifo
++- block_voice_state_store
+|  +- block_voice_event_executor
++- voice_major_block_controller
+   +- block_mono_voice_engine
+      +- block_interleaved_envelope_frontend
+      +- block_interleaved_voice_renderer
+      |  +- mono_phase_frame
+      |  +- voice_sample_window
+      |  +- block_interleaved_voice_dsp
+      +- block_mix_buffer
 ```
 
-`wavetable_cached_render_core` wraps that tree and adds the cached memory adapter:
-
-```text
-wavetable_cached_render_core
-+- wavetable_render_core
-+- voice_line_cache
-```
-
-The reusable system core uses the same render and memory blocks directly while
-keeping SPI and I2S out of the synthesis engine boundary:
-
-```text
-wavetable_system_core
-+- wavetable_render_core
-+- lookahead_compressor
-+- wave_memory_subsystem
-```
-
-The I2S adapter is a separate audio-output consumer:
-
-```text
-wavetable_i2s_output
-+- output_sample_fifo
-+- i2s_tx
-```
-
-The demo board/common wrapper adds transport, status registers, tick generation, and I2S
-around those reusable blocks. It also exposes a platform-register extension hook
-that board wrappers can use for platform-specific status windows:
-
-```text
-wavetable_demo_system
-+- wavetable_common_status_regs
-+- spi_register_bridge
-+- fractional_tick_gen
-+- render_credit_scheduler
-+- wavetable_system_core
-+- wavetable_i2s_output
-```
-
-`spi_register_bridge`, `wavetable_common_status_regs`, `fractional_tick_gen`,
-`i2s_tx`, `wavetable_system_core`, `wavetable_i2s_output`, and
-`wavetable_demo_system` live under `fpga/common/rtl/`, not under generic `rtl/`.
-
-The current Smart Artix board top keeps SD loading, DDR3 arbitration, line reads,
-and DDR register access traffic behind a board-specific subsystem:
+The board/common composition is:
 
 ```text
 smart_artix_top
 +- smart_artix_ddr3_subsystem
-|  +- sd_native_pin_phy
 |  +- smart_artix_sd_native_asset_loader
-|  |  +- sd_native_block_reader
-|  |  +- smart_artix_asset_loader
-|  |  +- smart_artix_ddr3_asset_writer
-|  +- smart_artix_ddr3_rw_arbiter
+|  +- smart_artix_ddr3_asset_writer
 |  +- smart_artix_ddr3_reg_access_master
 |  +- smart_artix_ddr3_line_reader
+|  +- smart_artix_ddr3_rw_arbiter
+|     +- MIG app interface
 +- smart_artix_platform_regs
-+- wavetable_demo_system
++- voice_major_demo_system
+   +- spi_register_bridge
+   +- wavetable_register_fabric
+   +- wavetable_common_status_regs
+   +- voice_major_render_core
+   +- global_audio_effects_chain
+   |  +- global_effects_chain
+   |  |  +- stereo_chorus
+   |  |  +- fdn_reverb
+   |  |  +- effect_return_mixer
+   |  +- lookahead_compressor
+   +- wavetable_i2s_output
+      +- output_sample_fifo
+      +- i2s_tx
 ```
 
-## Package Layer
+## Ownership
 
-`rtl/pkg/synth_pkg.sv` owns the hardware-wide data contracts:
-
-- PCM, phase, address, filter-state, and voice-count widths.
-- Loop-mode constants.
-- `voice_config_t`, the static renderer configuration inside prepared/active state.
-- `prepared_voice_t` and `active_voice_t`, the packed command-owned state.
-- `voice_runtime_t`, runtime controls sampled by the renderer.
-- `voice_dsp_context_t` and `voice_dsp_result_t`, the typed boundary between
-  endpoint fetching, DSP, and result retirement.
-
-`rtl/pkg/synth_register_pkg.sv` is generated from `spec/register_map.json` and
-owns global register address constants, bit masks, and numeric constants. Do
-not edit it by hand; run `make generate-register-map`
-after changing the JSON spec.
-
-Board-facing packages stay with their board integration code instead of the
-generic package layer. For example, `fpga/smart_artix/rtl/smart_artix_pkg.sv`
-owns the Smart Artix DDR3 app-channel structs, line-read request/response
-structs, platform status, and DDR register access request/status structs used between
-`smart_artix_top`, `smart_artix_ddr3_subsystem`, and the board register inspection adapter.
+| Directory | Current ownership |
+| --- | --- |
+| `rtl/pkg` | Shared widths, packed records, commands, render blocks, and generated register constants. |
+| `rtl/control` | Unified command FIFO/parser, global audio configuration, generation checks, active voice state, and runtime event application. |
+| `rtl/voice` | Block traversal, envelope advancement, mono phase/loop calculation, windowed sample access, DSP issue, and block mixing. |
+| `rtl/dsp` | Interpolation, biquad, gain/envelope scaling, and contribution formatting. |
+| `rtl/memory` | Per-voice 32-word sample window and ordered 8-word refill interface. |
+| `rtl/audio` | Chorus, reverb, return mix, compressor/master processing, scheduling, and output FIFO. |
+| `rtl/legacy` | Superseded stereo renderer and transactional action plane; excluded from production builds. |
+| `fpga/common/rtl` | Reusable SPI, register routing, status, effects-to-I2S composition, SD protocol, and serializer blocks. |
+| `fpga/smart_artix/rtl` | MIG, SD pins, asset loading, DDR register access, line reads, and DDR arbitration. |
+| `sim/models` | Behavioral DDR3 timing/store adapters; never synthesis inputs. |
 
 ## Control Layer
 
-`synth_control_plane` is the top of `rtl/control`. It is the only generic RTL
-module that talks directly to the external register bus. It owns:
+`voice_major_command_plane` is the only production voice/global command decoder.
+It accepts the dedicated command stream and `CMD_FIFO_DATA` register writes into
+one FIFO. It parses the compact version-10 header, validates complete commands,
+and dispatches only while the renderer is idle.
 
-- Global command/status address decoding and `VERSION` reads.
-- Accepting register-fed or dedicated-stream command words.
-- Bounded action execution at renderer frame boundaries.
-- Renderer-facing synchronous snapshots of packed active/runtime state.
-- Coherent read-only board-debug capture using the existing voice RAM read port.
+`block_voice_state_store` owns active mono state and arbitrates renderer
+snapshots, START installs, runtime events, and renderer writeback. Generation is
+16 bits; voice ID is 10 bits in the command header. There is no prepared state,
+stereo descriptor, typed simulation install port, or per-voice debug register
+aperture.
 
-Internal control modules are split by ownership:
+## Voice And DSP Layers
 
-| Module | Role |
-| --- | --- |
-| `control_word_fifo` | Generic synchronous FIFO used by the 32-bit command ingress. |
-| `control_action_parser` | Decodes complete transactional command headers and payloads into packed actions. |
-| `control_action_fifo` | Buffers decoded actions until the next renderer frame boundary. |
-| `control_action_executor` | Applies all lifecycle/runtime actions, advances the six-stage volume envelope, and owns packed prepared/active voice RAM with seq validation. |
-| `transactional_control_plane` | Connects word parsing, action batching, lifecycle execution, and renderer frame release. |
-| `voice_bram_1r1w` | Small inferred synchronous RAM helper with one read and one write port. |
+`voice_major_block_controller` visits configured voice slots for one requested
+block and publishes a completed mix buffer. `block_mono_voice_engine` overlaps
+envelope preparation, sample-window traffic, DSP execution, and accumulation.
 
-`voice_bram_1r1w` is a local storage primitive, not a protocol top.
+`mono_phase_frame` derives the two interpolation endpoints and next phase for
+one mono voice. START clears phase to zero. Runtime PITCH changes only
+`phase_inc`. LOOP_MODE 0 stops at length, mode 1 wraps continuously, and mode 2
+wraps until RELEASE.
 
-## Voice Layer
-
-`multi_voice_pipeline` is the top of `rtl/voice`. It owns one complete output
-frame at a time:
-
-- Accepts `sample_tick` when idle.
-- Scans active voice slots in index order.
-- Reads active configuration and runtime state through `synth_control_plane`.
-- Maintains renderer-owned phase and filter history.
-- Uses `voice_phase_frame` to calculate frames, fraction, wrapping, done, and
-  next phase.
-- Uses `voice_endpoint_fetch` to convert each voice context into ordered wave
-  memory word reads and a complete `voice_dsp_context_t`.
-- Sends complete contexts into `voice_dsp_pipeline`.
-- Retires DSP results into a stereo accumulator, writes filter state, and emits
-  saturated PCM on `sample_valid`.
-
-Internal voice modules are:
-
-| Module | Role |
-| --- | --- |
-| `voice_phase_frame` | Combinational phase, loop, endpoint-frame, and done calculation for one voice snapshot. |
-| `voice_endpoint_fetch` | Multi-request fetch engine for L0/L1/R0/R1 interpolation endpoints. It owns request queues, response metadata, fetch slots, and DSP-context assembly. |
-
-## DSP Layer
-
-`voice_dsp_pipeline` is the top of `rtl/dsp`. It is a fixed-latency valid
-pipeline that receives complete endpoint contexts and produces one voice's
-contribution plus next filter state.
-
-Internal DSP primitives are:
-
-| Module | Role |
-| --- | --- |
-| `linear_interpolator` | Interpolates between two signed PCM16 endpoints using the phase fraction. The result remains PCM16 for valid endpoints. |
-
-`multi_voice_pipeline` does not duplicate the per-voice DSP arithmetic. It
-delegates interpolation, filter arithmetic, combined output gain/envelope scaling,
-and PCM saturation to `voice_dsp_pipeline`.
+`block_interleaved_voice_dsp` duplicates the interpolated mono sample before
+independent left/right gain, then applies filter/envelope arithmetic. Linked SF2
+stereo material has already become two mono voices in C++.
 
 ## Memory Layer
 
-`voice_line_cache` is the current cached render adapter in `rtl/memory`. It adapts:
+`voice_sample_window` stores 32 mono words per voice. A miss issues ordered
+aligned 8-word refills. The 8-word object is a DDR transaction width, not the old
+one-line cache policy.
+
+On Smart Artix the refill path is:
 
 ```text
-core one-word PCM read request
-  -> per-voice/per-stream two-line cache lookup
-  -> external aligned line read on miss
-  -> one-word PCM response
+voice_sample_window
+  -> smart_artix_ddr3_line_reader
+  -> smart_artix_ddr3_rw_arbiter
+  -> MIG app request/response
 ```
 
-It keeps ordered one-word responses and one outstanding external line request,
-with demand misses taking priority over conservative next-line prefetch. A
-prefetch can be queued after a demand hit reaches the second half of a cache
-line for the same voice/stream; phase-aware loop/channel prediction is deferred.
-`stream_id` separates mono/left endpoint reads from right stereo endpoint reads
-so linked stereo regions do not evict each other's cache lines while sharing one
-voice id. `wave_memory_subsystem` remains as the older single-line baseline
-adapter used by some common/board wrapper paths. The renderer still issues
-absolute word addresses with a voice id and stream id, and responses return in
-accepted-request order. Future cache policy work should keep DSP arithmetic out
-of this adapter; phase-aware prefetch may need metadata from
-`voice_endpoint_fetch`.
+The arbiter also serves asset loading and the DDR register inspection master.
+The behavioral `ordered_line_ddr3_bridge_model` exists only in simulation.
 
-## Audio Layer
+## Register And Package Layers
 
-`output_sample_fifo` is a synchronous stereo PCM FIFO with push/pop controls and
-level/empty/full status. `render_credit_scheduler` requests new frames until the
-FIFO plus any inflight frame reaches its target level. The bare generic render
-tops instantiate neither module; the common demo/I2S wrappers use them to
-decouple rendering from sample consumption.
+`synth_register_pkg.sv` and `sim/harness/generated/register_map.h` are generated
+from `spec/register_map.json`. The common register fabric preserves platform,
+DDR, common status, compressor, and effect diagnostic ownership while forwarding
+generic command/status addresses to `voice_major_command_plane`.
 
-## Source Order
-
-`rtl/filelist.f` is the single ordered source of truth for generic synthesizable
-RTL. The root `Makefile` derives `RTL_SOURCES` from it, and board synthesis flows
-prepend/append their own board sources without copying the generic list. The
-generic order runs from shared packages through leaf/storage modules, then
-composition modules:
-
-```text
-rtl/pkg
-rtl/control
-rtl/memory
-rtl/dsp
-rtl/audio
-rtl/voice
-rtl/top
-```
-
-This order is useful for Verilator and synthesis scripts, but it is not the best
-reading order. For understanding behavior, start at `rtl/top`, then follow the
-instantiation tree down into `rtl/control`, `rtl/voice`, `rtl/dsp`, and
-`rtl/memory`.
+Run `make generate-register-map` after editing the JSON and
+`make check-register-map` before committing.

@@ -27,7 +27,7 @@ host, MCU, or later soft-processor responsibilities.
 - `clk_in` from the board `50 MHz` oscillator.
 - `smart_artix_clk_50m_to_200m`, feeding MIG `sys_clk_i`.
 - `smart_artix_ddr3_mig`, exposing a `100 MHz` MIG `ui_clk`.
-- `wavetable_demo_system`, clocked by MIG `ui_clk`.
+- `voice_major_demo_system`, clocked by MIG `ui_clk`.
 - native 4-bit SD asset loading into DDR3.
 - DDR3 read/write arbitration between asset-loader writes and wavetable reads.
 - SPI global-register access, transactional voice commands, and common status.
@@ -107,7 +107,7 @@ Run the normal core and board-level tests before building a bitstream:
 make lint
 make test
 make smart-artix-test
-make render-board-loader SECONDS=0.1
+make render-rtl-ddr3 SECONDS=0.1
 ```
 
 Expected intent:
@@ -117,8 +117,8 @@ Expected intent:
   memory, interpolation, loop, gain, mix, SPI, and I2S behavior.
 - `make smart-artix-test` checks the Smart Artix SD, DDR writer, DDR reader,
   read/write arbiter, native SD path, and loader blocks with focused simulations.
-- `make render-board-loader` verifies the raw-image SD-to-DDR path at command level
-  and compares rendered samples against the C++ fixed-point reference.
+- `make render-rtl-ddr3` verifies real SF2 command generation, the voice window,
+  ordered DDR refill traffic, and timed DDR3-backed rendering.
 
 These tests do not prove board pin timing or DDR3 electrical behavior. They are
 the regression floor before hardware bring-up starts.
@@ -402,13 +402,10 @@ Start with:
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
 The command payload and ordering are documented in
-`../design/control_command_stream_plan.md`. For board inspection, run
-`build/ch347_control --snapshot-voice 0`; it captures one coherent copy of the
-selected voice's active configuration, runtime controls, and envelope state.
-The low-cost snapshot does not expose the renderer's advancing phase or biquad
-history.
+`../design/control_command_stream_plan.md`. Inspect command/parser state through
+`CMD_FIFO_STATUS`, `CMD_ERROR_STATUS`, and `CMD_ACTION_STATUS`.
 
-If audio is silent after `VOICE_START`:
+If audio is silent after `VOICE_START_MONO`:
 
 - Read `AUDIO_STATUS`, `RENDER_STATUS`, and `MEMORY_STATUS`.
 - Check whether `MEMORY_STATUS` shows line-memory requests and memory responses.

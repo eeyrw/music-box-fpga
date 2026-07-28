@@ -1,181 +1,115 @@
-# Multi-Voice Render Pipeline
+# Mono Voice-Major Block Pipeline
 
-This document describes the current `multi_voice_pipeline` implementation. The
-numeric contract is in `../fixed_point.md`; memory layout and handshakes are in
-`../memory_format.md`.
+This document describes the production renderer behind
+`voice_major_render_core`. Numeric and memory contracts are in
+`../fixed_point.md` and `../memory_format.md`.
 
-## Interface
+## Block Contract
 
-One accepted `sample_tick` requests one stereo PCM frame. The renderer exposes:
+One accepted request names a start frame and one through eight output frames.
+The controller processes voices in voice-major order, accumulating every frame
+of one voice before advancing to the next voice. Completion publishes one mix
+buffer; the consumer reads its frames and explicitly releases it.
 
-- an indexed synchronous control-state read (`voice_read_index`);
-- an envelope snapshot/writeback handshake;
-- active and START-activation bitmaps;
-- ordered word-memory ready/valid traffic;
-- a completion pulse with signed 16-bit left/right samples;
-- queue occupancy and memory-pressure diagnostics.
-
-`busy` remains asserted from frame acceptance through final PCM generation.
+Commands and block requests share one boundary. A block is not accepted until
+the command FIFO, parser, and pending dispatcher work are drained. No typed
+simulation port can install state behind that boundary.
 
 ## State Ownership
 
-The control plane owns packed prepared and active records. The renderer reads one
-active record at a time and owns the state that changes with sample fetching:
-
-| State | Owner | Storage |
-| --- | --- | --- |
-| Wave addresses, lengths, loops, initial phase | control | active RAM |
-| Phase increment, gain, envelope, filter coefficients | control | active RAM |
-| Advancing left/right phase | renderer | distributed RAM |
-| Biquad `z1/z2`, left/right | renderer | distributed RAM |
-| Active/prepared validity | control | bitmaps |
-| Phase/filter-history validity | renderer | bitmaps |
-
-A matching `VOICE_START` produces a one-frame activation pulse. The renderer
-then reloads phase from `phase_init` and treats filter history as zero. Runtime
-gain, phase-increment, envelope, and filter changes do not reload phase.
-
-## Front-End State Machine
-
-| State | Work |
+| State | Owner |
 | --- | --- |
-| `IDLE` | Wait for a frame, clear accumulators, and latch activation pulses. |
-| `SCAN_VOICE` | Find the next set bit in `config_valid`. |
-| `READ_VOICE` | Present the selected synchronous RAM address. |
-| `WAIT_VOICE` | Allow active, phase, and filter-state reads to settle; request an envelope snapshot. |
-| `WAIT_SNAPSHOT` | Wait for the registered snapshot conversion result. |
-| `START_VOICE` | Capture one coherent render context and start prefetching the next valid voice. |
-| `PROCESS_VOICE` | Skip disabled/done voices or enqueue endpoint work and write next phase. |
-| `DSP_START` | Advance to the prefetched voice, resume scanning, or enter drain. |
-| `DRAIN` | Wait for endpoint requests, responses, DSP contexts, and results to retire. |
-| `FINISH` | Saturate accumulators and pulse `sample_valid`. |
+| Active bit, generation, mono region, phase increment, gains, filter parameters, envelope parameters | `block_voice_state_store` |
+| Advancing Q24.8 phase, envelope stage/value, biquad history | renderer writeback in the active state store |
+| 32-word sample contents and tags | `voice_sample_window` |
+| Per-block signed mix | `block_mix_buffer` |
 
-Sequential bitmap scanning deliberately trades clocks for area. It avoids a
-wide next-active priority encoder. Empty slots cost scan clocks but do not issue
-RAM, memory, or DSP work.
+`VOICE_START_MONO` atomically replaces one slot, clears phase to zero, clears
+filter history, and starts a fresh envelope. Runtime GAIN, FILTER, PITCH, ENV,
+and RELEASE require the same 16-bit generation. PITCH does not reload phase.
 
-## Coherent Voice Snapshot
+## Processing Flow
 
-The control RAM, phase RAM, and filter-state RAM use synchronous reads. A voice
-therefore passes through `READ_VOICE`, `WAIT_VOICE`, and `START_VOICE` before its
-fields are consumed.
+```text
+voice snapshot
+  -> envelope advance for requested frames
+  -> mono phase and LOOP_MODE endpoint calculation
+  -> 32-word per-voice sample-window lookup/refill
+  -> linear interpolation
+  -> optional biquad
+  -> duplicate mono sample
+  -> independent left/right gain and envelope
+  -> block mix accumulation
+  -> active-state writeback
+```
 
-During `WAIT_VOICE`, `runtime_snapshot_prepare` asks the executor to advance the
-selected volume envelope and write the new active record. A separate
-`runtime_snapshot_valid` marks the registered conversion result; the renderer
-does not assume combinational RAM or lookup-table output. The snapshot contains
-the level for the current output frame.
-
-The front end starts scanning the remaining bitmap while the current voice
-enters endpoint fetch. As soon as that scan finds a valid record, its envelope
-snapshot request overlaps the current voice's memory wait. A completed prefetched
-snapshot advances directly to `START_VOICE`; cancellation clears the associated
-prefetch state so a late result cannot be applied to another voice.
+The envelope front end and DSP renderer are interleaved so memory stalls for one
+work item do not force all arithmetic to idle. All memory movement uses
+ready/valid handshakes.
 
 ## Phase And Looping
 
-Phase is unsigned Q24.8 in sample-frame units:
+Phase and increment are unsigned Q24.8 sample-frame units:
 
 ```text
 frame_0  = phase[31:8]
 fraction = phase[7:0]
 frame_1  = frame_0 + 1, adjusted at the sample or loop boundary
-next     = phase + phase_inc, with at most one loop-span subtraction
+next     = phase + phase_inc
 ```
 
-Mono uses one phase and duplicates the interpolated sample before independent
-left/right gain. Stereo has independent left/right addresses, lengths, loop
-points, and phase state while sharing `phase_inc` and interpolation fraction.
+START sets `phase=0`. `phase_inc=0x100` advances one source sample per output
+frame; fractional increments drive interpolation.
 
-`loop_end` is exclusive. Loop-until-release behaves as continuous looping until
-the active record's released bit is set, then proceeds toward the sample end.
-No-loop voices stop contributing when phase reaches length.
+LOOP_MODE is carried in compact START header flags `[1:0]`:
 
-## Endpoint Fetch
+| Mode | Behavior |
+| ---: | --- |
+| 0 | No loop; stop contributing at `length`. |
+| 1 | Wrap at exclusive `loop_end` to `loop_start`. |
+| 2 | Wrap until RELEASE, then continue toward `length`. |
+| 3 | Invalid command. |
 
-`voice_endpoint_fetch` accepts one complete context and serializes its required
-word reads:
+The increment must be smaller than one loop span, so one subtraction is enough.
 
-- mono: left frame 0 and frame 1;
-- stereo: left frame 0/1 and right frame 0/1.
+## Sample Window
 
-Accepted-request metadata is queued so ordered responses can be placed into the
-correct fetch slot. Four fetch slots, a 16-entry word-request queue, and a
-16-entry response-metadata queue allow memory latency from several voices to be
-overlapped. A completed slot is registered directly as one
-`voice_dsp_context_t`; a second full-width context FIFO is unnecessary because
-the ordered response port can complete at most one slot per clock and the DSP
-accepts one context per clock.
+Each voice has a 32-word mono window. The renderer requests both interpolation
+endpoints; hits return locally. A miss requests aligned 8-word chunks in order
+until the needed portion of the window is populated. A boundary endpoint that
+falls outside the current window uses the documented fallback read path.
 
-The renderer does not assume asynchronous memory. All request and response
-movement follows ready/valid rules.
+The external 8-word object is a refill transaction, not the removed line-cache
+architecture. Smart Artix sends it through its DDR3 line reader and existing
+read/write arbiter to the MIG app interface.
 
-## DSP Pipeline
+## DSP And Mix
 
-`voice_dsp_pipeline` is fixed latency and can accept one complete context every
-clock. Different voices may occupy all stages concurrently. Its work is:
+`block_interleaved_voice_dsp` performs exact integer interpolation, optional
+transposed direct-form-II biquad filtering, channel gain, envelope gain, and
+explicit saturation. One mono result is duplicated before channel gain. There
+is no dual-sample stereo voice.
 
-1. Linear interpolation using the Q24.8 fraction.
-2. Optional transposed direct-form II biquad per channel.
-3. Filter state calculation and saturation.
-4. Register the independent left/right sample-by-channel-gain products.
-5. Apply the shared Q1.15 envelope in a separate multiplier stage.
-6. Register signed 16-bit per-voice contribution saturation.
+For the normal 256-voice configuration, signed 24-bit block mix samples preserve
+the exact worst-case sum. A 512-voice product mode needs enforced headroom or a
+wider mix contract even though the 512-slot cycle/correct-ID test passes.
 
-Mono samples are duplicated before channel gain. Stereo samples retain their
-independent channels. Results carry the voice index so filter history can be
-written back on retirement.
+## Output
 
-## Accumulation And Completion
-
-DSP results retire into signed 32-bit left/right accumulators. `DRAIN` waits
-until endpoint fetch is empty and the outstanding DSP count reaches zero.
-`FINISH` then performs the only final mix saturation to signed 16-bit PCM.
-
-Renderer output is a pulse. `wavetable_system_core` converts it to a held
-ready/valid frame before the output FIFO.
-
-## Diagnostics
-
-The pipeline exports pulses and high-water marks for:
-
-- cross-line endpoint pairs;
-- fetch-slot pressure;
-- memory stalls;
-- fetch-slot, word-request, response-metadata, and DSP-context occupancy;
-- cycles where the DSP is ready but no complete context is available.
-
-The C++ harness also records total/max render cycles, memory reads, active and
-audible voices, stereo/filter counts, cache behavior, and saturation metrics.
-
-## Cost Model
-
-For a frame, the fixed front-end cost includes bitmap scanning and synchronous
-read staging. Each contributing mono voice needs two PCM words; stereo needs
-four. With one accepted word request per clock, the ideal issue limits are one
-mono voice per two clocks and one stereo voice per four clocks. The DSP's
-one-context-per-clock initiation interval is therefore intentionally higher than
-the memory-side supply rate. Cache hits reduce external line traffic but not the
-logical endpoint count. The frame cannot complete until the slowest accepted
-endpoint response and all DSP results retire.
-
-The current design favors bounded area and simple ordering over maximum
-polyphony throughput. Optimize only from measured queue, memory-stall, FIFO, and
-post-route data. A future voice-major block renderer is a separate architecture,
-not a control-plane compatibility feature.
+The board wrapper drains the completed block into `global_audio_effects_chain`.
+Chorus, reverb/return mix, compressor, and master volume therefore remain in
+series before the I2S output FIFO. Backpressure is held through each ready/valid
+stage; no completed block is released before all requested frames are accepted.
 
 ## Verification
 
-Focused RTL tests cover:
+Focused coverage includes:
 
-- reset and empty frames;
-- DEFINE isolation and atomic START;
-- mono/stereo interpolation and exclusive loops;
-- no-loop completion and loop-until-release;
-- runtime gain/phase/filter changes without phase reload;
-- filter width, rounding, saturation, and state reset on START;
-- highest voice index and multi-voice mixing;
-- cached-memory counters and backpressure;
-- coherent control-state debug capture.
-
-Run `make test-rtl-core` for these tests and `make test` for the complete suite.
+- phase 0 on START and fractional `phase_inc` interpolation;
+- all LOOP_MODE values and exclusive boundaries;
+- mono duplication with independent channel gains;
+- generation rejection and IDs above 255;
+- 32-word window hit/refill/fallback behavior;
+- DDR3 timing, row hit/miss, refresh, and deadline accounting;
+- effects-chain dispatch after block rendering;
+- exact C++ reference comparison through the unified command stream.
