@@ -7,6 +7,24 @@ package synth_pkg;
   localparam int PHASE_FRAC_WIDTH = 8;
   localparam int PHASE_WIDTH = PHASE_FRAME_WIDTH + PHASE_FRAC_WIDTH;
   localparam int ADDR_WIDTH = 32;
+  localparam int TIMELINE_FRAME_WIDTH = 32;
+`ifdef SYNTH_MAX_BLOCK_FRAMES
+  localparam int MAX_BLOCK_FRAMES = `SYNTH_MAX_BLOCK_FRAMES;
+`else
+  localparam int MAX_BLOCK_FRAMES = 8;
+`endif
+  localparam int BLOCK_FRAME_INDEX_WIDTH = $clog2(MAX_BLOCK_FRAMES);
+  localparam int BLOCK_FRAME_COUNT_WIDTH = $clog2(MAX_BLOCK_FRAMES + 1);
+  localparam int BLOCK_BUFFER_ID_WIDTH = 1;
+  localparam int VOICE_GENERATION_WIDTH = 16;
+  localparam int BLOCK_ENDPOINT_COUNT = 2;
+  localparam int BLOCK_LINE_WORDS = 8;
+  localparam int BLOCK_ENDPOINT_SCRATCH_COUNT =
+      MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
+  // Eight independent block contexts cover the five-cycle recursive-filter
+  // feedback distance while keeping the slot ID and round-robin wrap binary.
+  localparam int BLOCK_WORK_ENTRY_COUNT = 8;
+  localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
   /* verilator lint_off UNUSEDPARAM */
   localparam int FILTER_COEFF_WIDTH = 16;
   localparam int FILTER_COEFF_FRAC_WIDTH = 14;
@@ -20,17 +38,7 @@ package synth_pkg;
   localparam int NUM_VOICES = 32;
 `endif
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
-  localparam int STREAM_ID_WIDTH = 1;
   /* verilator lint_off UNUSEDPARAM */
-  localparam int CONTROL_CMD_WORD_WIDTH = 32;
-  localparam int CONTROL_CMD_OPCODE_WIDTH = 8;
-  localparam int CONTROL_CMD_SEQ_WIDTH = 8;
-  localparam int CONTROL_ACTION_MAX_PAYLOAD_WORDS = 15;
-  /* verilator lint_on UNUSEDPARAM */
-
-  /* verilator lint_off UNUSEDPARAM */
-  localparam logic [STREAM_ID_WIDTH-1:0] STREAM_LEFT = 1'b0;
-  localparam logic [STREAM_ID_WIDTH-1:0] STREAM_RIGHT = 1'b1;
   localparam logic [1:0] LOOP_MODE_NONE = 2'd0;
   localparam logic [1:0] LOOP_MODE_CONTINUOUS = 2'd1;
   localparam logic [1:0] LOOP_MODE_UNTIL_RELEASE = 2'd2;
@@ -40,6 +48,7 @@ package synth_pkg;
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
   typedef logic signed [MIX_WIDTH-1:0] mix_t;
+  typedef logic signed [31:0] accum_t;
   typedef logic signed [FILTER_SAMPLE_WIDTH-1:0] filter_sample_t;
 
   typedef struct packed {
@@ -53,16 +62,120 @@ package synth_pkg;
   } stereo_mix_t;
 
   typedef struct packed {
-    logic                       valid;
-    logic [VOICE_ID_WIDTH-1:0]  voice;
-    logic [STREAM_ID_WIDTH-1:0] stream_id;
-    logic [ADDR_WIDTH-1:0]      addr;
-  } wave_word_req_t;
+    accum_t l;
+    accum_t r;
+  } stereo_accum_t;
+
+  // The block-renderer payload types exclude ready/valid so ownership and
+  // backpressure remain explicit at module boundaries. frame_count is
+  // 1..MAX_BLOCK_FRAMES.
+  typedef struct packed {
+    logic [TIMELINE_FRAME_WIDTH-1:0] start_frame;
+    logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_count;
+  } render_block_req_t;
 
   typedef struct packed {
-    logic valid;
-    pcm_t data;
-  } wave_word_rsp_t;
+    logic [BLOCK_BUFFER_ID_WIDTH-1:0] buffer_id;
+    logic [TIMELINE_FRAME_WIDTH-1:0] start_frame;
+    logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_count;
+  } render_block_complete_t;
+
+  typedef struct packed {
+    logic [BLOCK_BUFFER_ID_WIDTH-1:0] buffer_id;
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
+  } render_block_read_req_t;
+
+  typedef struct packed {
+    stereo_mix_t sample;
+  } render_block_read_rsp_t;
+
+  typedef struct packed {
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    logic [VOICE_ID_WIDTH-1:0] voice_index;
+    logic signed [15:0] gain_l;
+    logic signed [15:0] gain_r;
+    logic filter_enable;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
+  } block_voice_context_t;
+
+  // Endpoint bits are {sample_1, sample_0}. Every renderer voice owns exactly
+  // one mono sample lane; stereo pairs are represented by two host-owned voices.
+  typedef struct packed {
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] block_frame_index;
+    logic [PHASE_FRAC_WIDTH-1:0] fraction;
+    logic [BLOCK_ENDPOINT_COUNT-1:0] endpoint_mask;
+    logic [BLOCK_ENDPOINT_COUNT-1:0][ADDR_WIDTH-1:0] endpoint_addr;
+    logic signed [15:0] envelope_level;
+  } block_endpoint_job_t;
+
+  typedef struct packed {
+    logic [ADDR_WIDTH-1:0] base_word_addr;
+    logic [BLOCK_ENDPOINT_SCRATCH_COUNT-1:0] endpoint_mask;
+  } block_fetch_segment_t;
+
+  typedef struct packed {
+    block_endpoint_job_t job;
+    pcm_t sample_0;
+    pcm_t sample_1;
+  } block_sample_job_t;
+
+  typedef struct packed {
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    logic [VOICE_ID_WIDTH-1:0] voice_index;
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] block_frame_index;
+    pcm_t contribution_l;
+    pcm_t contribution_r;
+  } block_voice_contribution_t;
+
+  // The board-facing response is ordered and therefore carries no transaction
+  // ID. The burst reader's issued-segment FIFO owns response association.
+  typedef struct packed {
+    logic [ADDR_WIDTH-1:0] aligned_line_addr;
+  } ordered_line_req_t;
+
+  typedef struct packed {
+    logic [BLOCK_LINE_WORDS-1:0][PCM_WIDTH-1:0] words;
+  } ordered_line_rsp_t;
+
+  typedef struct packed {
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    logic active;
+    logic [PHASE_WIDTH-1:0] phase;
+    logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frames_walked;
+  } block_phase_result_t;
+
+  typedef struct packed {
+    block_phase_result_t phase_result;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
+  } block_voice_dsp_result_t;
+
+  typedef struct packed {
+    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic last;
+    block_voice_context_t voice_context;
+    block_sample_job_t sample;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
+  } block_dsp_sample_token_t;
+
+  typedef struct packed {
+    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
+  } block_dsp_state_update_t;
+
+  typedef struct packed {
+    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic last;
+    block_voice_contribution_t contribution;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
+  } block_dsp_retire_t;
 
   typedef struct packed {
     logic        valid;
@@ -76,31 +189,6 @@ package synth_pkg;
     logic        ready;
     logic        error;
   } reg_bus_rsp_t;
-
-  typedef enum logic [CONTROL_CMD_OPCODE_WIDTH-1:0] {
-    VOICE_DEFINE_MONO   = 8'h10,
-    VOICE_DEFINE_STEREO = 8'h11,
-    VOICE_START         = 8'h12,
-    VOICE_ENV_UPDATE    = 8'h13,
-    VOICE_RELEASE       = 8'h14,
-    VOICE_STOP          = 8'h15,
-    VOICE_GAIN_PHASE    = 8'h16,
-    VOICE_FILTER        = 8'h17,
-    COMPRESSOR_CONFIG   = 8'h20,
-    MASTER_VOLUME       = 8'h21,
-    CHORUS_CONFIG       = 8'h22,
-    REVERB_CONFIG       = 8'h23,
-    EFFECT_CLEAR        = 8'h24,
-    STREAM_FLUSH        = 8'h7f
-  } command_opcode_t;
-
-  typedef struct packed {
-    command_opcode_t opcode;
-    logic [7:0] voice;
-    logic [CONTROL_CMD_SEQ_WIDTH-1:0] seq;
-    logic [7:0] payload_words;
-    logic [CONTROL_ACTION_MAX_PAYLOAD_WORDS-1:0][31:0] payload;
-  } control_action_t;
 
   typedef struct packed {
     logic        enable;
@@ -178,80 +266,6 @@ package synth_pkg;
     compressor_diagnostics_t     compressor;
   } audio_diagnostics_t;
 
-  typedef struct packed {
-    logic       cross_line_endpoint_pair_pulse;
-    logic       fetch_slot_pressure_pulse;
-    logic       memory_stall_pulse;
-    logic [2:0] fetch_slot_occupancy;
-    logic [2:0] fetch_slot_max_occupancy;
-    logic [4:0] word_req_occupancy;
-    logic [4:0] word_req_max_occupancy;
-    logic [4:0] rsp_meta_occupancy;
-    logic [4:0] rsp_meta_max_occupancy;
-    logic [2:0] dsp_context_queue_occupancy;
-    logic [2:0] dsp_context_queue_max_occupancy;
-  } voice_endpoint_diagnostics_t;
-
-  typedef struct packed {
-    voice_endpoint_diagnostics_t endpoint;
-    logic                        dsp_ready_no_context_pulse;
-  } voice_pipeline_diagnostics_t;
-
-  typedef struct packed {
-    logic        response_trace_pulse;
-    logic [15:0] response_trace_latency;
-    logic        demand_hit_pulse;
-    logic        demand_miss_pulse;
-    logic        line_fill_pulse;
-    logic        same_line_endpoint_hit_pulse;
-    logic        replacement_pulse;
-    logic        prefetch_issued_pulse;
-    logic        prefetch_filled_pulse;
-    logic        prefetch_used_pulse;
-    logic        prefetch_dropped_pulse;
-    logic        prefetch_late_pulse;
-  } cache_diagnostics_t;
-
-  typedef struct packed {
-    logic        active;
-    logic [31:0] last_cycles;
-    logic [31:0] max_cycles;
-    logic [63:0] cycle_sum;
-    logic [63:0] frame_count;
-    logic [63:0] deadline_miss_count;
-    logic [63:0] over_budget_frames;
-    logic [31:0] over_budget_max_cycles;
-    logic [31:0] cycle_counter;
-  } render_timing_diagnostics_t;
-
-  // One committed voice configuration. These fields describe the sample region
-  // and static playback mode that must become visible atomically on voice commit.
-  typedef struct packed {
-    logic                      enable;
-    logic                      stereo;
-    logic [ADDR_WIDTH-1:0]     base_addr;
-    logic [ADDR_WIDTH-1:0]     base_addr_r;
-    logic [PHASE_FRAME_WIDTH-1:0] length;
-    logic [PHASE_FRAME_WIDTH-1:0] length_r;
-    logic [PHASE_FRAME_WIDTH-1:0] loop_start;
-    logic [PHASE_FRAME_WIDTH-1:0] loop_start_r;
-    logic [PHASE_FRAME_WIDTH-1:0] loop_end;
-    logic [PHASE_FRAME_WIDTH-1:0] loop_end_r;
-    logic [PHASE_WIDTH-1:0]    phase_init;
-    logic [1:0]                loop_mode;
-  } voice_config_t;
-
-  typedef struct packed {
-    logic [CONTROL_CMD_SEQ_WIDTH-1:0] seq;
-    voice_config_t voice;
-    logic filter_enable;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
-  } prepared_voice_t;
-
   typedef enum logic [2:0] {
     ENV_DELAY,
     ENV_ATTACK,
@@ -278,9 +292,28 @@ package synth_pkg;
   } volume_env_state_t;
 
   typedef struct packed {
-    logic audible;
-    logic [CONTROL_CMD_SEQ_WIDTH-1:0] seq;
-    voice_config_t voice;
+    logic active;
+    volume_env_state_t env_state;
+    logic [MAX_BLOCK_FRAMES-1:0] phase_advance_mask;
+    logic [MAX_BLOCK_FRAMES-1:0] render_mask;
+    logic signed [MAX_BLOCK_FRAMES-1:0][15:0] envelope_levels;
+  } block_envelope_result_t;
+
+  // Block-renderer state is split by ownership and update frequency.
+  typedef struct packed {
+    logic [ADDR_WIDTH-1:0] base_addr;
+    logic [PHASE_FRAME_WIDTH-1:0] length;
+    logic [PHASE_FRAME_WIDTH-1:0] loop_start;
+    logic [PHASE_FRAME_WIDTH-1:0] loop_end;
+    logic [1:0] loop_mode;
+  } voice_playback_region_t;
+
+  typedef struct packed {
+    voice_playback_region_t region;
+    logic [PHASE_WIDTH-1:0] phase_init;
+  } voice_descriptor_state_t;
+
+  typedef struct packed {
     logic [PHASE_WIDTH-1:0] phase_inc;
     logic signed [15:0] gain_l;
     logic signed [15:0] gain_r;
@@ -291,57 +324,59 @@ package synth_pkg;
     logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
     logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
     logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
-    volume_env_params_t env_params;
+  } voice_event_params_t;
+
+  typedef struct packed {
+    logic active;
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    logic [PHASE_WIDTH-1:0] phase;
     volume_env_state_t env_state;
-  } active_voice_t;
-
-  // Runtime control state. These fields may be updated while a voice is playing
-  // and do not reload phase. The renderer snapshots them at output-frame start.
-  typedef struct packed {
-    logic [PHASE_WIDTH-1:0]    phase_inc;
-    logic signed [15:0]        gain_l;
-    logic signed [15:0]        gain_r;
-    logic signed [15:0]        envelope_level;
-    logic                      envelope_delay;
-    logic                      released;
-    logic                      filter_enable;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
-  } voice_runtime_t;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
+    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
+  } voice_dynamic_state_t;
 
   typedef struct packed {
-    logic [VOICE_ID_WIDTH-1:0]    voice_index;
-    logic                        filter_enable;
-    logic signed [15:0]          gain_l;
-    logic signed [15:0]          gain_r;
-    logic signed [15:0]          envelope_level;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
-    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1_r;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2_r;
-    logic [PHASE_FRAC_WIDTH-1:0] fraction;
-    pcm_t                        raw_l0;
-    pcm_t                        raw_l1;
-    pcm_t                        raw_r0;
-    pcm_t                        raw_r1;
-  } voice_dsp_context_t;
+    voice_playback_region_t region;
+    voice_event_params_t event_params;
+    volume_env_params_t env_params;
+    voice_dynamic_state_t dynamic;
+  } block_voice_state_snapshot_t;
+
+  // Control events are decoded, timestamped transactions.
+  typedef enum logic [2:0] {
+    BLOCK_VOICE_START,
+    BLOCK_VOICE_STOP,
+    BLOCK_VOICE_RELEASE,
+    BLOCK_VOICE_GAIN,
+    BLOCK_VOICE_PITCH,
+    BLOCK_VOICE_FILTER,
+    BLOCK_VOICE_ENV
+  } block_voice_event_kind_t;
 
   typedef struct packed {
-    logic [VOICE_ID_WIDTH-1:0]    voice_index;
-    logic                        filter_enable;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_l;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z1_r;
-    logic signed [FILTER_STATE_WIDTH-1:0] next_z2_r;
-    pcm_t                        contribution_l;
-    pcm_t                        contribution_r;
-  } voice_dsp_result_t;
+    logic [TIMELINE_FRAME_WIDTH-1:0] target_frame;
+    logic [15:0] host_voice_id;
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    block_voice_event_kind_t kind;
+    voice_descriptor_state_t descriptor;
+    voice_event_params_t event_params;
+    volume_env_params_t env_params;
+    volume_env_state_t start_env_state;
+  } block_voice_event_t;
+
+  typedef enum logic [1:0] {
+    BLOCK_EVENT_APPLIED,
+    BLOCK_EVENT_STALE,
+    BLOCK_EVENT_BAD_VOICE,
+    BLOCK_EVENT_BAD_TIME
+  } block_voice_event_status_t;
+
+  typedef struct packed {
+    logic [TIMELINE_FRAME_WIDTH-1:0] target_frame;
+    logic [15:0] host_voice_id;
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    block_voice_event_kind_t kind;
+    block_voice_event_status_t status;
+  } block_voice_event_result_t;
+
 endpackage

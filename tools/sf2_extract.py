@@ -460,7 +460,7 @@ def main():
     config_json = os.path.join(args.out_dir, "render_config.json")
     words = file_words(data)
     write_memh(memh, words)
-    # These localparams directly program tb_wavetable_render_core_asset.sv.
+    # These localparams describe a compact single-zone simulation fixture.
     cfg = {
         "RENDER_MEMORY_DEPTH": len(words),
         "RENDER_SAMPLE_COUNT": sample_count,

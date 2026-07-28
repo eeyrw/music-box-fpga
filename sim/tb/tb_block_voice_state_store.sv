@@ -1,0 +1,200 @@
+`timescale 1ns/1ps
+
+module tb_block_voice_state_store;
+  import synth_pkg::*;
+
+  logic clk = 1'b0;
+  logic rst = 1'b1;
+  logic render_busy;
+  logic install_valid;
+  logic install_ready;
+  logic [VOICE_ID_WIDTH-1:0] install_voice;
+  block_voice_state_snapshot_t install_state;
+  logic params_write_valid;
+  logic params_write_ready;
+  logic [VOICE_ID_WIDTH-1:0] params_write_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] params_write_generation;
+  voice_event_params_t params_write_event;
+  volume_env_params_t params_write_env;
+  logic control_event_valid;
+  logic control_event_ready;
+  block_voice_event_t control_event;
+  logic control_event_done_pulse;
+  logic stale_control_event_pulse;
+  logic state_read_req_valid;
+  logic state_read_req_ready;
+  logic [VOICE_ID_WIDTH-1:0] state_read_req_voice;
+  logic state_read_rsp_valid;
+  logic state_read_rsp_ready;
+  block_voice_state_snapshot_t state_read_rsp;
+  logic dynamic_write_valid;
+  logic dynamic_write_ready;
+  logic [VOICE_ID_WIDTH-1:0] dynamic_write_voice;
+  voice_dynamic_state_t dynamic_write_data;
+  logic [NUM_VOICES-1:0] active_bitmap;
+  logic stale_params_write_pulse;
+  logic stale_dynamic_write_pulse;
+
+  always #5 clk = ~clk;
+
+  block_voice_state_store dut (.*);
+
+  task automatic install_voice_state(
+      input logic [VOICE_ID_WIDTH-1:0] voice,
+      input block_voice_state_snapshot_t snapshot);
+    begin
+      @(negedge clk);
+      install_voice = voice;
+      install_state = snapshot;
+      install_valid = 1'b1;
+      do @(posedge clk); while (!install_ready);
+      @(negedge clk);
+      install_valid = 1'b0;
+    end
+  endtask
+
+  task automatic write_params(
+      input logic [VOICE_GENERATION_WIDTH-1:0] generation,
+      input voice_event_params_t event_value,
+      input volume_env_params_t env_value);
+    begin
+      @(negedge clk);
+      params_write_generation = generation;
+      params_write_event = event_value;
+      params_write_env = env_value;
+      params_write_valid = 1'b1;
+      do @(posedge clk); while (!params_write_ready);
+      @(negedge clk);
+      params_write_valid = 1'b0;
+    end
+  endtask
+
+  task automatic read_state(output block_voice_state_snapshot_t value);
+    block_voice_state_snapshot_t held;
+    begin
+      @(negedge clk);
+      state_read_req_valid = 1'b1;
+      do @(posedge clk); while (!state_read_req_ready);
+      @(negedge clk);
+      state_read_req_valid = 1'b0;
+      do @(posedge clk); while (!state_read_rsp_valid);
+      held = state_read_rsp;
+      @(posedge clk);
+      if (!state_read_rsp_valid || state_read_rsp != held)
+        $fatal(1, "state response changed under backpressure");
+      value = state_read_rsp;
+      @(negedge clk);
+      state_read_rsp_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      state_read_rsp_ready = 1'b0;
+    end
+  endtask
+
+  task automatic write_dynamic(
+      input voice_dynamic_state_t value,
+      input logic expect_stale);
+    begin
+      @(negedge clk);
+      dynamic_write_data = value;
+      dynamic_write_valid = 1'b1;
+      do @(posedge clk); while (!dynamic_write_ready);
+      @(negedge clk);
+      dynamic_write_valid = 1'b0;
+      if (stale_dynamic_write_pulse != expect_stale)
+        $fatal(1, "dynamic stale result mismatch");
+    end
+  endtask
+
+  initial begin
+    block_voice_state_snapshot_t initial_state;
+    block_voice_state_snapshot_t observed;
+    voice_event_params_t changed_event;
+    volume_env_params_t changed_env;
+    voice_dynamic_state_t changed_dynamic;
+
+    render_busy = 1'b0;
+    install_valid = 1'b0;
+    install_voice = VOICE_ID_WIDTH'(7);
+    install_state = '0;
+    params_write_valid = 1'b0;
+    params_write_voice = VOICE_ID_WIDTH'(7);
+    params_write_generation = '0;
+    params_write_event = '0;
+    params_write_env = '0;
+    control_event_valid = 1'b0;
+    control_event = '0;
+    state_read_req_valid = 1'b0;
+    state_read_req_voice = VOICE_ID_WIDTH'(7);
+    state_read_rsp_ready = 1'b0;
+    dynamic_write_valid = 1'b0;
+    dynamic_write_voice = VOICE_ID_WIDTH'(7);
+    dynamic_write_data = '0;
+
+    repeat (3) @(posedge clk);
+    @(negedge clk);
+    rst = 1'b0;
+    if (active_bitmap != '0) $fatal(1, "active bitmap not clear after reset");
+
+    initial_state = '0;
+    initial_state.region.base_addr = 32'h0010_0000;
+    initial_state.region.length = 24'd200;
+    initial_state.event_params.phase_inc = 32'h0000_0180;
+    initial_state.event_params.gain_l = 16'sh4000;
+    initial_state.event_params.gain_r = 16'sh2000;
+    initial_state.env_params.delay_samples = 24'd3;
+    initial_state.dynamic.active = 1'b1;
+    initial_state.dynamic.generation = 16'h0052;
+    initial_state.dynamic.phase = 32'h0000_0400;
+    initial_state.dynamic.env_state.stage = ENV_DELAY;
+    install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
+    if (!active_bitmap[7]) $fatal(1, "install did not activate voice");
+
+    changed_event = initial_state.event_params;
+    changed_event.gain_l = 16'sh6000;
+    changed_env = initial_state.env_params;
+    changed_env.delay_samples = 24'd5;
+    write_params(16'h0051, changed_event, changed_env);
+    if (!stale_params_write_pulse)
+      $fatal(1, "stale parameter generation was accepted");
+    write_params(16'h0052, changed_event, changed_env);
+    if (stale_params_write_pulse)
+      $fatal(1, "matching parameter generation was rejected");
+
+    render_busy = 1'b1;
+    @(posedge clk);
+    if (install_ready || params_write_ready)
+      $fatal(1, "host writes were not blocked during render");
+    read_state(observed);
+    if (observed.region != initial_state.region ||
+        observed.event_params != changed_event ||
+        observed.env_params != changed_env ||
+        observed.dynamic != initial_state.dynamic)
+      $fatal(1, "state banks did not preserve ownership");
+
+    changed_dynamic = initial_state.dynamic;
+    changed_dynamic.generation = 16'h0051;
+    changed_dynamic.phase = 32'h0000_0900;
+    write_dynamic(changed_dynamic, 1'b1);
+    if (!active_bitmap[7]) $fatal(1, "stale write changed active state");
+
+    changed_dynamic.generation = 16'h0052;
+    changed_dynamic.active = 1'b0;
+    write_dynamic(changed_dynamic, 1'b0);
+    if (active_bitmap[7])
+      $fatal(1, "renderer completion did not remove inactive voice");
+
+    render_busy = 1'b0;
+    @(posedge clk);
+    if (!install_ready || !params_write_ready)
+      $fatal(1, "host writes did not reopen after render");
+
+    $display("PASS: block voice state banks and generation arbitration");
+    $finish;
+  end
+
+  initial begin
+    repeat (2000) @(posedge clk);
+    $fatal(1, "testbench timeout");
+  end
+endmodule

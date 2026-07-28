@@ -1,6 +1,5 @@
 VERILATOR ?= verilator
 BUILD_DIR := build
-TOP := tb_wavetable_render_core
 NUM_VOICES ?= 256
 VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
@@ -11,14 +10,11 @@ HARNESS_INCLUDE_FLAGS := \
 	-I$(abspath sim/harness/common) \
 	-I$(abspath sim/harness/formats) \
 	-I$(abspath sim/harness/render) \
-	-I$(abspath sim/harness/control) \
-	-I$(abspath sim/harness/dut) \
-	-I$(abspath sim/harness/board_loader)
+	-I$(abspath sim/harness/control)
 CXX_STD_FLAGS := -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 
-# Defaults for the SoundFont render flow. Users can override any of these on the
-# make command line, for example: make render-instrument INSTRUMENT=10 KEY=64.
+# Defaults for the C++ SoundFont reference-render flow.
 SF2 ?= assets/soundfonts/MT6276.sf2
 INSTRUMENT ?=
 KEY ?= 60
@@ -39,15 +35,14 @@ CHORUS_ENABLE ?= auto
 REVERB_ENABLE ?= auto
 EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
-MEMORY_PROFILE ?= ddr
-RENDER_MEMORY_OUT_DIR ?= $(BUILD_DIR)/render_memory
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
-RENDER_RTL_CORE_OUT_DIR ?= $(BUILD_DIR)/render_rtl_core
-RENDER_BOARD_LOADER_OUT_DIR ?= $(BUILD_DIR)/render_board_loader
+RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
+RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3_obj_dir
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
 WTSF_CRC ?=
 SD_DEVICE ?=
+DDR3_IMAGE ?=
 RENDER_OPT_FAST ?= -O3
 RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
@@ -63,26 +58,10 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/sd_native_pkg.sv \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
-	fpga/common/rtl/wavetable_system_core.sv \
-	fpga/common/rtl/wavetable_i2s_output.sv \
-	fpga/common/rtl/wavetable_demo_system.sv
-
-SIM_SOURCES := \
-	sim/models/line_memory_model.sv \
-	sim/tb/tb_wavetable_render_core.sv
+	fpga/common/rtl/wavetable_i2s_output.sv
 
 SPI_SIM_SOURCES := \
 	sim/tb/tb_spi_register_bridge.sv
-
-MEMORY_SIM_SOURCES := \
-	sim/models/line_memory_model.sv \
-	sim/tb/tb_wave_memory_subsystem.sv
-
-VOICE_LINE_CACHE_SIM_SOURCES := \
-	sim/tb/tb_voice_line_cache.sv
-
-CACHED_RENDER_COUNTER_SIM_SOURCES := \
-	sim/tb/tb_wavetable_cached_render_core_counters.sv
 
 I2S_SIM_SOURCES := \
 	sim/tb/tb_i2s_tx.sv
@@ -111,20 +90,35 @@ GLOBAL_AUDIO_EFFECTS_SIM_SOURCES := \
 RENDER_SCHEDULER_SIM_SOURCES := \
 	sim/tb/tb_render_credit_scheduler.sv
 
-COMMON_STATUS_SIM_SOURCES := \
-	sim/tb/tb_wavetable_demo_common_status.sv
+BLOCK_MIX_BUFFER_SIM_SOURCES := \
+	sim/tb/tb_block_mix_buffer.sv
 
-VOICE_PHASE_SIM_SOURCES := \
-	sim/tb/tb_voice_phase_frame.sv
+BLOCK_INTERLEAVED_DSP_SIM_SOURCES := \
+	sim/tb/tb_block_interleaved_voice_dsp.sv
 
-CONTROL_CMD_SIM_SOURCES := \
-	sim/tb/tb_control_cmd_parser.sv
+BLOCK_INTERLEAVED_RENDERER_SIM_SOURCES := \
+	sim/tb/tb_block_interleaved_voice_renderer.sv
 
-CONTROL_WORD_FIFO_SIM_SOURCES := \
-	sim/tb/tb_control_word_fifo.sv
+BLOCK_INTERLEAVED_ENVELOPE_SIM_SOURCES := \
+	sim/tb/tb_block_interleaved_envelope_frontend.sv
 
-TRANSACTIONAL_CONTROL_SIM_SOURCES := \
-	sim/tb/tb_transactional_control_plane.sv
+BLOCK_MONO_ENGINE_SIM_SOURCES := \
+	sim/tb/tb_block_mono_voice_engine.sv
+
+VOICE_MAJOR_CONTROLLER_SIM_SOURCES := \
+	sim/tb/tb_voice_major_block_controller.sv
+
+BLOCK_VOICE_STATE_STORE_SIM_SOURCES := \
+	sim/tb/tb_block_voice_state_store.sv
+
+BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES := \
+	sim/tb/tb_block_voice_event_executor.sv
+
+VOICE_MAJOR_RENDER_CORE_SIM_SOURCES := \
+	sim/tb/tb_voice_major_render_core.sv
+
+VOICE_MAJOR_THROUGHPUT_SIM_SOURCES := \
+	sim/tb/tb_voice_major_throughput.sv
 
 HARNESS_RENDER_COMMON_SRCS := \
 	$(abspath sim/harness/render/render_support.cpp) \
@@ -140,13 +134,6 @@ HARNESS_WAV_SRC := \
 
 HARNESS_INTERRUPT_SRC := \
 	$(abspath sim/harness/common/render_interrupt.cpp)
-
-HARNESS_MEMORY_PROFILE_SRC := \
-	$(abspath sim/harness/common/memory_profile.cpp)
-
-HARNESS_BOARD_LOADER_SRCS := \
-	$(abspath sim/harness/board_loader/board_loader_render_harness.cpp) \
-	$(abspath sim/harness/board_loader/board_loader_render_utils.cpp)
 
 SMART_ARTIX_RTL_SOURCES := \
 	rtl/pkg/synth_register_pkg.sv \
@@ -169,9 +156,6 @@ SMART_ARTIX_SIM_MODELS := \
 	fpga/common/sim/fake_sd_native_phy_model.sv \
 	fpga/common/sim/fake_sd_native_pin_model.sv
 
-SMART_ARTIX_WITH_CORE_RTL_SOURCES := \
-	$(filter-out rtl/pkg/synth_register_pkg.sv,$(SMART_ARTIX_RTL_SOURCES))
-
 SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_asset_loader \
 	tb_smart_artix_ddr3_asset_writer \
@@ -187,7 +171,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-instrument render-reference render-rtl-core render-memory render-board-loader vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-summary clean
 
 all: test
 
@@ -222,12 +206,8 @@ lint:
 		rtl/audio/stereo_chorus.sv rtl/audio/fdn_reverb.sv \
 		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
 		rtl/audio/lookahead_compressor.sv rtl/audio/global_audio_effects_chain.sv
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_render_core $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_cached_render_core $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wave_memory_subsystem $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_system_core $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_render_core $(RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module sd_native_block_reader \
 		fpga/common/rtl/sd_native_pkg.sv fpga/common/rtl/sd_native_block_reader.sv
@@ -236,10 +216,112 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral
+test: test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model
+
+test-sample-window:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_sample_window_obj_dir \
+		--top-module tb_voice_sample_window \
+		rtl/pkg/synth_pkg.sv rtl/memory/voice_sample_window.sv \
+		sim/tb/tb_voice_sample_window.sv
+	$(BUILD_DIR)/voice_sample_window_obj_dir/Vtb_voice_sample_window
+
+test-ddr3-model:
+	mkdir -p $(BUILD_DIR)/ddr3_test_image
+	printf '\000\020\001\020\002\020\003\020\004\020\005\020\006\020\007\020' > $(BUILD_DIR)/ddr3_test_image/00000000.bin
+	printf '\000\040\001\040\002\040\003\040\004\040\005\040\006\040\007\040' > $(BUILD_DIR)/ddr3_test_image/00000008.bin
+	printf '\000\060\001\060\002\060\003\060\004\060\005\060\006\060\007\060' > $(BUILD_DIR)/ddr3_test_image/00000010.bin
+	printf '\000\100\001\100\002\100\003\100\004\100\005\100\006\100\007\100' > $(BUILD_DIR)/ddr3_test_image/00000020.bin
+	$(VERILATOR) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/ddr3_timing_model_obj_dir --top-module tb_ddr3_timing_model \
+		sim/models/ddr3_timing_model.sv sim/tb/tb_ddr3_timing_model.sv \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/ddr3_timing_model_obj_dir/Vtb_ddr3_timing_model \
+		+DDR3_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
+
+test-voice-major-512:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/block_voice_event_executor_512_obj_dir \
+		--top-module tb_block_voice_event_executor \
+		$(RTL_SOURCES) $(BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES)
+	$(BUILD_DIR)/block_voice_event_executor_512_obj_dir/Vtb_block_voice_event_executor
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_render_core_512_obj_dir \
+		--top-module tb_voice_major_render_core \
+		$(RTL_SOURCES) $(VOICE_MAJOR_RENDER_CORE_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_render_core_512_obj_dir/Vtb_voice_major_render_core
+
+measure-voice-major-throughput:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_throughput_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-major-throughput-filtered:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 -DSYNTH_FILTER_ENABLE \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_filtered_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_throughput_filtered_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-major-throughput-ddr3:
+	mkdir -p $(BUILD_DIR)/ddr3_render_image
+	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 -DSYNTH_DDR3_MODEL \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir/Vtb_voice_major_throughput \
+		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
+
+measure-voice-major-throughput-512:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_512_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_throughput_512_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-major-throughput-512-filtered:
+	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-compute-pipeline:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/voice_compute_pipeline_model.cpp \
+		sim/harness/render/voice_compute_pipeline_model_test.cpp \
+		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
+	$(BUILD_DIR)/voice_compute_pipeline_model_test
 
 test-cpp-unit:
 	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/voice_compute_pipeline_model.cpp \
+		sim/harness/render/voice_compute_pipeline_model_test.cpp \
+		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
+	$(BUILD_DIR)/voice_compute_pipeline_model_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/block_scheduler.cpp \
+		sim/harness/render/block_scheduler_test.cpp \
+		-o $(BUILD_DIR)/block_scheduler_test
+	$(BUILD_DIR)/block_scheduler_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/midi_parser.cpp sim/harness/formats/midi_parser_test.cpp \
 		-o $(BUILD_DIR)/midi_parser_test
@@ -296,38 +378,44 @@ test-cpp-unit:
 test-rtl-core:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/control_word_fifo_obj_dir --top-module tb_control_word_fifo \
-		$(RTL_SOURCES) $(CONTROL_WORD_FIFO_SIM_SOURCES)
-	$(BUILD_DIR)/control_word_fifo_obj_dir/Vtb_control_word_fifo
+		--Mdir $(BUILD_DIR)/voice_major_render_core_obj_dir --top-module tb_voice_major_render_core \
+		$(RTL_SOURCES) $(VOICE_MAJOR_RENDER_CORE_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_render_core_obj_dir/Vtb_voice_major_render_core
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/voice_phase_obj_dir --top-module tb_voice_phase_frame \
-		$(RTL_SOURCES) $(VOICE_PHASE_SIM_SOURCES)
-	$(BUILD_DIR)/voice_phase_obj_dir/Vtb_voice_phase_frame
+		--Mdir $(BUILD_DIR)/block_voice_state_store_obj_dir --top-module tb_block_voice_state_store \
+		$(RTL_SOURCES) $(BLOCK_VOICE_STATE_STORE_SIM_SOURCES)
+	$(BUILD_DIR)/block_voice_state_store_obj_dir/Vtb_block_voice_state_store
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/control_cmd_obj_dir --top-module tb_control_cmd_parser \
-		$(RTL_SOURCES) $(CONTROL_CMD_SIM_SOURCES)
-	$(BUILD_DIR)/control_cmd_obj_dir/Vtb_control_cmd_parser
+		--Mdir $(BUILD_DIR)/block_voice_event_executor_obj_dir \
+		--top-module tb_block_voice_event_executor \
+		$(RTL_SOURCES) $(BLOCK_VOICE_EVENT_EXECUTOR_SIM_SOURCES)
+	$(BUILD_DIR)/block_voice_event_executor_obj_dir/Vtb_block_voice_event_executor
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/transactional_control_obj_dir --top-module tb_transactional_control_plane \
-		$(RTL_SOURCES) $(TRANSACTIONAL_CONTROL_SIM_SOURCES)
-	$(BUILD_DIR)/transactional_control_obj_dir/Vtb_transactional_control_plane
-	# Build and run the self-checking synthetic-data regression.
+		--Mdir $(BUILD_DIR)/voice_major_controller_obj_dir --top-module tb_voice_major_block_controller \
+		$(RTL_SOURCES) $(VOICE_MAJOR_CONTROLLER_SIM_SOURCES)
+	$(BUILD_DIR)/voice_major_controller_obj_dir/Vtb_voice_major_block_controller
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/obj_dir --top-module $(TOP) \
-		$(RTL_SOURCES) $(SIM_SOURCES)
-	$(BUILD_DIR)/obj_dir/V$(TOP)
+		--Mdir $(BUILD_DIR)/block_mono_engine_obj_dir --top-module tb_block_mono_voice_engine \
+		$(RTL_SOURCES) $(BLOCK_MONO_ENGINE_SIM_SOURCES)
+	$(BUILD_DIR)/block_mono_engine_obj_dir/Vtb_block_mono_voice_engine
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/memory_obj_dir --top-module tb_wave_memory_subsystem \
-		$(RTL_SOURCES) $(MEMORY_SIM_SOURCES)
-	$(BUILD_DIR)/memory_obj_dir/Vtb_wave_memory_subsystem
+		--Mdir $(BUILD_DIR)/block_interleaved_envelope_obj_dir \
+		--top-module tb_block_interleaved_envelope_frontend \
+		$(RTL_SOURCES) $(BLOCK_INTERLEAVED_ENVELOPE_SIM_SOURCES)
+	$(BUILD_DIR)/block_interleaved_envelope_obj_dir/Vtb_block_interleaved_envelope_frontend
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/voice_line_cache_obj_dir --top-module tb_voice_line_cache \
-		$(RTL_SOURCES) $(VOICE_LINE_CACHE_SIM_SOURCES)
-	$(BUILD_DIR)/voice_line_cache_obj_dir/Vtb_voice_line_cache
+		--Mdir $(BUILD_DIR)/block_interleaved_renderer_obj_dir \
+		--top-module tb_block_interleaved_voice_renderer \
+		$(RTL_SOURCES) $(BLOCK_INTERLEAVED_RENDERER_SIM_SOURCES)
+	$(BUILD_DIR)/block_interleaved_renderer_obj_dir/Vtb_block_interleaved_voice_renderer
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/cached_render_counter_obj_dir --top-module tb_wavetable_cached_render_core_counters \
-		$(RTL_SOURCES) $(CACHED_RENDER_COUNTER_SIM_SOURCES)
-	$(BUILD_DIR)/cached_render_counter_obj_dir/Vtb_wavetable_cached_render_core_counters
+		--Mdir $(BUILD_DIR)/block_interleaved_dsp_obj_dir --top-module tb_block_interleaved_voice_dsp \
+		$(RTL_SOURCES) $(BLOCK_INTERLEAVED_DSP_SIM_SOURCES)
+	$(BUILD_DIR)/block_interleaved_dsp_obj_dir/Vtb_block_interleaved_voice_dsp
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/block_mix_buffer_obj_dir --top-module tb_block_mix_buffer \
+		$(RTL_SOURCES) $(BLOCK_MIX_BUFFER_SIM_SOURCES)
+	$(BUILD_DIR)/block_mix_buffer_obj_dir/Vtb_block_mix_buffer
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
@@ -384,10 +472,6 @@ test-rtl-peripheral:
 		--Mdir $(BUILD_DIR)/i2s_obj_dir --top-module tb_i2s_tx \
 		rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv $(I2S_SIM_SOURCES)
 	$(BUILD_DIR)/i2s_obj_dir/Vtb_i2s_tx
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/common_status_obj_dir --top-module tb_wavetable_demo_common_status \
-		$(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES) $(COMMON_STATUS_SIM_SOURCES)
-	$(BUILD_DIR)/common_status_obj_dir/Vtb_wavetable_demo_common_status
 
 smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
 
@@ -431,22 +515,6 @@ flash-wtsf-sd: verify-wtsf-image
 	fi
 	tools/flash_wtsf_sd.sh --image "$(WTSF_IMAGE)" --device "$(SD_DEVICE)" --yes
 
-render-instrument:
-	# 1. Extract one instrument zone to wave.memh plus render_config.svh.
-	python3 tools/sf2_extract.py --sf2 "$(SF2)" \
-		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
-		--key $(KEY) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--out-dir $(BUILD_DIR)/render
-	# 2. Build and execute the render testbench against the generated memory.
-	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		-I$(BUILD_DIR)/render --Mdir $(BUILD_DIR)/render_obj_dir \
-		--top-module tb_wavetable_render_core_asset \
-		$(RTL_SOURCES) sim/models/line_memory_model.sv sim/tb/tb_wavetable_render_core_asset.sv
-	$(BUILD_DIR)/render_obj_dir/Vtb_wavetable_render_core_asset
-	# 3. Convert the raw stereo PCM stream into a playable WAV file.
-	python3 tools/pcm_to_wav.py --pcm $(BUILD_DIR)/render/out.pcm \
-		--wav $(BUILD_DIR)/render/out.wav --sample-rate $(SAMPLE_RATE)
-
 render-reference:
 	# Build and run the pure C++ SF2/MIDI reference synthesizer.
 	mkdir -p $(RENDER_REFERENCE_OUT_DIR)
@@ -481,82 +549,32 @@ render-reference:
 		--effects-tail-seconds $(EFFECTS_TAIL_SECONDS) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
-render-rtl-core:
-	# Build and run the C++ reference-vs-RTL harness against wavetable_render_core.
-	mkdir -p $(RENDER_RTL_CORE_OUT_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_rtl_core_cpp_obj_dir --top-module wavetable_render_core \
-		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/apps/render_rtl_core_main.cpp) \
+render-rtl-ddr3:
+	# Build the RTL renderer with 200 MHz MIG input, DDR3-800 timing, and C++ SF2/MIDI policy.
+	mkdir -p $(RENDER_RTL_OUT_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
+		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
+		--top-module voice_major_render_harness \
+		-CFLAGS "$(HARNESS_CXXFLAGS)" \
+		$(RTL_SOURCES) \
+		sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		sim/models/voice_major_render_harness.sv \
+		$(abspath sim/harness/apps/render_rtl_ddr3_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(HARNESS_WAV_SRC) \
 		$(HARNESS_INTERRUPT_SRC) \
-		$(abspath sim/harness/render/reference_synth.cpp) \
-		$(abspath sim/harness/dut/core_rtl_harness.cpp) \
-		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_rtl_core_cpp_obj_dir -f Vwavetable_render_core.mk \
-		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_rtl_core_cpp_obj_dir/Vwavetable_render_core --sf2 "$(SF2)" \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(RENDER_RTL_OBJ_DIR)/Vvoice_major_render_harness \
+		--sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
 		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
 		--control-tick-ms $(CONTROL_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
 		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
-		--out-dir $(RENDER_RTL_CORE_OUT_DIR)
-
-render-memory:
-	# Build and run the C++ MIDI/SF2 memory-profile harness against wavetable_cached_render_core.
-	mkdir -p $(RENDER_MEMORY_OUT_DIR)
-	rm -f $(RENDER_MEMORY_OUT_DIR)/out.pcm
-	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_memory_cpp_obj_dir --top-module wavetable_cached_render_core \
-		$(RTL_SOURCES) --exe \
-		$(abspath sim/harness/apps/render_memory_main.cpp) \
-		$(HARNESS_RENDER_COMMON_SRCS) \
-		$(HARNESS_MEMORY_PROFILE_SRC) \
-		$(HARNESS_WAV_SRC) \
-		$(HARNESS_INTERRUPT_SRC) \
-		$(abspath sim/harness/dut/rtl_harness.cpp) \
-		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_memory_cpp_obj_dir -f Vwavetable_cached_render_core.mk \
-		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_memory_cpp_obj_dir/Vwavetable_cached_render_core --sf2 "$(SF2)" \
-		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
-		$(if $(MIDI),--midi "$(MIDI)",) \
-		--memory-profile "$(MEMORY_PROFILE)" \
-		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--control-tick-ms $(CONTROL_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
-		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
-		--out-dir $(RENDER_MEMORY_OUT_DIR)
-
-render-board-loader:
-	# Build and run SD-native-loader-to-DDR plus RTL/reference wavetable render.
-	mkdir -p $(RENDER_BOARD_LOADER_OUT_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --cc --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/render_board_loader_cpp_obj_dir \
-		--top-module board_loader_render_tops \
-		$(RTL_SOURCES) $(SMART_ARTIX_WITH_CORE_RTL_SOURCES) sim/tb/board_loader_render_tops.sv --exe \
-		$(abspath sim/harness/apps/board_loader_render_main.cpp) \
-		$(HARNESS_RENDER_COMMON_SRCS) \
-		$(HARNESS_MEMORY_PROFILE_SRC) \
-		$(HARNESS_WAV_SRC) \
-		$(HARNESS_INTERRUPT_SRC) \
-		$(HARNESS_BOARD_LOADER_SRCS) \
-		$(abspath sim/harness/render/reference_synth.cpp) \
-		-CFLAGS "$(HARNESS_CXXFLAGS)"
-	$(MAKE) $(MAKE_JOBS) -C $(BUILD_DIR)/render_board_loader_cpp_obj_dir -f Vboard_loader_render_tops.mk \
-		OPT_FAST="$(RENDER_OPT_FAST)" OPT_GLOBAL="$(RENDER_OPT_GLOBAL)"
-	$(BUILD_DIR)/render_board_loader_cpp_obj_dir/Vboard_loader_render_tops --sf2 "$(SF2)" \
-		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
-		$(if $(MIDI),--midi "$(MIDI)",) \
-		--memory-profile "$(MEMORY_PROFILE)" \
-		--start-seconds $(START_SECONDS) --seconds $(SECONDS) --sample-rate $(SAMPLE_RATE) \
-		--control-tick-ms $(CONTROL_TICK_MS) \
-		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
-		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
-		--out-dir $(RENDER_BOARD_LOADER_OUT_DIR)
+		--out-dir $(RENDER_RTL_OUT_DIR) \
+		+DDR3_IMAGE=$(abspath $(SF2))
 
 vivado-summary:
 	python3 tools/vivado_report_summary.py show
