@@ -32,9 +32,9 @@ updates, release, and stop use the transactional command stream documented in
 | `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
 | `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
 | `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
-| `0x9118` | `COMPRESSOR_DETECTOR_PEAK` | RO | Current linked unsigned 24-bit peak magnitude. |
+| `0x9118` | `COMPRESSOR_DETECTOR_PEAK` | RO | Current linked unsigned 25-bit peak magnitude. |
 | `0x911c` | `COMPRESSOR_MAX_GAIN_REDUCTION` | RO | Maximum gain reduction since core reset, cB Q12.20. |
-| `0x9120` | `COMPRESSOR_MAX_DETECTOR_PEAK` | RO | Maximum unsigned 24-bit detector peak since core reset. |
+| `0x9120` | `COMPRESSOR_MAX_DETECTOR_PEAK` | RO | Maximum unsigned 25-bit detector peak since core reset. |
 | `0x9124` | `COMPRESSOR_INPUT_FRAME_COUNT` | RO | Saturating count of accepted mix frames. |
 | `0x9128` | `COMPRESSOR_OUTPUT_FRAME_COUNT` | RO | Saturating count of valid post-delay output frames. |
 | `0x912c` | `COMPRESSOR_COMPRESSED_FRAME_COUNT` | RO | Saturating count of output frames with nonzero compressor reduction. |
@@ -42,13 +42,13 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9134` | `EFFECT_STATUS` | RO | Spatial-effect enable, activity, history-valid, and clamp flags. |
 | `0x9138` | `EFFECT_INPUT_FRAME_COUNT` | RO | Saturating count of frames accepted by the spatial-effect chain. |
 | `0x913c` | `EFFECT_OUTPUT_FRAME_COUNT` | RO | Saturating count of spatial-effect output handshakes. |
-| `0x9140` | `EFFECT_SATURATION_COUNT` | RO | Saturating count of signed-24 effect-return mixer channel clamps. |
+| `0x9140` | `EFFECT_SATURATION_COUNT` | RO | Saturating count of signed-25 effect-return mixer channel clamps. |
 | `0x9144` | `EFFECT_MAX_PROCESSING_CYCLES` | RO | Maximum spatial-chain clocks from input acceptance to output valid. |
 | `0x9148` | `CHORUS_HISTORY_LEVEL` | RO | Valid stereo frames in chorus history, low 16 bits. |
 | `0x914c` | `CHORUS_LFO_PHASE` | RO | Current chorus LFO phase, unsigned Q0.32. |
-| `0x9150` | `CHORUS_SATURATION_COUNT` | RO | Saturating chorus signed-24 channel clamp count. |
+| `0x9150` | `CHORUS_SATURATION_COUNT` | RO | Saturating chorus signed-25 channel clamp count. |
 | `0x9154` | `REVERB_STATUS` | RO | Reverb pre-delay occupancy and valid-line mask. |
-| `0x9158` | `REVERB_SATURATION_COUNT` | RO | Saturating reverb signed-24 channel clamp count. |
+| `0x9158` | `REVERB_SATURATION_COUNT` | RO | Saturating reverb signed-25 channel clamp count. |
 | `0x915c` | `REVERB_MAX_PROCESSING_CYCLES` | RO | Maximum clocks used by the reverb FSM. |
 
 The generic control plane accepts writes only at `CMD_FIFO_DATA`. Unknown
@@ -90,7 +90,7 @@ The current detector peak, target, and applied reduction are published together
 after one accepted input frame is analyzed. Maximum values and counters clear on
 core reset. `COMPRESSOR_DETECTOR_PEAK` and its maximum register contain the raw
 unsigned `max(abs(mix_l), abs(mix_r))` magnitude from the pre-compressor signed
-24-bit mix. Interpret magnitude `32768` as `0 dBFS`; for a nonzero value `A`,
+25-bit mix. Interpret magnitude `32768` as `0 dBFS`; for a nonzero value `A`,
 `level_dBFS = 20 * log10(A / 32768)`. Values above `32768` therefore represent
 positive dBFS before final PCM16 saturation. These registers do not report RMS
 or post-master output level.

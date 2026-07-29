@@ -42,6 +42,7 @@ module voice_sample_window #(
   localparam int COUNT_WIDTH = $clog2(WINDOW_LINES + 1);
   localparam int RAM_DEPTH = NUM_VOICES * WINDOW_LINES;
   localparam int RAM_ADDR_WIDTH = $clog2(RAM_DEPTH);
+  localparam int META_WIDTH = LINE_ADDR_WIDTH + 1;
 
   typedef enum logic [1:0] {
     STATE_IDLE,
@@ -51,8 +52,14 @@ module voice_sample_window #(
   } state_t;
 
   state_t state_q;
-  logic [NUM_VOICES-1:0] window_valid_q;
-  logic [LINE_ADDR_WIDTH-1:0] window_base_q [0:NUM_VOICES-1];
+  (* ram_style = "block" *) logic [META_WIDTH-1:0]
+      window_meta_q [0:NUM_VOICES-1];
+  logic [META_WIDTH-1:0] window_meta_read_q;
+  logic metadata_init_active_q;
+  logic [VOICE_ID_WIDTH-1:0] metadata_init_voice_q;
+  logic metadata_write_enable;
+  logic [VOICE_ID_WIDTH-1:0] metadata_write_voice;
+  logic [META_WIDTH-1:0] metadata_write_data;
   (* ram_style = "block" *) logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0]
       window_data [0:RAM_DEPTH-1];
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] window_read_data_q;
@@ -85,16 +92,17 @@ module voice_sample_window #(
 
   always_comb begin
     request_window_offset = request_line_q -
-                            window_base_q[request_voice_q];
-    request_window_hit = window_valid_q[request_voice_q] &&
-        (request_line_q >= window_base_q[request_voice_q]) &&
+                            window_meta_read_q[LINE_ADDR_WIDTH-1:0];
+    request_window_hit = window_meta_read_q[META_WIDTH-1] &&
+        (request_line_q >= window_meta_read_q[LINE_ADDR_WIDTH-1:0]) &&
         (request_window_offset < LINE_ADDR_WIDTH'(WINDOW_LINES));
     request_window_index = RAM_ADDR_WIDTH'(
         (int'(request_voice_q) * WINDOW_LINES) +
         int'(request_window_offset[WINDOW_LINE_INDEX_WIDTH-1:0]));
 
     rsp_slot_available = !rsp_valid_q || client_rsp_ready;
-    client_req_ready = (state_q == STATE_IDLE) && rsp_slot_available;
+    client_req_ready = !metadata_init_active_q &&
+                       (state_q == STATE_IDLE) && rsp_slot_available;
     client_req_fire = client_req_valid && client_req_ready;
 
     transaction_line_count = refill_q ? COUNT_WIDTH'(WINDOW_LINES) :
@@ -117,7 +125,45 @@ module voice_sample_window #(
     client_rsp = rsp_data_q;
   end
 
+  always_comb begin
+    metadata_write_enable = 1'b0;
+    metadata_write_voice = '0;
+    metadata_write_data = '0;
+    if (!rst && metadata_init_active_q) begin
+      metadata_write_enable = 1'b1;
+      metadata_write_voice = metadata_init_voice_q;
+    end else if ((state_q == STATE_LOOKUP) && !request_window_hit &&
+                 request_refill_q) begin
+      metadata_write_enable = 1'b1;
+      metadata_write_voice = request_voice_q;
+      metadata_write_data = {1'b0, request_line_q};
+    end else if (memory_rsp_fire && refill_q &&
+                 ((response_count_q + 1'b1) >= transaction_line_count)) begin
+      metadata_write_enable = 1'b1;
+      metadata_write_voice = miss_voice_q;
+      metadata_write_data = {1'b1, miss_base_q};
+    end
+  end
+
   always_ff @(posedge clk) begin
+    if (rst) begin
+      metadata_init_active_q <= 1'b1;
+      metadata_init_voice_q <= '0;
+    end else if (metadata_init_active_q) begin
+      if (metadata_init_voice_q == VOICE_ID_WIDTH'(NUM_VOICES - 1)) begin
+        metadata_init_active_q <= 1'b0;
+      end else begin
+        metadata_init_voice_q <= metadata_init_voice_q + 1'b1;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (client_req_fire)
+      window_meta_read_q <= window_meta_q[client_req_voice];
+    if (metadata_write_enable)
+      window_meta_q[metadata_write_voice] <= metadata_write_data;
+
     if ((state_q == STATE_LOOKUP) && request_window_hit)
       window_read_data_q <= window_data[request_window_index];
 
@@ -130,7 +176,6 @@ module voice_sample_window #(
   always_ff @(posedge clk) begin
     if (rst) begin
       state_q <= STATE_IDLE;
-      window_valid_q <= '0;
       rsp_valid_q <= 1'b0;
       stat_client_requests <= '0;
       stat_window_hits <= '0;
@@ -143,7 +188,7 @@ module voice_sample_window #(
       if (rsp_valid_q && client_rsp_ready)
         rsp_valid_q <= 1'b0;
 
-      if (client_req_valid && !client_req_ready)
+      if (client_req_valid && !client_req_ready && !metadata_init_active_q)
         stat_stall_cycles <= stat_stall_cycles + 1'b1;
 
       if (client_req_fire) begin
@@ -171,10 +216,8 @@ module voice_sample_window #(
           request_count_q <= '0;
           response_count_q <= '0;
           if (request_refill_q) begin
-            window_valid_q[request_voice_q] <= 1'b0;
-            window_base_q[request_voice_q] <= request_line_q;
             stat_window_refills <= stat_window_refills + 1'b1;
-            if (window_valid_q[request_voice_q])
+            if (window_meta_read_q[META_WIDTH-1])
               stat_evictions <= stat_evictions + 1'b1;
           end else begin
             stat_fallback_reads <= stat_fallback_reads + 1'b1;
@@ -203,8 +246,6 @@ module voice_sample_window #(
         end
         if ((response_count_q + 1'b1) >= transaction_line_count) begin
           state_q <= STATE_IDLE;
-          if (refill_q)
-            window_valid_q[miss_voice_q] <= 1'b1;
         end
       end
     end

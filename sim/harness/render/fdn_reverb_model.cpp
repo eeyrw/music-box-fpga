@@ -55,8 +55,8 @@ void FdnReverbModel::clear() {
 std::pair<int32_t, int32_t> FdnReverbModel::process_frame(int32_t left,
                                                           int32_t right) {
   const ReverbConfig config = effective_config();
-  left = signed_mix24(left);
-  right = signed_mix24(right);
+  left = signed_mix25(left);
+  right = signed_mix25(right);
 
   std::pair<int32_t, int32_t> delayed{left, right};
   if (config.pre_delay_frames != 0) {
@@ -95,7 +95,7 @@ std::pair<int32_t, int32_t> FdnReverbModel::process_frame(int32_t left,
         transformed[line] * config.feedback_gain_q1_15[line]);
     bool saturated = false;
     lines_[line][pointers_[line]] = apply_state_deadband(
-        saturate_mix24(injection + feedback, &saturated));
+        saturate_mix25(injection + feedback, &saturated));
     saturation_count_ = sat_inc(saturation_count_, saturated ? 1u : 0u);
     pointers_[line] = (pointers_[line] + 1) % lines_[line].size();
     ages_[line] = std::min(ages_[line] + 1, lines_[line].size());
@@ -110,8 +110,8 @@ std::pair<int32_t, int32_t> FdnReverbModel::process_frame(int32_t left,
     wet_r_sum += sign_r * int64_t(damped[line]);
   }
   if (!config.enable) return {0, 0};
-  return {saturate_mix24(arithmetic_shift_right(wet_l_sum, 3)),
-          saturate_mix24(arithmetic_shift_right(wet_r_sum, 3))};
+  return {saturate_mix25(arithmetic_shift_right(wet_l_sum, 3)),
+          saturate_mix25(arithmetic_shift_right(wet_r_sum, 3))};
 }
 
 ReverbConfig FdnReverbModel::effective_config() {
@@ -177,15 +177,15 @@ int32_t FdnReverbModel::apply_state_deadband(int32_t value) {
   return value >= -kStateDeadband && value <= kStateDeadband ? 0 : value;
 }
 
-int32_t FdnReverbModel::signed_mix24(int32_t value) {
-  const uint32_t bits = uint32_t(value) & 0x00ffffffu;
-  return (bits & 0x00800000u) ? int32_t(int64_t(bits) - (int64_t{1} << 24))
+int32_t FdnReverbModel::signed_mix25(int32_t value) {
+  const uint32_t bits = uint32_t(value) & 0x01ffffffu;
+  return (bits & 0x01000000u) ? int32_t(int64_t(bits) - (int64_t{1} << 25))
                               : int32_t(bits);
 }
 
-int32_t FdnReverbModel::saturate_mix24(int64_t value, bool* saturated) {
-  constexpr int32_t minimum = -(1 << 23);
-  constexpr int32_t maximum = (1 << 23) - 1;
+int32_t FdnReverbModel::saturate_mix25(int64_t value, bool* saturated) {
+  constexpr int32_t minimum = -(1 << 24);
+  constexpr int32_t maximum = (1 << 24) - 1;
   const bool clipped = value < minimum || value > maximum;
   if (saturated) *saturated = clipped;
   return int32_t(std::clamp<int64_t>(value, minimum, maximum));

@@ -111,11 +111,11 @@ fpga/common/rtl/i2s_tx.sv
 fpga/common/rtl/sd_native_block_reader.sv
 fpga/common/rtl/sd_native_pin_phy.sv
 fpga/common/rtl/wavetable_i2s_output.sv
-fpga/common/rtl/voice_major_demo_system.sv
+fpga/common/rtl/voice_major_system.sv
 ```
 
 Use `voice_major_render_core` for the generic block renderer,
-`voice_major_demo_system` for SPI/register/effects/I2S composition,
+`voice_major_system` for SPI/register/effects/I2S composition,
 `wavetable_i2s_output` when adapting PCM frames to I2S,
 `sd_native_block_reader` and `sd_native_pin_phy` when a board loader needs the
 native SD command/pin layer without tying it to a specific memory controller.

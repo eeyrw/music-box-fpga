@@ -1,7 +1,6 @@
 # Smart Artix Vivado implementation flow.
-# Usage:
-#   cd build/fpga/smart_artix/vivado
-#   vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl
+# Usage from the repository root:
+#   make vivado-impl
 
 source [file join [file dirname [file normalize [info script]]] project.tcl]
 source [file join [file dirname [file normalize [info script]]] report_summary.tcl]

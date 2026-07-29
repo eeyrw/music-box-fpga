@@ -69,8 +69,8 @@ void LookaheadCompressorModel::write_command_words(const std::vector<uint32_t>& 
 
 std::optional<std::pair<int16_t, int16_t>> LookaheadCompressorModel::process_frame(
     int32_t mix_l, int32_t mix_r) {
-  mix_l = signed_mix24(mix_l);
-  mix_r = signed_mix24(mix_r);
+  mix_l = signed_mix25(mix_l);
+  mix_r = signed_mix25(mix_r);
   const std::pair<int32_t, int32_t> delayed = delay_line_[delay_ptr_];
   const bool delayed_valid = primed();
   delay_line_[delay_ptr_] = {mix_l, mix_r};
@@ -145,10 +145,10 @@ std::optional<std::pair<int16_t, int16_t>> LookaheadCompressorModel::process_fra
   return std::pair<int16_t, int16_t>{saturate_pcm(scaled_l), saturate_pcm(scaled_r)};
 }
 
-int32_t LookaheadCompressorModel::signed_mix24(int32_t value) {
-  const uint32_t bits = uint32_t(value) & 0x00ffffffu;
-  return (bits & 0x00800000u) != 0
-             ? int32_t(int64_t(bits) - (int64_t{1} << 24))
+int32_t LookaheadCompressorModel::signed_mix25(int32_t value) {
+  const uint32_t bits = uint32_t(value) & 0x01ffffffu;
+  return (bits & 0x01000000u) != 0
+             ? int32_t(int64_t(bits) - (int64_t{1} << 25))
              : int32_t(bits);
 }
 

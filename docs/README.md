@@ -46,6 +46,9 @@ change.
 - [`design/voice_major_block_renderer_plan.md`](design/voice_major_block_renderer_plan.md):
   implementation plan for voice-major N-frame rendering, block accumulation,
   event boundaries, state ownership, DDR locality, and ping-pong output.
+- [`design/voice_major_render_pipeline_detailed.md`](design/voice_major_render_pipeline_detailed.md):
+  cycle-level description of the current 512-voice, eight-slot renderer,
+  including scheduling, BRAM-backed job payloads, hazards, and DDR traffic.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.

@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     std::vector<Event> events;
     uint32_t order = 0;
     events.push_back(Event{0, order++, {0xff, 0x51, 0x03, 0x07, 0xa1, 0x20}});
-    const std::string name = "SGM 256-voice random-access stress";
+    const std::string name = "SGM 512-voice random-access stress";
     std::vector<uint8_t> name_event{0xff, 0x03, uint8_t(name.size())};
     name_event.insert(name_event.end(), name.begin(), name.end());
     events.push_back(Event{0, order++, std::move(name_event)});
@@ -80,8 +80,8 @@ int main(int argc, char** argv) {
       }
     }
 
-    // More than 256 simultaneous note instances force all allocator slots live,
-    // including banks/programs that expand one MIDI note into stereo regions.
+    // Stereo-region expansion lets these 320 simultaneous MIDI notes fill the
+    // 512 mono-voice allocator while spanning many banks and programs.
     for (int channel = 0; channel < 16; ++channel) {
       for (int index = 0; index < 20; ++index) {
         const int note = channel == 9 ? 35 + (index % 47) : note_dist(rng);

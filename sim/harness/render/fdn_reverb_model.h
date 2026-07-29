@@ -37,8 +37,8 @@ class FdnReverbModel {
   static int64_t arithmetic_shift_right(int64_t value, unsigned bits);
   static int64_t symmetric_round_shift_15(int64_t value);
   static int32_t apply_state_deadband(int32_t value);
-  static int32_t signed_mix24(int32_t value);
-  static int32_t saturate_mix24(int64_t value, bool* saturated = nullptr);
+  static int32_t signed_mix25(int32_t value);
+  static int32_t saturate_mix25(int64_t value, bool* saturated = nullptr);
   static uint32_t sat_inc(uint32_t value, uint32_t amount = 1);
   static std::array<int64_t, 8> hadamard(const std::array<int32_t, 8>& input);
   ReverbConfig effective_config();

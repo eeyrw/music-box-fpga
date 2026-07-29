@@ -1,4 +1,4 @@
-module voice_major_demo_system #(
+module voice_major_system #(
   parameter int LINE_WORDS = synth_pkg::BLOCK_LINE_WORDS,
   parameter int OUTPUT_FIFO_DEPTH = 64,
   parameter int TARGET_LEVEL = 48,
@@ -122,7 +122,7 @@ module voice_major_demo_system #(
 
   initial begin
     if (LINE_WORDS != BLOCK_LINE_WORDS)
-      $error("voice_major_demo_system requires an eight-word line interface");
+      $error("voice_major_system requires an eight-word line interface");
     if (TARGET_LEVEL < MAX_BLOCK_FRAMES)
       $error("TARGET_LEVEL must hold at least one render block");
   end
@@ -204,9 +204,11 @@ module voice_major_demo_system #(
     .core_reset,
     .bus_req(common_status_bus_req),
     .bus_rsp(common_status_bus_rsp),
-    .sample_tick(1'b0),
     .core_sample_valid,
     .core_busy(renderer_busy),
+    .render_inflight,
+    .render_deadline_miss_pulse,
+    .render_latency_cycles,
     .ext_req_valid,
     .ext_req_ready,
     .ext_rsp_valid,
@@ -217,9 +219,7 @@ module voice_major_demo_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
-    .audio_diagnostics,
-    .render_deadline_miss_pulse,
-    .render_latency_cycles
+    .audio_diagnostics
   );
 
   voice_major_render_core core (

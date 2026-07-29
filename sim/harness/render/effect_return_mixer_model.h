@@ -29,8 +29,8 @@ class EffectReturnMixerModel {
  private:
   static int64_t arithmetic_shift_right(int64_t value, unsigned bits);
   static int64_t scale_q1_15(int32_t sample, uint16_t gain);
-  static int32_t signed_mix24(int32_t value);
-  static int32_t saturate_mix24(int64_t value, bool* saturated);
+  static int32_t signed_mix25(int32_t value);
+  static int32_t saturate_mix25(int64_t value, bool* saturated);
   void add_saturation_events(uint32_t amount);
 
   uint32_t saturation_count_ = 0;

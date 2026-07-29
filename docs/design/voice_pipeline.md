@@ -90,9 +90,8 @@ transposed direct-form-II biquad filtering, channel gain, envelope gain, and
 explicit saturation. One mono result is duplicated before channel gain. There
 is no dual-sample stereo voice.
 
-For the normal 256-voice configuration, signed 24-bit block mix samples preserve
-the exact worst-case sum. A 512-voice product mode needs enforced headroom or a
-wider mix contract even though the 512-slot cycle/correct-ID test passes.
+For the 512-voice project configuration, signed 25-bit block mix samples preserve
+the exact worst-case PCM16 sum without requiring mix headroom.
 
 ## Output
 

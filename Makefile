@@ -1,10 +1,17 @@
 VERILATOR ?= verilator
+VIVADO ?= vivado
 BUILD_DIR := build
-NUM_VOICES ?= 256
+NUM_VOICES ?= 512
+BLOCK_WORK_ENTRIES ?= 8
 VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
-RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES)
+RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
+	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
+VIVADO_BUILD_DIR := $(BUILD_DIR)/fpga/smart_artix/vivado
+VIVADO_SCRIPT_DIR := $(abspath fpga/smart_artix/vivado/scripts)
+VIVADO_CONFIG_ENV := SYNTH_NUM_VOICES=$(NUM_VOICES) \
+	SYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES)
 HARNESS_INCLUDE_FLAGS := \
 	-I$(abspath sim/harness) \
 	-I$(abspath sim/harness/common) \
@@ -59,7 +66,7 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/common/rtl/wavetable_i2s_output.sv \
-	fpga/common/rtl/voice_major_demo_system.sv
+	fpga/common/rtl/voice_major_system.sv
 
 SPI_SIM_SOURCES := \
 	sim/tb/tb_spi_register_bridge.sv
@@ -69,6 +76,9 @@ I2S_SIM_SOURCES := \
 
 I2S_OUTPUT_SIM_SOURCES := \
 	sim/tb/tb_wavetable_i2s_output.sv
+
+COMMON_STATUS_SIM_SOURCES := \
+	sim/tb/tb_wavetable_common_status_regs.sv
 
 COMPRESSOR_SIM_SOURCES := \
 	sim/tb/tb_lookahead_compressor.sv
@@ -166,7 +176,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-summary clean
 
 all: test
 
@@ -202,7 +212,7 @@ lint:
 		rtl/audio/effect_return_mixer.sv rtl/audio/global_effects_chain.sv \
 		rtl/audio/lookahead_compressor.sv rtl/audio/global_audio_effects_chain.sv
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_render_core $(RTL_SOURCES)
-	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_demo_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
+	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module voice_major_system $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module wavetable_i2s_output $(RTL_SOURCES) $(FPGA_COMMON_RTL_SOURCES)
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module i2s_tx rtl/pkg/synth_pkg.sv fpga/common/rtl/fractional_tick_gen.sv fpga/common/rtl/i2s_tx.sv
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module sd_native_block_reader \
@@ -238,7 +248,9 @@ test-ddr3-model:
 
 test-voice-major-512:
 	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) -DSYNTH_NUM_VOICES=512 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_render_core_512_obj_dir \
 		--top-module tb_voice_major_render_core \
 		$(RTL_SOURCES) $(VOICE_MAJOR_RENDER_CORE_SIM_SOURCES)
@@ -246,7 +258,9 @@ test-voice-major-512:
 
 measure-voice-major-throughput:
 	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) -DSYNTH_NUM_VOICES=256 --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_obj_dir \
 		--top-module tb_voice_major_throughput \
 		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
@@ -254,7 +268,8 @@ measure-voice-major-throughput:
 
 measure-voice-major-throughput-filtered:
 	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) -DSYNTH_NUM_VOICES=256 -DSYNTH_FILTER_ENABLE \
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_FILTER_ENABLE \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_filtered_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -264,7 +279,8 @@ measure-voice-major-throughput-filtered:
 measure-voice-major-throughput-ddr3:
 	mkdir -p $(BUILD_DIR)/ddr3_render_image
 	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
-	$(VERILATOR) -DSYNTH_NUM_VOICES=256 -DSYNTH_DDR3_MODEL \
+	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -278,6 +294,7 @@ measure-voice-major-throughput-ddr3:
 measure-voice-major-throughput-512:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -287,11 +304,42 @@ measure-voice-major-throughput-512:
 measure-voice-major-throughput-512-filtered:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir \
 		--top-module tb_voice_major_throughput \
 		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
 	$(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir/Vtb_voice_major_throughput
+
+measure-voice-major-throughput-512-ddr3:
+	mkdir -p $(BUILD_DIR)/ddr3_render_image
+	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
+		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/voice_major_throughput_512_ddr3_obj_dir/Vtb_voice_major_throughput \
+		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
+
+measure-voice-major-throughput-512-ddr3-filtered:
+	mkdir -p $(BUILD_DIR)/ddr3_render_image
+	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
+	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
+		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_filtered_obj_dir \
+		--top-module tb_voice_major_throughput \
+		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/voice_major_throughput_512_ddr3_filtered_obj_dir/Vtb_voice_major_throughput \
+		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
 
 measure-voice-compute-pipeline:
 	mkdir -p $(BUILD_DIR)
@@ -405,6 +453,12 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/common_status_obj_dir \
+		--top-module tb_wavetable_common_status_regs \
+		rtl/pkg/synth_pkg.sv rtl/pkg/synth_register_pkg.sv \
+		fpga/common/rtl/wavetable_common_status_regs.sv $(COMMON_STATUS_SIM_SOURCES)
+	$(BUILD_DIR)/common_status_obj_dir/Vtb_wavetable_common_status_regs
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/chorus_obj_dir --top-module tb_stereo_chorus \
 		rtl/pkg/synth_pkg.sv rtl/generated/synth_dsp_lut_pkg.sv \
@@ -557,6 +611,30 @@ render-rtl-ddr3:
 		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
 		--out-dir $(RENDER_RTL_OUT_DIR) \
 		+DDR3_IMAGE=$(abspath $(SF2))
+
+vivado-project:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO_CONFIG_ENV) $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/project.tcl \
+		-journal logs/project.jou -log logs/project.log
+
+vivado-synth:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO_CONFIG_ENV) $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/synth.tcl \
+		-journal logs/synth.jou -log logs/synth.log
+
+vivado-impl:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO_CONFIG_ENV) $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/impl.tcl \
+		-journal logs/impl.jou -log logs/impl.log
+
+vivado-bitstream:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO_CONFIG_ENV) $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/bitstream.tcl \
+		-journal logs/bitstream.jou -log logs/bitstream.log
 
 vivado-summary:
 	python3 tools/vivado_report_summary.py show

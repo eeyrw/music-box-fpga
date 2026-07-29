@@ -12,7 +12,7 @@
 namespace render {
 
 #ifndef RENDER_NUM_VOICES
-#define RENDER_NUM_VOICES 32
+#define RENDER_NUM_VOICES 512
 #endif
 
 constexpr int kNumVoices = RENDER_NUM_VOICES;

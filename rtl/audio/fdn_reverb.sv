@@ -47,7 +47,7 @@ module fdn_reverb #(
                                  $clog2(PRE_DELAY_CAPACITY);
   localparam int PRE_AGE_WIDTH = $clog2(PRE_DELAY_CAPACITY + 1);
   localparam logic [15:0] FEEDBACK_MAX_Q1_15 = 16'h2d41;
-  localparam logic signed [23:0] STATE_DEADBAND = 24'sd32;
+  localparam mix_t STATE_DEADBAND = MIX_WIDTH'(32);
 
   typedef enum logic [3:0] {
     IDLE, PRE_DELAY, PRE_DELAY_CAPTURE, READ_LINES, READ_LINES_DRAIN,
@@ -87,16 +87,16 @@ module fdn_reverb #(
   reverb_config_t effective_config;
   /* verilator lint_on UNUSEDSIGNAL */
   logic effective_config_clamped;
-  logic signed [24:0] damping_delta;
-  logic signed [41:0] damping_product;
-  logic signed [41:0] damping_product_q;
+  logic signed [25:0] damping_delta;
+  logic signed [42:0] damping_product;
+  logic signed [42:0] damping_product_q;
   logic signed [45:0] damping_scaled;
   logic signed [45:0] damping_scaled_q;
   mix_t damped_value;
-  logic signed [24:0] hadamard_a [0:7];
-  logic signed [25:0] hadamard_b [0:7];
-  logic signed [26:0] hadamard_value [0:7];
-  logic signed [26:0] hadamard_q [0:7];
+  logic signed [25:0] hadamard_a [0:7];
+  logic signed [26:0] hadamard_b [0:7];
+  logic signed [27:0] hadamard_value [0:7];
+  logic signed [27:0] hadamard_q [0:7];
   logic signed [41:0] scaled_input_l;
   logic signed [41:0] scaled_input_r;
   logic signed [42:0] injection;
@@ -110,8 +110,8 @@ module fdn_reverb #(
   logic line_write_saturated;
   mix_t line_write_value_q;
   logic line_write_saturated_q;
-  logic signed [26:0] wet_sum_l;
-  logic signed [26:0] wet_sum_r;
+  logic signed [27:0] wet_sum_l;
+  logic signed [27:0] wet_sum_r;
 
   initial begin
     if (PRE_DELAY_CAPACITY < 1 ||
@@ -150,10 +150,10 @@ module fdn_reverb #(
   endfunction
 
   function automatic mix_t saturate_mix(input logic signed [45:0] value);
-    if (value > 46'sd8388607)
-      saturate_mix = 24'sh7fffff;
-    else if (value < -46'sd8388608)
-      saturate_mix = 24'sh800000;
+    if (value > 46'sd16777215)
+      saturate_mix = 25'sh0ffffff;
+    else if (value < -46'sd16777216)
+      saturate_mix = 25'sh1000000;
     else
       saturate_mix = mix_t'(value);
   endfunction
@@ -230,16 +230,16 @@ module fdn_reverb #(
                     $signed(line_read[line_index]);
     damping_product = damping_delta * $signed({1'b0, config_damping_q});
     damping_scaled = round_shift_q1_15(
-        $signed({{4{damping_product_q[41]}}, damping_product_q}));
+        $signed({{3{damping_product_q[42]}}, damping_product_q}));
     damped_value = apply_state_deadband(mix_t'(
-        $signed({{22{line_read[line_index][23]}}, line_read[line_index]}) +
+        $signed({{21{line_read[line_index][MIX_WIDTH-1]}}, line_read[line_index]}) +
         damping_scaled_q));
 
     for (int pair = 0; pair < 8; pair += 2) begin
-      hadamard_a[pair] = $signed({damped[pair][23], damped[pair]}) +
-                         $signed({damped[pair + 1][23], damped[pair + 1]});
-      hadamard_a[pair + 1] = $signed({damped[pair][23], damped[pair]}) -
-                             $signed({damped[pair + 1][23], damped[pair + 1]});
+      hadamard_a[pair] = $signed({damped[pair][MIX_WIDTH-1], damped[pair]}) +
+                         $signed({damped[pair + 1][MIX_WIDTH-1], damped[pair + 1]});
+      hadamard_a[pair + 1] = $signed({damped[pair][MIX_WIDTH-1], damped[pair]}) -
+                             $signed({damped[pair + 1][MIX_WIDTH-1], damped[pair + 1]});
     end
     for (int block = 0; block < 8; block += 4) begin
       hadamard_b[block] = $signed(hadamard_a[block]) +
@@ -258,8 +258,8 @@ module fdn_reverb #(
                                  $signed(hadamard_b[item + 4]);
     end
 
-    scaled_input_l = {{18{delayed_input_q.l[23]}}, delayed_input_q.l};
-    scaled_input_r = {{18{delayed_input_q.r[23]}}, delayed_input_q.r};
+    scaled_input_l = {{17{delayed_input_q.l[MIX_WIDTH-1]}}, delayed_input_q.l};
+    scaled_input_r = {{17{delayed_input_q.r[MIX_WIDTH-1]}}, delayed_input_q.r};
     injection = line_index[0]
         ? ($signed({scaled_input_l[41], scaled_input_l}) -
            $signed({scaled_input_r[41], scaled_input_r})) >>> 1
@@ -271,18 +271,18 @@ module fdn_reverb #(
         $signed({feedback_product_q[44], feedback_product_q}));
     line_write_wide = injection_q + feedback_scaled_q;
     line_write_value = apply_state_deadband(saturate_mix(line_write_wide));
-    line_write_saturated = (line_write_wide > 46'sd8388607) ||
-                           (line_write_wide < -46'sd8388608);
+    line_write_saturated = (line_write_wide > 46'sd16777215) ||
+                           (line_write_wide < -46'sd16777216);
 
     wet_sum_l = '0;
     wet_sum_r = '0;
     for (int line = 0; line < LINE_COUNT; line++) begin
       wet_sum_l = line[1]
-          ? wet_sum_l - $signed({{3{damped[line][23]}}, damped[line]})
-          : wet_sum_l + $signed({{3{damped[line][23]}}, damped[line]});
+          ? wet_sum_l - $signed({{3{damped[line][MIX_WIDTH-1]}}, damped[line]})
+          : wet_sum_l + $signed({{3{damped[line][MIX_WIDTH-1]}}, damped[line]});
       wet_sum_r = ^line[1:0]
-          ? wet_sum_r - $signed({{3{damped[line][23]}}, damped[line]})
-          : wet_sum_r + $signed({{3{damped[line][23]}}, damped[line]});
+          ? wet_sum_r - $signed({{3{damped[line][MIX_WIDTH-1]}}, damped[line]})
+          : wet_sum_r + $signed({{3{damped[line][MIX_WIDTH-1]}}, damped[line]});
     end
   end
 

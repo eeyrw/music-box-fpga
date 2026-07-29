@@ -9,7 +9,7 @@ Behavioral contracts remain in `../fixed_point.md`, `../memory_format.md`, and
 | Top | File | Role |
 | --- | --- | --- |
 | `voice_major_render_core` | `rtl/top/voice_major_render_core.sv` | Generic command-controlled block renderer with ordered line-memory traffic. |
-| `voice_major_demo_system` | `fpga/common/rtl/voice_major_demo_system.sv` | SPI/register fabric, render scheduling, global effects, FIFO, and I2S composition. |
+| `voice_major_system` | `fpga/common/rtl/voice_major_system.sv` | SPI/register fabric, render scheduling, global effects, FIFO, and I2S composition. |
 | `smart_artix_top` | `fpga/smart_artix/rtl/smart_artix_top.sv` | Board top connecting the common system to SD loading and the MIG DDR3 app interface. |
 | `voice_major_render_harness` | `sim/models/voice_major_render_harness.sv` | Verilator top using the same command plane plus the behavioral DDR3 model. |
 
@@ -47,7 +47,7 @@ smart_artix_top
 |  +- smart_artix_ddr3_rw_arbiter
 |     +- MIG app interface
 +- smart_artix_platform_regs
-+- voice_major_demo_system
++- voice_major_system
    +- spi_register_bridge
    +- wavetable_register_fabric
    +- wavetable_common_status_regs

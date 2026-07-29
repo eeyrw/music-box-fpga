@@ -99,20 +99,20 @@ module stereo_chorus #(
   mix_t tap_l1;
   mix_t tap_r0;
   mix_t tap_r1;
-  logic signed [24:0] delta_l;
-  logic signed [24:0] delta_r;
-  logic signed [32:0] interpolation_product_l;
-  logic signed [32:0] interpolation_product_r;
-  logic signed [32:0] interpolation_product_l_q;
-  logic signed [32:0] interpolation_product_r_q;
+  logic signed [25:0] delta_l;
+  logic signed [25:0] delta_r;
+  logic signed [34:0] interpolation_product_l;
+  logic signed [34:0] interpolation_product_r;
+  logic signed [34:0] interpolation_product_l_q;
+  logic signed [34:0] interpolation_product_r_q;
   mix_t wet_l;
   mix_t wet_r;
-  logic signed [39:0] input_product_l;
-  logic signed [39:0] input_product_r;
-  logic signed [39:0] feedback_product_l;
-  logic signed [39:0] feedback_product_r;
-  logic signed [41:0] write_wide_l;
-  logic signed [41:0] write_wide_r;
+  logic signed [41:0] input_product_l;
+  logic signed [41:0] input_product_r;
+  logic signed [40:0] feedback_product_l;
+  logic signed [40:0] feedback_product_r;
+  logic signed [42:0] write_wide_l;
+  logic signed [42:0] write_wide_r;
   mix_t write_l;
   mix_t write_r;
   logic write_saturated_l;
@@ -142,11 +142,11 @@ module stereo_chorus #(
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
-  function automatic mix_t saturate_mix(input logic signed [41:0] value);
-    if (value > 42'sd8388607)
-      saturate_mix = 24'sh7fffff;
-    else if (value < -42'sd8388608)
-      saturate_mix = 24'sh800000;
+  function automatic mix_t saturate_mix(input logic signed [42:0] value);
+    if (value > 43'sd16777215)
+      saturate_mix = 25'sh0ffffff;
+    else if (value < -43'sd16777216)
+      saturate_mix = 25'sh1000000;
     else
       saturate_mix = mix_t'(value);
   endfunction
@@ -224,32 +224,32 @@ module stereo_chorus #(
     delta_r = $signed(tap_r1) - $signed(tap_r0);
     interpolation_product_l = delta_l * $signed({1'b0, fraction_l_q});
     interpolation_product_r = delta_r * $signed({1'b0, fraction_r_q});
-    wet_l = mix_t'($signed({{10{tap_l0[23]}}, tap_l0}) +
-                     ($signed({interpolation_product_l_q[32], interpolation_product_l_q}) >>> 8));
-    wet_r = mix_t'($signed({{10{tap_r0[23]}}, tap_r0}) +
-                     ($signed({interpolation_product_r_q[32], interpolation_product_r_q}) >>> 8));
+    wet_l = mix_t'($signed({{10{tap_l0[MIX_WIDTH-1]}}, tap_l0}) +
+                     ($signed(interpolation_product_l_q) >>> 8));
+    wet_r = mix_t'($signed({{10{tap_r0[MIX_WIDTH-1]}}, tap_r0}) +
+                     ($signed(interpolation_product_r_q) >>> 8));
 
     input_product_l = input_q.l * $signed({1'b0, config_input_send_q});
     input_product_r = input_q.r * $signed({1'b0, config_input_send_q});
     feedback_product_l = wet_l_q * config_feedback_q;
     feedback_product_r = wet_r_q * config_feedback_q;
     if (config_input_send_q == 16'h7fff) begin
-      write_wide_l = $signed({{18{input_q.l[23]}}, input_q.l}) +
-                     ($signed({{2{feedback_product_l[39]}}, feedback_product_l}) >>> 15);
-      write_wide_r = $signed({{18{input_q.r[23]}}, input_q.r}) +
-                     ($signed({{2{feedback_product_r[39]}}, feedback_product_r}) >>> 15);
+      write_wide_l = $signed({{18{input_q.l[MIX_WIDTH-1]}}, input_q.l}) +
+                     ($signed({{2{feedback_product_l[40]}}, feedback_product_l}) >>> 15);
+      write_wide_r = $signed({{18{input_q.r[MIX_WIDTH-1]}}, input_q.r}) +
+                     ($signed({{2{feedback_product_r[40]}}, feedback_product_r}) >>> 15);
     end else begin
-      write_wide_l = ($signed({{2{input_product_l[39]}}, input_product_l}) >>> 15) +
-                     ($signed({{2{feedback_product_l[39]}}, feedback_product_l}) >>> 15);
-      write_wide_r = ($signed({{2{input_product_r[39]}}, input_product_r}) >>> 15) +
-                     ($signed({{2{feedback_product_r[39]}}, feedback_product_r}) >>> 15);
+      write_wide_l = ($signed({input_product_l[41], input_product_l}) >>> 15) +
+                     ($signed({{2{feedback_product_l[40]}}, feedback_product_l}) >>> 15);
+      write_wide_r = ($signed({input_product_r[41], input_product_r}) >>> 15) +
+                     ($signed({{2{feedback_product_r[40]}}, feedback_product_r}) >>> 15);
     end
     write_l = saturate_mix(write_wide_l);
     write_r = saturate_mix(write_wide_r);
-    write_saturated_l = (write_wide_l > 42'sd8388607) ||
-                        (write_wide_l < -42'sd8388608);
-    write_saturated_r = (write_wide_r > 42'sd8388607) ||
-                        (write_wide_r < -42'sd8388608);
+    write_saturated_l = (write_wide_l > 43'sd16777215) ||
+                        (write_wide_l < -43'sd16777216);
+    write_saturated_r = (write_wide_r > 43'sd16777215) ||
+                        (write_wide_r < -43'sd16777216);
   end
 
   always_ff @(posedge clk) begin

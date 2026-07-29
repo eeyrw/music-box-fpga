@@ -98,12 +98,12 @@ module tb_effect_return_mixer;
     reverb_wet_r_i = -24'sd10;
     accept_mix(85, -85);
 
-    dry_l_i = 24'sh7fffff;
-    dry_r_i = 24'sh800000;
-    chorus_wet_l_i = 24'sh7fffff;
-    chorus_wet_r_i = 24'sh800000;
-    reverb_wet_l_i = 24'sh7fffff;
-    reverb_wet_r_i = 24'sh800000;
+    dry_l_i = 25'sh0ffffff;
+    dry_r_i = 25'sh1000000;
+    chorus_wet_l_i = 25'sh0ffffff;
+    chorus_wet_r_i = 25'sh1000000;
+    reverb_wet_l_i = 25'sh0ffffff;
+    reverb_wet_r_i = 25'sh1000000;
     chorus_config_i.return_gain_q1_15 = 16'h7fff;
     reverb_config_i.return_gain_q1_15 = 16'h7fff;
     reverb_config_i.input_send_q1_15 = 16'h7fff;
@@ -114,8 +114,8 @@ module tb_effect_return_mixer;
     reverb_input_commit_i = 1'b0;
     in_valid = 1'b0;
     @(negedge clk);
-    if (!out_valid || $signed(out_l) != 8388607 ||
-        $signed(out_r) != -8388608) begin
+    if (!out_valid || $signed(out_l) != 16777215 ||
+        $signed(out_r) != -16777216) begin
       $error("saturated effect mix mismatch got %0d/%0d",
              $signed(out_l), $signed(out_r));
       errors++;
@@ -136,8 +136,8 @@ module tb_effect_return_mixer;
     @(negedge clk);
     reverb_input_commit_i = 1'b0;
     #1;
-    if ($signed(reverb_input_l_o) != 8388607 ||
-        $signed(reverb_input_r_o) != -8388608) begin
+    if ($signed(reverb_input_l_o) != 16777215 ||
+        $signed(reverb_input_r_o) != -16777216) begin
       $error("clamped gain route mismatch");
       errors++;
     end

@@ -205,8 +205,8 @@ module tb_voice_major_block_controller;
     @(negedge clk);
     block_read_req_valid = 1'b0;
     do @(posedge clk); while (!block_read_rsp_valid);
-    if ($signed(block_read_rsp.sample.l) != 24'sd99 ||
-        $signed(block_read_rsp.sample.r) != 24'sd99)
+    if ($signed(block_read_rsp.sample.l) != mix_t'(99) ||
+        $signed(block_read_rsp.sample.r) != mix_t'(99))
       $fatal(1, "published mix mismatch: l=%0d r=%0d",
              $signed(block_read_rsp.sample.l),
              $signed(block_read_rsp.sample.r));

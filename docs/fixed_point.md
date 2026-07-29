@@ -162,7 +162,7 @@ exponent with this mantissa correction to produce a signed level relative to
 `2^15` PCM full scale, then uses its own centibel-to-Q1.15 table for gain
 conversion. Seven mantissa bits plus the next-bit rounding decision address 129
 table nodes. Generator checks cover every rounding boundary and every exponent
-in the signed 24-bit mix range, including magnitude `2^23`; maximum logarithmic
+in the signed 25-bit mix range, including magnitude `2^24`; maximum logarithmic
 error is limited to `0.35 cB`.
 
 ## Biquad IIR Filter
@@ -236,14 +236,14 @@ raw state expressions before the state is saturated back to 34 bits.
 ## Mixing
 
 The multi-voice renderer accumulates signed 16-bit voice outputs in a signed
-32-bit stereo accumulator. With at most 256 voices, the exact range is
-`-8,388,608..8,388,352`, which fits a signed 24-bit sample. The common system
-path therefore narrows the accumulator exactly to a signed 24-bit stereo mix
+32-bit stereo accumulator. With 512 voices, the exact range is
+`-16,777,216..16,776,704`, which fits a signed 25-bit sample. The common system
+path therefore narrows the accumulator exactly to a signed 25-bit stereo mix
 and stores 48 such frames in the compressor delay line.
 
 ## Stereo Chorus
 
-The isolated chorus processor uses signed 24-bit stereo samples and a 2048-frame
+The isolated chorus processor uses signed 25-bit stereo samples and a 2048-frame
 power-of-two circular history. Delay base and depth are unsigned Q16.8 frame
 values. LFO phase and increment are unsigned Q0.32 cycles; the upper ten phase
 bits address 1024 full-cycle positions reconstructed from the generated
@@ -264,10 +264,10 @@ The accepted-frame configuration is clamped so that the complete modulated
 delay remains from one through `DELAY_CAPACITY - 2` frames. Feedback is signed
 Q1.15 and clamps to `-0x6000..0x6000`; input send is nonnegative Q1.15 and
 clamps to `0..0x7fff`. An input send of `0x7fff` bypasses multiplication to
-preserve the signed-24 input exactly. History writes use:
+preserve the signed-25 input exactly. History writes use:
 
 ```text
-write = saturate24(input_send * input + feedback * wet)
+write = saturate25(input_send * input + feedback * wet)
 ```
 
 Products shift arithmetically by 15 bits and the sum saturates once. Saturation
@@ -277,7 +277,7 @@ history by resetting pointers and age; it does not clear the RAM array.
 
 ## Eight-Line FDN Reverb
 
-The isolated reverb processor stores eight signed-24 delay lines in one packed
+The isolated reverb processor stores eight signed-25 delay lines in one packed
 RAM. The production line lengths at 48 kHz are the odd prime frame counts below;
 the generated RTL and C++ tables also contain their packed base offsets.
 
@@ -285,8 +285,8 @@ the generated RTL and C++ tables also contain their packed base offsets.
 1451, 1559, 1663, 1777, 1879, 1999, 2131, 2371
 ```
 
-They span approximately 30.2 through 49.4 ms and total 14,830 signed-24
-samples. A separate 2048-frame signed-24 stereo RAM provides zero through 2047
+They span approximately 30.2 through 49.4 ms and total 14,830 signed-25
+samples. A separate 2048-frame signed-25 stereo RAM provides zero through 2047
 frames of pre-delay. Saturating age counters make all pre-delay and FDN reads
 that precede valid written history return exact zero. Clear resets pointers,
 ages, damping state, and diagnostics without clearing either RAM.
@@ -306,7 +306,7 @@ damped = deadband32(read + round_q15((state - read) * damping))
 Thus zero damping passes the delay read exactly, while `0x7fff` nearly retains
 the previous state outside the internal deadband. `round_q15` rounds the
 magnitude to nearest with exact half values away from zero, then restores the
-sign. `deadband32` maps inclusive signed-24 values from `-32` through `32` to
+sign. `deadband32` maps inclusive signed-25 values from `-32` through `32` to
 zero. The eight damped samples pass through the standard
 unnormalized three-stage Hadamard butterfly. Left and right pre-delayed inputs
 use Hadamard rows 0 and 1 as orthogonal injection sign vectors, with their sum
@@ -315,7 +315,7 @@ with the signed sums shifted right three times:
 
 ```text
 injection_i = (left + sign(row1, i) * right) >>> 1
-write_i = deadband32(saturate24(
+write_i = deadband32(saturate25(
     injection_i + round_q15(hadamard_i * feedback_gain_i)))
 wet_l = sum(sign(row2, i) * damped_i) >>> 3
 wet_r = sum(sign(row3, i) * damped_i) >>> 3
@@ -333,7 +333,7 @@ eventually reaches exact digital silence.
 ## Effect Routing And Return Mix
 
 `effect_return_mixer` is the only owner of the dry/wet sums. It accepts signed
-24-bit dry, chorus-wet, and reverb-wet samples. The four routing and return
+25-bit dry, chorus-wet, and reverb-wet samples. The four routing and return
 gains are nonnegative Q1.15 values clamped to `0..0x7fff`; `0x7fff` uses an
 exact bypass instead of multiplying, so default dry routing and unity returns
 do not lose one least-significant step. A gain above `0x7fff` sets the sticky
@@ -342,7 +342,7 @@ configuration-clamped diagnostic.
 The reverb input is evaluated when the chorus output is accepted:
 
 ```text
-reverb_input = saturate24(
+reverb_input = saturate25(
     scale_q1_15(dry, reverb_input_send)
   + scale_q1_15(chorus_wet, chorus_to_reverb))
 ```
@@ -350,7 +350,7 @@ reverb_input = saturate24(
 The final return is evaluated when the reverb output is accepted:
 
 ```text
-effect_mix = saturate24(
+effect_mix = saturate25(
     dry
   + scale_q1_15(chorus_wet, chorus_return)
   + scale_q1_15(reverb_wet, reverb_return))
@@ -359,10 +359,10 @@ effect_mix = saturate24(
 For gains below `0x7fff`, `scale_q1_15(sample, gain)` is the wide signed product
 shifted arithmetically right by 15 bits. Negative values therefore round toward
 negative infinity. Each sum retains all product bits and saturates only once at
-its signed-24 boundary. A saturating 32-bit counter records each channel that
+its signed-25 boundary. A saturating 32-bit counter records each channel that
 saturates in either the committed reverb-input route or final return mix.
 
-`global_effects_chain` is the internal signed-24 spatial-effects segment. It
+`global_effects_chain` is the internal signed-25 spatial-effects segment. It
 accepts at most one frame at a time, snapshots both complete configurations with
 the dry input, and sequences chorus, reverb, and return-mixer handshakes. Delay
 state advances once per accepted frame regardless of output stalls. The dry
@@ -372,7 +372,7 @@ chorus and reverb state; either bit also drops an in-flight spatial frame and
 clears return-mixer diagnostics.
 
 `global_audio_effects_chain` is the complete user-visible processing chain. It
-feeds the signed-24 spatial result into `lookahead_compressor`, which also owns
+feeds the signed-25 spatial result into `lookahead_compressor`, which also owns
 master gain and final PCM16 saturation. The compressor remains a distinct inner
 module because its output format and look-ahead fill semantics differ from the
 wet processors, but system integration uses the unified wrapper rather than
@@ -382,7 +382,7 @@ look-ahead, gain-reduction history, or compressor diagnostics.
 ### Compressor dBFS Reference
 
 The compressor uses the PCM16 numerical full scale as its dBFS reference even
-though its input and delay line are signed 24-bit. For each undelayed stereo mix
+though its input and delay line are signed 25-bit. For each undelayed stereo mix
 frame it computes the instantaneous linked peak
 
 ```text
@@ -394,10 +394,10 @@ level_cBFS = 200 * log10(A / 32768)
 Thus magnitude `32768` is exactly `0 dBFS`, `16384` is approximately
 `-6.0206 dBFS`, and `65536` is approximately `+6.0206 dBFS`. Signed PCM16's
 positive maximum `32767` is approximately `-0.00027 dBFS`; its negative maximum
-`-32768` has magnitude `32768` and is exactly `0 dBFS`. The signed 24-bit mix may
-legitimately exceed PCM16 full scale, up to approximately `+48.16 dBFS`, so the
+`-32768` has magnitude `32768` and is exactly `0 dBFS`. The signed 25-bit mix may
+legitimately exceed PCM16 full scale, up to approximately `+54.19 dBFS`, so the
 detector can measure overload before final saturation. It is not referenced to
-24-bit full scale.
+25-bit full scale.
 
 This is a per-frame sample-peak detector, not RMS, LUFS, or a windowed energy
 measurement. There is no detector averaging. Attack and release smooth the gain

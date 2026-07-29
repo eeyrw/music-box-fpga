@@ -6,8 +6,8 @@ and board-facing SPI/I2S adapters, plus a source-controlled Smart Artix Vivado
 synthesis and implementation flow.
 
 The current milestone implements a configurable mono voice-major block renderer.
-Linked SF2 stereo notes use two mono voices. The default 256-voice path uses
-per-voice sample windows and timed DDR3 simulation.
+Linked SF2 stereo notes use two mono voices. The default 512-voice path uses
+eight tagged work slots, per-voice sample windows, and timed DDR3 simulation.
 
 ## Implemented
 
@@ -22,14 +22,15 @@ per-voice sample windows and timed DDR3 simulation.
 - FPGA-owned six-stage per-voice volume envelope
 - Per-voice biquad IIR filter with runtime coefficients
 - Linear interpolation and signed 16-bit saturated output
-- Voice-major block rendering and signed-24 stereo mixing
-- Signed-24 global chorus, eight-line FDN reverb, return mixer, look-ahead
+- Voice-major block rendering and signed-25 stereo mixing
+- Signed-25 global chorus, eight-line FDN reverb, return mixer, look-ahead
   compressor, and master-volume path
 - Ready/valid 32-word per-voice windows with ordered 8-word DDR refills
 - Transport-independent register bus for host, MCU, soft-core, or simulation control
 - Common board/peripheral adapters for SPI register transport and I2S output
-- Smart Artix clock/MIG integration, SD-to-DDR loader path, Tcl batch flow, and
-  post-route 100 MHz internal timing closure
+- Smart Artix clock/MIG integration, SD-to-DDR loader path, and Tcl batch flow;
+  the current 512-voice build meets 100 MHz post-synthesis timing and awaits
+  implementation signoff
 - One-cycle behavioral wave-memory model
 - Self-checking SystemVerilog regression test
 

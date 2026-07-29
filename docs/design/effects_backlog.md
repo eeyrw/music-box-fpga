@@ -2,12 +2,12 @@
 
 ## Implementation Status
 
-The signed-24 `stereo_chorus`, eight-line `fdn_reverb`, `effect_return_mixer`,
+The signed-25 `stereo_chorus`, eight-line `fdn_reverb`, `effect_return_mixer`,
 serial `global_effects_chain`, and compressor-inclusive
 `global_audio_effects_chain` ready/valid path are implemented and integrated in
-`wavetable_system_core`. The system order is chorus, reverb/return mixing,
+`voice_major_system`. The system order is chorus, reverb/return mixing,
 look-ahead compression, master volume, and final PCM16 saturation. Reset-default
-effect settings preserve the exact dry signed-24 path.
+effect settings preserve the exact dry signed-25 path.
 
 Transactional `CHORUS_CONFIG`, `REVERB_CONFIG`, and `EFFECT_CLEAR` commands are
 implemented. `EFFECT_CLEAR[0]` clears chorus state and `[1]` clears reverb state;
@@ -17,10 +17,12 @@ integer C++ models cover both wet engines and return mixing, and focused
 self-checking RTL tests cover the isolated blocks and integrated chain.
 
 The initial global-effects implementation is therefore functionally complete.
-Qualification is not complete: full-session C++/RTL comparison, full-polyphony
-cached-memory stress renders, hardware capture, listening evaluation, and RT60
-preset sweeps remain open. Smart Artix synthesis, implementation, utilization,
-and constrained internal 100 MHz timing closure are complete. Per-voice
+Qualification is not complete: full-session C++/RTL comparison, long-duration
+full-polyphony renders, hardware capture, listening evaluation, and RT60 preset
+sweeps remain open. A three-second 512-voice RTL/timed-DDR3 random-access stress
+render passes with zero deadline misses. The current Smart Artix post-synthesis
+build meets the constrained internal 100 MHz target; implementation and route
+signoff remain open. Per-voice
 SoundFont/MIDI sends remain a deliberately deferred milestone.
 
 The C++ reference song renderer now accepts musical `chorus`, `studio`, and
@@ -54,7 +56,7 @@ and listening terminology to the implemented algorithms is documented in
 ## Current Boundary
 
 The renderer emits both saturated PCM16 compatibility samples and an exact
-signed 24-bit stereo mix. `wavetable_system_core` sends the wide mix through
+signed 25-bit stereo mix. `voice_major_system` sends the wide mix through
 `global_audio_effects_chain`, which owns the serial spatial-effect path followed
 by `lookahead_compressor`. The compressor applies the final master gain,
 saturates to PCM16, and feeds the existing output FIFO and I2S path.
@@ -64,7 +66,7 @@ phase/filter state, or bare `wavetable_render_core` PCM behavior. The effects
 occupy the board-facing system path between the wide mix and the compressor:
 
 ```text
-signed 24-bit stereo mix
+signed 25-bit stereo mix
   -> chorus wet processor
   -> reverb wet processor
   -> effect return mixer
@@ -81,7 +83,7 @@ support is a separate later milestone described below.
 ## Common Streaming Contract
 
 Each effect block uses an explicit stereo ready/valid frame interface with a
-signed 24-bit payload. A block must:
+signed 25-bit payload. A block must:
 
 - accept a frame only on `in_valid && in_ready`;
 - advance delay pointers, LFO phase, feedback state, counters, and warm-up state
@@ -100,7 +102,7 @@ parallel. Effect delay storage must use local block RAM and must not share the
 external wavetable DDR request path.
 
 Disabled effects must have an exact-zero wet return. The dry path must remain
-bit-exact with the current signed 24-bit mix. Engines may continue advancing
+bit-exact with the current signed 25-bit mix. Engines may continue advancing
 their history while their return is disabled so that re-enabling an effect does
 not expose stale memory.
 
@@ -121,10 +123,10 @@ effect_mix = dry
 This topology preserves a single exact dry path, permits chorus-to-reverb
 routing, and avoids hiding dry gain inside either algorithm. The return mixer
 uses explicit wide signed products and sums, shifts Q1.15 gains arithmetically,
-and saturates once to signed 24-bit at its output. It exposes a saturating count
+and saturates once to signed 25-bit at its output. It exposes a saturating count
 of channel saturation events.
 
-The effect mix remains signed 24-bit so the existing compressor detector,
+The effect mix remains signed 25-bit so the existing compressor detector,
 look-ahead RAM, fixed-point tables, and C++ model do not need an unrelated width
 change. Normal presets should keep send and return levels below unity. The RTL
 must still saturate safely for hostile configurations and report that event.
@@ -132,11 +134,11 @@ must still saturate safely for hostile configurations and report that event.
 ## Chorus Architecture
 
 The implemented `stereo_chorus` is a modulated fractional delay with feedback.
-It stores signed 24-bit history in separate left/right circular block RAMs and
+It stores signed 25-bit history in separate left/right circular block RAMs and
 evaluates two independent fractional taps:
 
 ```text
-write_sample = saturate24(input + feedback * delayed_sample)
+write_sample = saturate25(input + feedback * delayed_sample)
 delay        = base_delay + depth * sine(lfo_phase)
 wet          = sample_0 + ((sample_1 - sample_0) * fraction >>> 8)
 lfo_phase    = lfo_phase + phase_inc
@@ -153,7 +155,7 @@ Implemented sizing and formats:
 | Item | Value |
 | --- | --- |
 | Delay capacity | 2048 stereo frames, approximately 42.7 ms at 48 kHz |
-| Delay storage | two signed 24-bit channels per frame |
+| Delay storage | two signed 25-bit channels per frame |
 | Base delay and depth | unsigned Q16.8 frames |
 | LFO phase and increment | unsigned Q0.32 cycles |
 | Feedback | signed Q1.15, initially limited to magnitude 0.75 |
@@ -191,7 +193,7 @@ For each accepted frame the engine should:
 
 1. Apply the configured input pre-delay.
 2. Inject left and right input through two orthogonal sign vectors.
-3. Read one signed 24-bit value from each of eight delay lines.
+3. Read one signed 25-bit value from each of eight delay lines.
 4. Update one-pole damping state for each line.
 5. Apply an eight-point Hadamard butterfly.
 6. Scale each transformed value by its line feedback coefficient.
@@ -204,7 +206,7 @@ Initial sizing and formats:
 | --- | --- |
 | FDN size | 8 delay lines |
 | Delay range | approximately 30 to 50 ms per line at 48 kHz |
-| Total FDN state | approximately 15K to 17K signed 24-bit samples |
+| Total FDN state | approximately 15K to 17K signed 25-bit samples |
 | Pre-delay | 0 to 2047 frames |
 | Damping coefficient | nonnegative Q1.15 |
 | Eight feedback coefficients | nonnegative Q1.15 |
@@ -250,7 +252,7 @@ a separately mixable branch so the diffuser does not erase their discrete
 arrival and stereo-position cues:
 
 ```text
-signed-24 stereo input
+signed-25 stereo input
   -> pre-delay
        +-> multi-tap early-reflection engine --------------------+
        |                                                         |
@@ -262,7 +264,7 @@ signed-24 stereo input
                                                                  |
 exact dry --------------------------------------------------------+
                                                                  v
-            saturate24(dry + early_return + late_return) -> compressor
+            saturate25(dry + early_return + late_return) -> compressor
 ```
 
 The early and late branches may use independent return gains. A configurable
@@ -274,7 +276,7 @@ return mixer.
 ### Early Reflections
 
 The preferred first extension is an 8-tap stereo early-reflection engine backed
-by one signed-24 stereo circular RAM. One tap is evaluated per system clock so
+by one signed-25 stereo circular RAM. One tap is evaluated per system clock so
 the design does not require a separate RAM or multiplier for every reflection.
 Each tap needs a delay and independent signed left/right gains. Related fields
 should cross module boundaries as a packed SystemVerilog structure, for
@@ -390,7 +392,7 @@ The proposed implementation order is:
 7. Reconsider a density control or sixteen-line FDN only after the cheaper
    diffusion and early-reflection options have been measured.
 
-The complete extended spatial chain must remain within the existing signed-24
+The complete extended spatial chain must remain within the existing signed-25
 streaming and backpressure contract. Its initial target remains no more than
 128 system clocks per stereo frame for the combined effects path at 100 MHz,
 subject to revision only after synthesis data. Each added RAM and multiplier
@@ -437,7 +439,7 @@ The implemented read-only effect diagnostics expose:
 - enable, busy, chorus-history-valid, reverb-line-valid, and configuration-
   clamped flags;
 - input and output stereo-frame counters;
-- effect-return signed-24 saturation count;
+- effect-return signed-25 saturation count;
 - maximum effect processing cycles;
 - chorus history level and current LFO phase;
 - reverb valid-line mask and pre-delay occupancy.
@@ -451,23 +453,23 @@ specification.
 
 The earlier 9-BRAM/26-DSP baseline and incremental estimates predated the final
 effect and control implementation and are retired as acceptance data. The
-current forced Smart Artix post-route result is:
+19,306-LUT result below is the last routed smaller-configuration result, not the
+current 512-voice signoff. The current comparable build is post-synthesis only:
 
-| Resource or timing field | Current result |
-| --- | ---: |
-| LUT | 19,306 / 32,600 (59.22%) |
-| FF | 20,750 / 65,200 (31.83%) |
-| Block RAM tiles | 39.5 / 75 (52.67%) |
-| DSP48E1 | 47 / 120 (39.17%) |
-| Combined spatial-effect processing test gate | no more than 96 clocks/frame |
-| Reverb processing test gate | no more than 88 clocks/frame |
-| Post-route setup | WNS +0.226 ns, TNS 0, zero failing endpoints |
-| Post-route hold | WHS +0.036 ns, THS 0, zero failing endpoints |
+| Resource or timing field | Earlier routed result | Current 512-voice, 8-slot synthesis |
+| --- | ---: | ---: |
+| LUT | 19,306 / 32,600 (59.22%) | 32,016 / 32,600 (98.21%) |
+| FF | 20,750 / 65,200 (31.83%) | 31,830 / 65,200 (48.82%) |
+| Block RAM tiles | 39.5 / 75 (52.67%) | 44 / 75 (58.67%) |
+| DSP48E1 | 47 / 120 (39.17%) | 39 / 120 (32.50%) |
+| Combined spatial-effect processing test gate | no more than 96 clocks/frame | no more than 96 clocks/frame |
+| Reverb processing test gate | no more than 88 clocks/frame | no more than 88 clocks/frame |
+| Setup timing | post-route WNS +0.226 ns | post-synthesis WNS +0.401 ns |
 
 The first effects-enabled synthesis did not fit because chorus and reverb delay
 storage failed to infer BRAM. After separate physical memories, synchronous
 reads, validity/age tracking, and arithmetic/control staging, the implementation
-uses 39.5 BRAM tiles and 47 DSPs and is fully routed. Source-level bit counts and
+used 39.5 BRAM tiles and 47 DSPs and was fully routed. Source-level bit counts and
 `ram_style` attributes are not proof of inference; the detailed failure and
 closure history is in `../verification/vivado_synthesis_timing.md`.
 
@@ -497,7 +499,7 @@ startup latency remains the compressor look-ahead plus output-FIFO lead.
 6. Add transactional actions and matching C++ command construction.
    **Implemented.**
 7. Integrate the effects between the wide renderer mix and compressor in
-   `wavetable_system_core`; keep bare render-core behavior unchanged.
+   `voice_major_system`; keep bare render-core behavior unchanged.
    **Implemented.**
 8. Add generated status registers, JSON diagnostics, and bit-exact C++/RTL
    render comparison.
@@ -506,8 +508,9 @@ startup latency remains the compressor look-ahead plus output-FIFO lead.
    full-session C++/RTL comparison remains.**
 9. Run full-polyphony cached-memory renders and Smart Artix synthesis,
    implementation, timing, and utilization checks.
-   **Smart Artix synthesis, implementation, resource, and constrained internal
-   timing checks complete; long full-polyphony memory-stress renders remain.**
+   **Current 512-voice synthesis and a three-second real-SF2 timed-DDR3 stress
+   render complete; implementation, route signoff, and long-duration stress
+   renders remain.**
 10. Qualify the result on hardware with impulse capture, sustained tails,
     silence, rapid configuration changes, and long underrun-free playback.
     **Open.**

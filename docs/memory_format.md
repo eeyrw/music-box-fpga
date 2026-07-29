@@ -59,6 +59,14 @@ owns a persistent 32-word mono window. The renderer issues ordered word requests
 for interpolation endpoints. Hits return locally; a miss starts aligned 8-word
 refills until the required window contents are available.
 
+Per-voice window-valid and window-base metadata share one synchronous block RAM.
+After reset the cache holds request ready low while it clears one metadata entry
+per cycle; this logically invalidates all voices without a 512-bit resettable
+valid register and its dynamic selection logic. Request acceptance then starts
+the metadata read, and the existing lookup state consumes its registered result
+on the following cycle. Window sample contents use a separate synchronous block
+RAM indexed by voice and line offset.
+
 The window contract is:
 
 - one accepted endpoint request returns exactly one ordered response;
@@ -81,7 +89,7 @@ The synthesizable board path is:
 
 ```text
 voice_sample_window ordered refill
-  -> voice_major_demo_system external line port
+  -> voice_major_system external line port
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
   -> smart_artix_ddr3_subsystem
@@ -142,10 +150,10 @@ must use measured block cycles, not inferred memory bandwidth alone.
 
 ## Capacity Notes
 
-At 256 voices, 32 words per voice require 8192 signed-16 sample words, equivalent
-to four RAMB36 blocks when mapped as 2048x18 memories before tag/control overhead.
-At 512 voices the sample storage doubles. Synthesis must confirm actual BRAM
-inference and timing; simulation capacity alone is not an implementation result.
+At the 512-voice project default, 32 words per voice require 16,384 signed-16
+sample words, equivalent to eight RAMB36 blocks before tag/control overhead.
+Synthesis must confirm actual BRAM inference and timing; simulation capacity
+alone is not an implementation result.
 
 Larger windows reduce fallback/refill pressure but scale linearly with voice
 count. Change the window size only from measured refill and post-route data.

@@ -81,22 +81,22 @@ For `N` active voices, update rate `F`, and `W` words per update:
 payload_bits_per_second = N * F * W * 32
 ```
 
-For 256 active voices:
+For the 512-voice project default:
 
 | Per-voice update rate | Gain, 3 words | Pitch, 3 words | Filter, 5 words | All, 11 words |
 | ---: | ---: | ---: | ---: | ---: |
-| 50 Hz | 1.229 Mbps | 1.229 Mbps | 2.048 Mbps | 4.506 Mbps |
-| 100 Hz | 2.458 Mbps | 2.458 Mbps | 4.096 Mbps | 9.011 Mbps |
-| 200 Hz | 4.915 Mbps | 4.915 Mbps | 8.192 Mbps | 18.022 Mbps |
+| 50 Hz | 2.458 Mbps | 2.458 Mbps | 4.096 Mbps | 9.011 Mbps |
+| 100 Hz | 4.915 Mbps | 4.915 Mbps | 8.192 Mbps | 18.022 Mbps |
+| 200 Hz | 9.830 Mbps | 9.830 Mbps | 16.384 Mbps | 36.045 Mbps |
 
 Updating every parameter group on every voice at 100 Hz is a stress workload,
 not expected MIDI traffic. Independent gain and pitch commands avoid paying for
 unmodified fields. The MCU command builder also suppresses unchanged groups.
 
 At 70 percent sustained link utilization, a 15 MHz SCLK provides about
-10.5 Mbps of useful command bits, enough for the 256-voice/100-Hz all-groups
-stress point with limited margin. The 7.5 MHz fallback is appropriate for
-normal sparse musical updates but not that stress point.
+10.5 Mbps of useful command bits, enough for the 512-voice/50-Hz all-groups
+stress point with limited margin but not the 100-Hz row. The 7.5 MHz fallback
+is appropriate for normal sparse musical updates, not full-density stress.
 
 ## Start Bursts
 
@@ -115,10 +115,10 @@ sample stream, duplicated only after sampling. A 32-word per-voice window serves
 hits locally and issues ordered 8-word refills through the existing Smart Artix
 DDR3 line reader and read/write arbiter to the MIG app interface.
 
-The measured 256-voice block renderer completes within the 48 kHz deadline, and
-the 512-slot configuration validates full voice IDs 256 through 511. These RTL
-measurements determine render capacity; SPI rate alone does not prove DDR or
-audio deadline margin.
+The measured 512-voice, eight-slot block renderer completes within the 48 kHz
+deadline with the timed DDR3 model. The capacity tests also validate voice IDs
+256 through 511. These RTL measurements determine render capacity; SPI rate
+alone does not prove DDR or audio deadline margin.
 
 ## Hardware Qualification
 

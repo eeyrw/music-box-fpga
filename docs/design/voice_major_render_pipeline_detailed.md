@@ -137,7 +137,7 @@ renderer，也不是 8 套 DSP。
 | 数据 | 格式/宽度 | 含义 |
 | --- | --- | --- |
 | PCM | signed 16-bit | 外部波表 sample 和每 voice 最终贡献 |
-| mix | signed 24-bit | 发布给后级的 block sample |
+| mix | signed 25-bit | 发布给后级的 block sample，可无损容纳 512 路 PCM16 和 |
 | accumulator | signed 32-bit | voice contribution 累加空间 |
 | phase | unsigned Q24.8 | 高 24 位 frame index，低 8 位 fraction |
 | gain/envelope level | signed Q1.15 | 正常范围 `0..0x7fff` |
@@ -345,19 +345,22 @@ phase planner 由 `plan_rr_q` round-robin 选择一个 `WORK_PLAN` slot，每拍
 frame。只有 `phase_advance_mask=1` 才推进 phase；只有 `render_mask=1` 才保存 job。
 因此 Delay 可以保持不取样，Release 到静音可以在 block 中途终止后续工作。
 
-每个保存的 job 包含：
+每个保存的 job 在同步 BRAM payload 中包含：
 
 ```text
 block_frame_index
 fraction
-endpoint_addr[0] = base_addr + frame_0
-endpoint_addr[1] = base_addr + frame_1
-endpoint_mask = 2'b11
 envelope_level
 ```
 
-job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 render，job 自身携带
-原始 `block_frame_index`，退休时仍会累加到正确 mix frame。
+8 个 slot、每 slot 最多 8 个 frame 时，该 payload 是 `64 x 27`，Vivado 映射为一块
+RAMB18。issue select 到 DSP token 本来就有一级寄存，因此同步读不会增加 DSP issue
+间隔。每个 job 的两个 endpoint address 单独保留：memory scheduler 需要同拍扫描一个
+slot 的 16 个 endpoint 以合并同一 DDR line，单端口 BRAM 无法提供这个读带宽。所有
+job 的 `endpoint_mask` 恒为 `2'b11`，不再逐项存储。
+
+job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 render，payload 自身
+携带原始 `block_frame_index`，退休时仍会累加到正确 mix frame。
 
 ## 11. Memory：voice-major 连续 segment
 
@@ -671,13 +674,14 @@ BANK_FREE -> BANK_CLEARING -> BANK_FILLING
 3. 每个 contribution 按 `frame_index` 加入对应 32-bit accumulator。
 4. controller 确认所有 voice result 已写回后发 `block_finish`。
 5. bank 发布 `buffer_id/start_frame/frame_count`。
-6. consumer 接受 complete 后拥有该 bank，通过 read request 逐 frame 读取 24-bit mix。
+6. consumer 接受 complete 后拥有该 bank，通过 read request 逐 frame 读取 25-bit mix。
 7. consumer 完成后显式 release，bank 才回到 FREE。
 
 不同 voice 的 contribution 可以交错退休，因为它们都带 frame index。32-bit 累加在
 所有 voice 到齐前不逐项饱和，所以加法顺序不改变数学结果。读出时取 accumulator 的
-低 `MIX_WIDTH=24` 位；当前 256 voice 的最坏 PCM16 和能装入 signed 24-bit，512 voice
-扩展目标需要重新确认累加/发布宽度契约，不能仅凭 renderer 周期达标就视为数值安全。
+低 `MIX_WIDTH=25` 位；512 voice 的最坏 PCM16 和为
+`-16,777,216..16,776,704`，能无损装入 signed 25-bit。测试会分别累加 512 个正、负
+满幅 contribution，防止发布边界回退为 24-bit。
 
 双 bank 的目的，是让 renderer 填 bank N 时，下游读取 bank N-1。当前 controller 一次
 只发起一个 render block，但 bank ownership 接口已经为后续跨 block overlap 留出边界。

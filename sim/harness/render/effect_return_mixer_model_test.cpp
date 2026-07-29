@@ -38,12 +38,12 @@ void test_bypass_saturation_and_clear() {
   reverb.input_send_q1_15 = 0x7fff;
   reverb.chorus_to_reverb_q1_15 = 0x7fff;
   reverb.return_gain_q1_15 = 0x7fff;
-  expect(mixer.route_reverb({0x7fffff, -0x800000},
-                            {0x7fffff, -0x800000}, reverb),
-         0x7fffff, -0x800000, "effect route saturation mismatch");
-  expect(mixer.mix({0x7fffff, -0x800000}, {0x7fffff, -0x800000},
-                   {0x7fffff, -0x800000}, chorus, reverb),
-         0x7fffff, -0x800000, "effect mix saturation mismatch");
+  expect(mixer.route_reverb({0xffffff, -0x1000000},
+                            {0xffffff, -0x1000000}, reverb),
+         0xffffff, -0x1000000, "effect route saturation mismatch");
+  expect(mixer.mix({0xffffff, -0x1000000}, {0xffffff, -0x1000000},
+                   {0xffffff, -0x1000000}, chorus, reverb),
+         0xffffff, -0x1000000, "effect mix saturation mismatch");
   if (mixer.saturation_count() != 4) {
     throw std::runtime_error("effect saturation count mismatch");
   }

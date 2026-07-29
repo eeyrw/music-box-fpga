@@ -2,7 +2,8 @@ package synth_pkg;
   // Shared widths keep the audio, phase, and memory-address contracts in one
   // place. Modules import this package instead of repeating magic numbers.
   localparam int PCM_WIDTH = 16;
-  localparam int MIX_WIDTH = 24;
+  // A signed 25-bit mix exactly covers the sum of 512 full-scale PCM16 voices.
+  localparam int MIX_WIDTH = 25;
   localparam int PHASE_FRAME_WIDTH = 24;
   localparam int PHASE_FRAC_WIDTH = 8;
   localparam int PHASE_WIDTH = PHASE_FRAME_WIDTH + PHASE_FRAC_WIDTH;
@@ -23,7 +24,11 @@ package synth_pkg;
       MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
   // Eight independent block contexts cover the five-cycle recursive-filter
   // feedback distance while keeping the slot ID and round-robin wrap binary.
+`ifdef SYNTH_BLOCK_WORK_ENTRY_COUNT
+  localparam int BLOCK_WORK_ENTRY_COUNT = `SYNTH_BLOCK_WORK_ENTRY_COUNT;
+`else
   localparam int BLOCK_WORK_ENTRY_COUNT = 8;
+`endif
   localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
   /* verilator lint_off UNUSEDPARAM */
   localparam int FILTER_COEFF_WIDTH = 16;
@@ -35,7 +40,7 @@ package synth_pkg;
 `ifdef SYNTH_NUM_VOICES
   localparam int NUM_VOICES = `SYNTH_NUM_VOICES;
 `else
-  localparam int NUM_VOICES = 32;
+  localparam int NUM_VOICES = 512;
 `endif
   localparam int VOICE_ID_WIDTH = $clog2(NUM_VOICES);
   /* verilator lint_off UNUSEDPARAM */

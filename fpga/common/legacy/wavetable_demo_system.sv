@@ -132,9 +132,11 @@ module wavetable_demo_system #(
     .core_reset,
     .bus_req(common_status_bus_req),
     .bus_rsp(common_status_bus_rsp),
-    .sample_tick(1'b0),
     .core_sample_valid,
     .core_busy,
+    .render_inflight(core_busy),
+    .render_deadline_miss_pulse(1'b0),
+    .render_latency_cycles(16'd0),
     .ext_req_valid,
     .ext_req_ready,
     .ext_rsp_valid,
@@ -145,10 +147,11 @@ module wavetable_demo_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
-    .audio_diagnostics,
-    .render_deadline_miss_pulse,
-    .render_latency_cycles
+    .audio_diagnostics
   );
+
+  assign render_deadline_miss_pulse = 1'b0;
+  assign render_latency_cycles = 16'd0;
 
   wavetable_system_core #(.LINE_WORDS(LINE_WORDS)) core (
     .clk,

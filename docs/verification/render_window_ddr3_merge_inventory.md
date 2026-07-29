@@ -35,7 +35,7 @@ MIDI + SF2 C++ policy
   -> mono engine / endpoint planner
   -> 32-word per-voice voice_sample_window
   -> ordered 8-word DDR burst adapter
-  -> signed-24 block mix
+  -> signed-25 block mix
   -> chorus/reverb -> compressor/master
   -> PCM FIFO -> I2S
 ```
@@ -54,7 +54,7 @@ access master.
 | Control | `rtl/control/voice_major_command_plane.sv`, `block_voice_state_store.sv` |
 | Render | `rtl/top/voice_major_render_core.sv`, `rtl/voice/voice_major_block_controller.sv`, block mono/interleaved modules |
 | Memory | `rtl/memory/voice_sample_window.sv`, ordered request/response types in `synth_pkg.sv` |
-| Effects/output | existing `global_audio_effects_chain`, `wavetable_i2s_output`, and new `fpga/common/rtl/voice_major_demo_system.sv` |
+| Effects/output | existing `global_audio_effects_chain`, `wavetable_i2s_output`, and new `fpga/common/rtl/voice_major_system.sv` |
 | Smart Artix | existing register fabric, platform registers, DDR line reader/subsystem/arbiter; `smart_artix_top` selects the new common wrapper |
 | C++ | `sf2_loader`, `command_control`, `reference_synth`, RTL DDR3 render harness |
 | Simulation | DDR3 timing/bridge models, sample-window TB, block renderer TBs, throughput TBs, real SF2 render |

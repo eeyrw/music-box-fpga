@@ -84,9 +84,10 @@ void test_compression_and_release() {
 
 void test_final_saturation() {
   LookaheadCompressorModel model(4);
-  prime(model, 100000, -100000);
+  prime(model, 16776704, -16777216);
   expect_output(model, 0, 0, 32767, -32768);
-  if (model.output_frame_count() != 1 || model.saturation_count() != 2) {
+  if (model.detector_peak() != 0 || model.max_detector_peak() != 16777216 ||
+      model.output_frame_count() != 1 || model.saturation_count() != 2) {
     throw std::runtime_error("compressor saturation diagnostics mismatch");
   }
 }

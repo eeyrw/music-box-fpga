@@ -41,7 +41,7 @@ Still required from peripheral documentation or hardware measurements:
 
 ## Current Top
 
-`rtl/smart_artix_top.sv` instantiates `voice_major_demo_system` with SPI control,
+`rtl/smart_artix_top.sv` instantiates `voice_major_system` with SPI control,
 the per-voice sample window, global effects, output FIFO, and I2S output. Board-specific SD loading, DDR3
 read/write arbitration, line reads, and DDR register access traffic are grouped behind
 `smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
@@ -64,7 +64,7 @@ SD native pins: CLK, CMD, DAT[3:0], active-low CD
   -> Xilinx MIG app write interface
   -> MT41K256M16TW
 
-voice_major_demo_system ordered window-refill pins
+voice_major_system ordered window-refill pins
   -> smart_artix_ddr3_subsystem
   -> smart_artix_ddr3_line_reader
   -> smart_artix_ddr3_rw_arbiter
@@ -166,14 +166,11 @@ merges the generic `../../rtl/filelist.f` with the board integration
 writes reports and checkpoints under `../../build/fpga/smart_artix/vivado`, and
 keeps the board source directory free of generated Vivado output.
 
-Run the current synthesis check from this directory with:
+Run the current synthesis check from the repository root. The Makefile supplies
+the project-wide voice count and work-entry configuration:
 
 ```bash
-mkdir -p ../../build/fpga/smart_artix/vivado/logs
-cd ../../build/fpga/smart_artix/vivado
-/opt/Xilinx2051.1/2025.2/Vivado/bin/vivado -mode batch \
-  -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
-  -journal logs/synth.jou -log logs/synth.log
+make VIVADO=/opt/Xilinx2051.1/2025.2/Vivado/bin/vivado vivado-synth
 ```
 
 The non-DDR XDC uses board-documented native-SD pins and project-selected
@@ -300,20 +297,16 @@ Generated Vivado projects, reports, checkpoints, bitstreams, logs, and IP output
 products live under `build/fpga/smart_artix/vivado/` at the repository root and
 should not be committed.
 
-Generate or refresh the local Vivado project:
+Generate or refresh the local Vivado project from the repository root:
 
 ```bash
-mkdir -p ../../build/fpga/smart_artix/vivado/logs
-cd ../../build/fpga/smart_artix/vivado
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/project.tcl \
-  -journal logs/project.jou -log logs/project.log
+make vivado-project
 ```
 
 Run synthesis:
 
 ```bash
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
-  -journal logs/synth.jou -log logs/synth.log
+make vivado-synth
 ```
 
 The synthesis script writes the flat utilization, hierarchical utilization, and
@@ -327,10 +320,8 @@ needed.
 Run implementation or bitstream generation:
 
 ```bash
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
-  -journal logs/impl.jou -log logs/impl.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/bitstream.tcl \
-  -journal logs/bitstream.jou -log logs/bitstream.log
+make vivado-impl
+make vivado-bitstream
 ```
 
 Program hardware with the generated bitstream:

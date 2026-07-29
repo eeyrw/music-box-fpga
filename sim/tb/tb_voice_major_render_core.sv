@@ -186,8 +186,8 @@ module tb_voice_major_render_core;
     configure_audio();
     start_mono_voice();
 
-    render_and_read(32'd20, 24'sd99, 1'b1);
-    render_and_read(32'd21, 24'sd100, 1'b0);
+    render_and_read(32'd20, mix_t'(99), 1'b1);
+    render_and_read(32'd21, mix_t'(100), 1'b0);
     if (command_error_count != 0 || stale_generation_count != 0)
       $fatal(1, "replacement core reported a false stale write");
 

@@ -18,7 +18,7 @@ SPI direct command stream or CMD_FIFO_DATA
   -> voice-major blocks of up to eight output frames
   -> one persistent 32-word sample window per voice
   -> ordered 8-word DDR refill requests
-  -> signed 24-bit stereo block mix
+  -> signed 25-bit stereo block mix
   -> chorus/reverb and return mix
   -> look-ahead compressor and master gain
   -> PCM output FIFO
@@ -129,7 +129,7 @@ regression, but it is not sufficient for board capacity sign-off.
 
 ### A5: Renderer And Effects Are Not Fully Overlapped
 
-The block mix buffer has two banks, but `voice_major_demo_system` owns one
+The block mix buffer has two banks, but `voice_major_system` owns one
 output block at a time and requests the next block only after the current block
 has passed through effects and been released. Renderer, spatial effects,
 compressor, and FIFO transfer therefore do not form a fully overlapped block
@@ -255,7 +255,7 @@ stability-preserving coefficient policy.
 ### A12: PCM16 Voice Contributions May Lose Headroom
 
 Each voice is saturated to signed PCM16 after filter, channel gain, and envelope
-gain, then accumulated into the signed 24-bit block mix. A filter-amplified voice
+gain, then accumulated into the signed 25-bit block mix. A filter-amplified voice
 can clip before the global compressor or master gain can manage the sum.
 
 Evaluate 20- and 24-bit voice contributions with:

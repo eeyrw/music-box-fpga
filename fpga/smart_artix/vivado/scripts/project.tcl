@@ -1,7 +1,6 @@
 # Smart Artix Vivado project generation.
-# Usage:
-#   cd build/fpga/smart_artix/vivado
-#   vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/project.tcl
+# Usage from the repository root:
+#   make vivado-project
 
 set board_name smart_artix
 set part_name xc7a50tfgg484-2
@@ -20,6 +19,20 @@ set report_dir $build_dir/reports
 set bitstream_dir $build_dir/bitstream
 set log_dir $build_dir/logs
 set project_file [file join $build_dir ${board_name}.xpr]
+
+foreach required_env [list SYNTH_NUM_VOICES SYNTH_BLOCK_WORK_ENTRY_COUNT] {
+  if {![info exists ::env($required_env)] || $::env($required_env) eq ""} {
+    error "$required_env is not set; invoke this flow through the repository Makefile"
+  }
+  if {![string is integer -strict $::env($required_env)] || $::env($required_env) < 2} {
+    error "$required_env must be an integer of at least 2"
+  }
+}
+set synth_num_voices $::env(SYNTH_NUM_VOICES)
+set synth_block_work_entry_count $::env(SYNTH_BLOCK_WORK_ENTRY_COUNT)
+if {$synth_num_voices > 1024} {
+  error "SYNTH_NUM_VOICES exceeds the 10-bit command voice-ID capacity"
+}
 
 proc load_ddr_ucf_pin_map {ucf_path} {
   if {![file exists $ucf_path]} {
@@ -132,6 +145,9 @@ if {[file exists $project_file]} {
   create_project $board_name $build_dir -part $part_name
 }
 set_property target_language Verilog [current_project]
+set_property verilog_define [list \
+  SYNTH_NUM_VOICES=$synth_num_voices \
+  SYNTH_BLOCK_WORK_ENTRY_COUNT=$synth_block_work_entry_count] [current_fileset]
 
 if {[llength [get_runs -quiet $synth_run_name]] == 0 && [llength [get_runs -quiet synth_1]] != 0} {
   set_property NAME $synth_run_name [get_runs synth_1]

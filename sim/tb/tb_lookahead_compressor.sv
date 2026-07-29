@@ -114,8 +114,8 @@ module tb_lookahead_compressor;
       errors++;
     end
     if (delay_level_frames != 16'd4 || input_frame_count != 32'd4 ||
-        output_frame_count != 32'd0 || detector_peak != 24'd4000 ||
-        max_detector_peak != 24'd4000) begin
+        output_frame_count != 32'd0 || detector_peak != MIX_WIDTH'(4000) ||
+        max_detector_peak != MIX_WIDTH'(4000)) begin
       $error("compressor prime diagnostics mismatch");
       errors++;
     end
@@ -153,7 +153,8 @@ module tb_lookahead_compressor;
     end
     if (!enabled || target_gain_reduction_cb_q12_20 != OCTAVE_CB_Q12_20 ||
         max_gain_reduction_cb_q12_20 != OCTAVE_CB_Q12_20 ||
-        detector_peak != 24'd131072 || max_detector_peak != 24'd131072 ||
+        detector_peak != MIX_WIDTH'(131072) ||
+        max_detector_peak != MIX_WIDTH'(131072) ||
         input_frame_count != 32'd5 || output_frame_count != 32'd1 ||
         compressed_frame_count != 32'd1) begin
       $error("compressor active diagnostics mismatch");

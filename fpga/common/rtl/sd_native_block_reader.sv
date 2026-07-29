@@ -156,7 +156,7 @@ module sd_native_block_reader #(
   logic [15:0] blocks_remaining;
   logic [8:0] data_count;
   logic [8:0] emit_count;
-  logic [7:0] block_buffer [0:511];
+  (* ram_style = "block" *) logic [7:0] block_buffer [0:511];
   logic cmd6_high_speed_supported;
   logic cmd6_high_speed_busy;
   logic [3:0] cmd6_selection;
@@ -170,6 +170,9 @@ module sd_native_block_reader #(
   logic cmd_accept;
   logic data_accept;
   logic [15:0] request_block_count;
+  logic block_buffer_write_enable;
+  logic block_buffer_read_enable;
+  logic [8:0] block_buffer_read_addr;
 
   assign phy_cmd_valid = state == STATE_SEND;
   assign phy_cmd_index = pending_cmd_index;
@@ -184,6 +187,45 @@ module sd_native_block_reader #(
   assign block_req_ready = state == STATE_IDLE && initialized;
   assign busy = state != STATE_IDLE;
   assign request_block_count = block_req_block_count == 0 ? 16'd1 : block_req_block_count;
+  assign block_buffer_write_enable = data_accept &&
+      (phy_data_status == SD_STATUS_OK) &&
+      (op != OP_ACMD51) && (op != OP_CMD6_QUERY) &&
+      (op != OP_CMD6_SWITCH);
+
+  always_comb begin
+    block_buffer_read_enable = 1'b0;
+    block_buffer_read_addr = '0;
+
+    if ((state == STATE_READ_DATA) && data_accept &&
+        (phy_data_status == SD_STATUS_OK) && (op == OP_CMD18) &&
+        phy_data_last && (data_count == 9'd511) &&
+        (blocks_remaining > 16'd1)) begin
+      block_buffer_read_enable = 1'b1;
+    end else if ((state == STATE_WAIT_MULTI_TRANSACTION) &&
+                 phy_transaction_done && multi_used_cmd23) begin
+      block_buffer_read_enable = 1'b1;
+    end else if ((state == STATE_WAIT_STOP_TRANSACTION) &&
+                 phy_transaction_done && (op == OP_CMD12_NORMAL)) begin
+      block_buffer_read_enable = 1'b1;
+    end else if ((state == STATE_WAIT_DATA_TRANSACTION) &&
+                 phy_transaction_done) begin
+      block_buffer_read_enable = 1'b1;
+    end else if ((state == STATE_EMIT_BLOCK) && block_byte_valid &&
+                 block_byte_ready && (emit_count != 9'd511)) begin
+      block_buffer_read_enable = 1'b1;
+      block_buffer_read_addr = emit_count + 9'd1;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (block_buffer_write_enable)
+      block_buffer[data_count] <= phy_data;
+
+    if (rst)
+      block_byte_data <= '0;
+    else if (block_buffer_read_enable)
+      block_byte_data <= block_buffer[block_buffer_read_addr];
+  end
 
   function automatic logic r1_has_error(input logic [31:0] status);
     r1_has_error = |(status & R1_ERROR_MASK);
@@ -305,7 +347,6 @@ module sd_native_block_reader #(
       emit_resume_multi <= 1'b0;
       recovery_due_to_data <= 1'b0;
       block_byte_valid <= 1'b0;
-      block_byte_data <= '0;
       block_byte_last <= 1'b0;
       phy_rsp_data_proceed <= 1'b0;
       phy_rsp_data_cancel <= 1'b0;
@@ -626,7 +667,6 @@ module sd_native_block_reader #(
                 data_count <= data_count + 9'd1;
               end
             end else begin
-              block_buffer[data_count] <= phy_data;
               if (phy_data_last != (data_count == 9'd511)) begin
                 if (op == OP_CMD18) begin
                   recovery_due_to_data <= 1'b1;
@@ -641,7 +681,6 @@ module sd_native_block_reader #(
                     state <= STATE_WAIT_MULTI_TRANSACTION;
                   end else begin
                     emit_count <= '0;
-                    block_byte_data <= block_buffer[0];
                     block_byte_last <= 1'b0;
                     block_byte_valid <= 1'b1;
                     emit_resume_multi <= 1'b1;
@@ -700,7 +739,6 @@ module sd_native_block_reader #(
           if (phy_transaction_done) begin
             if (multi_used_cmd23) begin
               emit_count <= '0;
-              block_byte_data <= block_buffer[0];
               block_byte_last <= 1'b0;
               block_byte_valid <= 1'b1;
               emit_resume_multi <= 1'b0;
@@ -727,7 +765,6 @@ module sd_native_block_reader #(
           if (phy_transaction_done) begin
             if (op == OP_CMD12_NORMAL) begin
               emit_count <= '0;
-              block_byte_data <= block_buffer[0];
               block_byte_last <= 1'b0;
               block_byte_valid <= 1'b1;
               emit_resume_multi <= 1'b0;
@@ -741,7 +778,6 @@ module sd_native_block_reader #(
         STATE_WAIT_DATA_TRANSACTION: begin
           if (phy_transaction_done) begin
             emit_count <= '0;
-            block_byte_data <= block_buffer[0];
             block_byte_last <= blocks_remaining == 16'd1 && 9'd0 == 9'd511;
             block_byte_valid <= 1'b1;
             state <= STATE_EMIT_BLOCK;
@@ -767,7 +803,6 @@ module sd_native_block_reader #(
               end
             end else begin
               emit_count <= emit_count + 9'd1;
-              block_byte_data <= block_buffer[emit_count + 9'd1];
               block_byte_last <= blocks_remaining == 16'd1 && emit_count == 9'd510;
               block_byte_valid <= 1'b1;
             end

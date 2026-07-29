@@ -27,9 +27,11 @@ multi-voice wavetable playback but does not contain a vendor PLL, DDR PHY,
 physical SPI timing constraint, or FPGA pin constraint. Those belong under
 `fpga/`.
 
-The voice count is parameterized. The package default is 32 voices; normal
-regressions use 256 voices and the capacity regression uses 512. Version 10
-commands carry an authoritative 10-bit voice ID in payload word zero.
+The project voice count is selected by the top-level Makefile through
+`NUM_VOICES`, which defaults to 512 and drives RTL, C++ harness, and Vivado
+builds. Explicit 256- and 512-voice throughput targets are workload regressions,
+not separate project defaults. Version 10 commands carry an authoritative
+10-bit voice ID in payload word zero.
 
 ## Architecture
 
@@ -44,7 +46,7 @@ voice_major_command_plane -> block_voice_state_store
 voice_major_block_controller -> mono engine -> 32-word/voice sample window
                                       |                    |
                                       v                    v
-                           signed 24-bit block mix   ordered DDR burst adapter
+                           signed 25-bit block mix   ordered DDR burst adapter
                                       |
                                       v
                        chorus/reverb -> compressor/master
@@ -54,7 +56,7 @@ voice_major_block_controller -> mono engine -> 32-word/voice sample window
 ```
 
 `voice_major_render_core` is the production generic top. The Smart Artix top
-uses `voice_major_demo_system` to retain main's SPI bridge, register fabric,
+uses `voice_major_system` to retain main's SPI bridge, register fabric,
 platform/common status windows, effects, PCM FIFO, and I2S serializer. Legacy
 single-frame tops remain in the tree for reference and board-template migration
 but are not in the production Smart Artix filelist.
@@ -109,7 +111,7 @@ The controller renders up to eight output frames per request. It snapshots the
 active bitmap, scans only active voice groups, reads each mono voice state,
 advances its envelope and phase across the block, gathers interpolation
 endpoints through tagged work slots, and retires filtered/gained contributions
-into a ping-pong signed-24 block mix buffer. Published buffers are read by the
+into a ping-pong signed-25 block mix buffer. Published buffers are read by the
 top while the other bank can be filled.
 
 Linked SF2 stereo is represented by two host-owned mono voices. Each voice
@@ -186,13 +188,11 @@ level reduces total latency but also reduces tolerance for renderer and memory
 service jitter.
 
 Each voice contribution is already saturated to signed 16-bit PCM. With the
-normal production configuration of 256 voices, the exact worst-case mix
-range is `-8,388,608..8,388,352`, so a signed 24-bit sample preserves the mix
-without loss. The look-ahead storage therefore uses two signed 24-bit
+512-voice project configuration, the exact worst-case mix range is
+`-16,777,216..16,776,704`, so a signed 25-bit sample preserves the mix without
+loss. The look-ahead storage and spatial effects therefore use signed 25-bit
 channels. Gain multiplication widens explicitly before the only final PCM16
-rounding and saturation. The 512-voice target is a capacity and cycle-budget
-regression; a 512-voice product configuration must enforce mix headroom or widen
-the post-mix contract.
+rounding and saturation.
 
 Compressor parameters use the dedicated command stream rather than the register
 window. One four-word global compressor action replaces enable, threshold,

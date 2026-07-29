@@ -164,14 +164,22 @@ module tb_block_mix_buffer;
     read_sample(first_bank, 1, 32767, -32768);
     read_sample(first_bank, 2, 0, 0);
 
+    release_block(first_bank);
     start_block(32'd103, 1);
+    for (int voice = 0; voice < 512; voice++)
+      add_contribution(0, 32767, -32768);
+    finish_block();
+    accept_completion(first_bank);
+    read_sample(first_bank, 0, 16776704, -16777216);
+
+    start_block(32'd104, 1);
     add_contribution(0, -123, 456);
     finish_block();
     accept_completion(second_bank);
     if (second_bank == first_bank) $fatal(1, "owned bank was overwritten");
 
     @(negedge clk);
-    block_req.start_frame = 32'd104;
+    block_req.start_frame = 32'd105;
     block_req.frame_count = 1;
     block_req_valid = 1'b1;
     repeat (2) begin
@@ -202,7 +210,7 @@ module tb_block_mix_buffer;
   end
 
   initial begin
-    repeat (500) @(posedge clk);
+    repeat (2500) @(posedge clk);
     $fatal(1, "testbench timeout");
   end
 endmodule

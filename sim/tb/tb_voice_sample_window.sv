@@ -142,8 +142,8 @@ module tb_voice_sample_window;
     return_transaction(32'd64, 4, 16'h6000);
     expect_response(32'd64, 2'd0, 16'h6000);
 
-    // Voice 1 owns independent metadata and BRAM lines.
-    request_line(32'd0, 2'd1, VOICE_ID_WIDTH'(1), 1'b1);
+    // The highest voice ID owns independent metadata and BRAM lines.
+    request_line(32'd0, 2'd1, VOICE_ID_WIDTH'(NUM_VOICES - 1), 1'b1);
     return_transaction(32'd0, 4, 16'h8000);
     expect_response(32'd0, 2'd1, 16'h8000);
     request_line(32'd64, 2'd2, VOICE_ID_WIDTH'(0), 1'b0);

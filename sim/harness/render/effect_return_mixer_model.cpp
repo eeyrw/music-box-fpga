@@ -12,16 +12,16 @@ EffectReturnMixerModel::StereoFrame EffectReturnMixerModel::route_reverb(
                  reverb_config.chorus_to_reverb_q1_15 > 0x7fff)) {
     config_clamped_ = true;
   }
-  dry = {signed_mix24(dry.first), signed_mix24(dry.second)};
-  chorus_wet = {signed_mix24(chorus_wet.first), signed_mix24(chorus_wet.second)};
+  dry = {signed_mix25(dry.first), signed_mix25(dry.second)};
+  chorus_wet = {signed_mix25(chorus_wet.first), signed_mix25(chorus_wet.second)};
   bool saturated_l = false;
   bool saturated_r = false;
-  const int32_t left = saturate_mix24(
+  const int32_t left = saturate_mix25(
       scale_q1_15(dry.first, reverb_config.input_send_q1_15) +
           scale_q1_15(chorus_wet.first,
                       reverb_config.chorus_to_reverb_q1_15),
       &saturated_l);
-  const int32_t right = saturate_mix24(
+  const int32_t right = saturate_mix25(
       scale_q1_15(dry.second, reverb_config.input_send_q1_15) +
           scale_q1_15(chorus_wet.second,
                       reverb_config.chorus_to_reverb_q1_15),
@@ -37,17 +37,17 @@ EffectReturnMixerModel::StereoFrame EffectReturnMixerModel::mix(
       reverb_config.return_gain_q1_15 > 0x7fff) {
     config_clamped_ = true;
   }
-  dry = {signed_mix24(dry.first), signed_mix24(dry.second)};
-  chorus_wet = {signed_mix24(chorus_wet.first), signed_mix24(chorus_wet.second)};
-  reverb_wet = {signed_mix24(reverb_wet.first), signed_mix24(reverb_wet.second)};
+  dry = {signed_mix25(dry.first), signed_mix25(dry.second)};
+  chorus_wet = {signed_mix25(chorus_wet.first), signed_mix25(chorus_wet.second)};
+  reverb_wet = {signed_mix25(reverb_wet.first), signed_mix25(reverb_wet.second)};
   bool saturated_l = false;
   bool saturated_r = false;
-  const int32_t left = saturate_mix24(
+  const int32_t left = saturate_mix25(
       int64_t(dry.first) +
           scale_q1_15(chorus_wet.first, chorus_config.return_gain_q1_15) +
           scale_q1_15(reverb_wet.first, reverb_config.return_gain_q1_15),
       &saturated_l);
-  const int32_t right = saturate_mix24(
+  const int32_t right = saturate_mix25(
       int64_t(dry.second) +
           scale_q1_15(chorus_wet.second, chorus_config.return_gain_q1_15) +
           scale_q1_15(reverb_wet.second, reverb_config.return_gain_q1_15),
@@ -68,16 +68,16 @@ int64_t EffectReturnMixerModel::scale_q1_15(int32_t sample, uint16_t gain) {
   return arithmetic_shift_right(int64_t(sample) * gain, 15);
 }
 
-int32_t EffectReturnMixerModel::signed_mix24(int32_t value) {
-  const uint32_t bits = uint32_t(value) & 0x00ffffffu;
-  return (bits & 0x00800000u) ? int32_t(int64_t(bits) - (int64_t{1} << 24))
+int32_t EffectReturnMixerModel::signed_mix25(int32_t value) {
+  const uint32_t bits = uint32_t(value) & 0x01ffffffu;
+  return (bits & 0x01000000u) ? int32_t(int64_t(bits) - (int64_t{1} << 25))
                               : int32_t(bits);
 }
 
-int32_t EffectReturnMixerModel::saturate_mix24(int64_t value,
+int32_t EffectReturnMixerModel::saturate_mix25(int64_t value,
                                                 bool* saturated) {
-  constexpr int32_t minimum = -(1 << 23);
-  constexpr int32_t maximum = (1 << 23) - 1;
+  constexpr int32_t minimum = -(1 << 24);
+  constexpr int32_t maximum = (1 << 24) - 1;
   *saturated = value < minimum || value > maximum;
   return int32_t(std::clamp<int64_t>(value, minimum, maximum));
 }

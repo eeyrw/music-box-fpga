@@ -41,8 +41,8 @@ void StereoChorusModel::clear() {
 std::pair<int32_t, int32_t> StereoChorusModel::process_frame(int32_t left,
                                                              int32_t right) {
   const ChorusConfig config = effective_config();
-  left = signed_mix24(left);
-  right = signed_mix24(right);
+  left = signed_mix25(left);
+  right = signed_mix25(right);
 
   const int64_t mod_l = arithmetic_shift_right(
       int64_t(config.depth_q16_8) * sine_q15(lfo_phase_), 15);
@@ -64,8 +64,8 @@ std::pair<int32_t, int32_t> StereoChorusModel::process_frame(int32_t left,
   bool saturated_l = false;
   bool saturated_r = false;
   history_[write_ptr_] = {
-      saturate_mix24(input_scaled(left) + feedback_l, &saturated_l),
-      saturate_mix24(input_scaled(right) + feedback_r, &saturated_r)};
+      saturate_mix25(input_scaled(left) + feedback_l, &saturated_l),
+      saturate_mix25(input_scaled(right) + feedback_r, &saturated_r)};
   saturation_count_ = sat_inc(saturation_count_, uint32_t(saturated_l) + saturated_r);
 
   write_ptr_ = (write_ptr_ + 1) & (history_.size() - 1);
@@ -127,15 +127,15 @@ int64_t StereoChorusModel::arithmetic_shift_right(int64_t value, unsigned bits) 
   return -int64_t((uint64_t(-(value + 1)) + 1u + ((uint64_t{1} << bits) - 1u)) >> bits);
 }
 
-int32_t StereoChorusModel::signed_mix24(int32_t value) {
-  const uint32_t bits = uint32_t(value) & 0x00ffffffu;
-  return (bits & 0x00800000u) ? int32_t(int64_t(bits) - (int64_t{1} << 24))
+int32_t StereoChorusModel::signed_mix25(int32_t value) {
+  const uint32_t bits = uint32_t(value) & 0x01ffffffu;
+  return (bits & 0x01000000u) ? int32_t(int64_t(bits) - (int64_t{1} << 25))
                               : int32_t(bits);
 }
 
-int32_t StereoChorusModel::saturate_mix24(int64_t value, bool* saturated) {
-  constexpr int32_t minimum = -(1 << 23);
-  constexpr int32_t maximum = (1 << 23) - 1;
+int32_t StereoChorusModel::saturate_mix25(int64_t value, bool* saturated) {
+  constexpr int32_t minimum = -(1 << 24);
+  constexpr int32_t maximum = (1 << 24) - 1;
   const bool clipped = value < minimum || value > maximum;
   if (saturated) *saturated = clipped;
   return int32_t(std::clamp<int64_t>(value, minimum, maximum));

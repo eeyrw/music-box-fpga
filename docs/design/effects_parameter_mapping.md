@@ -26,13 +26,13 @@ The spatial processing order is:
 ```text
 chorus_wet = Chorus(dry, chorus_send, chorus_feedback)
 
-reverb_input = saturate24(
+reverb_input = saturate25(
     dry * reverb_send
   + chorus_wet * chorus_to_reverb)
 
 reverb_wet = FDN(reverb_input)
 
-output = saturate24(
+output = saturate25(
     dry
   + chorus_wet * chorus_return
   + reverb_wet * reverb_return)
@@ -43,7 +43,7 @@ therefore an additive wet-return gain, not a conventional crossfading wet/dry
 knob. For a linear, unsaturated effect, perceived wet level is approximately
 proportional to `input_send * return_gain`. Send and return are kept separate
 because send controls internal excitation and headroom, while return controls
-the final mix. Feedback, signed-24 saturation, and the compressor make the
+the final mix. Feedback, signed-25 saturation, and the compressor make the
 complete path nonlinear at its limits.
 
 `chorus_to_reverb` provides an optional serial route in addition to the direct
@@ -110,8 +110,8 @@ delay_r = base_delay + depth * sin(phase + stereo_phase_offset)
 The wet tap is linearly interpolated. The history write is:
 
 ```text
-history_l = saturate24(input_l * input_send + wet_l * feedback)
-history_r = saturate24(input_r * input_send + wet_r * feedback)
+history_l = saturate25(input_l * input_send + wet_l * feedback)
+history_r = saturate25(input_r * input_send + wet_r * feedback)
 ```
 
 The common control mapping is:

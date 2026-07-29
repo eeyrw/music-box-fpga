@@ -45,7 +45,7 @@ initial compatibility boundary.
 - Allow `frame_count` from 1 through `MAX_BLOCK_FRAMES` so the scheduler can
   stop at an event boundary or at available output capacity.
 - Keep signed 32-bit left and right accumulators for every block frame and retain
-  the current signed 24-bit final mix boundary.
+  the current signed 25-bit final mix boundary.
 - Publish a completed buffer descriptor rather than driving all block samples
   over one wide combinational bus. The descriptor contains `buffer_id`,
   `start_frame`, and `frame_count`; a synchronous read port drains the selected
@@ -264,7 +264,7 @@ event exactly at `start_frame + frame_count` belongs to the next block.
 
 - [ ] Initially scan the active bitmap once per block to isolate the benefit of
   traversal-order reversal.
-- [ ] Measure scan cycles for empty, sparse, and 256-voice workloads.
+- [ ] Measure scan cycles for empty, sparse, and 512-voice workloads.
 - [ ] Prototype a dense active-voice ID table with a reverse-position table.
 - [ ] Define bounded START insertion, STOP removal, voice stealing, generation
   replacement, and automatic envelope-completion removal.

@@ -35,7 +35,7 @@ class LookaheadCompressorModel : public CommandWordSink {
   int16_t master_volume() const { return master_volume_; }
 
  private:
-  static int32_t signed_mix24(int32_t value);
+  static int32_t signed_mix25(int32_t value);
   static uint32_t magnitude(int32_t value);
   static int64_t arithmetic_shift_right(int64_t value, unsigned bits);
   static int16_t saturate_pcm(int64_t value);

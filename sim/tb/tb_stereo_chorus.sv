@@ -152,8 +152,8 @@ module tb_stereo_chorus;
     @(negedge clk);
     clear_i = 1'b0;
     config_i.feedback_q1_15 = 16'sh6000;
-    push_and_expect(8388607, -8388608, 0, 0);
-    push_and_expect(8388607, -8388608, 8388607, -8388608);
+    push_and_expect(16777215, -16777216, 0, 0);
+    push_and_expect(16777215, -16777216, 16777215, -16777216);
     if (saturation_count != 32'd2) begin
       $error("chorus saturation count mismatch");
       errors++;

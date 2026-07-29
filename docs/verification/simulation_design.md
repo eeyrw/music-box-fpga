@@ -40,7 +40,7 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |
 
 `sim/harness/render/lookahead_compressor_model` is the bit-exact C++ model of
-the same post-mix path. It consumes signed 24-bit stereo mixes, accepts the
+the same post-mix path. It consumes signed 25-bit stereo mixes, accepts the
 global compressor and master-volume commands, and returns no sample while the
 fixed delay primes. Its unit test uses the same exact bypass, gain, linked
 detector, release, saturation, current/max state, and counter vectors as

@@ -1,7 +1,6 @@
 # Smart Artix Vivado bitstream flow.
-# Usage:
-#   cd build/fpga/smart_artix/vivado
-#   vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/bitstream.tcl
+# Usage from the repository root:
+#   make vivado-bitstream
 
 source [file join [file dirname [file normalize [info script]]] project.tcl]
 

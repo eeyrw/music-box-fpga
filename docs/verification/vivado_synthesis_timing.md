@@ -43,6 +43,73 @@ Some board-level input/output delay constraints remain roadmap work. This note
 therefore establishes closure for the currently constrained internal design; it
 does not claim closure for every future external I/O interface.
 
+### Current 512-Voice Post-Synthesis Baseline
+
+A forced Vivado 2025.2 synthesis on 2026-07-29 used the Makefile defaults of
+`NUM_VOICES=512` and `BLOCK_WORK_ENTRIES=8`. This is the current architecture's
+resource baseline; the older routed results later in this document describe an
+earlier, smaller configuration and are not 512-voice timing signoff.
+
+| Resource or estimate | Current 8-slot result |
+| --- | ---: |
+| LUT | 32,016 / 32,600 (98.21%) |
+| FF | 31,830 / 65,200 (48.82%) |
+| DSP48E1 | 39 / 120 (32.50%) |
+| BRAM tiles | 44 / 75 (58.67%) |
+| Post-synthesis WNS/TNS | +0.401 ns / 0 ns |
+
+An earlier incremental run reported 29,045 LUTs and 24,948 FFs for the same
+requested configuration. A source rename forced Vivado to rebuild every
+partition and exposed that result as stale reuse, so it is not an acceptance
+baseline. `vivado-synth` now resets and rebuilds the synthesis run every time;
+voice-count or slot-count comparisons must come from separate forced runs.
+
+Vivado maps the packed valid bit and 29-bit per-voice sample-window base as one
+512 x 30 RAMB18. The renderer's 64 x 27 job payload store is also a synchronous
+RAMB18 instead of per-slot FF storage. Endpoint addresses remain separate
+because the memory scheduler compares all 16 endpoints in parallel.
+
+With the DDR3 timing model and the filter path enabled, eight slots complete a
+512-voice block in 8,367 cycles versus 12,559 cycles with four slots. Both are
+below the 16,666-cycle deadline, but eight slots retain substantially more
+latency tolerance without increasing the job-payload BRAM count.
+
+The design uses 98.21% of the device LUTs. This is too dense to treat the
+positive post-synthesis slack as closure, and no current 512-voice route has
+been completed. The largest generic-core owners are the controller at 14,751
+LUTs, including the renderer at 9,790 LUTs, and the state store at 2,290 LUTs.
+Further LUT reduction and a forced implementation are required before the
+512-voice configuration can replace the older routed signoff baseline.
+
+### Why LUT Reduction Is Difficult
+
+The current LUT total is not dominated by one removable register array. The
+post-synthesis hierarchy attributes 5,114 LUTs to the generated DDR3 MIG,
+5,347 LUTs to the effects chain, and 18,684 LUTs to the generic render core.
+Within the core, the controller uses 14,751 LUTs and its renderer uses 9,790.
+These totals include both storage and the logic needed to select, compare, and
+route that storage.
+
+Moving an array to RAM only removes LUTs when its access pattern matches the
+physical memory ports. The job payload has one sequential writer and one
+pipelined reader, so a single synchronous RAMB18 is a good match. Endpoint
+addresses are different: the memory scheduler compares up to 16 endpoints from
+one slot in the same cycle to merge reads for one DDR line. A one- or two-port
+BRAM cannot supply those values without serializing the scan, replicating the
+memory, or adding a multi-cycle address-gather pipeline. Each option trades LUTs
+against BRAM, latency, and the number of DDR requests that can remain covered by
+the eight slots.
+
+LUTRAM is also not a general solution to high Slice LUT utilization. It is
+useful for shallow, narrow arrays with compatible synchronous writes, but every
+LUT used as distributed RAM still counts in the device's Slice LUT total.
+Converting FF state to LUTRAM can reduce FFs while leaving the limiting LUT
+percentage unchanged or higher. The remaining useful work is therefore
+architectural: reduce replicated comparisons and wide muxes, pipeline or bank
+the endpoint scan without losing DDR overlap, and measure each change with both
+the DDR3 throughput test and synthesis. Storage attributes alone are not an
+adequate acceptance criterion.
+
 The current `check_timing` section reports zero unconstrained internal endpoints,
 but also reports 9 input ports without input delay and 12 output ports without
 output delay. Those I/O warnings must be resolved against external device and
@@ -154,12 +221,11 @@ cluster.
 
 ### 1. Run The Repository Flow From The Correct Directory
 
-Use the existing Tcl entry point, including implementation. From
-`build/fpga/smart_artix/vivado`:
+Use the Makefile-owned entry point from the repository root so the voice and
+slot configuration is explicit:
 
 ```sh
-VIVADO_FORCE_REBUILD=1 vivado -mode batch \
-  -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl
+make VIVADO_FORCE_REBUILD=1 vivado-impl
 ```
 
 `impl.tcl` runs or reuses the named synthesis and implementation runs, opens the
@@ -683,8 +749,7 @@ checksum or utilization. For timing work, force the complete implementation,
 not only synthesis:
 
 ```sh
-VIVADO_FORCE_REBUILD=1 vivado -mode batch \
-  -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl
+make VIVADO_FORCE_REBUILD=1 vivado-impl
 ```
 
 Do not accept an implementation result when the expected FF/LUT change or

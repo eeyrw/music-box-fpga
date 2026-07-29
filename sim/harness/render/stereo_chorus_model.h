@@ -35,8 +35,8 @@ class StereoChorusModel {
  private:
   static int16_t sine_q15(uint32_t phase);
   static int64_t arithmetic_shift_right(int64_t value, unsigned bits);
-  static int32_t signed_mix24(int32_t value);
-  static int32_t saturate_mix24(int64_t value, bool* saturated = nullptr);
+  static int32_t signed_mix25(int32_t value);
+  static int32_t saturate_mix25(int64_t value, bool* saturated = nullptr);
   static uint32_t sat_inc(uint32_t value, uint32_t amount = 1);
   ChorusConfig effective_config();
   int32_t tap(uint32_t delay_q16_8, bool right) const;

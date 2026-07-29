@@ -47,6 +47,9 @@ module block_interleaved_voice_renderer (
   localparam int ENDPOINT_COUNT = MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
   localparam int LINE_SHIFT = $clog2(BLOCK_LINE_WORDS);
   localparam int LINE_ADDR_WIDTH = ADDR_WIDTH - LINE_SHIFT;
+  localparam int JOB_RAM_DEPTH =
+      BLOCK_WORK_ENTRY_COUNT * MAX_BLOCK_FRAMES;
+  localparam int JOB_RAM_ADDR_WIDTH = $clog2(JOB_RAM_DEPTH);
 
   typedef enum logic [3:0] {
     WORK_FREE,
@@ -60,10 +63,20 @@ module block_interleaved_voice_renderer (
     WORK_PLAN_FINAL
   } work_state_t;
 
+  typedef struct packed {
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] block_frame_index;
+    logic [PHASE_FRAC_WIDTH-1:0] fraction;
+    logic signed [15:0] envelope_level;
+  } job_payload_t;
+  localparam int JOB_PAYLOAD_WIDTH = $bits(job_payload_t);
+
   work_state_t work_state_q [0:BLOCK_WORK_ENTRY_COUNT-1];
   block_voice_context_t work_context_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  block_endpoint_job_t work_job_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1][0:MAX_BLOCK_FRAMES-1];
+  logic [ADDR_WIDTH-1:0] work_endpoint_addr_q
+      [0:BLOCK_WORK_ENTRY_COUNT-1][0:ENDPOINT_COUNT-1];
+  (* ram_style = "block" *) logic [JOB_PAYLOAD_WIDTH-1:0]
+      work_job_payload_mem
+      [0:JOB_RAM_DEPTH-1];
   pcm_t work_endpoint_sample_q
       [0:BLOCK_WORK_ENTRY_COUNT-1][0:ENDPOINT_COUNT-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_valid_q
@@ -90,7 +103,9 @@ module block_interleaved_voice_renderer (
   logic work_active_q [0:BLOCK_WORK_ENTRY_COUNT-1];
   logic [PHASE_WIDTH-1:0] work_phase_q [0:BLOCK_WORK_ENTRY_COUNT-1];
   voice_playback_region_t work_region_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  voice_event_params_t work_params_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+  logic [PHASE_WIDTH-1:0] work_phase_inc_q
+      [0:BLOCK_WORK_ENTRY_COUNT-1];
+  logic work_released_q [0:BLOCK_WORK_ENTRY_COUNT-1];
   block_phase_result_t work_phase_result_q [0:BLOCK_WORK_ENTRY_COUNT-1];
   logic signed [FILTER_STATE_WIDTH-1:0] work_z1_q
       [0:BLOCK_WORK_ENTRY_COUNT-1];
@@ -118,7 +133,8 @@ module block_interleaved_voice_renderer (
     logic active;
     logic [PHASE_WIDTH-1:0] phase;
     voice_playback_region_t region;
-    voice_event_params_t params;
+    logic [PHASE_WIDTH-1:0] phase_inc;
+    logic released;
     logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_count;
     logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_cursor;
     logic [BLOCK_FRAME_COUNT_WIDTH-1:0] job_count;
@@ -134,10 +150,23 @@ module block_interleaved_voice_renderer (
   logic memory_select_valid_q;
   logic [BLOCK_WORK_ID_WIDTH-1:0] memory_select_work_id_q;
   logic memory_found;
+  logic memory_prepare_capture;
   logic [BLOCK_WORK_ID_WIDTH-1:0] memory_work_id;
   logic [ENDPOINT_COUNT-1:0] memory_line_mask;
+  logic [LINE_SHIFT-1:0] memory_line_word_index [0:ENDPOINT_COUNT-1];
   logic [LINE_ADDR_WIDTH-1:0] memory_line_addr;
+  logic memory_request_valid_q;
+  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_request_work_id_q;
+  logic [ENDPOINT_COUNT-1:0] memory_request_line_mask_q;
+  logic [LINE_SHIFT-1:0] memory_request_word_index_q
+      [0:ENDPOINT_COUNT-1];
+  logic [LINE_ADDR_WIDTH-1:0] memory_request_line_addr_q;
+  logic [VOICE_ID_WIDTH-1:0] memory_request_voice_q;
+  logic memory_request_refill_q;
   logic memory_action;
+  logic [ENDPOINT_COUNT-1:0] response_line_mask_q;
+  logic [LINE_SHIFT-1:0] response_word_index_q
+      [0:ENDPOINT_COUNT-1];
   logic cache_req_valid;
   logic cache_req_ready;
   logic [ADDR_WIDTH-1:0] cache_req_addr;
@@ -167,6 +196,7 @@ module block_interleaved_voice_renderer (
   logic issue_select_valid_q;
   logic [BLOCK_WORK_ID_WIDTH-1:0] issue_select_work_id_q;
   logic [BLOCK_FRAME_INDEX_WIDTH-1:0] issue_select_job_index_q;
+  job_payload_t issue_job_payload_q;
   logic issue_select_capture;
 
   block_dsp_sample_token_t dsp_token;
@@ -196,9 +226,9 @@ module block_interleaved_voice_renderer (
 
   mono_phase_frame plan_phase_frame (
     .loop_mode(plan_q.region.loop_mode),
-    .released(plan_q.params.released),
+    .released(plan_q.released),
     .phase(plan_q.phase),
-    .phase_inc(plan_q.params.phase_inc),
+    .phase_inc(plan_q.phase_inc),
     .length(plan_q.region.length),
     .loop_start(plan_q.region.loop_start),
     .loop_end(plan_q.region.loop_end),
@@ -337,7 +367,6 @@ module block_interleaved_voice_renderer (
     end
 
     memory_found = 1'b0;
-    memory_work_id = memory_select_work_id_q;
     memory_line_addr = '0;
     for (int endpoint = 0; endpoint < ENDPOINT_COUNT; endpoint++) begin
       if (!memory_found && memory_select_valid_q &&
@@ -345,31 +374,36 @@ module block_interleaved_voice_renderer (
           !work_endpoint_valid_q[memory_select_work_id_q][endpoint] &&
           !work_endpoint_pending_q[memory_select_work_id_q][endpoint]) begin
         memory_found = 1'b1;
-        memory_line_addr = work_job_q[memory_select_work_id_q]
-            [endpoint / BLOCK_ENDPOINT_COUNT]
-            .endpoint_addr[endpoint % BLOCK_ENDPOINT_COUNT]
+        memory_line_addr = work_endpoint_addr_q[memory_select_work_id_q]
+            [endpoint]
             [ADDR_WIDTH-1:LINE_SHIFT];
       end
     end
 
     memory_line_mask = '0;
     for (int endpoint = 0; endpoint < ENDPOINT_COUNT; endpoint++) begin
+      memory_line_word_index[endpoint] = '0;
       if (memory_found &&
-          work_endpoint_required_q[memory_work_id][endpoint] &&
-          !work_endpoint_valid_q[memory_work_id][endpoint] &&
-          !work_endpoint_pending_q[memory_work_id][endpoint] &&
-          (work_job_q[memory_work_id]
-               [endpoint / BLOCK_ENDPOINT_COUNT]
-               .endpoint_addr[endpoint % BLOCK_ENDPOINT_COUNT]
-               [ADDR_WIDTH-1:LINE_SHIFT] == memory_line_addr))
+          work_endpoint_required_q[memory_select_work_id_q][endpoint] &&
+          !work_endpoint_valid_q[memory_select_work_id_q][endpoint] &&
+          !work_endpoint_pending_q[memory_select_work_id_q][endpoint] &&
+          (work_endpoint_addr_q[memory_select_work_id_q][endpoint]
+               [ADDR_WIDTH-1:LINE_SHIFT] == memory_line_addr)) begin
         memory_line_mask[endpoint] = 1'b1;
+        memory_line_word_index[endpoint] =
+            work_endpoint_addr_q[memory_select_work_id_q][endpoint]
+            [LINE_SHIFT-1:0];
+      end
     end
 
-    cache_req_valid = memory_select_valid_q && memory_found;
-    cache_req_addr = {memory_line_addr, {LINE_SHIFT{1'b0}}};
-    cache_req_tag = memory_work_id;
-    cache_req_voice = work_context_q[memory_work_id].voice_index;
-    cache_req_refill = !work_window_checked_q[memory_work_id];
+    memory_prepare_capture = memory_select_valid_q && memory_found &&
+                             !memory_request_valid_q;
+    memory_work_id = memory_request_work_id_q;
+    cache_req_valid = memory_request_valid_q;
+    cache_req_addr = {memory_request_line_addr_q, {LINE_SHIFT{1'b0}}};
+    cache_req_tag = memory_request_work_id_q;
+    cache_req_voice = memory_request_voice_q;
+    cache_req_refill = memory_request_refill_q;
 
     issue_found = 1'b0;
     issue_candidate_work_id = '0;
@@ -386,10 +420,8 @@ module block_interleaved_voice_renderer (
       hazard_resolves = dsp_state_update_valid &&
                         (dsp_state_update.work_id == candidate);
       endpoints_ready =
-          (work_endpoint_valid_q[candidate][{job_index, 1'b0}] ||
-           !work_job_q[candidate][job_index].endpoint_mask[0]) &&
-          (work_endpoint_valid_q[candidate][{job_index, 1'b1}] ||
-           !work_job_q[candidate][job_index].endpoint_mask[1]);
+          work_endpoint_valid_q[candidate][{job_index, 1'b0}] &&
+          work_endpoint_valid_q[candidate][{job_index, 1'b1}];
       if (!issue_found && !issue_select_valid_q && endpoints_ready &&
           (!work_hazard_q[candidate] || hazard_resolves) &&
           (((work_state_q[candidate] == WORK_MEM_WAIT) ||
@@ -413,8 +445,13 @@ module block_interleaved_voice_renderer (
     dsp_token_q_next.last = (work_issue_index_q[issue_select_work_id_q] + 1'b1) >=
                             work_job_count_q[issue_select_work_id_q];
     dsp_token_q_next.voice_context = work_context_q[issue_select_work_id_q];
-    dsp_token_q_next.sample.job = work_job_q[issue_select_work_id_q][
-        issue_select_job_index_q];
+    dsp_token_q_next.sample.job.block_frame_index =
+        issue_job_payload_q.block_frame_index;
+    dsp_token_q_next.sample.job.fraction = issue_job_payload_q.fraction;
+    dsp_token_q_next.sample.job.endpoint_mask = '1;
+    dsp_token_q_next.sample.job.endpoint_addr = '0;
+    dsp_token_q_next.sample.job.envelope_level =
+        issue_job_payload_q.envelope_level;
     dsp_token_q_next.sample.sample_0 =
         work_endpoint_sample_q[issue_select_work_id_q][
             {issue_select_job_index_q, 1'b0}];
@@ -446,6 +483,7 @@ module block_interleaved_voice_renderer (
       plan_q.valid <= 1'b0;
       memory_rr_q <= '0;
       memory_select_valid_q <= 1'b0;
+      memory_request_valid_q <= 1'b0;
       issue_rr_q <= '0;
       issue_select_valid_q <= 1'b0;
       dsp_token_valid_q <= 1'b0;
@@ -455,12 +493,27 @@ module block_interleaved_voice_renderer (
       end
     end else begin
       plan_q.valid <= plan_found;
-      if (!memory_select_valid_q && memory_candidate_found) begin
+      if (!memory_select_valid_q && !memory_request_valid_q &&
+          memory_candidate_found) begin
         memory_select_valid_q <= 1'b1;
         memory_select_work_id_q <= memory_candidate_work_id;
       end else if (memory_select_valid_q &&
-                   (memory_action || !memory_found)) begin
+                   (memory_prepare_capture || !memory_found)) begin
         memory_select_valid_q <= 1'b0;
+      end
+
+      if (memory_prepare_capture) begin
+        memory_request_valid_q <= 1'b1;
+        memory_request_work_id_q <= memory_select_work_id_q;
+        memory_request_line_mask_q <= memory_line_mask;
+        memory_request_word_index_q <= memory_line_word_index;
+        memory_request_line_addr_q <= memory_line_addr;
+        memory_request_voice_q <=
+            work_context_q[memory_select_work_id_q].voice_index;
+        memory_request_refill_q <=
+            !work_window_checked_q[memory_select_work_id_q];
+      end else if (memory_action) begin
+        memory_request_valid_q <= 1'b0;
       end
 
       unique case ({issue_capture, dsp_token_valid_q && dsp_token_ready})
@@ -476,6 +529,11 @@ module block_interleaved_voice_renderer (
         issue_select_work_id_q <= issue_candidate_work_id;
         issue_select_job_index_q <= work_issue_index_q[
             issue_candidate_work_id][BLOCK_FRAME_INDEX_WIDTH-1:0];
+        issue_job_payload_q <= job_payload_t'(work_job_payload_mem[
+            (JOB_RAM_ADDR_WIDTH'(issue_candidate_work_id) <<
+             BLOCK_FRAME_INDEX_WIDTH) |
+            JOB_RAM_ADDR_WIDTH'(work_issue_index_q[
+                issue_candidate_work_id])]);
       end else if (issue_capture) begin
         issue_select_valid_q <= 1'b0;
       end
@@ -509,7 +567,8 @@ module block_interleaved_voice_renderer (
         work_active_q[free_work_id] <= start_active;
         work_phase_q[free_work_id] <= start_phase;
         work_region_q[free_work_id] <= start_region;
-        work_params_q[free_work_id] <= start_params;
+        work_phase_inc_q[free_work_id] <= start_params.phase_inc;
+        work_released_q[free_work_id] <= start_params.released;
         work_z1_q[free_work_id] <= start_filter_z1;
         work_z2_q[free_work_id] <= start_filter_z2;
         work_hazard_q[free_work_id] <= 1'b0;
@@ -525,7 +584,8 @@ module block_interleaved_voice_renderer (
         plan_q.active <= work_active_q[plan_work_id];
         plan_q.phase <= work_phase_q[plan_work_id];
         plan_q.region <= work_region_q[plan_work_id];
-        plan_q.params <= work_params_q[plan_work_id];
+        plan_q.phase_inc <= work_phase_inc_q[plan_work_id];
+        plan_q.released <= work_released_q[plan_work_id];
         plan_q.frame_count <= work_frame_count_q[plan_work_id];
         plan_q.frame_cursor <= work_frame_cursor_q[plan_work_id];
         plan_q.job_count <= work_job_count_q[plan_work_id];
@@ -555,22 +615,20 @@ module block_interleaved_voice_renderer (
               (plan_q.job_count == '0) ? WORK_COMPLETE : WORK_MEM_WAIT;
         end else begin
           if (plan_store_job) begin
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].block_frame_index <=
-                plan_q.frame_cursor[BLOCK_FRAME_INDEX_WIDTH-1:0];
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].fraction <= plan_fraction;
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].endpoint_mask <= 2'b11;
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].endpoint_addr[0] <=
+            work_job_payload_mem[
+                (JOB_RAM_ADDR_WIDTH'(plan_q.work_id) <<
+                 BLOCK_FRAME_INDEX_WIDTH) |
+                JOB_RAM_ADDR_WIDTH'(plan_q.job_count)] <= {
+                    plan_q.frame_cursor[BLOCK_FRAME_INDEX_WIDTH-1:0],
+                    plan_fraction,
+                    plan_q.envelope_level
+                };
+            work_endpoint_addr_q[plan_q.work_id][
+                {plan_q.job_count[BLOCK_FRAME_INDEX_WIDTH-1:0], 1'b0}] <=
                 plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].endpoint_addr[1] <=
+            work_endpoint_addr_q[plan_q.work_id][
+                {plan_q.job_count[BLOCK_FRAME_INDEX_WIDTH-1:0], 1'b1}] <=
                 plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
-            work_job_q[plan_q.work_id][plan_q.job_count
-                [BLOCK_FRAME_INDEX_WIDTH-1:0]].envelope_level <=
-                plan_q.envelope_level;
             work_endpoint_required_q[plan_q.work_id][
                 {plan_q.job_count
                      [BLOCK_FRAME_INDEX_WIDTH-1:0], 1'b0}] <= 1'b1;
@@ -606,31 +664,21 @@ module block_interleaved_voice_renderer (
 
       if (memory_action) begin
         memory_rr_q <= memory_work_id + 1'b1;
+        response_line_mask_q <= memory_request_line_mask_q;
+        response_word_index_q <= memory_request_word_index_q;
         work_state_q[memory_work_id] <= WORK_MEM_FETCH;
         work_window_checked_q[memory_work_id] <= 1'b1;
         work_endpoint_pending_q[memory_work_id] <=
-            work_endpoint_pending_q[memory_work_id] | memory_line_mask;
+            work_endpoint_pending_q[memory_work_id] |
+            memory_request_line_mask_q;
       end
 
       if (cache_rsp_valid) begin
         for (endpoint = 0; endpoint < ENDPOINT_COUNT;
              endpoint = endpoint + 1) begin
-          if ((endpoint < (int'(work_job_count_q[cache_rsp_tag]) *
-                           BLOCK_ENDPOINT_COUNT)) &&
-              work_job_q[cache_rsp_tag]
-                  [endpoint / BLOCK_ENDPOINT_COUNT]
-                  .endpoint_mask[endpoint % BLOCK_ENDPOINT_COUNT] &&
-              work_endpoint_pending_q[cache_rsp_tag][endpoint] &&
-              (work_job_q[cache_rsp_tag]
-                   [endpoint / BLOCK_ENDPOINT_COUNT]
-                   .endpoint_addr[endpoint % BLOCK_ENDPOINT_COUNT]
-                   [ADDR_WIDTH-1:LINE_SHIFT] ==
-               cache_rsp_addr[ADDR_WIDTH-1:LINE_SHIFT])) begin
+          if (response_line_mask_q[endpoint]) begin
             work_endpoint_sample_q[cache_rsp_tag][endpoint] <=
-                cache_rsp.words[work_job_q[cache_rsp_tag]
-                    [endpoint / BLOCK_ENDPOINT_COUNT]
-                    .endpoint_addr[endpoint % BLOCK_ENDPOINT_COUNT]
-                    [LINE_SHIFT-1:0]];
+                cache_rsp.words[response_word_index_q[endpoint]];
             work_endpoint_valid_q[cache_rsp_tag][endpoint] <= 1'b1;
             work_endpoint_pending_q[cache_rsp_tag][endpoint] <= 1'b0;
           end

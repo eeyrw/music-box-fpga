@@ -55,21 +55,21 @@ module effect_return_mixer (
     input mix_t sample,
     input logic [15:0] gain
   );
-    logic signed [40:0] product;
+    logic signed [41:0] product;
     begin
       product = sample * $signed({1'b0, gain});
       if (gain >= 16'h7fff)
-        scale_q1_15 = {{24{sample[MIX_WIDTH-1]}}, sample};
+        scale_q1_15 = {{23{sample[MIX_WIDTH-1]}}, sample};
       else
-        scale_q1_15 = $signed({{7{product[40]}}, product}) >>> 15;
+        scale_q1_15 = $signed({{6{product[41]}}, product}) >>> 15;
     end
   endfunction
 
   function automatic mix_t saturate_mix(input logic signed [49:0] value);
-    if (value > 50'sd8388607)
-      saturate_mix = 24'sh7fffff;
-    else if (value < -50'sd8388608)
-      saturate_mix = 24'sh800000;
+    if (value > 50'sd16777215)
+      saturate_mix = 25'sh0ffffff;
+    else if (value < -50'sd16777216)
+      saturate_mix = 25'sh1000000;
     else
       saturate_mix = mix_t'(value);
   endfunction
@@ -105,10 +105,10 @@ module effect_return_mixer (
                                    chorus_route_scaled_r_q});
     reverb_input_l_o = saturate_mix(reverb_input_wide_l);
     reverb_input_r_o = saturate_mix(reverb_input_wide_r);
-    reverb_input_saturated_l_o = (reverb_input_wide_l > 50'sd8388607) ||
-                                 (reverb_input_wide_l < -50'sd8388608);
-    reverb_input_saturated_r_o = (reverb_input_wide_r > 50'sd8388607) ||
-                                 (reverb_input_wide_r < -50'sd8388608);
+    reverb_input_saturated_l_o = (reverb_input_wide_l > 50'sd16777215) ||
+                                 (reverb_input_wide_l < -50'sd16777216);
+    reverb_input_saturated_r_o = (reverb_input_wide_r > 50'sd16777215) ||
+                                 (reverb_input_wide_r < -50'sd16777216);
 
     chorus_return_scaled_l = scale_q1_15(
         chorus_wet_l_i, chorus_config_i.return_gain_q1_15);
@@ -118,12 +118,12 @@ module effect_return_mixer (
         reverb_wet_l_i, reverb_config_i.return_gain_q1_15);
     reverb_return_scaled_r = scale_q1_15(
         reverb_wet_r_i, reverb_config_i.return_gain_q1_15);
-    effect_mix_wide_l = $signed({{26{dry_l_i[MIX_WIDTH-1]}}, dry_l_i}) +
+    effect_mix_wide_l = $signed({{25{dry_l_i[MIX_WIDTH-1]}}, dry_l_i}) +
                         $signed({{2{chorus_return_scaled_l[47]}},
                                  chorus_return_scaled_l}) +
                         $signed({{2{reverb_return_scaled_l[47]}},
                                  reverb_return_scaled_l});
-    effect_mix_wide_r = $signed({{26{dry_r_i[MIX_WIDTH-1]}}, dry_r_i}) +
+    effect_mix_wide_r = $signed({{25{dry_r_i[MIX_WIDTH-1]}}, dry_r_i}) +
                         $signed({{2{chorus_return_scaled_r[47]}},
                                  chorus_return_scaled_r}) +
                         $signed({{2{reverb_return_scaled_r[47]}},
@@ -131,16 +131,16 @@ module effect_return_mixer (
     diagnostic_events = 3'd0;
     if (reverb_event_pending_q)
       diagnostic_events = diagnostic_events +
-          {2'd0, ((reverb_input_wide_l > 50'sd8388607) ||
-                  (reverb_input_wide_l < -50'sd8388608))} +
-          {2'd0, ((reverb_input_wide_r > 50'sd8388607) ||
-                  (reverb_input_wide_r < -50'sd8388608))};
+          {2'd0, ((reverb_input_wide_l > 50'sd16777215) ||
+                  (reverb_input_wide_l < -50'sd16777216))} +
+          {2'd0, ((reverb_input_wide_r > 50'sd16777215) ||
+                  (reverb_input_wide_r < -50'sd16777216))};
     if (effect_stage_valid && output_slot_ready)
       diagnostic_events = diagnostic_events +
-          {2'd0, ((effect_mix_wide_l_q > 50'sd8388607) ||
-                  (effect_mix_wide_l_q < -50'sd8388608))} +
-          {2'd0, ((effect_mix_wide_r_q > 50'sd8388607) ||
-                  (effect_mix_wide_r_q < -50'sd8388608))};
+          {2'd0, ((effect_mix_wide_l_q > 50'sd16777215) ||
+                  (effect_mix_wide_l_q < -50'sd16777216))} +
+          {2'd0, ((effect_mix_wide_r_q > 50'sd16777215) ||
+                  (effect_mix_wide_r_q < -50'sd16777216))};
   end
 
   always_ff @(posedge clk) begin

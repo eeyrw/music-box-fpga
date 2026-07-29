@@ -6,9 +6,11 @@ module wavetable_common_status_regs #(
   input  logic                     core_reset,
   input  synth_pkg::reg_bus_req_t  bus_req,
   output synth_pkg::reg_bus_rsp_t  bus_rsp,
-  input  logic                     sample_tick,
   input  logic                     core_sample_valid,
   input  logic                     core_busy,
+  input  logic                     render_inflight,
+  input  logic                     render_deadline_miss_pulse,
+  input  logic [15:0]              render_latency_cycles,
   input  logic                     ext_req_valid,
   input  logic                     ext_req_ready,
   input  logic                     ext_rsp_valid,
@@ -19,9 +21,7 @@ module wavetable_common_status_regs #(
   input  logic                     mem_response_trace_pulse,
   input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
-  input  synth_pkg::audio_diagnostics_t audio_diagnostics,
-  output logic                     render_deadline_miss_pulse,
-  output logic [15:0]              render_latency_cycles
+  input  synth_pkg::audio_diagnostics_t audio_diagnostics
 );
   import synth_register_pkg::*;
 
@@ -65,8 +65,6 @@ module wavetable_common_status_regs #(
   localparam logic [15:0] ADDR_REVERB_MAX_PROCESSING_CYCLES =
       REG_REVERB_MAX_PROCESSING_CYCLES;
 
-  logic render_pending;
-  logic [15:0] render_latency_count;
   logic [31:0] common_event_flags;
   logic [31:0] underrun_count;
   logic [31:0] sample_drop_count;
@@ -108,7 +106,7 @@ module wavetable_common_status_regs #(
   assign common_event_set_mask = {
     28'd0,
     mem_response_trace_pulse,
-    sample_tick && render_pending && !core_sample_valid,
+    render_deadline_miss_pulse,
     sample_drop_pulse,
     underrun_pulse
   };
@@ -125,7 +123,7 @@ module wavetable_common_status_regs #(
           i2s_sample_ready,
           fifo_sample_valid,
           core_sample_valid,
-          render_pending,
+          render_inflight,
           core_busy
         };
       end
@@ -139,7 +137,8 @@ module wavetable_common_status_regs #(
         };
       end
       ADDR_RENDER_STATUS: begin
-        bus_rsp.rdata = {14'd0, common_event_flags[2], render_pending, render_latency_cycles};
+        bus_rsp.rdata = {14'd0, common_event_flags[2], render_inflight,
+                         render_latency_cycles};
       end
       ADDR_MEMORY_STATUS: begin
         bus_rsp.rdata = {
@@ -220,18 +219,12 @@ module wavetable_common_status_regs #(
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      render_pending <= 1'b0;
-      render_latency_count <= '0;
-      render_latency_cycles <= '0;
-      render_deadline_miss_pulse <= 1'b0;
       common_event_flags <= 32'd0;
       underrun_count <= 32'd0;
       sample_drop_count <= 32'd0;
       render_deadline_miss_count <= 32'd0;
       mem_response_count <= 32'd0;
     end else begin
-      render_deadline_miss_pulse <= 1'b0;
-
       if (regs_access && bus_req.write && (bus_req.address == ADDR_COMMON_EVENT_FLAGS)) begin
         common_event_flags <= (common_event_flags & ~bus_req.wdata) | common_event_set_mask;
       end else begin
@@ -242,28 +235,13 @@ module wavetable_common_status_regs #(
         underrun_count <= sat_inc(underrun_count);
       if (sample_drop_pulse)
         sample_drop_count <= sat_inc(sample_drop_count);
-      if (sample_tick && render_pending && !core_sample_valid)
+      if (render_deadline_miss_pulse)
         render_deadline_miss_count <= sat_inc(render_deadline_miss_count);
       if (mem_response_trace_pulse)
         mem_response_count <= sat_inc(mem_response_count);
 
-      if (core_reset) begin
-        render_pending <= 1'b0;
-        render_latency_count <= '0;
-        render_latency_cycles <= '0;
-      end else begin
-        render_deadline_miss_pulse <= sample_tick && render_pending && !core_sample_valid;
-
-        if (sample_tick) begin
-          render_pending <= 1'b1;
-          render_latency_count <= '0;
-        end else if (core_sample_valid) begin
-          render_pending <= 1'b0;
-          render_latency_cycles <= render_latency_count;
-        end else if (render_pending && render_latency_count != 16'hffff) begin
-          render_latency_count <= render_latency_count + 1'b1;
-        end
-      end
+      if (core_reset)
+        common_event_flags <= 32'd0;
     end
   end
 endmodule

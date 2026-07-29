@@ -32,6 +32,7 @@ module lookahead_compressor #(
   localparam int DELAY_PTR_WIDTH = (LOOKAHEAD_FRAMES <= 1) ? 1 :
                                    $clog2(LOOKAHEAD_FRAMES);
   localparam int DELAY_LEVEL_WIDTH = $clog2(LOOKAHEAD_FRAMES + 1);
+  localparam int DELAY_WORD_WIDTH = $bits(stereo_mix_t);
 
   typedef enum logic [3:0] {
     IDLE, DETECT, DETECT_INDEX, CALC_LEVEL, CALC_TARGET, CALC_GAIN,
@@ -40,7 +41,10 @@ module lookahead_compressor #(
   } state_t;
   state_t state;
 
-  (* ram_style = "distributed" *) stereo_mix_t delay_line [0:LOOKAHEAD_FRAMES-1];
+  // A flat word and one canonical write let Vivado infer one LUTRAM instead of
+  // decomposing the packed struct into individually written flip-flops.
+  (* ram_style = "distributed" *) logic [DELAY_WORD_WIDTH-1:0]
+      delay_line [0:LOOKAHEAD_FRAMES-1];
   logic [DELAY_PTR_WIDTH-1:0] delay_ptr;
   logic [DELAY_LEVEL_WIDTH-1:0] delay_level;
   stereo_mix_t delayed_sample;
@@ -57,8 +61,8 @@ module lookahead_compressor #(
   logic signed [31:0] combined_gain_q;
   logic signed [32:0] level_cb_q12_20_q;
   logic [31:0] target_gain_reduction_q;
-  logic signed [55:0] scaled_output_l_q;
-  logic signed [55:0] scaled_output_r_q;
+  logic signed [56:0] scaled_output_l_q;
+  logic signed [56:0] scaled_output_r_q;
   logic output_saturated_l_q;
   logic output_saturated_r_q;
 
@@ -79,12 +83,12 @@ module lookahead_compressor #(
   logic [32:0] gain_rounded_residual;
   logic [6:0] gain_mantissa_index;
   logic signed [15:0] compressor_gain;
-  logic signed [39:0] master_product_l;
-  logic signed [39:0] master_product_r;
-  logic signed [55:0] combined_product_l;
-  logic signed [55:0] combined_product_r;
-  logic signed [55:0] scaled_output_l;
-  logic signed [55:0] scaled_output_r;
+  logic signed [40:0] master_product_l;
+  logic signed [40:0] master_product_r;
+  logic signed [56:0] combined_product_l;
+  logic signed [56:0] combined_product_r;
+  logic signed [56:0] scaled_output_l;
+  logic signed [56:0] scaled_output_r;
   logic output_saturated_l;
   logic output_saturated_r;
 
@@ -100,10 +104,10 @@ module lookahead_compressor #(
       abs_mix = $unsigned(value);
   endfunction
 
-  function automatic pcm_t saturate_pcm(input logic signed [55:0] value);
-    if (value > 56'sd32767)
+  function automatic pcm_t saturate_pcm(input logic signed [56:0] value);
+    if (value > 57'sd32767)
       saturate_pcm = 16'sh7fff;
-    else if (value < -56'sd32768)
+    else if (value < -57'sd32768)
       saturate_pcm = 16'sh8000;
     else
       saturate_pcm = value[15:0];
@@ -232,13 +236,13 @@ module lookahead_compressor #(
 
     if ((!config_q.enable || (gain_reduction_cb_q12_20 == '0)) &&
         (master_volume_q == 16'sh7fff)) begin
-      scaled_output_l = {{(56-MIX_WIDTH){delayed_sample.l[MIX_WIDTH-1]}},
+      scaled_output_l = {{(57-MIX_WIDTH){delayed_sample.l[MIX_WIDTH-1]}},
                          delayed_sample.l};
-      scaled_output_r = {{(56-MIX_WIDTH){delayed_sample.r[MIX_WIDTH-1]}},
+      scaled_output_r = {{(57-MIX_WIDTH){delayed_sample.r[MIX_WIDTH-1]}},
                          delayed_sample.r};
     end else if (!config_q.enable || (gain_reduction_cb_q12_20 == '0)) begin
-      scaled_output_l = $signed({{16{master_product_l[39]}}, master_product_l}) >>> 15;
-      scaled_output_r = $signed({{16{master_product_r[39]}}, master_product_r}) >>> 15;
+      scaled_output_l = $signed({{16{master_product_l[40]}}, master_product_l}) >>> 15;
+      scaled_output_r = $signed({{16{master_product_r[40]}}, master_product_r}) >>> 15;
     end else if (master_volume_q == 16'sh7fff) begin
       scaled_output_l = combined_product_l >>> 15;
       scaled_output_r = combined_product_r >>> 15;
@@ -246,10 +250,10 @@ module lookahead_compressor #(
       scaled_output_l = combined_product_l >>> 30;
       scaled_output_r = combined_product_r >>> 30;
     end
-    output_saturated_l = (scaled_output_l > 56'sd32767) ||
-                         (scaled_output_l < -56'sd32768);
-    output_saturated_r = (scaled_output_r > 56'sd32767) ||
-                         (scaled_output_r < -56'sd32768);
+    output_saturated_l = (scaled_output_l > 57'sd32767) ||
+                         (scaled_output_l < -57'sd32768);
+    output_saturated_r = (scaled_output_r > 57'sd32767) ||
+                         (scaled_output_r < -57'sd32768);
   end
 
   always_ff @(posedge clk) begin
@@ -291,10 +295,9 @@ module lookahead_compressor #(
       unique case (state)
         IDLE: begin
           if (in_valid && in_ready) begin
-            delayed_sample <= delay_line[delay_ptr];
+            delayed_sample <= stereo_mix_t'(delay_line[delay_ptr]);
             delayed_valid <= primed;
-            delay_line[delay_ptr].l <= in_l;
-            delay_line[delay_ptr].r <= in_r;
+            delay_line[delay_ptr] <= {in_l, in_r};
             if (delay_ptr == DELAY_PTR_WIDTH'(LOOKAHEAD_FRAMES - 1))
               delay_ptr <= '0;
             else

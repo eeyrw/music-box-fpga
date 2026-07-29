@@ -94,9 +94,9 @@ void test_stereo_phase_pointer_wrap_and_saturation() {
   model.clear();
   config.feedback_q1_15 = 0x6000;
   model.set_config(config);
-  expect(model.process_frame(8388607, -8388608), 0, 0,
+  expect(model.process_frame(16777215, -16777216), 0, 0,
          "saturation warm-up mismatch");
-  expect(model.process_frame(8388607, -8388608), 8388607, -8388608,
+  expect(model.process_frame(16777215, -16777216), 16777215, -16777216,
          "saturation tap mismatch");
   if (model.saturation_count() != 2) {
     throw std::runtime_error("chorus saturation count mismatch");

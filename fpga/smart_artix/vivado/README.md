@@ -8,26 +8,20 @@ This directory contains source-controlled Vivado inputs only.
 Generated Vivado projects, runs, checkpoints, bitstreams, reports, logs, and IP
 output products belong under `../../../build/fpga/smart_artix/vivado/`. Do not
 commit a generated `.xpr`; the source of truth is still the Tcl scripts plus the
-source-controlled IP configuration. The scripts keep the generated project in the
-build tree between runs so unchanged synthesis runs can be reused.
+source-controlled IP configuration. The scripts keep the generated project in
+the build tree, while `vivado-synth` deliberately resets the synthesis run so
+configuration comparisons cannot reuse stale incremental partitions.
 
-Common entry points from `fpga/smart_artix/`. Run Vivado from the build
-directory so `.Xil/`, logs, and project output all stay out of the board source
-tree:
+Common entry points run from the repository root. The Makefile runs Vivado from
+the build directory so `.Xil/`, logs, and project output stay out of the source
+tree, and it supplies the shared `NUM_VOICES` and `BLOCK_WORK_ENTRIES`
+configuration:
 
 ```bash
-mkdir -p ../../build/fpga/smart_artix/vivado/logs
-cd ../../build/fpga/smart_artix/vivado
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/project.tcl \
-  -journal logs/project.jou -log logs/project.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
-  -journal logs/synth.jou -log logs/synth.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
-  -journal logs/impl.jou -log logs/impl.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/bitstream.tcl \
-  -journal logs/bitstream.jou -log logs/bitstream.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/program.tcl \
-  -journal logs/program.jou -log logs/program.log
+make vivado-project
+make vivado-synth
+make vivado-impl
+make vivado-bitstream
 ```
 
 For GUI work, open the generated project at
@@ -41,10 +35,10 @@ source directories and runs `generate_target` only when build-tree IP products a
 missing, or when forced. It also avoids repeatedly adding the same RTL and XDC
 files to the project.
 
-`synth.tcl` reuses an up-to-date completed `synth_smart_artix_top` run. If Vivado marks the run
-stale after source or constraint changes, the script resets and relaunches
-`synth_smart_artix_top` automatically. This avoids the common batch-flow failure where Vivado
-refuses to launch a completed stale run until it has been reset.
+`synth.tcl` always resets and relaunches `synth_smart_artix_top`. This costs more
+runtime than incremental reuse, but an earlier slot-count change produced a
+plausible stale utilization report. Resource comparisons require a fresh run.
+The generated project and IP output products are still reused.
 
 Each synthesis run writes these stable report files under
 `../../build/fpga/smart_artix/vivado/reports/`:
@@ -88,14 +82,9 @@ bitstream.
 Useful environment overrides:
 
 ```bash
-VIVADO_FORCE_REBUILD=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
-  -journal logs/synth.jou -log logs/synth.log
-
-VIVADO_FORCE_REBUILD=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
-  -journal logs/impl.jou -log logs/impl.log
-
-VIVADO_REGENERATE_IP=1 vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/synth.tcl \
-  -journal logs/synth.jou -log logs/synth.log
+VIVADO_FORCE_REBUILD=1 make vivado-synth
+VIVADO_FORCE_REBUILD=1 make vivado-impl
+VIVADO_REGENERATE_IP=1 make vivado-synth
 ```
 
 `VIVADO_FORCE_REBUILD=1` deletes the generated project/runs before recreating
