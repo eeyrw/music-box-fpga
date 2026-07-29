@@ -152,9 +152,11 @@ module tb_block_interleaved_envelope_frontend;
       frame_counts[4] = 15;
       frame_counts[5] = 16;
       for (int index = 0; index < 6; index++) begin
-        start_frame_count = BLOCK_FRAME_COUNT_WIDTH'(frame_counts[index]);
-        submit(index);
-        accept_result(index, frame_counts[index]);
+        if (frame_counts[index] <= MAX_BLOCK_FRAMES) begin
+          start_frame_count = BLOCK_FRAME_COUNT_WIDTH'(frame_counts[index]);
+          submit(index);
+          accept_result(index, frame_counts[index]);
+        end
       end
     end
 

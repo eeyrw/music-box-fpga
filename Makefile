@@ -5,6 +5,8 @@ NUM_VOICES ?= 512
 BLOCK_WORK_ENTRIES ?= 8
 BLOCK_JOB_ENTRIES ?= 8
 MAX_BLOCK_FRAMES ?= 16
+# Keep Verilator builds parallel. Its thread-pool failure is intermittent; retry
+# the failed make command instead of permanently falling back to -j 1.
 VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \

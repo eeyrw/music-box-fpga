@@ -19,27 +19,58 @@
 ### 1.1 当前实施状态
 
 当前工作树使用 16-frame render block、8-entry job storage 和固定 8-lane DSP。16-entry 与
-8-entry 的零等待 A/B 分别为 28,144 和 28,000 clocks；更深的表反而增加 modulo 扫描成本，
-而 8-entry 已达到 `max_outstanding=8` 并保持 frontend/DSP 重叠，因此默认深度改为 8。
+8-entry job storage 的零等待 A/B 分别为 28,144 和 28,000 clocks；更深的表反而增加
+modulo 扫描成本，而 8-entry 已达到 `max_outstanding=8` 并保持 frontend/DSP 重叠，因此
+job storage 默认深度为 8。
 phase、memory 和 lane 装载使用单项 modulo 轮询。控制面固定扫描 0..511 voice，envelope
 frontend 只保留一个 context。Smart Artix line reader 已是 8-entry 有界请求/响应队列，
 arbiter 可跟踪多个有序 render read。
 
-renderer 的 job payload、sample-0、sample-1 和八个 endpoint 地址 bank 已改为同步 BRAM。
-endpoint bank 采用 8-way bank、每组 8 endpoint；同步读增加的读拍由扫描组数从 8 减到 4
-抵消。fresh synthesis 明确映射出 11 个 renderer RAMB18：8 个 `32x32` endpoint bank、
-两个 `128x16` sample bank 和一个 `128x28` payload bank，不再使用原来的 44 个 RAM64M。
+renderer 的 job payload、sample-0、sample-1 和 ordered line descriptor 已改为同步 BRAM。
+规划阶段把相邻同 line endpoint 合并为 `{line_addr, endpoint_mask, word_index[]}`，memory
+阶段按 descriptor 次序直接发请求，不再扫描 endpoint 全表。descriptor 生成前增加一级
+端点地址流水，切断 loop wrap 到 BRAM data 的长组合路径。8-frame fresh synthesis 将两个
+descriptor bank 映射为 `64x93`，每 bank 一个 RAMB18 和一个 RAMB36；sample 和 payload
+也保持 BRAM，不再使用原来的 44 个 RAM64M。
 
-尚未完成的架构项是规划阶段生成的 ordered line-descriptor FIFO、sample-ready FIFO，以及
-第 12 节定义的 8-voice group reducer + true-dual-port BRAM mix。当前 endpoint BRAM 仍在
-每次 line request 前扫描 endpoint；虽然 LUTRAM 已下降，但 8-way line compare 抵消了这次
-BRAM 化的 LUT 收益。下一步必须删除全表 line scan，而不是继续扩大比较宽度。
+尚未完成的架构项是 sample-ready FIFO，以及第 12 节定义的 8-voice group reducer +
+true-dual-port BRAM mix。ordered line descriptor 已完成，下一步不再回到 endpoint scan。
 
-2026-07-29 使用 SGM v2.01 SF2 和 `polyphony_stress_512.mid` 的 0.02 秒 smoke 明确产生
-60 个 16-frame block，峰值 465 active voices，timed DDR3 下
-`max_render_cycles=26,752`、`deadline_misses=0`。同配置的定向 512-voice SV 压力为：
-零等待理论值 28,024 clocks；timed DDR3 为 28,008 clocks、2,048 reads、2,011 row hits、
-37 row misses。零等待数字仅表示片内/内存零等待理论吞吐，不能代替 DDR3 验收。
+2026-07-29 使用同一 descriptor RTL 完成 8/16 A/B。定向 512-voice SV 压力中，8-frame
+零等待理论值为 15,544 clocks，timed DDR3 为 15,552 clocks；16-frame 两者均为
+28,000 clocks。零等待数字仅表示片内/内存零等待理论吞吐，不能代替 DDR3 验收。使用
+SGM v2.01 SF2 和 `polyphony_stress_512.mid` 的 0.02 秒真实 smoke 均达到 465 active voices：
+
+| block | blocks | max render clocks | deadline utilization | DDR reads | row misses |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 120 | 15,704 | 94.224% | 59,034 | 20,343 |
+| 16 | 60 | 26,847 | 80.541% | 58,804 | 18,752 |
+
+两者均为 zero deadline miss。随后完成的 1 秒、48,000-frame 压力达到 512 active voices：
+
+| block | blocks | max render clocks | deadline utilization | DDR reads | row misses |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 6,000 | 16,477 | 98.862% | 3,422,000 | 1,283,515 |
+| 16 | 3,039 | 29,164 | 94.602% | 3,412,980 | 1,169,882 |
+
+8-frame 只剩 189 clocks 的整块 deadline 余量，不适合作为当前硬件默认。16-frame 满足真实
+压力 `<30,000 clocks` 门槛，并减少约 9.1M core cycles 和 9,020 DDR reads。因此默认值
+冻结为 16；8 保留为资源优化候选，只有降低固定调度和 DDR stall 后才能重新启用。
+
+同一 0.02 秒真实 smoke 使用 `gprof` 定位了 RTL DDR3 仿真慢的主要原因。driver 每个
+core clock 推进四个 DDR clock，并在每个高低电平调用 `eval()`，加上最后一个 core
+falling-edge `eval()`，总计约 9 次 Verilator 求值。1,555,535 个 core clocks 实测产生
+14,028,857 次 `eval()`。flat profile 的主要自耗时集中在 Verilator 生成的 renderer/DDR
+时序与组合区域；`ddr3_bin_read_word` 虽调用 470,432 次，但采样自耗时接近零。因此当前
+render wall time 的第一瓶颈不是外部 bin 文件 I/O，也不是 DPI map lookup，而是每个模拟
+clock 的 RTL 求值量和总 core cycle 数。
+
+将同一模型从 Verilator 默认 `-Os` 单独改为 `-O3` 后，结果和 cycle counters 完全一致，
+host render time 从 5,375.86 ms 降到 3,580.17 ms，约快 1.50 倍。这是后续仿真构建优化，
+不改变硬件吞吐。profile 还显示 SGM v2.01 的输入准备存在独立热点：SF2 zone 处理和重复
+image 装载会显著增加短 smoke 的启动时间，但不属于 `timing_render_ms` 内的 RTL DDR3
+执行瓶颈。后续优化顺序应为：先给该 render target 使用 `-O3`，再减少 renderer core
+cycles；只有 profile 证明 mailbox/DPI 占比上升后，才值得重写 DDR3 simulation bridge。
 
 此前 2 秒结果中的 `max_render_cycles=16,347` 来自旧 harness 的固定 8-frame boundary，
 尽管编译 RTL 的上限是 16，也没有实际请求 16-frame block。该结果只保留为 8-frame 真实
@@ -52,7 +83,7 @@ generic `render-rtl-ddr3` 仍接 simulation bridge/timing model，不实例化 S
 
 ### 2.1 配置和截止时间
 
-重构前可复现基线（当前 Makefile 已切换为 16-frame 候选）：
+当前 Makefile 默认配置：
 
 ```text
 NUM_VOICES=512
@@ -113,19 +144,15 @@ post-synthesis 层次的主要占用为：
 
 层次数字包含父子层级，不能相加为全芯片总数；它们用于确定优化优先级。
 
-当前 8-entry、16-frame、endpoint BRAM 候选的 fresh post-synthesis 结果为：
+当前 ordered descriptor RTL 的 8/16 fresh post-synthesis A/B 为：
 
-| 资源 | 使用 | 器件容量 | 占用 |
-| --- | ---: | ---: | ---: |
-| Slice LUT | 25,560 | 32,600 | 78.40% |
-| Slice FF | 25,184 | 65,200 | 38.63% |
-| BRAM36 等效 tile | 49 | 75 | 65.33% |
-| DSP48E1 | 39 | 120 | 32.50% |
+| 配置 | Slice LUT | Slice FF | BRAM36 tile | DSP48E1 | setup WNS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8-frame | 22,981 (70.49%) | 23,380 (35.86%) | 48 (64.00%) | 39 | +0.389 ns |
+| 16-frame | 25,119 (77.05%) | 26,320 (40.37%) | 50 (66.67%) | 39 | +0.389 ns |
 
-post-synthesis setup WNS 为 `+0.389 ns`，DRC error 为 0。与相同 8-entry 配置在 endpoint
-BRAM 化前相比，LUTRAM 从 1,047 降到 871、BRAM tile 从 45 增到 49，但总 LUT 从 25,368
-增到 25,560。该 A/B 证明存储已真实迁移到 BRAM，也证明删除 endpoint-to-line 全表比较器
-是下一阶段的必要条件。以上不是 post-route 结果。
+8-frame 相对 16-frame 减少 2,138 LUT、2,940 FF 和 2 个 BRAM tile。两组 DRC error 均为
+0；以上是 post-synthesis，不是 post-route 结果。
 
 ### 2.3 当前真实压力证据
 
@@ -157,7 +184,7 @@ trace replay。
 - generation、start/release/stop/pitch/gain/filter/envelope 语义逐位保持。
 - 同一 voice 的 phase、envelope、filter state 严格按音频 frame 顺序演进。
 - 首次可听输出的新增架构 latency 小于 1 ms；总目标仍小于现有几毫秒预算。
-- runtime command 的额外量化等待不超过选定最大 render block，即候选 16 帧时 0.333 ms。
+- runtime command 的额外量化等待不超过选定最大 render block，即当前 16 帧时 0.333 ms。
 
 ### 3.2 非目标
 
@@ -281,10 +308,10 @@ SF2/MIDI trace 比较 8、16 和 32；4 只作为短块/事件边界测试。
 bend 的完整分布，但说明 16 帧通常仍能在一个 32-word forward window 内形成良好局部性；
 32 帧即使 unity pitch 也必跨 window。
 
-### 6.2 推荐决策
+### 6.2 实施决策
 
-推荐以 `MAX_RENDER_FRAMES=16` 作为 RTL 候选，保留 `frame_count=1..16` 的功能支持。
-选择 16 的原因：
+8/16 RTL DDR3、真实 SGM 1 秒压力和 fresh synthesis A/B 后，当前实现冻结
+`MAX_RENDER_FRAMES=16`，保留 `frame_count=1..16` 的功能支持。16-frame 的优势为：
 
 - state snapshot、command drain、job header 和 block publish 的固定开销相对 8 减半；
 - 48-frame output target 正好容纳三个完整 block；
@@ -292,16 +319,20 @@ bend 的完整分布，但说明 16 帧通常仍能在一个 32-word forward win
 - 32-word window 对主流 phase increment 仍有意义；
 - 两倍 job/mix storage 可用 BRAM 吸收。
 
-但这是有退出条件的推荐，不是未经测量的定案。Phase 1 只有在 16 相对 8 同时满足以下
-条件时才能冻结为生产常量：
+16 相对 8 按以下门槛联合决策；实时正确性和 deadline 是硬门槛，资源项用于确认仍可实现：
 
 1. DDR lines/output-frame 不增加超过 5%；
 2. 真实压力的最大 render 时间小于 30,000 clocks；
 3. command/event 量化误差满足 0.333 ms 合同；
 4. job RAM 和 mix RAM 的 post-synth BRAM 增量不超过 8 tiles；
-5. LUT 不因更宽 mask、mux 或 accumulator 增加。
+5. LUT 不超过器件的 80% 设计上限，且增长必须由明确的实时收益解释。
 
-若任一项失败，保持 8；第一版不选 32。
+0.02 秒 smoke 中两者都通过，但 1 秒压力显示 8-frame 最大 render 为
+15,704 -> 16,477 clocks，只剩 189 clocks；16-frame 最大 render 为
+26,847 -> 29,164 clocks，仍满足 30,000-clocks 门槛。16-frame 增加 2,138 LUT、2,940 FF
+和 2 个 BRAM tile，但 post-synthesis LUT 仍为 77.05%，低于 80% 硬上限。实时余量优先于
+这部分资源节省，因此冻结 16；第一版不选 32。若后续优化使 8-frame 在同一 1 秒及更长
+压力下保留足够余量，可重新评估默认值。
 
 ### 6.3 短 block 的 deadline 定义
 
