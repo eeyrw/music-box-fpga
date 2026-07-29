@@ -1,6 +1,8 @@
 module tb_global_audio_effects_chain;
   import synth_pkg::*;
 
+  localparam int OUTPUT_TIMEOUT_CYCLES = 128;
+
   logic clk = 1'b0;
   logic rst;
   logic [1:0] effect_clear_i;
@@ -44,7 +46,7 @@ module tb_global_audio_effects_chain;
     int timeout;
     begin
       timeout = 0;
-      while (!out_valid && timeout < 100) begin
+      while (!out_valid && timeout < OUTPUT_TIMEOUT_CYCLES) begin
         @(negedge clk);
         timeout++;
       end

@@ -40,6 +40,15 @@ void add_event(std::vector<Event>& events, uint32_t tick, uint32_t& order,
   events.push_back(Event{tick, order++, std::vector<uint8_t>(data)});
 }
 
+void add_pitch_bend(std::vector<Event>& events, uint32_t tick, uint32_t& order,
+                    int channel, int bend) {
+  bend = std::max(-8192, std::min(8191, bend));
+  const int value = bend + 8192;
+  add_event(events, tick, order,
+            {uint8_t(0xe0 | channel), uint8_t(value & 0x7f),
+             uint8_t((value >> 7) & 0x7f)});
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -56,6 +65,8 @@ int main(int argc, char** argv) {
     std::uniform_int_distribution<int> velocity_dist(48, 127);
     std::uniform_int_distribution<int> channel_dist(0, 15);
     std::uniform_int_distribution<int> program_dist(0, 127);
+    std::mt19937 bend_rng(0x50495443u);
+    std::uniform_int_distribution<int> bend_dist(-8192, 8191);
 
     std::vector<Event> events;
     uint32_t order = 0;
@@ -74,6 +85,17 @@ int main(int argc, char** argv) {
       add_event(events, 0, order,
                 {uint8_t(0xb0 | channel), 10,
                  uint8_t((channel * 23 + 17) & 0x7f)});
+      // RPN 0: use a different bend range and fractional cents per channel.
+      add_event(events, 0, order, {uint8_t(0xb0 | channel), 101, 0});
+      add_event(events, 0, order, {uint8_t(0xb0 | channel), 100, 0});
+      add_event(events, 0, order,
+                {uint8_t(0xb0 | channel), 6,
+                 uint8_t(2 + ((channel * 5) % 23))});
+      add_event(events, 0, order,
+                {uint8_t(0xb0 | channel), 38,
+                 uint8_t((channel * 17) % 100)});
+      add_event(events, 0, order, {uint8_t(0xb0 | channel), 101, 127});
+      add_event(events, 0, order, {uint8_t(0xb0 | channel), 100, 127});
       if (channel != 9) {
         add_event(events, 0, order,
                   {uint8_t(0xb0 | channel), 64, uint8_t(127)});
@@ -94,6 +116,30 @@ int main(int argc, char** argv) {
     // Churn voices and programs at 25 ms intervals. Sustain keeps released
     // melodic notes resident until allocation pressure steals them.
     for (uint32_t tick = 24, step = 1; tick < kEndTick; tick += 24, ++step) {
+      for (int channel = 0; channel < 16; ++channel) {
+        const int phase = int((step + uint32_t(channel * 7)) & 63u);
+        int bend = 0;
+        switch (channel & 3) {
+          case 0:
+            bend = phase < 32 ? -8192 + phase * 512
+                              : 8191 - (phase - 32) * 512;
+            break;
+          case 1:
+            bend = -8192 + int((step * 977u + uint32_t(channel * 2053)) &
+                               0x3fffu);
+            break;
+          case 2:
+            bend = bend_dist(bend_rng);
+            break;
+          default: {
+            constexpr int kBoundaryPattern[8] = {
+                -8192, -4096, 0, 4096, 8191, 2048, -2048, 0};
+            bend = kBoundaryPattern[(step + uint32_t(channel)) & 7u];
+            break;
+          }
+        }
+        add_pitch_bend(events, tick, order, channel, bend);
+      }
       if ((step % 16) == 0) {
         for (int channel = 0; channel < 16; ++channel) {
           if (channel == 9) continue;
@@ -113,6 +159,7 @@ int main(int argc, char** argv) {
     }
 
     for (int channel = 0; channel < 16; ++channel) {
+      add_pitch_bend(events, kEndTick, order, channel, 0);
       add_event(events, kEndTick, order,
                 {uint8_t(0xb0 | channel), 64, uint8_t(0)});
       add_event(events, kEndTick, order,

@@ -262,9 +262,12 @@ renderer sources are retained under `sim/legacy` without current Make targets.
 ### 512-Voice DDR3 Stress
 
 The deterministic stress generator starts 320 simultaneous MIDI notes across
-all channels and then changes notes and programs every 25 ms. Stereo SF2 regions
-expand MIDI notes into separate mono voices, allowing the workload to fill the
-512-voice allocator while producing nonlocal DDR accesses.
+all channels and then changes notes and programs every 25 ms. It also programs
+different RPN 0 pitch-bend ranges per channel and sends 40 Hz triangle, saw,
+deterministic-random, and boundary-value pitch bends. Stereo SF2 regions expand
+MIDI notes into separate mono voices, allowing the workload to fill the
+512-voice allocator while producing nonlocal DDR accesses and frequent runtime
+`PHASE_INC` updates.
 
 ```bash
 g++ -std=c++17 -Wall -Wextra -Werror \
@@ -284,25 +287,30 @@ contains peak active voices, maximum render latency, deadline misses, sample-
 window traffic, and DDR row statistics; per-event diagnostics make the
 cycle-accurate run unnecessarily slow.
 
-The 2026-07-29 run used the 310 MB
-`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2`, 512 voices, eight work slots, and the
-timed DDR3 model. It completed all 144,000 output frames with these results:
+The 2026-07-29 A/B run used the 310 MB
+`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2`, 512 voices, eight work slots, the
+timed DDR3 model, and the same generated MIDI. Both versions completed all
+144,000 output frames:
 
-| Metric | Result |
-| --- | ---: |
-| Peak active mono voices | 512 |
-| Maximum render cycles per 8-frame block | 9,217 |
-| Maximum deadline utilization | 55.302% |
-| Deadline misses | 0 |
-| Window refills / fallback reads | 1,814,897 / 2,188,664 |
-| DDR reads | 9,448,252 |
-| DDR row hits / misses | 5,775,172 / 3,673,080 |
-| Stale parameter updates | 0 |
+| Metric | 16-endpoint parallel scan | 4-endpoint grouped scan |
+| --- | ---: | ---: |
+| Peak active mono voices | 512 | 512 |
+| Maximum render cycles per 8-frame block | 11,682 | 12,983 |
+| Maximum deadline utilization | 70.092% | 77.898% |
+| Deadline misses | 0 | 0 |
+| Window refills / fallback reads | 1,953,560 / 2,578,740 | 1,953,560 / 2,578,740 |
+| DDR reads | 10,392,980 | 10,392,980 |
+| DDR row hits / misses | 6,318,743 / 4,074,237 | 6,194,098 / 4,198,882 |
+| Stale parameter updates | 1,974 | 1,974 |
 
+The two WAV files are byte-identical. Grouped scanning changes request timing
+and therefore DDR row ordering, but not sample results. Stale parameter updates
+are generation-tag rejections caused by pitch events queued for voices that the
+allocator steals under pressure; the identical count in both runs is expected.
 The high fallback and row-miss counts are intentional consequences of random
-program/note churn. Passing this test demonstrates useful latency margin under
-that trace; it does not replace longer musical renders or board-level MIG and
-audio-underrun qualification.
+program/note churn. Passing this test demonstrates 22.102% worst-case deadline
+margin under that trace; it does not replace longer musical renders or
+board-level MIG and audio-underrun qualification.
 
 ## Output Files
 

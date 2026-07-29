@@ -355,9 +355,12 @@ envelope_level
 
 8 个 slot、每 slot 最多 8 个 frame 时，该 payload 是 `64 x 27`，Vivado 映射为一块
 RAMB18。issue select 到 DSP token 本来就有一级寄存，因此同步读不会增加 DSP issue
-间隔。每个 job 的两个 endpoint address 单独保留：memory scheduler 需要同拍扫描一个
-slot 的 16 个 endpoint 以合并同一 DDR line，单端口 BRAM 无法提供这个读带宽。所有
-job 的 `endpoint_mask` 恒为 `2'b11`，不再逐项存储。
+间隔。每个 job 的两个 endpoint address 单独保留；memory scheduler 不再同拍比较全部
+16 个 endpoint，而是每拍扫描 4 个。第一轮 FIND 最多用 4 拍找到一条尚未覆盖的 DDR
+line，第二轮 MASK 从命中组继续、最多再用 4 拍收集落在该 line 的 endpoint；FIND 已
+证明更早的组没有 missing endpoint。扫描直接累加到现有 request mask 和 word-index
+寄存器，不复制第二套 16 路暂存。所有 job 的 `endpoint_mask` 恒为 `2'b11`，不再逐项
+存储。
 
 job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 render，payload 自身
 携带原始 `block_frame_index`，退休时仍会累加到正确 mix frame。
@@ -379,24 +382,26 @@ job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 ren
 
 ### 11.2 Segment 的选择
 
-一个 segment 是 32 word，即四条 8-word line。memory scheduler round-robin 找到一个
-`WORK_MEM_WAIT` slot，从其 remaining endpoint 中取最低地址对应的 32-word 对齐基址：
+memory scheduler round-robin 找到一个 `WORK_MEM_WAIT` slot 后，以 4 endpoint/拍扫描
+remaining endpoint。FIND 阶段锁存第一条未覆盖 endpoint 所在的 8-word line：
 
 ```text
-segment_base = floor(endpoint_addr / 32) * 32
+line_base = floor(endpoint_addr / 8) * 8
 ```
 
-然后生成该 segment 覆盖的 endpoint mask，并锁定这条 voice，依次请求：
+MASK 阶段从 FIND 命中的组扫描到最后一组，生成该 line 覆盖的 endpoint mask 和每个
+endpoint 的 word index，然后向 `voice_sample_window` 发出一条 client request。sample
+window 可把 miss 扩展为 32-word refill：
 
 ```text
-segment_base + 0
-segment_base + 8
-segment_base + 16
-segment_base + 24
+window_base + 0
+window_base + 8
+window_base + 16
+window_base + 24
 ```
 
-四条 request 没有全部 transfer 前不会换 voice。这样保留 DDR、SDRAM、SRAM burst
-adapter 和带预取存储器都能利用的连续访问特性。
+扫描新增的拍数与其他 slot 的 DSP、已有 line response 和 DDR 等待重叠。这样把地址
+比较扇出从 16 路降到 4 路，同时保留八个 slot 覆盖 DDR latency 的能力。
 
 ### 11.3 Request 和 response 独立计数
 
@@ -1163,12 +1168,12 @@ TB 还在层次路径上检查：
 
 | active mono lanes | filter off | filter on | DSP issues | line requests |
 | ---: | ---: | ---: | ---: | ---: |
-| 256 | 2149 clocks | 2191 clocks | 2048 | 1024 |
-| 512 | 4197 clocks | 4258 clocks | 4096 | 2048 |
+| 256 | 4446 clocks | 4460 clocks | 2048 | 1024 |
+| 512 | 8798 clocks | 8309 clocks | 4096 | 2048 |
 
-256 filtered 和 512 filtered 都观察到最长 312 clocks 连续每拍 issue。这证明当前生产
-SV 在长稳态区间能达到 sample `II=1`。它不证明整个 block 从第一拍到最后一拍无气泡；
-fill/drain、group scan、memory segment 交接和尾部不足 8 个 ready context 都会产生空拍。
+grouped endpoint scan 把每拍地址比较从 16 路降到 4 路，但当前理想 memory trace 不再
+形成连续多拍 issue，最长 run 为 1。它以调度空拍换取 LUT，尚未把 DSP 算术吞吐本身
+降到低于 `II=1`；真实 DDR 下部分扫描拍会被 memory latency 覆盖。
 
 相对历史架构的 256-lane 周期：
 
@@ -1179,7 +1184,8 @@ fill/drain、group scan、memory segment 交接和尾部不足 8 个 ready conte
 | 2-entry streaming/forwarding | 5928 | 7734 |
 | 8 tags、串行 frontend | 5928 | 5956 |
 | interleaved phase/memory frontend | 3373 | 3401 |
-| 当前 envelope + renderer tagged pipeline | 2149 | 2191 |
+| envelope + 全并行 endpoint scan | 2149 | 2191 |
+| 当前 4-endpoint grouped scan | 4446 | 4460 |
 
 当前架构相对 2-slot 版本明显更快，特别是 filter-on 已接近 filter-off。因此已选定该
 架构，旧串行 envelope/endpoint/segment/gather RTL 和专属 TB 已删除。

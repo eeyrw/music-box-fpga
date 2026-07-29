@@ -125,6 +125,8 @@ module block_interleaved_envelope_frontend (
   logic [SLOT_ID_WIDTH-1:0] result_rr_q;
   logic result_found;
   logic [SLOT_ID_WIDTH-1:0] result_slot;
+  logic result_valid_q;
+  logic [SLOT_ID_WIDTH-1:0] result_slot_q;
   logic free_found;
   logic [SLOT_ID_WIDTH-1:0] free_slot;
   logic result_fire;
@@ -199,14 +201,14 @@ module block_interleaved_envelope_frontend (
     end
   end
 
-  assign result_valid = result_found;
+  assign result_valid = result_valid_q;
   assign result_fire = result_valid && result_ready;
-  assign result_voice_index = voice_index_q[result_slot];
-  assign result_frame_count = frame_count_q[result_slot];
-  assign result_region = region_q[result_slot];
-  assign result_params = params_q[result_slot];
-  assign result_dynamic = dynamic_q[result_slot];
-  assign result_envelope = envelope_q[result_slot];
+  assign result_voice_index = voice_index_q[result_slot_q];
+  assign result_frame_count = frame_count_q[result_slot_q];
+  assign result_region = region_q[result_slot_q];
+  assign result_params = params_q[result_slot_q];
+  assign result_dynamic = dynamic_q[result_slot_q];
+  assign result_envelope = envelope_q[result_slot_q];
   assign start_fire = start_valid && start_ready;
 
   always_comb begin
@@ -432,7 +434,7 @@ module block_interleaved_envelope_frontend (
     end
     if (!free_found && result_fire) begin
       free_found = 1'b1;
-      free_slot = result_slot;
+      free_slot = result_slot_q;
     end
     start_ready = free_found && (start_frame_count != '0) &&
         (start_frame_count <= BLOCK_FRAME_COUNT_WIDTH'(MAX_BLOCK_FRAMES));
@@ -442,6 +444,8 @@ module block_interleaved_envelope_frontend (
     if (rst) begin
       walk_rr_q <= '0;
       result_rr_q <= '0;
+      result_valid_q <= 1'b0;
+      result_slot_q <= '0;
       level_s0_q.valid <= 1'b0;
       level_s1_q.valid <= 1'b0;
       level_s2_q.valid <= 1'b0;
@@ -453,6 +457,11 @@ module block_interleaved_envelope_frontend (
         slot_state_q[slot] <= SLOT_FREE;
       end
     end else begin
+      if (!result_valid_q && result_found) begin
+        result_valid_q <= 1'b1;
+        result_slot_q <= result_slot;
+      end
+
       walk_q.valid <= walk_found &&
           (slot_state_q[walk_slot] == SLOT_WALK);
       advance_q.valid <= walk_process_frame;
@@ -579,8 +588,9 @@ module block_interleaved_envelope_frontend (
       end
 
       if (result_fire) begin
-        result_rr_q <= result_slot + 1'b1;
-        slot_state_q[result_slot] <= SLOT_FREE;
+        result_valid_q <= 1'b0;
+        result_rr_q <= result_slot_q + 1'b1;
+        slot_state_q[result_slot_q] <= SLOT_FREE;
       end
 
       if (start_fire) begin

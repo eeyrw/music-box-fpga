@@ -52,8 +52,8 @@ earlier, smaller configuration and are not 512-voice timing signoff.
 
 | Resource or estimate | Current 8-slot result |
 | --- | ---: |
-| LUT | 32,016 / 32,600 (98.21%) |
-| FF | 31,830 / 65,200 (48.82%) |
+| LUT | 31,674 / 32,600 (97.16%) |
+| FF | 31,869 / 65,200 (48.88%) |
 | DSP48E1 | 39 / 120 (32.50%) |
 | BRAM tiles | 44 / 75 (58.67%) |
 | Post-synthesis WNS/TNS | +0.401 ns / 0 ns |
@@ -66,18 +66,22 @@ voice-count or slot-count comparisons must come from separate forced runs.
 
 Vivado maps the packed valid bit and 29-bit per-voice sample-window base as one
 512 x 30 RAMB18. The renderer's 64 x 27 job payload store is also a synchronous
-RAMB18 instead of per-slot FF storage. Endpoint addresses remain separate
-because the memory scheduler compares all 16 endpoints in parallel.
+RAMB18 instead of per-slot FF storage. Endpoint addresses remain separate, but
+the memory scheduler now compares four at a time in a two-pass FIND/MASK scan.
+It reuses the request mask and word-index registers as scan accumulators instead
+of adding a second 16-entry copy.
 
-With the DDR3 timing model and the filter path enabled, eight slots complete a
-512-voice block in 8,367 cycles versus 12,559 cycles with four slots. Both are
-below the 16,666-cycle deadline, but eight slots retain substantially more
+With the DDR3 timing model and the filter path enabled, the grouped endpoint
+scan completes a 512-voice block in 9,929 cycles. The previous all-parallel
+scan took 8,367 cycles. Both are below the 16,666-cycle deadline, but eight
+slots retain substantially more
 latency tolerance without increasing the job-payload BRAM count.
 
-The design uses 98.21% of the device LUTs. This is too dense to treat the
+The design uses 97.16% of the device LUTs. This is too dense to treat the
 positive post-synthesis slack as closure, and no current 512-voice route has
-been completed. The largest generic-core owners are the controller at 14,751
-LUTs, including the renderer at 9,790 LUTs, and the state store at 2,290 LUTs.
+been completed. The grouped scan reduces the controller from 14,751 to 14,406
+LUTs and the renderer from 9,790 to 9,443 LUTs. Total LUT use falls by 342 while
+FF use rises by 39; BRAM and DSP use are unchanged.
 Further LUT reduction and a forced implementation are required before the
 512-voice configuration can replace the older routed signoff baseline.
 
@@ -85,20 +89,19 @@ Further LUT reduction and a forced implementation are required before the
 
 The current LUT total is not dominated by one removable register array. The
 post-synthesis hierarchy attributes 5,114 LUTs to the generated DDR3 MIG,
-5,347 LUTs to the effects chain, and 18,684 LUTs to the generic render core.
-Within the core, the controller uses 14,751 LUTs and its renderer uses 9,790.
+5,347 LUTs to the effects chain, and 18,339 LUTs to the generic render core.
+Within the core, the controller uses 14,406 LUTs and its renderer uses 9,443.
 These totals include both storage and the logic needed to select, compare, and
 route that storage.
 
 Moving an array to RAM only removes LUTs when its access pattern matches the
 physical memory ports. The job payload has one sequential writer and one
 pipelined reader, so a single synchronous RAMB18 is a good match. Endpoint
-addresses are different: the memory scheduler compares up to 16 endpoints from
-one slot in the same cycle to merge reads for one DDR line. A one- or two-port
-BRAM cannot supply those values without serializing the scan, replicating the
-memory, or adding a multi-cycle address-gather pipeline. Each option trades LUTs
-against BRAM, latency, and the number of DDR requests that can remain covered by
-the eight slots.
+addresses are different. The implemented four-at-a-time scan demonstrates the
+trade: it saves 342 total LUTs but raises the filtered 512-voice directed test
+from 8,367 to 9,929 cycles. A one- or two-port BRAM would require still more
+serialization or replication. Each option must therefore be measured against
+both LUT use and the latency hidden by the eight slots.
 
 LUTRAM is also not a general solution to high Slice LUT utilization. It is
 useful for shallow, narrow arrays with compatible synchronous writes, but every

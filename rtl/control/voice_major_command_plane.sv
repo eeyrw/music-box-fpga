@@ -52,6 +52,7 @@ module voice_major_command_plane #(
     READ_HEADER,
     READ_PAYLOAD,
     DISPATCH_ACTION,
+    DISPATCH_INSTALL,
     WAIT_CONTROL_EVENT
   } parser_state_t;
 
@@ -82,6 +83,10 @@ module voice_major_command_plane #(
   logic [3:0] start_gain_index;
   logic [3:0] start_filter_index;
   logic [3:0] start_env_index;
+  logic [VOICE_ID_WIDTH-1:0] install_voice_decode;
+  block_voice_state_snapshot_t install_state_decode;
+  logic [VOICE_ID_WIDTH-1:0] install_voice_q;
+  block_voice_state_snapshot_t install_state_q;
 
   function automatic logic [7:0] start_payload_words(
     input logic [5:0] flags
@@ -235,9 +240,9 @@ module voice_major_command_plane #(
        (voice_action && (int'(command_voice) < NUM_VOICES) &&
         ((opcode_q == CMD_VOICE_START_MONO) || (command_flags_q == '0)) &&
         voice_action_valid_format));
-  assign install_valid = (parser_state_q == DISPATCH_ACTION) &&
-                         action_valid_format &&
-                         (opcode_q == CMD_VOICE_START_MONO);
+  assign install_valid = parser_state_q == DISPATCH_INSTALL;
+  assign install_voice = install_voice_q;
+  assign install_state = install_state_q;
   assign control_event_valid = (parser_state_q == DISPATCH_ACTION) &&
       action_valid_format && voice_action &&
       (opcode_q != CMD_VOICE_START_MONO);
@@ -284,51 +289,55 @@ module voice_major_command_plane #(
       endcase
     end
 
-    install_voice = command_voice[VOICE_ID_WIDTH-1:0];
-    install_state = '0;
-    install_state.region.base_addr = payload_q[1];
-    install_state.region.length = payload_q[2][PHASE_FRAME_WIDTH-1:0];
-    install_state.region.loop_start = command_flags_q[1:0] != 2'b00 ?
+    install_voice_decode = command_voice[VOICE_ID_WIDTH-1:0];
+    install_state_decode = '0;
+    install_state_decode.region.base_addr = payload_q[1];
+    install_state_decode.region.length =
+        payload_q[2][PHASE_FRAME_WIDTH-1:0];
+    install_state_decode.region.loop_start = command_flags_q[1:0] != 2'b00 ?
         payload_q[3][PHASE_FRAME_WIDTH-1:0] : '0;
-    install_state.region.loop_end = command_flags_q[1:0] != 2'b00 ?
+    install_state_decode.region.loop_end = command_flags_q[1:0] != 2'b00 ?
         payload_q[4][PHASE_FRAME_WIDTH-1:0] :
         payload_q[2][PHASE_FRAME_WIDTH-1:0];
-    install_state.region.loop_mode = command_flags_q[1:0];
-    install_state.event_params.phase_inc = payload_q[start_phase_inc_index];
-    install_state.event_params.gain_l = payload_q[start_gain_index][15:0];
-    install_state.event_params.gain_r = payload_q[start_gain_index][31:16];
+    install_state_decode.region.loop_mode = command_flags_q[1:0];
+    install_state_decode.event_params.phase_inc =
+        payload_q[start_phase_inc_index];
+    install_state_decode.event_params.gain_l =
+        payload_q[start_gain_index][15:0];
+    install_state_decode.event_params.gain_r =
+        payload_q[start_gain_index][31:16];
     if (command_flags_q[2]) begin
-      install_state.event_params.filter_b0 =
+      install_state_decode.event_params.filter_b0 =
           payload_q[start_filter_index][15:0];
-      install_state.event_params.filter_b1 =
+      install_state_decode.event_params.filter_b1 =
           payload_q[start_filter_index][31:16];
-      install_state.event_params.filter_b2 =
+      install_state_decode.event_params.filter_b2 =
           payload_q[start_filter_index + 1'b1][15:0];
-      install_state.event_params.filter_a1 =
+      install_state_decode.event_params.filter_a1 =
           payload_q[start_filter_index + 1'b1][31:16];
-      install_state.event_params.filter_a2 =
+      install_state_decode.event_params.filter_a2 =
           payload_q[start_filter_index + 4'd2][15:0];
-      install_state.event_params.filter_enable =
+      install_state_decode.event_params.filter_enable =
           payload_q[start_filter_index + 4'd2][16];
     end
     if (command_flags_q[3]) begin
-      install_state.env_params.delay_samples =
+      install_state_decode.env_params.delay_samples =
           payload_q[start_env_index][PHASE_FRAME_WIDTH-1:0];
-      install_state.env_params.attack_step_q0_32 =
+      install_state_decode.env_params.attack_step_q0_32 =
           payload_q[start_env_index + 1'b1];
-      install_state.env_params.hold_samples =
+      install_state_decode.env_params.hold_samples =
           payload_q[start_env_index + 4'd2][PHASE_FRAME_WIDTH-1:0];
-      install_state.env_params.decay_step_cb_q12_20 =
+      install_state_decode.env_params.decay_step_cb_q12_20 =
           payload_q[start_env_index + 4'd3];
-      install_state.env_params.sustain_cb_q12_20 =
+      install_state_decode.env_params.sustain_cb_q12_20 =
           payload_q[start_env_index + 4'd4];
-      install_state.env_params.release_step_cb_q12_20 =
+      install_state_decode.env_params.release_step_cb_q12_20 =
           payload_q[start_env_index + 4'd5];
     end
-    install_state.dynamic.active = 1'b1;
-    install_state.dynamic.generation = payload_q[0][15:0];
-    install_state.dynamic.phase = '0;
-    install_state.dynamic.env_state.stage = ENV_DELAY;
+    install_state_decode.dynamic.active = 1'b1;
+    install_state_decode.dynamic.generation = payload_q[0][15:0];
+    install_state_decode.dynamic.phase = '0;
+    install_state_decode.dynamic.env_state.stage = ENV_DELAY;
 
     control_event = '0;
     control_event.target_frame = current_frame;
@@ -404,6 +413,8 @@ module voice_major_command_plane #(
       audio_config <= '0;
       audio_config.master_volume <= 16'sh7fff;
       effect_clear <= '0;
+      install_voice_q <= '0;
+      install_state_q <= '0;
     end else begin
       effect_clear <= '0;
       unique case (parser_state_q)
@@ -434,6 +445,10 @@ module voice_major_command_plane #(
             parser_state_q <= READ_HEADER;
           end else if (opcode_q == CMD_STREAM_FLUSH) begin
             parser_state_q <= READ_HEADER;
+          end else if (opcode_q == CMD_VOICE_START_MONO) begin
+            install_voice_q <= install_voice_decode;
+            install_state_q <= install_state_decode;
+            parser_state_q <= DISPATCH_INSTALL;
           end else if (action_fire) begin
             unique case (opcode_q)
               CMD_COMPRESSOR_CONFIG: begin
@@ -472,9 +487,12 @@ module voice_major_command_plane #(
               CMD_EFFECT_CLEAR: effect_clear <= payload_q[0][1:0];
               default: begin end
             endcase
-            parser_state_q <= opcode_q == CMD_VOICE_START_MONO ?
-                READ_HEADER : (audio_action ? READ_HEADER : WAIT_CONTROL_EVENT);
+            parser_state_q <= audio_action ? READ_HEADER : WAIT_CONTROL_EVENT;
           end
+        end
+        DISPATCH_INSTALL: begin
+          if (install_valid && install_ready)
+            parser_state_q <= READ_HEADER;
         end
         WAIT_CONTROL_EVENT: begin
           if (control_event_done_pulse) begin

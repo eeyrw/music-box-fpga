@@ -56,6 +56,7 @@ module lookahead_compressor #(
   logic [4:0] magnitude_exponent_q;
   logic [7:0] magnitude_mantissa_index_q;
   logic [4:0] gain_octave_q;
+  logic [4:0] gain_octave_step_q;
   logic [6:0] gain_mantissa_index_q;
   logic [23:0] gain_mantissa_q;
   logic signed [31:0] combined_gain_q;
@@ -78,7 +79,8 @@ module lookahead_compressor #(
   logic [47:0] target_product;
   logic [31:0] target_gain_reduction;
   logic [31:0] next_gain_reduction;
-  logic [4:0] gain_octave;
+  logic [4:0] gain_octave_candidate;
+  logic gain_octave_step_hits;
   logic [31:0] gain_residual;
   logic [32:0] gain_rounded_residual;
   logic [6:0] gain_mantissa_index;
@@ -205,22 +207,9 @@ module lookahead_compressor #(
                               config_q.release_step_cb_q12_20;
     end
 
-    gain_octave = '0;
-    if (gain_reduction_cb_q12_20 >= COMP_CB_OCTAVE_Q12_20_LUT[16]) begin
-      gain_octave = 5'd16;
-    end else begin
-      if (gain_reduction_cb_q12_20 >= COMP_CB_OCTAVE_Q12_20_LUT[8])
-        gain_octave = 5'd8;
-      if (gain_reduction_cb_q12_20 >=
-          COMP_CB_OCTAVE_Q12_20_LUT[gain_octave + 5'd4])
-        gain_octave = gain_octave + 5'd4;
-      if (gain_reduction_cb_q12_20 >=
-          COMP_CB_OCTAVE_Q12_20_LUT[gain_octave + 5'd2])
-        gain_octave = gain_octave + 5'd2;
-      if (gain_reduction_cb_q12_20 >=
-          COMP_CB_OCTAVE_Q12_20_LUT[gain_octave + 5'd1])
-        gain_octave = gain_octave + 5'd1;
-    end
+    gain_octave_candidate = gain_octave_q + gain_octave_step_q;
+    gain_octave_step_hits = gain_reduction_cb_q12_20 >=
+        COMP_CB_OCTAVE_Q12_20_LUT[gain_octave_candidate];
     gain_residual = gain_reduction_cb_q12_20 -
                     COMP_CB_OCTAVE_Q12_20_LUT[gain_octave_q];
     gain_rounded_residual = {1'b0, gain_residual} +
@@ -270,6 +259,7 @@ module lookahead_compressor #(
       magnitude_exponent_q <= '0;
       magnitude_mantissa_index_q <= '0;
       gain_octave_q <= '0;
+      gain_octave_step_q <= '0;
       gain_mantissa_index_q <= '0;
       gain_mantissa_q <= '0;
       combined_gain_q <= '0;
@@ -336,11 +326,20 @@ module lookahead_compressor #(
           detector_peak <= peak_magnitude_q;
           if (next_gain_reduction > max_gain_reduction_cb_q12_20)
             max_gain_reduction_cb_q12_20 <= next_gain_reduction;
+          gain_octave_q <= '0;
+          gain_octave_step_q <= 5'd16;
           state <= CALC_GAIN_OCTAVE;
         end
         CALC_GAIN_OCTAVE: begin
-          gain_octave_q <= gain_octave;
-          state <= CALC_GAIN_INDEX;
+          if (gain_octave_step_hits)
+            gain_octave_q <= gain_octave_candidate;
+          if ((gain_octave_step_q == 5'd1) ||
+              ((gain_octave_step_q == 5'd16) &&
+               gain_octave_step_hits)) begin
+            state <= CALC_GAIN_INDEX;
+          end else begin
+            gain_octave_step_q <= gain_octave_step_q >> 1;
+          end
         end
         CALC_GAIN_INDEX: begin
           gain_mantissa_index_q <= gain_mantissa_index;

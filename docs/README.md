@@ -49,6 +49,9 @@ change.
 - [`design/voice_major_render_pipeline_detailed.md`](design/voice_major_render_pipeline_detailed.md):
   cycle-level description of the current 512-voice, eight-slot renderer,
   including scheduling, BRAM-backed job payloads, hazards, and DDR traffic.
+- [`design/streaming_voice_architecture_redesign_plan.md`](design/streaming_voice_architecture_redesign_plan.md):
+  review plan for replacing the eight-slot scheduler with an ordered streaming
+  pipeline, including resource and throughput budgets and complexity limits.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.
