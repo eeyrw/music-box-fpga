@@ -173,7 +173,7 @@ Run the current synthesis check from the repository root. The Makefile supplies
 the project-wide voice count and work-entry configuration:
 
 ```bash
-make VIVADO=/opt/Xilinx2051.1/2025.2/Vivado/bin/vivado vivado-synth
+make vivado-synth
 ```
 
 The non-DDR XDC uses board-documented native-SD pins and project-selected

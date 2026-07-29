@@ -1,5 +1,5 @@
 VERILATOR ?= verilator
-VIVADO ?= vivado
+VIVADO ?= /opt/Xilinx2051.1/2025.2/Vivado/bin/vivado
 BUILD_DIR := build
 NUM_VOICES ?= 512
 BLOCK_WORK_ENTRIES ?= 8
