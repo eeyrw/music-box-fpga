@@ -55,6 +55,7 @@ module voice_major_render_harness (
   output logic [31:0]                              configured_cache_sets,
   output logic [31:0]                              configured_cache_bytes,
   output logic [31:0]                              configured_window_words,
+  output logic [31:0]                              configured_max_block_frames,
   output logic [15:0]                              active_voice_count,
 
   output logic                                     debug_plan_valid,
@@ -136,6 +137,7 @@ module voice_major_render_harness (
     configured_cache_sets = '0;
     configured_cache_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
     configured_window_words = 32'd32;
+    configured_max_block_frames = 32'(MAX_BLOCK_FRAMES);
     active_voice_count = '0;
     for (int voice = 0; voice < NUM_VOICES; voice++) begin
       active_voice_count += 16'(core.state_store.dynamic_mem[voice][

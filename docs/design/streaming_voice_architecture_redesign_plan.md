@@ -18,23 +18,35 @@
 
 ### 1.1 当前实施状态
 
-当前工作树已经切到 16-frame 候选、16-entry job storage 和固定 8-lane DSP；phase、memory
-和 lane 装载均使用单项 modulo 轮询，不再生成 job-ready 全表搜索。控制面已改为固定
-0..511 voice scan，envelope frontend 只保留一个 context。Smart Artix line reader 已改为
-8-entry 有界请求/响应队列，arbiter 可跟踪多个有序 render read。
+当前工作树使用 16-frame render block、8-entry job storage 和固定 8-lane DSP。16-entry 与
+8-entry 的零等待 A/B 分别为 28,144 和 28,000 clocks；更深的表反而增加 modulo 扫描成本，
+而 8-entry 已达到 `max_outstanding=8` 并保持 frontend/DSP 重叠，因此默认深度改为 8。
+phase、memory 和 lane 装载使用单项 modulo 轮询。控制面固定扫描 0..511 voice，envelope
+frontend 只保留一个 context。Smart Artix line reader 已是 8-entry 有界请求/响应队列，
+arbiter 可跟踪多个有序 render read。
 
-尚未完成的架构项是独立 ordered descriptor FIFO、sample-ready FIFO，以及第 12 节定义的
-8-voice group reducer + true-dual-port BRAM mix。当前 `voice_sample_window` 已在 generic
-`render-rtl-ddr3` 中使用，但该长仿真接 simulation bridge/timing model，不实例化 Smart
-Artix reader；板级队列由定向 SV test 覆盖。fresh synthesis、place/route 和资源退出条件也
-仍待执行，因此本节状态不能视为 Phase 5/6 signoff。
+renderer 的 job payload、sample-0、sample-1 和八个 endpoint 地址 bank 已改为同步 BRAM。
+endpoint bank 采用 8-way bank、每组 8 endpoint；同步读增加的读拍由扫描组数从 8 减到 4
+抵消。fresh synthesis 明确映射出 11 个 renderer RAMB18：8 个 `32x32` endpoint bank、
+两个 `128x16` sample bank 和一个 `128x28` payload bank，不再使用原来的 44 个 RAM64M。
 
-2026-07-29 使用 SGM v2.01 SF2 和 `polyphony_stress_512.mid` 完成 2 秒
-`render-rtl-ddr3`：96,000 frames、12,000 render blocks、峰值 512 active voices，
-`max_render_cycles=16,347`、`deadline_misses=0`。该结果包含 `voice_sample_window` 和 timed
-DDR3 的 6,419,462 次 line read（3,852,561 row hits、2,566,901 row misses），满足第 6.2
-节 `<30,000` 的真实 SF2/MIDI generic-core 门槛。它不包含 Smart Artix queued reader，
-因此不能替代板级 wrapper 的吞吐或 post-route signoff。
+尚未完成的架构项是规划阶段生成的 ordered line-descriptor FIFO、sample-ready FIFO，以及
+第 12 节定义的 8-voice group reducer + true-dual-port BRAM mix。当前 endpoint BRAM 仍在
+每次 line request 前扫描 endpoint；虽然 LUTRAM 已下降，但 8-way line compare 抵消了这次
+BRAM 化的 LUT 收益。下一步必须删除全表 line scan，而不是继续扩大比较宽度。
+
+2026-07-29 使用 SGM v2.01 SF2 和 `polyphony_stress_512.mid` 的 0.02 秒 smoke 明确产生
+60 个 16-frame block，峰值 465 active voices，timed DDR3 下
+`max_render_cycles=26,752`、`deadline_misses=0`。同配置的定向 512-voice SV 压力为：
+零等待理论值 28,024 clocks；timed DDR3 为 28,008 clocks、2,048 reads、2,011 row hits、
+37 row misses。零等待数字仅表示片内/内存零等待理论吞吐，不能代替 DDR3 验收。
+
+此前 2 秒结果中的 `max_render_cycles=16,347` 来自旧 harness 的固定 8-frame boundary，
+尽管编译 RTL 的上限是 16，也没有实际请求 16-frame block。该结果只保留为 8-frame 真实
+SF2/MIDI 证据，不能用于 16-frame `<30,000` 验收。harness 现从 SV 导出的
+`configured_max_block_frames` 取得边界，并在 JSON 中记录配置上限、实际最大请求和直方图。
+generic `render-rtl-ddr3` 仍接 simulation bridge/timing model，不实例化 Smart Artix reader；
+板级队列由定向 SV test 覆盖。因此以上结果也不能替代 post-route signoff。
 
 ## 2. 已知基线
 
@@ -100,6 +112,20 @@ post-synthesis 层次的主要占用为：
 | generated MIG | 5,114 | 4,146 | 0 | 0 |
 
 层次数字包含父子层级，不能相加为全芯片总数；它们用于确定优化优先级。
+
+当前 8-entry、16-frame、endpoint BRAM 候选的 fresh post-synthesis 结果为：
+
+| 资源 | 使用 | 器件容量 | 占用 |
+| --- | ---: | ---: | ---: |
+| Slice LUT | 25,560 | 32,600 | 78.40% |
+| Slice FF | 25,184 | 65,200 | 38.63% |
+| BRAM36 等效 tile | 49 | 75 | 65.33% |
+| DSP48E1 | 39 | 120 | 32.50% |
+
+post-synthesis setup WNS 为 `+0.389 ns`，DRC error 为 0。与相同 8-entry 配置在 endpoint
+BRAM 化前相比，LUTRAM 从 1,047 降到 871、BRAM tile 从 45 增到 49，但总 LUT 从 25,368
+增到 25,560。该 A/B 证明存储已真实迁移到 BRAM，也证明删除 endpoint-to-line 全表比较器
+是下一阶段的必要条件。以上不是 post-route 结果。
 
 ### 2.3 当前真实压力证据
 
@@ -205,7 +231,7 @@ voice_id counter -> 512-depth state BRAM
 single-context phase/envelope/endpoint microengine
                          |
                          v
-                 16-entry voice-job RAM
+                  8-entry voice-job RAM
                          |
                          v
        sequential line planner + per-voice window
@@ -230,7 +256,7 @@ single-context phase/envelope/endpoint microengine
 
 只有三个地方保存多项工作：
 
-- 16-entry voice-job RAM，用于隔离 frontend、DDR 和 DSP；
+- 8-entry voice-job RAM，用于隔离 frontend、DDR 和 DSP；
 - 固定 8 个 DSP lane，只保存 filter feedback 所需的最小 context；
 - 固定深度 ordered line descriptor，用于关联 MIG response。
 
@@ -396,30 +422,29 @@ cB-to-Q15 conversion 是独立 registered pipeline。它接受 ENV 结果及 `{j
 如果 post-route 证明 ENV 或 PHASE 仍是最差路径，允许各自再拆一级并把 active voice 上限
 提高到 48 clocks；超过 48 必须重新做完整 rolling-deadline 模型，不能继续无界串行化。
 
-## 9. 16-Entry Voice-Job Ring
+## 9. 8-Entry Voice-Job Ring
 
-### 9.1 为什么是 16
+### 9.1 为什么是 8
 
 variable DDR latency 需要多个 voice job 在途。删除并发只会把 DDR stall 传播到 frontend。
-16 entries 允许 memory 等待一组 job 时 frontend 继续，并允许 DSP 固定装入八个 lane 后
-memory 填下一组。它是两个 8-job 工作集的容量，不是 16 个动态 scheduler slot。
-
-Phase 1 必须同时模拟深度 8 和 16。若 8 在所有 trace 下的 frontend stall 和 DSP starvation
-与 16 相同，生产值可以降为 8；不得增加到 32，除非 16 的 occupancy histogram 明确满载。
+8 entries 与固定八个 DSP lane 一一对应；memory 等待部分 job 时 frontend 仍可继续，且
+定向压力已经达到 `max_outstanding=8` 和完整 frontend/DSP overlap。Phase 1 的 A/B 显示
+8-entry 为 28,000 clocks、16-entry 为 28,144 clocks，更深表的轮询代价没有换来吞吐收益。
+因此生产值使用 8；不得增加到 16 或 32，除非真实 occupancy/stall 证据推翻该结果。
 
 ### 9.2 逻辑布局
 
-以 16-frame 候选估算：
+以 16-frame、8-entry 候选估算：
 
 | RAM | 逻辑形状 | 约 bit 数 | 访问 |
 | --- | ---: | ---: | --- |
-| job header/context | 16 x 约 350 | 5.6 Kbit | frontend write，DSP/final writeback read |
-| frame job | 256 x 约 84 | 21.5 Kbit | frontend write，memory/DSP read |
-| sample pair | 256 x 32 | 8.2 Kbit | memory write，DSP read |
-| valid/pending/count | 16 x 小于 64 | 小于 1 Kbit | 各 owner pointer |
+| job header/context | 8 x 约 350 | 2.8 Kbit | frontend write，DSP/final writeback read |
+| frame job | 128 x 约 84 | 10.8 Kbit | frontend write，memory/DSP read |
+| sample pair | 128 x 32 | 4.1 Kbit | memory write，DSP read |
+| valid/pending/count | 8 x 小于 64 | 小于 0.5 Kbit | 各 owner pointer |
 
 实际 RAMB packing 可能为 3 至 6 个 BRAM36 tile。endpoint 地址不得展开成
-`16 entries x 32 endpoints` 的异步宽读矩阵。frame job 按 `{job_id, frame}` 存储，一次
+`8 entries x 32 endpoints` 的异步宽读矩阵。frame job 按 `{job_id, frame}` 存储，一次
 同步读一个 frame 的两个连续 endpoint。
 
 ### 9.3 Ownership
@@ -431,7 +456,7 @@ FREE -> FRONTEND -> MEMORY -> DSP_READY -> DSP -> WRITEBACK -> FREE
 ```
 
 每个边界使用 head/tail 或 job-ID FIFO。任何 engine 都只能访问自己持有的 ID；不扫描
-16 个 owner state，不做 round-robin candidate select。所有 FIFO payload 只有 job ID。
+8 个 owner state，不做 round-robin candidate select。所有 FIFO payload 只有 job ID。
 
 DSP retirement 必须保持 job 顺序，因此 ring entry 可以按序释放。若实现发现需要乱序
 释放，说明 memory/DSP 合同已经偏离本计划，应停止而不是增加 reorder buffer。
@@ -810,7 +835,7 @@ response 或 sample association 错误。
 
 1. frontend 只有一个 voice context；没有证据不增加第二个。
 2. DSP 固定八 lane；没有动态 ready search。
-3. job ring 最大 16；没有 occupancy 证据不增到 32。
+3. job ring 生产值为 8；没有 occupancy 证据不增到 16。
 4. line descriptor 最大 16；response 严格有序。
 5. 不做跨 voice merge、CAM、通用 MSHR 或 reorder buffer。
 6. window 第一版保持 32 words/voice；64-word 只允许作为独立测量实验。
@@ -828,7 +853,7 @@ NUM_VOICES             = 512
 MAX_RENDER_FRAMES      = 16
 FRONTEND_CONTEXTS      = 1
 FRONTEND_CLOCKS/FRAME  = 2
-JOB_RING_DEPTH         = 16
+JOB_RING_DEPTH         = 8
 ENDPOINT_SCAN_WIDTH    = 1 frame pair/clock
 WINDOW_WORDS/VOICE     = 32
 WINDOW_POLICY          = compatibility first, sector-valid only after A/B

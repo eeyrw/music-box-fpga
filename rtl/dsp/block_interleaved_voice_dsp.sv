@@ -20,9 +20,22 @@ module block_interleaved_voice_dsp (
       FILTER_SAMPLE_WIDTH + FILTER_COEFF_WIDTH;
 
   typedef struct packed {
+    logic [VOICE_GENERATION_WIDTH-1:0] generation;
+    logic [VOICE_ID_WIDTH-1:0] voice_index;
+    logic signed [15:0] gain_l;
+    logic signed [15:0] gain_r;
+  } dsp_metadata_t;
+
+  typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
+    logic filter_enable;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     pcm_t sample_0;
@@ -34,7 +47,13 @@ module block_interleaved_voice_dsp (
   typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
+    logic filter_enable;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b0;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_b2;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     pcm_t x;
@@ -45,7 +64,10 @@ module block_interleaved_voice_dsp (
   typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
+    logic filter_enable;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     pcm_t x;
@@ -59,7 +81,10 @@ module block_interleaved_voice_dsp (
   typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
+    logic filter_enable;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a1;
+    logic signed [FILTER_COEFF_WIDTH-1:0] filter_a2;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     pcm_t x;
@@ -73,7 +98,8 @@ module block_interleaved_voice_dsp (
   typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
+    logic filter_enable;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     pcm_t x;
@@ -89,7 +115,7 @@ module block_interleaved_voice_dsp (
   typedef struct packed {
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
-    block_voice_context_t voice_context;
+    dsp_metadata_t metadata;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
     logic signed [15:0] envelope_level;
     filter_sample_t selected_sample;
@@ -228,9 +254,9 @@ module block_interleaved_voice_dsp (
         $signed({{(FILTER_RAW_WIDTH-32){s4_q.b2_x[31]}}, s4_q.b2_x}) -
         $signed({{(FILTER_RAW_WIDTH-FILTER_FEEDBACK_PRODUCT_WIDTH){
                   s4_q.a2_y[FILTER_FEEDBACK_PRODUCT_WIDTH-1]}}, s4_q.a2_y});
-    next_z1 = s4_q.voice_context.filter_enable ?
+    next_z1 = s4_q.filter_enable ?
         saturate_filter_state(next_z1_raw) : s4_q.filter_z1;
-    next_z2 = s4_q.voice_context.filter_enable ?
+    next_z2 = s4_q.filter_enable ?
         saturate_filter_state(next_z2_raw) : s4_q.filter_z2;
 
     retire_next = '0;
@@ -287,14 +313,14 @@ module block_interleaved_voice_dsp (
       if (valid_q[5]) begin
         s6_q.work_id <= s5_q.work_id;
         s6_q.last <= s5_q.last;
-        s6_q.generation <= s5_q.voice_context.generation;
-        s6_q.voice_index <= s5_q.voice_context.voice_index;
+        s6_q.generation <= s5_q.metadata.generation;
+        s6_q.voice_index <= s5_q.metadata.voice_index;
         s6_q.frame_index <= s5_q.frame_index;
         s6_q.envelope_level <= s5_q.envelope_level;
         s6_q.gain_product_l <=
-            $signed(s5_q.selected_sample) * $signed(s5_q.voice_context.gain_l);
+            $signed(s5_q.selected_sample) * $signed(s5_q.metadata.gain_l);
         s6_q.gain_product_r <=
-            $signed(s5_q.selected_sample) * $signed(s5_q.voice_context.gain_r);
+            $signed(s5_q.selected_sample) * $signed(s5_q.metadata.gain_r);
         s6_q.filter_z1 <= s5_q.filter_z1;
         s6_q.filter_z2 <= s5_q.filter_z2;
       end
@@ -302,10 +328,10 @@ module block_interleaved_voice_dsp (
       if (valid_q[4]) begin
         s5_q.work_id <= s4_q.work_id;
         s5_q.last <= s4_q.last;
-        s5_q.voice_context <= s4_q.voice_context;
+        s5_q.metadata <= s4_q.metadata;
         s5_q.frame_index <= s4_q.frame_index;
         s5_q.envelope_level <= s4_q.envelope_level;
-        s5_q.selected_sample <= s4_q.voice_context.filter_enable ?
+        s5_q.selected_sample <= s4_q.filter_enable ?
             s4_q.y : {{(FILTER_SAMPLE_WIDTH-PCM_WIDTH){s4_q.x[PCM_WIDTH-1]}},
                        s4_q.x};
         s5_q.filter_z1 <= next_z1;
@@ -315,7 +341,8 @@ module block_interleaved_voice_dsp (
       if (valid_q[3]) begin
         s4_q.work_id <= s3_q.work_id;
         s4_q.last <= s3_q.last;
-        s4_q.voice_context <= s3_q.voice_context;
+        s4_q.metadata <= s3_q.metadata;
+        s4_q.filter_enable <= s3_q.filter_enable;
         s4_q.frame_index <= s3_q.frame_index;
         s4_q.envelope_level <= s3_q.envelope_level;
         s4_q.x <= s3_q.x;
@@ -323,9 +350,9 @@ module block_interleaved_voice_dsp (
         s4_q.b2_x <= s3_q.b2_x;
         s4_q.y <= s3_q.y;
         s4_q.a1_y <= $signed(s3_q.y) *
-                     $signed(s3_q.voice_context.filter_a1);
+                     $signed(s3_q.filter_a1);
         s4_q.a2_y <= $signed(s3_q.y) *
-                     $signed(s3_q.voice_context.filter_a2);
+                     $signed(s3_q.filter_a2);
         s4_q.filter_z1 <= s3_q.filter_z1;
         s4_q.filter_z2 <= s3_q.filter_z2;
       end
@@ -333,7 +360,10 @@ module block_interleaved_voice_dsp (
       if (valid_q[2]) begin
         s3_q.work_id <= s2_q.work_id;
         s3_q.last <= s2_q.last;
-        s3_q.voice_context <= s2_q.voice_context;
+        s3_q.metadata <= s2_q.metadata;
+        s3_q.filter_enable <= s2_q.filter_enable;
+        s3_q.filter_a1 <= s2_q.filter_a1;
+        s3_q.filter_a2 <= s2_q.filter_a2;
         s3_q.frame_index <= s2_q.frame_index;
         s3_q.envelope_level <= s2_q.envelope_level;
         s3_q.x <= s2_q.x;
@@ -347,16 +377,19 @@ module block_interleaved_voice_dsp (
       if (valid_q[1]) begin
         s2_q.work_id <= s1_q.work_id;
         s2_q.last <= s1_q.last;
-        s2_q.voice_context <= s1_q.voice_context;
+        s2_q.metadata <= s1_q.metadata;
+        s2_q.filter_enable <= s1_q.filter_enable;
+        s2_q.filter_a1 <= s1_q.filter_a1;
+        s2_q.filter_a2 <= s1_q.filter_a2;
         s2_q.frame_index <= s1_q.frame_index;
         s2_q.envelope_level <= s1_q.envelope_level;
         s2_q.x <= s1_q.x;
         s2_q.b0_x <= $signed(s1_q.x) *
-                     $signed(s1_q.voice_context.filter_b0);
+                     $signed(s1_q.filter_b0);
         s2_q.b1_x <= $signed(s1_q.x) *
-                     $signed(s1_q.voice_context.filter_b1);
+                     $signed(s1_q.filter_b1);
         s2_q.b2_x <= $signed(s1_q.x) *
-                     $signed(s1_q.voice_context.filter_b2);
+                     $signed(s1_q.filter_b2);
         s2_q.filter_z1 <= s1_q.filter_z1;
         s2_q.filter_z2 <= s1_q.filter_z2;
       end
@@ -364,7 +397,13 @@ module block_interleaved_voice_dsp (
       if (valid_q[0]) begin
         s1_q.work_id <= s0_q.work_id;
         s1_q.last <= s0_q.last;
-        s1_q.voice_context <= s0_q.voice_context;
+        s1_q.metadata <= s0_q.metadata;
+        s1_q.filter_enable <= s0_q.filter_enable;
+        s1_q.filter_b0 <= s0_q.filter_b0;
+        s1_q.filter_b1 <= s0_q.filter_b1;
+        s1_q.filter_b2 <= s0_q.filter_b2;
+        s1_q.filter_a1 <= s0_q.filter_a1;
+        s1_q.filter_a2 <= s0_q.filter_a2;
         s1_q.frame_index <= s0_q.frame_index;
         s1_q.envelope_level <= s0_q.envelope_level;
         s1_q.x <= interpolated[PCM_WIDTH-1:0];
@@ -375,7 +414,16 @@ module block_interleaved_voice_dsp (
       if (token_valid && token_ready) begin
         s0_q.work_id <= token.work_id;
         s0_q.last <= token.last;
-        s0_q.voice_context <= token.voice_context;
+        s0_q.metadata.generation <= token.voice_context.generation;
+        s0_q.metadata.voice_index <= token.voice_context.voice_index;
+        s0_q.metadata.gain_l <= token.voice_context.gain_l;
+        s0_q.metadata.gain_r <= token.voice_context.gain_r;
+        s0_q.filter_enable <= token.voice_context.filter_enable;
+        s0_q.filter_b0 <= token.voice_context.filter_b0;
+        s0_q.filter_b1 <= token.voice_context.filter_b1;
+        s0_q.filter_b2 <= token.voice_context.filter_b2;
+        s0_q.filter_a1 <= token.voice_context.filter_a1;
+        s0_q.filter_a2 <= token.voice_context.filter_a2;
         s0_q.frame_index <= token.sample.job.block_frame_index;
         s0_q.envelope_level <= token.sample.job.envelope_level;
         s0_q.sample_0 <= token.sample.sample_0;

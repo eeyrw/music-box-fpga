@@ -54,7 +54,7 @@ module block_interleaved_voice_renderer (
   localparam int JOB_RAM_DEPTH =
       JOB_RING_ENTRY_COUNT * MAX_BLOCK_FRAMES;
   localparam int JOB_RAM_ADDR_WIDTH = $clog2(JOB_RAM_DEPTH);
-  localparam int MEMORY_SCAN_GROUP_SIZE = 4;
+  localparam int MEMORY_SCAN_GROUP_SIZE = 8;
   localparam int MEMORY_SCAN_GROUP_COUNT =
       ENDPOINT_COUNT / MEMORY_SCAN_GROUP_SIZE;
   localparam int MEMORY_SCAN_GROUP_WIDTH =
@@ -85,19 +85,27 @@ module block_interleaved_voice_renderer (
 
   work_state_t work_state_q [0:JOB_RING_ENTRY_COUNT-1];
   block_voice_context_t work_context_q [0:JOB_RING_ENTRY_COUNT-1];
-  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
       work_endpoint_addr_bank_0 [0:ENDPOINT_BANK_DEPTH-1];
-  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
       work_endpoint_addr_bank_1 [0:ENDPOINT_BANK_DEPTH-1];
-  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
       work_endpoint_addr_bank_2 [0:ENDPOINT_BANK_DEPTH-1];
-  (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
       work_endpoint_addr_bank_3 [0:ENDPOINT_BANK_DEPTH-1];
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
+      work_endpoint_addr_bank_4 [0:ENDPOINT_BANK_DEPTH-1];
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
+      work_endpoint_addr_bank_5 [0:ENDPOINT_BANK_DEPTH-1];
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
+      work_endpoint_addr_bank_6 [0:ENDPOINT_BANK_DEPTH-1];
+  (* ram_style = "block" *) logic [ADDR_WIDTH-1:0]
+      work_endpoint_addr_bank_7 [0:ENDPOINT_BANK_DEPTH-1];
   (* ram_style = "block" *) logic [JOB_PAYLOAD_WIDTH-1:0]
       work_job_payload_mem
       [0:JOB_RAM_DEPTH-1];
-  pcm_t work_endpoint_sample_q
-      [0:JOB_RING_ENTRY_COUNT-1][0:ENDPOINT_COUNT-1];
+  (* ram_style = "block" *) pcm_t work_sample_0_mem [0:JOB_RAM_DEPTH-1];
+  (* ram_style = "block" *) pcm_t work_sample_1_mem [0:JOB_RAM_DEPTH-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_valid_q
       [0:JOB_RING_ENTRY_COUNT-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_pending_q
@@ -175,6 +183,7 @@ module block_interleaved_voice_renderer (
   logic [ENDPOINT_BANK_ADDR_WIDTH-1:0] memory_scan_bank_addr;
   logic [ADDR_WIDTH-1:0] memory_scan_group_addr
       [0:MEMORY_SCAN_GROUP_SIZE-1];
+  logic memory_scan_read_valid_q;
   logic [ENDPOINT_COUNT-1:0] memory_scan_group_mask;
   logic [LINE_SHIFT-1:0] memory_scan_group_word_index
       [0:ENDPOINT_COUNT-1];
@@ -191,6 +200,13 @@ module block_interleaved_voice_renderer (
   logic [ENDPOINT_COUNT-1:0] response_line_mask_q;
   logic [LINE_SHIFT-1:0] response_word_index_q
       [0:ENDPOINT_COUNT-1];
+  logic response_gather_active_q;
+  logic [ENDPOINT_COUNT-1:0] response_gather_mask_q;
+  logic [JOB_RING_ID_WIDTH-1:0] response_gather_work_id_q;
+  ordered_line_rsp_t response_gather_line_q;
+  logic response_gather_found;
+  logic [ENDPOINT_INDEX_WIDTH-1:0] response_gather_endpoint;
+  logic [JOB_RAM_ADDR_WIDTH-1:0] response_gather_pair_addr;
   logic cache_req_valid;
   logic cache_req_ready;
   logic [ADDR_WIDTH-1:0] cache_req_addr;
@@ -230,8 +246,9 @@ module block_interleaved_voice_renderer (
   logic issue_select_valid_q;
   logic [DSP_LANE_ID_WIDTH-1:0] issue_select_lane_q;
   logic [JOB_RING_ID_WIDTH-1:0] issue_select_work_id_q;
-  logic [BLOCK_FRAME_INDEX_WIDTH-1:0] issue_select_job_index_q;
   job_payload_t issue_job_payload_q;
+  pcm_t issue_sample_0_q;
+  pcm_t issue_sample_1_q;
   logic issue_select_capture;
 
   block_dsp_sample_token_t dsp_token;
@@ -313,7 +330,7 @@ module block_interleaved_voice_renderer (
     .client_req_voice(cache_req_voice),
     .client_req_refill(cache_req_refill),
     .client_rsp_valid(cache_rsp_valid),
-    .client_rsp_ready(1'b1),
+    .client_rsp_ready(!response_gather_active_q),
     .client_rsp_addr(cache_rsp_addr),
     .client_rsp_tag(cache_rsp_tag),
     .client_rsp(cache_rsp),
@@ -413,14 +430,6 @@ module block_interleaved_voice_renderer (
         (ENDPOINT_BANK_ADDR_WIDTH'(memory_select_work_id_q) <<
          MEMORY_SCAN_GROUP_WIDTH) |
         ENDPOINT_BANK_ADDR_WIDTH'(memory_scan_group_q);
-    memory_scan_group_addr[0] =
-        work_endpoint_addr_bank_0[memory_scan_bank_addr];
-    memory_scan_group_addr[1] =
-        work_endpoint_addr_bank_1[memory_scan_bank_addr];
-    memory_scan_group_addr[2] =
-        work_endpoint_addr_bank_2[memory_scan_bank_addr];
-    memory_scan_group_addr[3] =
-        work_endpoint_addr_bank_3[memory_scan_bank_addr];
     for (int endpoint = 0; endpoint < ENDPOINT_COUNT; endpoint++) begin
       memory_scan_group_word_index[endpoint] = '0;
     end
@@ -429,7 +438,7 @@ module block_interleaved_voice_renderer (
       logic [ENDPOINT_INDEX_WIDTH-1:0] endpoint_index;
       endpoint_index = ENDPOINT_INDEX_WIDTH'(
           (int'(memory_scan_group_q) * MEMORY_SCAN_GROUP_SIZE) + lane);
-      endpoint_missing = memory_select_valid_q &&
+      endpoint_missing = memory_select_valid_q && memory_scan_read_valid_q &&
           work_endpoint_required_q[memory_select_work_id_q][endpoint_index] &&
           !work_endpoint_valid_q[memory_select_work_id_q][endpoint_index] &&
           !work_endpoint_pending_q[memory_select_work_id_q][endpoint_index];
@@ -454,6 +463,22 @@ module block_interleaved_voice_renderer (
     cache_req_tag = memory_request_work_id_q;
     cache_req_voice = memory_request_voice_q;
     cache_req_refill = memory_request_refill_q;
+
+    response_gather_found = 1'b0;
+    response_gather_endpoint = '0;
+    for (int gather_endpoint = 0; gather_endpoint < ENDPOINT_COUNT;
+         gather_endpoint++) begin
+      if (!response_gather_found &&
+          response_gather_mask_q[gather_endpoint]) begin
+        response_gather_found = 1'b1;
+        response_gather_endpoint = ENDPOINT_INDEX_WIDTH'(gather_endpoint);
+      end
+    end
+    response_gather_pair_addr =
+        (JOB_RAM_ADDR_WIDTH'(response_gather_work_id_q) <<
+         BLOCK_FRAME_INDEX_WIDTH) |
+        JOB_RAM_ADDR_WIDTH'(
+            response_gather_endpoint[ENDPOINT_INDEX_WIDTH-1:1]);
 
     issue_candidate_lane = issue_rr_q;
     issue_candidate_work_id = lane_work_id_q[issue_candidate_lane];
@@ -486,11 +511,9 @@ module block_interleaved_voice_renderer (
     dsp_token_q_next.sample.job.envelope_level =
         issue_job_payload_q.envelope_level;
     dsp_token_q_next.sample.sample_0 =
-        work_endpoint_sample_q[issue_select_work_id_q][
-            {issue_select_job_index_q, 1'b0}];
+        issue_sample_0_q;
     dsp_token_q_next.sample.sample_1 =
-        work_endpoint_sample_q[issue_select_work_id_q][
-            {issue_select_job_index_q, 1'b1}];
+        issue_sample_1_q;
     dsp_token_q_next.filter_z1 =
         (dsp_state_update_valid &&
          (dsp_state_update.work_id == issue_select_work_id_q)) ?
@@ -509,7 +532,6 @@ module block_interleaved_voice_renderer (
     result_env_state = result_env_state_q;
   end
 
-  integer endpoint;
   always_ff @(posedge clk) begin
     if (rst) begin
       plan_rr_q <= '0;
@@ -518,7 +540,10 @@ module block_interleaved_voice_renderer (
       memory_select_valid_q <= 1'b0;
       memory_scan_mask_phase_q <= 1'b0;
       memory_scan_group_q <= '0;
+      memory_scan_read_valid_q <= 1'b0;
       memory_request_valid_q <= 1'b0;
+      response_gather_active_q <= 1'b0;
+      response_gather_mask_q <= '0;
       lane_load_lane_rr_q <= '0;
       lane_load_job_rr_q <= '0;
       issue_rr_q <= '0;
@@ -534,6 +559,23 @@ module block_interleaved_voice_renderer (
         lane_work_id_q[lane] <= '0;
       end
     end else begin
+      memory_scan_group_addr[0] <=
+          work_endpoint_addr_bank_0[memory_scan_bank_addr];
+      memory_scan_group_addr[1] <=
+          work_endpoint_addr_bank_1[memory_scan_bank_addr];
+      memory_scan_group_addr[2] <=
+          work_endpoint_addr_bank_2[memory_scan_bank_addr];
+      memory_scan_group_addr[3] <=
+          work_endpoint_addr_bank_3[memory_scan_bank_addr];
+      memory_scan_group_addr[4] <=
+          work_endpoint_addr_bank_4[memory_scan_bank_addr];
+      memory_scan_group_addr[5] <=
+          work_endpoint_addr_bank_5[memory_scan_bank_addr];
+      memory_scan_group_addr[6] <=
+          work_endpoint_addr_bank_6[memory_scan_bank_addr];
+      memory_scan_group_addr[7] <=
+          work_endpoint_addr_bank_7[memory_scan_bank_addr];
+
       plan_q.valid <= plan_found;
       if (!plan_found)
         plan_rr_q <= plan_rr_q + 1'b1;
@@ -543,19 +585,26 @@ module block_interleaved_voice_renderer (
         memory_select_work_id_q <= memory_candidate_work_id;
         memory_scan_mask_phase_q <= 1'b0;
         memory_scan_group_q <= '0;
+        memory_scan_read_valid_q <= 1'b0;
         memory_request_line_mask_q <= '0;
       end else if (memory_select_valid_q) begin
-        if (!memory_scan_mask_phase_q) begin
+        if (!memory_scan_read_valid_q) begin
+          memory_scan_read_valid_q <= 1'b1;
+        end else if (!memory_scan_mask_phase_q) begin
           if (memory_scan_find_found) begin
             memory_scan_mask_phase_q <= 1'b1;
             memory_scan_line_addr_q <= memory_scan_find_line_addr;
+            memory_scan_group_q <= '0;
+            memory_scan_read_valid_q <= 1'b0;
             memory_request_line_mask_q <= '0;
           end else if (memory_scan_group_q ==
                        MEMORY_SCAN_GROUP_WIDTH'(MEMORY_SCAN_GROUP_COUNT - 1)) begin
             memory_select_valid_q <= 1'b0;
             memory_scan_group_q <= '0;
+            memory_scan_read_valid_q <= 1'b0;
           end else begin
             memory_scan_group_q <= memory_scan_group_q + 1'b1;
+            memory_scan_read_valid_q <= 1'b0;
           end
         end else begin
           memory_request_line_mask_q <= memory_request_line_mask_q |
@@ -571,6 +620,7 @@ module block_interleaved_voice_renderer (
             memory_select_valid_q <= 1'b0;
             memory_scan_mask_phase_q <= 1'b0;
             memory_scan_group_q <= '0;
+            memory_scan_read_valid_q <= 1'b0;
             memory_request_valid_q <= 1'b1;
             memory_request_work_id_q <= memory_select_work_id_q;
             memory_request_line_addr_q <= memory_scan_line_addr_q;
@@ -580,6 +630,7 @@ module block_interleaved_voice_renderer (
                 !work_window_checked_q[memory_select_work_id_q];
           end else begin
             memory_scan_group_q <= memory_scan_group_q + 1'b1;
+            memory_scan_read_valid_q <= 1'b0;
           end
         end
       end else if (memory_action) begin
@@ -601,13 +652,21 @@ module block_interleaved_voice_renderer (
         issue_select_valid_q <= 1'b1;
         issue_select_lane_q <= issue_candidate_lane;
         issue_select_work_id_q <= issue_candidate_work_id;
-        issue_select_job_index_q <= work_issue_index_q[
-            issue_candidate_work_id][BLOCK_FRAME_INDEX_WIDTH-1:0];
         issue_job_payload_q <= job_payload_t'(work_job_payload_mem[
             (JOB_RAM_ADDR_WIDTH'(issue_candidate_work_id) <<
              BLOCK_FRAME_INDEX_WIDTH) |
             JOB_RAM_ADDR_WIDTH'(work_issue_index_q[
                 issue_candidate_work_id])]);
+        issue_sample_0_q <= work_sample_0_mem[
+            (JOB_RAM_ADDR_WIDTH'(issue_candidate_work_id) <<
+             BLOCK_FRAME_INDEX_WIDTH) |
+            JOB_RAM_ADDR_WIDTH'(work_issue_index_q[
+                issue_candidate_work_id])];
+        issue_sample_1_q <= work_sample_1_mem[
+            (JOB_RAM_ADDR_WIDTH'(issue_candidate_work_id) <<
+             BLOCK_FRAME_INDEX_WIDTH) |
+            JOB_RAM_ADDR_WIDTH'(work_issue_index_q[
+                issue_candidate_work_id])];
       end else if (issue_capture) begin
         issue_select_valid_q <= 1'b0;
       end
@@ -709,33 +768,64 @@ module block_interleaved_voice_renderer (
                     plan_fraction,
                     plan_q.envelope_level
                 };
-            if (!plan_q.job_count[0]) begin
-              work_endpoint_addr_bank_0[
-                  (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
-                   MEMORY_SCAN_GROUP_WIDTH) |
-                  ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
-                      BLOCK_FRAME_INDEX_WIDTH-1:1])] <=
-                  plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
-              work_endpoint_addr_bank_1[
-                  (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
-                   MEMORY_SCAN_GROUP_WIDTH) |
-                  ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
-                      BLOCK_FRAME_INDEX_WIDTH-1:1])] <=
-                  plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
-            end else begin
-              work_endpoint_addr_bank_2[
-                  (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
-                   MEMORY_SCAN_GROUP_WIDTH) |
-                  ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
-                      BLOCK_FRAME_INDEX_WIDTH-1:1])] <=
-                  plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
-              work_endpoint_addr_bank_3[
-                  (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
-                   MEMORY_SCAN_GROUP_WIDTH) |
-                  ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
-                      BLOCK_FRAME_INDEX_WIDTH-1:1])] <=
-                  plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
-            end
+            unique case (plan_q.job_count[1:0])
+              2'd0: begin
+                work_endpoint_addr_bank_0[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
+                work_endpoint_addr_bank_1[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
+              end
+              2'd1: begin
+                work_endpoint_addr_bank_2[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
+                work_endpoint_addr_bank_3[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
+              end
+              2'd2: begin
+                work_endpoint_addr_bank_4[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
+                work_endpoint_addr_bank_5[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
+              end
+              default: begin
+                work_endpoint_addr_bank_6[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_0);
+                work_endpoint_addr_bank_7[
+                    (ENDPOINT_BANK_ADDR_WIDTH'(plan_q.work_id) <<
+                     MEMORY_SCAN_GROUP_WIDTH) |
+                    ENDPOINT_BANK_ADDR_WIDTH'(plan_q.job_count[
+                        BLOCK_FRAME_INDEX_WIDTH-1:2])] <=
+                    plan_q.region.base_addr + ADDR_WIDTH'(plan_frame_1);
+              end
+            endcase
             work_endpoint_required_q[plan_q.work_id][
                 {plan_q.job_count
                      [BLOCK_FRAME_INDEX_WIDTH-1:0], 1'b0}] <= 1'b1;
@@ -780,16 +870,30 @@ module block_interleaved_voice_renderer (
             memory_request_line_mask_q;
       end
 
-      if (cache_rsp_valid) begin
-        for (endpoint = 0; endpoint < ENDPOINT_COUNT;
-             endpoint = endpoint + 1) begin
-          if (response_line_mask_q[endpoint]) begin
-            work_endpoint_sample_q[cache_rsp_tag][endpoint] <=
-                cache_rsp.words[response_word_index_q[endpoint]];
-            work_endpoint_valid_q[cache_rsp_tag][endpoint] <= 1'b1;
-            work_endpoint_pending_q[cache_rsp_tag][endpoint] <= 1'b0;
-          end
-        end
+      if (cache_rsp_valid && !response_gather_active_q) begin
+        response_gather_active_q <= |response_line_mask_q;
+        response_gather_mask_q <= response_line_mask_q;
+        response_gather_work_id_q <= cache_rsp_tag;
+        response_gather_line_q <= cache_rsp;
+      end
+
+      if (response_gather_active_q && response_gather_found) begin
+        if (response_gather_endpoint[0])
+          work_sample_1_mem[response_gather_pair_addr] <=
+              response_gather_line_q.words[
+                  response_word_index_q[response_gather_endpoint]];
+        else
+          work_sample_0_mem[response_gather_pair_addr] <=
+              response_gather_line_q.words[
+                  response_word_index_q[response_gather_endpoint]];
+        work_endpoint_valid_q[response_gather_work_id_q]
+            [response_gather_endpoint] <= 1'b1;
+        work_endpoint_pending_q[response_gather_work_id_q]
+            [response_gather_endpoint] <= 1'b0;
+        response_gather_mask_q[response_gather_endpoint] <= 1'b0;
+        if ((response_gather_mask_q &
+             ~(ENDPOINT_COUNT'(1) << response_gather_endpoint)) == '0)
+          response_gather_active_q <= 1'b0;
       end
 
       if (issue_capture) begin

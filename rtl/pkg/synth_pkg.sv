@@ -30,7 +30,11 @@ package synth_pkg;
   localparam int BLOCK_WORK_ENTRY_COUNT = 8;
 `endif
   localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
-  localparam int BLOCK_JOB_ENTRY_COUNT = 16;
+`ifdef SYNTH_BLOCK_JOB_ENTRY_COUNT
+  localparam int BLOCK_JOB_ENTRY_COUNT = `SYNTH_BLOCK_JOB_ENTRY_COUNT;
+`else
+  localparam int BLOCK_JOB_ENTRY_COUNT = 8;
+`endif
   localparam int BLOCK_JOB_ID_WIDTH = $clog2(BLOCK_JOB_ENTRY_COUNT);
   /* verilator lint_off UNUSEDPARAM */
   localparam int FILTER_COEFF_WIDTH = 16;

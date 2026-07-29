@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -204,6 +205,9 @@ class RtlDriver : public render::CommandWordSink {
 
   std::vector<std::pair<int16_t, int16_t>> render_block(uint32_t start_frame,
                                                         uint32_t frame_count) {
+    if (frame_count == 0 || frame_count > configured_max_block_frames()) {
+      throw std::runtime_error("block length exceeds configured RTL maximum");
+    }
     dut_.block_start_frame = start_frame;
     dut_.block_frame_count = uint8_t(frame_count);
     const uint16_t block_active_voices = active_voice_count();
@@ -212,6 +216,9 @@ class RtlDriver : public render::CommandWordSink {
     wait_valid(dut_.block_complete_valid, "block completion");
     const uint64_t render_cycles = cycles_ - start_cycle;
     ++render_blocks_;
+    ++block_frame_count_histogram_[frame_count];
+    max_requested_block_frames_ =
+        std::max(max_requested_block_frames_, frame_count);
     render_frames_ += frame_count;
     total_render_cycles_ += render_cycles;
     max_render_cycles_ = std::max(max_render_cycles_, render_cycles);
@@ -269,6 +276,24 @@ class RtlDriver : public render::CommandWordSink {
     return max_deadline_utilization_ppm_;
   }
   uint64_t deadline_misses() const { return deadline_misses_; }
+  uint32_t configured_max_block_frames() const {
+    return dut_.configured_max_block_frames;
+  }
+  uint32_t max_requested_block_frames() const {
+    return max_requested_block_frames_;
+  }
+  std::string block_frame_count_histogram_json() const {
+    std::ostringstream out;
+    out << '{';
+    bool first = true;
+    for (const auto& [frames, count] : block_frame_count_histogram_) {
+      if (!first) out << ',';
+      first = false;
+      out << '\"' << frames << "\":" << count;
+    }
+    out << '}';
+    return out.str();
+  }
   uint64_t first_output_frame_core_cycle() const {
     return first_output_frame_core_cycle_;
   }
@@ -388,6 +413,8 @@ class RtlDriver : public render::CommandWordSink {
   uint64_t max_render_cycles_ = 0;
   uint64_t max_deadline_utilization_ppm_ = 0;
   uint64_t deadline_misses_ = 0;
+  uint32_t max_requested_block_frames_ = 0;
+  std::map<uint32_t, uint64_t> block_frame_count_histogram_;
   bool first_output_frame_seen_ = false;
   uint64_t first_output_frame_core_cycle_ = 0;
   uint64_t first_output_frame_latency_cycles_ = 0;
@@ -398,8 +425,9 @@ class RtlDriver : public render::CommandWordSink {
 
 uint32_t next_boundary(uint32_t frame, uint32_t end_frame,
                        int control_tick_samples,
-                       const std::vector<render::NoteEvent>& events) {
-  uint32_t result = std::min<uint32_t>(end_frame, frame + 8u);
+                       const std::vector<render::NoteEvent>& events,
+                       uint32_t max_block_frames) {
+  uint32_t result = std::min<uint32_t>(end_frame, frame + max_block_frames);
   const uint32_t tick = uint32_t(std::max(1, control_tick_samples));
   const uint64_t next_tick = (uint64_t(frame) / tick + 1u) * tick;
   if (next_tick < result) result = uint32_t(next_tick);
@@ -456,7 +484,8 @@ int main(int argc, char** argv) {
                                    driver.active_voice_count());
       const uint32_t boundary = next_boundary(frame, end_frame,
                                               inputs.control_tick_samples,
-                                              inputs.events);
+                                              inputs.events,
+                                              driver.configured_max_block_frames());
       auto samples = driver.render_block(frame, boundary - frame);
       for (const auto& sample : samples) {
         wav.write_stereo(sample.first, sample.second);
@@ -494,6 +523,12 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_core_cycles\": " << driver.cycles()
           << ",\n  \"rtl_render_blocks\": " << driver.render_blocks()
           << ",\n  \"rtl_render_frames\": " << driver.render_frames()
+          << ",\n  \"rtl_configured_max_block_frames\": "
+          << driver.configured_max_block_frames()
+          << ",\n  \"rtl_max_requested_block_frames\": "
+          << driver.max_requested_block_frames()
+          << ",\n  \"rtl_block_frame_count_histogram\": "
+          << driver.block_frame_count_histogram_json()
           << ",\n  \"rtl_total_render_cycles\": " << driver.total_render_cycles()
           << ",\n  \"rtl_max_render_cycles\": " << driver.max_render_cycles()
           << ",\n  \"rtl_max_deadline_utilization_ppm\": "
