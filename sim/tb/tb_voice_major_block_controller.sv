@@ -10,7 +10,6 @@ module tb_voice_major_block_controller;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
-  logic [NUM_VOICES-1:0] active_bitmap;
   logic render_busy;
   logic state_read_req_valid;
   logic state_read_req_ready;
@@ -116,8 +115,14 @@ module tb_voice_major_block_controller;
       if (dynamic_write_voice != expected_voice ||
           dynamic_write_data.phase != expected_phase ||
           dynamic_write_data.env_state.stage != expected_stage ||
-          dynamic_write_data.env_state.elapsed != expected_elapsed)
+          dynamic_write_data.env_state.elapsed != expected_elapsed) begin
+        $display("DYNAMIC got_voice=%0d phase=%h stage=%0d elapsed=%0d expected_voice=%0d phase=%h stage=%0d elapsed=%0d",
+                 dynamic_write_voice, dynamic_write_data.phase,
+                 dynamic_write_data.env_state.stage,
+                 dynamic_write_data.env_state.elapsed, expected_voice,
+                 expected_phase, expected_stage, expected_elapsed);
         $fatal(1, "dynamic write mismatch for voice %0d", expected_voice);
+      end
       @(negedge clk);
       dynamic_write_ready = 1'b1;
       @(posedge clk);
@@ -135,9 +140,6 @@ module tb_voice_major_block_controller;
     block_req = '0;
     block_req.start_frame = 32'h1234_5678;
     block_req.frame_count = BLOCK_FRAME_COUNT_WIDTH'(1);
-    active_bitmap = '0;
-    active_bitmap[1] = 1'b1;
-    active_bitmap[DELAY_VOICE] = 1'b1;
     state_read_req_ready = 1'b0;
     state_read_rsp_valid = 1'b0;
     state_read_rsp = '0;
@@ -175,14 +177,19 @@ module tb_voice_major_block_controller;
     rst = 1'b0;
 
     send_block();
+    provide_state('0, '0);
     provide_state(VOICE_ID_WIDTH'(1), sounding);
     service_line(32'd96);
     accept_dynamic_write(VOICE_ID_WIDTH'(1), 32'h0000_0100,
                          ENV_SUSTAIN, 24'd0);
 
+    for (int voice = 2; voice < DELAY_VOICE; voice++)
+      provide_state(VOICE_ID_WIDTH'(voice), '0);
     provide_state(VOICE_ID_WIDTH'(DELAY_VOICE), delayed);
     accept_dynamic_write(VOICE_ID_WIDTH'(DELAY_VOICE), 32'h0000_0300,
                          ENV_DELAY, 24'd1);
+    for (int voice = DELAY_VOICE + 1; voice < NUM_VOICES; voice++)
+      provide_state(VOICE_ID_WIDTH'(voice), '0);
 
     do @(posedge clk); while (!block_complete_valid);
     if (block_complete.start_frame != block_req.start_frame ||

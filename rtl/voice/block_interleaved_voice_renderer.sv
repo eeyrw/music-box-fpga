@@ -44,11 +44,15 @@ module block_interleaved_voice_renderer (
 );
   import synth_pkg::*;
 
+  localparam int JOB_RING_ENTRY_COUNT = BLOCK_JOB_ENTRY_COUNT;
+  localparam int JOB_RING_ID_WIDTH = BLOCK_JOB_ID_WIDTH;
+  localparam int DSP_LANE_COUNT = BLOCK_WORK_ENTRY_COUNT;
+  localparam int DSP_LANE_ID_WIDTH = BLOCK_WORK_ID_WIDTH;
   localparam int ENDPOINT_COUNT = MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
   localparam int LINE_SHIFT = $clog2(BLOCK_LINE_WORDS);
   localparam int LINE_ADDR_WIDTH = ADDR_WIDTH - LINE_SHIFT;
   localparam int JOB_RAM_DEPTH =
-      BLOCK_WORK_ENTRY_COUNT * MAX_BLOCK_FRAMES;
+      JOB_RING_ENTRY_COUNT * MAX_BLOCK_FRAMES;
   localparam int JOB_RAM_ADDR_WIDTH = $clog2(JOB_RAM_DEPTH);
   localparam int MEMORY_SCAN_GROUP_SIZE = 4;
   localparam int MEMORY_SCAN_GROUP_COUNT =
@@ -56,7 +60,7 @@ module block_interleaved_voice_renderer (
   localparam int MEMORY_SCAN_GROUP_WIDTH =
       $clog2(MEMORY_SCAN_GROUP_COUNT);
   localparam int ENDPOINT_BANK_DEPTH =
-      BLOCK_WORK_ENTRY_COUNT * MEMORY_SCAN_GROUP_COUNT;
+      JOB_RING_ENTRY_COUNT * MEMORY_SCAN_GROUP_COUNT;
   localparam int ENDPOINT_BANK_ADDR_WIDTH = $clog2(ENDPOINT_BANK_DEPTH);
   localparam int ENDPOINT_INDEX_WIDTH = $clog2(ENDPOINT_COUNT);
 
@@ -79,8 +83,8 @@ module block_interleaved_voice_renderer (
   } job_payload_t;
   localparam int JOB_PAYLOAD_WIDTH = $bits(job_payload_t);
 
-  work_state_t work_state_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  block_voice_context_t work_context_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+  work_state_t work_state_q [0:JOB_RING_ENTRY_COUNT-1];
+  block_voice_context_t work_context_q [0:JOB_RING_ENTRY_COUNT-1];
   (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
       work_endpoint_addr_bank_0 [0:ENDPOINT_BANK_DEPTH-1];
   (* ram_style = "distributed" *) logic [ADDR_WIDTH-1:0]
@@ -93,46 +97,45 @@ module block_interleaved_voice_renderer (
       work_job_payload_mem
       [0:JOB_RAM_DEPTH-1];
   pcm_t work_endpoint_sample_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1][0:ENDPOINT_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1][0:ENDPOINT_COUNT-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_valid_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_pending_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [ENDPOINT_COUNT-1:0] work_endpoint_required_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic work_window_checked_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
+  logic work_window_checked_q [0:JOB_RING_ENTRY_COUNT-1];
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] work_job_count_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] work_issue_index_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] work_frame_count_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] work_frame_cursor_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [MAX_BLOCK_FRAMES-1:0] work_phase_advance_mask_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic [MAX_BLOCK_FRAMES-1:0] work_render_mask_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic signed [MAX_BLOCK_FRAMES-1:0][15:0] work_envelope_levels_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic work_active_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic [PHASE_WIDTH-1:0] work_phase_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  voice_playback_region_t work_region_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
+  logic work_active_q [0:JOB_RING_ENTRY_COUNT-1];
+  logic [PHASE_WIDTH-1:0] work_phase_q [0:JOB_RING_ENTRY_COUNT-1];
+  voice_playback_region_t work_region_q [0:JOB_RING_ENTRY_COUNT-1];
   logic [PHASE_WIDTH-1:0] work_phase_inc_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic work_released_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  block_phase_result_t work_phase_result_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
+  logic work_released_q [0:JOB_RING_ENTRY_COUNT-1];
+  block_phase_result_t work_phase_result_q [0:JOB_RING_ENTRY_COUNT-1];
   logic signed [FILTER_STATE_WIDTH-1:0] work_z1_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
   logic signed [FILTER_STATE_WIDTH-1:0] work_z2_q
-      [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic work_hazard_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  logic work_env_active_q [0:BLOCK_WORK_ENTRY_COUNT-1];
-  volume_env_state_t work_env_state_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+      [0:JOB_RING_ENTRY_COUNT-1];
+  logic work_env_active_q [0:JOB_RING_ENTRY_COUNT-1];
+  volume_env_state_t work_env_state_q [0:JOB_RING_ENTRY_COUNT-1];
 
-  logic [BLOCK_WORK_ID_WIDTH-1:0] plan_rr_q;
+  logic [JOB_RING_ID_WIDTH-1:0] plan_rr_q;
   logic plan_found;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] plan_work_id;
+  logic [JOB_RING_ID_WIDTH-1:0] plan_work_id;
   logic plan_current_done;
   logic [PHASE_FRAME_WIDTH-1:0] plan_frame_0;
   logic [PHASE_FRAME_WIDTH-1:0] plan_frame_1;
@@ -140,11 +143,11 @@ module block_interleaved_voice_renderer (
   logic [PHASE_WIDTH-1:0] plan_next_phase;
   logic plan_store_job;
   logic plan_step_finishes;
-  logic work_phase_candidate_active_q [0:BLOCK_WORK_ENTRY_COUNT-1];
+  logic work_phase_candidate_active_q [0:JOB_RING_ENTRY_COUNT-1];
   typedef struct packed {
     logic valid;
     logic finalize;
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [JOB_RING_ID_WIDTH-1:0] work_id;
     logic active;
     logic [PHASE_WIDTH-1:0] phase;
     voice_playback_region_t region;
@@ -159,11 +162,11 @@ module block_interleaved_voice_renderer (
   } plan_stage_t;
   plan_stage_t plan_q;
 
-  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_rr_q;
+  logic [JOB_RING_ID_WIDTH-1:0] memory_rr_q;
   logic memory_candidate_found;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_candidate_work_id;
+  logic [JOB_RING_ID_WIDTH-1:0] memory_candidate_work_id;
   logic memory_select_valid_q;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_select_work_id_q;
+  logic [JOB_RING_ID_WIDTH-1:0] memory_select_work_id_q;
   logic memory_scan_mask_phase_q;
   logic [MEMORY_SCAN_GROUP_WIDTH-1:0] memory_scan_group_q;
   logic memory_scan_find_found;
@@ -175,9 +178,9 @@ module block_interleaved_voice_renderer (
   logic [ENDPOINT_COUNT-1:0] memory_scan_group_mask;
   logic [LINE_SHIFT-1:0] memory_scan_group_word_index
       [0:ENDPOINT_COUNT-1];
-  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_work_id;
+  logic [JOB_RING_ID_WIDTH-1:0] memory_work_id;
   logic memory_request_valid_q;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] memory_request_work_id_q;
+  logic [JOB_RING_ID_WIDTH-1:0] memory_request_work_id_q;
   logic [ENDPOINT_COUNT-1:0] memory_request_line_mask_q;
   logic [LINE_SHIFT-1:0] memory_request_word_index_q
       [0:ENDPOINT_COUNT-1];
@@ -191,12 +194,12 @@ module block_interleaved_voice_renderer (
   logic cache_req_valid;
   logic cache_req_ready;
   logic [ADDR_WIDTH-1:0] cache_req_addr;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] cache_req_tag;
+  logic [JOB_RING_ID_WIDTH-1:0] cache_req_tag;
   logic [VOICE_ID_WIDTH-1:0] cache_req_voice;
   logic cache_req_refill;
   logic cache_rsp_valid;
   logic [ADDR_WIDTH-1:0] cache_rsp_addr;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] cache_rsp_tag;
+  logic [JOB_RING_ID_WIDTH-1:0] cache_rsp_tag;
   ordered_line_rsp_t cache_rsp;
   logic [63:0] cache_stat_client_requests;
   logic [63:0] cache_stat_cache_hits;
@@ -208,14 +211,25 @@ module block_interleaved_voice_renderer (
   logic [63:0] cache_stat_fallback_reads;
 
   logic free_found;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] free_work_id;
+  logic [JOB_RING_ID_WIDTH-1:0] free_work_id;
   logic start_fire;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] issue_rr_q;
+  logic lane_load_found;
+  logic [DSP_LANE_ID_WIDTH-1:0] lane_load_lane;
+  logic [JOB_RING_ID_WIDTH-1:0] lane_load_work_id;
+  logic [DSP_LANE_ID_WIDTH-1:0] lane_load_lane_rr_q;
+  logic [JOB_RING_ID_WIDTH-1:0] lane_load_job_rr_q;
+  logic lane_valid_q [0:DSP_LANE_COUNT-1];
+  logic [JOB_RING_ID_WIDTH-1:0] lane_work_id_q [0:DSP_LANE_COUNT-1];
+  logic work_lane_assigned_q [0:JOB_RING_ENTRY_COUNT-1];
+  logic [DSP_LANE_ID_WIDTH-1:0] work_lane_q [0:JOB_RING_ENTRY_COUNT-1];
+  logic [DSP_LANE_ID_WIDTH-1:0] issue_rr_q;
   logic issue_found;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] issue_candidate_work_id;
+  logic [DSP_LANE_ID_WIDTH-1:0] issue_candidate_lane;
+  logic [JOB_RING_ID_WIDTH-1:0] issue_candidate_work_id;
   logic issue_endpoints_ready;
   logic issue_select_valid_q;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] issue_select_work_id_q;
+  logic [DSP_LANE_ID_WIDTH-1:0] issue_select_lane_q;
+  logic [JOB_RING_ID_WIDTH-1:0] issue_select_work_id_q;
   logic [BLOCK_FRAME_INDEX_WIDTH-1:0] issue_select_job_index_q;
   job_payload_t issue_job_payload_q;
   logic issue_select_capture;
@@ -235,7 +249,7 @@ module block_interleaved_voice_renderer (
   logic dsp_retire_ready;
 
   logic complete_found;
-  logic [BLOCK_WORK_ID_WIDTH-1:0] complete_work_id;
+  logic [JOB_RING_ID_WIDTH-1:0] complete_work_id;
   logic result_slot_available;
   logic dsp_last_publish;
   logic complete_publish;
@@ -244,6 +258,18 @@ module block_interleaved_voice_renderer (
   logic [VOICE_ID_WIDTH-1:0] result_voice_index_q;
   logic result_env_active_q;
   volume_env_state_t result_env_state_q;
+
+  function automatic logic next_endpoints_ready(
+      input logic [JOB_RING_ID_WIDTH-1:0] work_id);
+    logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
+    next_endpoints_ready = 1'b0;
+    frame_index = work_issue_index_q[work_id][BLOCK_FRAME_INDEX_WIDTH-1:0];
+    if (work_issue_index_q[work_id] < work_job_count_q[work_id]) begin
+      next_endpoints_ready =
+          work_endpoint_valid_q[work_id][{frame_index, 1'b0}] &&
+          work_endpoint_valid_q[work_id][{frame_index, 1'b1}];
+    end
+  endfunction
 
   mono_phase_frame plan_phase_frame (
     .loop_mode(plan_q.region.loop_mode),
@@ -275,8 +301,8 @@ module block_interleaved_voice_renderer (
 
   voice_sample_window #(
     .WINDOW_WORDS(32),
-    .TAG_COUNT(BLOCK_WORK_ENTRY_COUNT),
-    .TAG_WIDTH(BLOCK_WORK_ID_WIDTH)
+    .TAG_COUNT(JOB_RING_ENTRY_COUNT),
+    .TAG_WIDTH(JOB_RING_ID_WIDTH)
   ) line_cache (
     .clk,
     .rst,
@@ -312,17 +338,20 @@ module block_interleaved_voice_renderer (
   assign memory_action = cache_req_valid && cache_req_ready;
 
   always_comb begin
-    plan_found = 1'b0;
-    plan_work_id = '0;
-    for (int offset = 0; offset < BLOCK_WORK_ENTRY_COUNT; offset++) begin
-      logic [BLOCK_WORK_ID_WIDTH-1:0] candidate;
-      candidate = plan_rr_q + BLOCK_WORK_ID_WIDTH'(offset);
-      if (!plan_found && ((work_state_q[candidate] == WORK_PLAN) ||
-                          (work_state_q[candidate] == WORK_PLAN_FINAL))) begin
-        plan_found = 1'b1;
-        plan_work_id = candidate;
-      end
-    end
+    lane_load_lane = lane_load_lane_rr_q;
+    lane_load_work_id = lane_load_job_rr_q;
+    lane_load_found = !lane_valid_q[lane_load_lane_rr_q] &&
+        !work_lane_assigned_q[lane_load_job_rr_q] &&
+        ((work_state_q[lane_load_job_rr_q] == WORK_MEM_WAIT) ||
+         (work_state_q[lane_load_job_rr_q] == WORK_MEM_FETCH) ||
+         (work_state_q[lane_load_job_rr_q] == WORK_READY)) &&
+        next_endpoints_ready(lane_load_job_rr_q);
+  end
+
+  always_comb begin
+    plan_work_id = plan_rr_q;
+    plan_found = (work_state_q[plan_rr_q] == WORK_PLAN) ||
+                 (work_state_q[plan_rr_q] == WORK_PLAN_FINAL);
   end
 
   always_comb begin
@@ -333,10 +362,10 @@ module block_interleaved_voice_renderer (
 
     complete_found = 1'b0;
     complete_work_id = '0;
-    for (int entry = 0; entry < BLOCK_WORK_ENTRY_COUNT; entry++) begin
+    for (int entry = 0; entry < JOB_RING_ENTRY_COUNT; entry++) begin
       if (!complete_found && (work_state_q[entry] == WORK_COMPLETE)) begin
         complete_found = 1'b1;
-        complete_work_id = BLOCK_WORK_ID_WIDTH'(entry);
+        complete_work_id = JOB_RING_ID_WIDTH'(entry);
       end
     end
     complete_publish = complete_found && result_slot_available &&
@@ -344,10 +373,10 @@ module block_interleaved_voice_renderer (
 
     free_found = 1'b0;
     free_work_id = '0;
-    for (int entry = 0; entry < BLOCK_WORK_ENTRY_COUNT; entry++) begin
+    for (int entry = 0; entry < JOB_RING_ENTRY_COUNT; entry++) begin
       if (!free_found && (work_state_q[entry] == WORK_FREE)) begin
         free_found = 1'b1;
-        free_work_id = BLOCK_WORK_ID_WIDTH'(entry);
+        free_work_id = JOB_RING_ID_WIDTH'(entry);
       end
     end
     if (!free_found && dsp_last_publish) begin
@@ -369,23 +398,13 @@ module block_interleaved_voice_renderer (
          !plan_q.phase_advance ||
          ((plan_q.frame_cursor + 1'b1) >= plan_q.frame_count));
 
-    memory_candidate_found = 1'b0;
-    memory_candidate_work_id = '0;
-    for (int offset = 0; offset < BLOCK_WORK_ENTRY_COUNT; offset++) begin
-      logic [BLOCK_WORK_ID_WIDTH-1:0] candidate;
-      logic [ENDPOINT_COUNT-1:0] missing_endpoints;
-      candidate = memory_rr_q + BLOCK_WORK_ID_WIDTH'(offset);
-      missing_endpoints = work_endpoint_required_q[candidate] &
-                          ~work_endpoint_valid_q[candidate] &
-                          ~work_endpoint_pending_q[candidate];
-      if (!memory_candidate_found &&
-          ((work_state_q[candidate] == WORK_MEM_WAIT) ||
-           (work_state_q[candidate] == WORK_MEM_FETCH)) &&
-          (missing_endpoints != '0)) begin
-        memory_candidate_found = 1'b1;
-        memory_candidate_work_id = candidate;
-      end
-    end
+    memory_candidate_work_id = memory_rr_q;
+    memory_candidate_found =
+        ((work_state_q[memory_rr_q] == WORK_MEM_WAIT) ||
+         (work_state_q[memory_rr_q] == WORK_MEM_FETCH)) &&
+        ((work_endpoint_required_q[memory_rr_q] &
+          ~work_endpoint_valid_q[memory_rr_q] &
+          ~work_endpoint_pending_q[memory_rr_q]) != '0);
 
     memory_scan_find_found = 1'b0;
     memory_scan_find_line_addr = '0;
@@ -436,34 +455,17 @@ module block_interleaved_voice_renderer (
     cache_req_voice = memory_request_voice_q;
     cache_req_refill = memory_request_refill_q;
 
-    issue_found = 1'b0;
-    issue_candidate_work_id = '0;
-    issue_endpoints_ready = 1'b0;
+    issue_candidate_lane = issue_rr_q;
+    issue_candidate_work_id = lane_work_id_q[issue_candidate_lane];
     issue_token_slot_ready = !dsp_token_valid_q || dsp_token_ready;
-    for (int offset = 0; offset < BLOCK_WORK_ENTRY_COUNT; offset++) begin
-      logic [BLOCK_WORK_ID_WIDTH-1:0] candidate;
-      logic hazard_resolves;
-      logic endpoints_ready;
-      logic [BLOCK_FRAME_INDEX_WIDTH-1:0] job_index;
-      candidate = issue_rr_q + BLOCK_WORK_ID_WIDTH'(offset);
-      job_index = work_issue_index_q[candidate]
-          [BLOCK_FRAME_INDEX_WIDTH-1:0];
-      hazard_resolves = dsp_state_update_valid &&
-                        (dsp_state_update.work_id == candidate);
-      endpoints_ready =
-          work_endpoint_valid_q[candidate][{job_index, 1'b0}] &&
-          work_endpoint_valid_q[candidate][{job_index, 1'b1}];
-      if (!issue_found && !issue_select_valid_q && endpoints_ready &&
-          (!work_hazard_q[candidate] || hazard_resolves) &&
-          (((work_state_q[candidate] == WORK_MEM_WAIT) ||
-            (work_state_q[candidate] == WORK_MEM_FETCH) ||
-            (work_state_q[candidate] == WORK_READY)) &&
-           (work_issue_index_q[candidate] < work_job_count_q[candidate]))) begin
-        issue_found = 1'b1;
-        issue_candidate_work_id = candidate;
-        issue_endpoints_ready = endpoints_ready;
-      end
-    end
+    issue_endpoints_ready = next_endpoints_ready(issue_candidate_work_id);
+    issue_found = !issue_select_valid_q &&
+        lane_valid_q[issue_candidate_lane] && issue_endpoints_ready &&
+        (((work_state_q[issue_candidate_work_id] == WORK_MEM_WAIT) ||
+          (work_state_q[issue_candidate_work_id] == WORK_MEM_FETCH) ||
+          (work_state_q[issue_candidate_work_id] == WORK_READY)) &&
+         (work_issue_index_q[issue_candidate_work_id] <
+          work_job_count_q[issue_candidate_work_id]));
 
     issue_select_capture = issue_found && issue_endpoints_ready &&
                            !issue_select_valid_q;
@@ -517,15 +519,24 @@ module block_interleaved_voice_renderer (
       memory_scan_mask_phase_q <= 1'b0;
       memory_scan_group_q <= '0;
       memory_request_valid_q <= 1'b0;
+      lane_load_lane_rr_q <= '0;
+      lane_load_job_rr_q <= '0;
       issue_rr_q <= '0;
       issue_select_valid_q <= 1'b0;
       dsp_token_valid_q <= 1'b0;
       result_valid_q <= 1'b0;
-      for (int entry = 0; entry < BLOCK_WORK_ENTRY_COUNT; entry++) begin
+      for (int entry = 0; entry < JOB_RING_ENTRY_COUNT; entry++) begin
         work_state_q[entry] <= WORK_FREE;
+        work_lane_assigned_q[entry] <= 1'b0;
+      end
+      for (int lane = 0; lane < DSP_LANE_COUNT; lane++) begin
+        lane_valid_q[lane] <= 1'b0;
+        lane_work_id_q[lane] <= '0;
       end
     end else begin
       plan_q.valid <= plan_found;
+      if (!plan_found)
+        plan_rr_q <= plan_rr_q + 1'b1;
       if (!memory_select_valid_q && !memory_request_valid_q &&
           memory_candidate_found) begin
         memory_select_valid_q <= 1'b1;
@@ -574,6 +585,9 @@ module block_interleaved_voice_renderer (
       end else if (memory_action) begin
         memory_request_valid_q <= 1'b0;
       end
+      if (!memory_select_valid_q && !memory_request_valid_q &&
+          !memory_candidate_found)
+        memory_rr_q <= memory_rr_q + 1'b1;
 
       unique case ({issue_capture, dsp_token_valid_q && dsp_token_ready})
         2'b10: dsp_token_valid_q <= 1'b1;
@@ -585,6 +599,7 @@ module block_interleaved_voice_renderer (
 
       if (issue_select_capture) begin
         issue_select_valid_q <= 1'b1;
+        issue_select_lane_q <= issue_candidate_lane;
         issue_select_work_id_q <= issue_candidate_work_id;
         issue_select_job_index_q <= work_issue_index_q[
             issue_candidate_work_id][BLOCK_FRAME_INDEX_WIDTH-1:0];
@@ -596,6 +611,18 @@ module block_interleaved_voice_renderer (
       end else if (issue_capture) begin
         issue_select_valid_q <= 1'b0;
       end
+      if (!issue_select_valid_q && !issue_select_capture)
+        issue_rr_q <= issue_rr_q + 1'b1;
+
+      if (lane_load_found) begin
+        lane_valid_q[lane_load_lane] <= 1'b1;
+        lane_work_id_q[lane_load_lane] <= lane_load_work_id;
+        work_lane_assigned_q[lane_load_work_id] <= 1'b1;
+        work_lane_q[lane_load_work_id] <= lane_load_lane;
+      end
+      lane_load_job_rr_q <= lane_load_job_rr_q + 1'b1;
+      if (lane_valid_q[lane_load_lane_rr_q] || lane_load_found)
+        lane_load_lane_rr_q <= lane_load_lane_rr_q + 1'b1;
 
       if (result_valid_q && result_ready)
         result_valid_q <= 1'b0;
@@ -630,9 +657,9 @@ module block_interleaved_voice_renderer (
         work_released_q[free_work_id] <= start_params.released;
         work_z1_q[free_work_id] <= start_filter_z1;
         work_z2_q[free_work_id] <= start_filter_z2;
-        work_hazard_q[free_work_id] <= 1'b0;
         work_env_active_q[free_work_id] <= start_env_active;
         work_env_state_q[free_work_id] <= start_env_state;
+        work_lane_assigned_q[free_work_id] <= 1'b0;
       end
 
       if (plan_found) begin
@@ -734,7 +761,7 @@ module block_interleaved_voice_renderer (
         end
       end
 
-      for (int entry = 0; entry < BLOCK_WORK_ENTRY_COUNT; entry++) begin
+      for (int entry = 0; entry < JOB_RING_ENTRY_COUNT; entry++) begin
         if (((work_state_q[entry] == WORK_MEM_WAIT) ||
              (work_state_q[entry] == WORK_MEM_FETCH)) &&
             ((work_endpoint_required_q[entry] &
@@ -768,9 +795,7 @@ module block_interleaved_voice_renderer (
       if (issue_capture) begin
         work_issue_index_q[issue_select_work_id_q] <=
             work_issue_index_q[issue_select_work_id_q] + 1'b1;
-        issue_rr_q <= issue_select_work_id_q + 1'b1;
-        work_hazard_q[issue_select_work_id_q] <=
-            work_context_q[issue_select_work_id_q].filter_enable;
+        issue_rr_q <= issue_select_lane_q + 1'b1;
         if (dsp_token_q_next.last)
           work_state_q[issue_select_work_id_q] <= WORK_DRAIN;
       end
@@ -778,10 +803,6 @@ module block_interleaved_voice_renderer (
       if (dsp_state_update_valid) begin
         work_z1_q[dsp_state_update.work_id] <= dsp_state_update.filter_z1;
         work_z2_q[dsp_state_update.work_id] <= dsp_state_update.filter_z2;
-        work_hazard_q[dsp_state_update.work_id] <=
-            issue_capture &&
-            (issue_select_work_id_q == dsp_state_update.work_id) &&
-            work_context_q[issue_select_work_id_q].filter_enable;
       end
 
       if (dsp_last_publish) begin
@@ -793,9 +814,10 @@ module block_interleaved_voice_renderer (
             work_context_q[dsp_retire.work_id].voice_index;
         result_env_active_q <= work_env_active_q[dsp_retire.work_id];
         result_env_state_q <= work_env_state_q[dsp_retire.work_id];
+        lane_valid_q[work_lane_q[dsp_retire.work_id]] <= 1'b0;
+        work_lane_assigned_q[dsp_retire.work_id] <= 1'b0;
         if (!(start_fire && (free_work_id == dsp_retire.work_id))) begin
           work_state_q[dsp_retire.work_id] <= WORK_FREE;
-          work_hazard_q[dsp_retire.work_id] <= 1'b0;
         end
       end else if (complete_publish) begin
         result_valid_q <= 1'b1;
@@ -807,7 +829,6 @@ module block_interleaved_voice_renderer (
         result_env_state_q <= work_env_state_q[complete_work_id];
         if (!(start_fire && (free_work_id == complete_work_id))) begin
           work_state_q[complete_work_id] <= WORK_FREE;
-          work_hazard_q[complete_work_id] <= 1'b0;
         end
       end
     end

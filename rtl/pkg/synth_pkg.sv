@@ -12,7 +12,7 @@ package synth_pkg;
 `ifdef SYNTH_MAX_BLOCK_FRAMES
   localparam int MAX_BLOCK_FRAMES = `SYNTH_MAX_BLOCK_FRAMES;
 `else
-  localparam int MAX_BLOCK_FRAMES = 8;
+  localparam int MAX_BLOCK_FRAMES = 16;
 `endif
   localparam int BLOCK_FRAME_INDEX_WIDTH = $clog2(MAX_BLOCK_FRAMES);
   localparam int BLOCK_FRAME_COUNT_WIDTH = $clog2(MAX_BLOCK_FRAMES + 1);
@@ -30,6 +30,8 @@ package synth_pkg;
   localparam int BLOCK_WORK_ENTRY_COUNT = 8;
 `endif
   localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
+  localparam int BLOCK_JOB_ENTRY_COUNT = 16;
+  localparam int BLOCK_JOB_ID_WIDTH = $clog2(BLOCK_JOB_ENTRY_COUNT);
   /* verilator lint_off UNUSEDPARAM */
   localparam int FILTER_COEFF_WIDTH = 16;
   localparam int FILTER_COEFF_FRAC_WIDTH = 14;
@@ -160,7 +162,7 @@ package synth_pkg;
   } block_voice_dsp_result_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     block_sample_job_t sample;
@@ -169,13 +171,13 @@ package synth_pkg;
   } block_dsp_sample_token_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
   } block_dsp_state_update_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_contribution_t contribution;
     logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;

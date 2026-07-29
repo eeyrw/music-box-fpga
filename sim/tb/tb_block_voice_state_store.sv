@@ -31,7 +31,6 @@ module tb_block_voice_state_store;
   logic dynamic_write_ready;
   logic [VOICE_ID_WIDTH-1:0] dynamic_write_voice;
   voice_dynamic_state_t dynamic_write_data;
-  logic [NUM_VOICES-1:0] active_bitmap;
   logic stale_params_write_pulse;
   logic stale_dynamic_write_pulse;
 
@@ -56,7 +55,9 @@ module tb_block_voice_state_store;
   task automatic write_params(
       input logic [VOICE_GENERATION_WIDTH-1:0] generation,
       input voice_event_params_t event_value,
-      input volume_env_params_t env_value);
+      input volume_env_params_t env_value,
+      input logic expect_stale);
+    logic saw_stale;
     begin
       @(negedge clk);
       params_write_generation = generation;
@@ -66,6 +67,13 @@ module tb_block_voice_state_store;
       do @(posedge clk); while (!params_write_ready);
       @(negedge clk);
       params_write_valid = 1'b0;
+      saw_stale = 1'b0;
+      repeat (4) begin
+        @(negedge clk);
+        saw_stale |= stale_params_write_pulse;
+      end
+      if (saw_stale != expect_stale)
+        $fatal(1, "parameter stale result mismatch");
     end
   endtask
 
@@ -94,6 +102,7 @@ module tb_block_voice_state_store;
   task automatic write_dynamic(
       input voice_dynamic_state_t value,
       input logic expect_stale);
+    logic saw_stale;
     begin
       @(negedge clk);
       dynamic_write_data = value;
@@ -101,7 +110,12 @@ module tb_block_voice_state_store;
       do @(posedge clk); while (!dynamic_write_ready);
       @(negedge clk);
       dynamic_write_valid = 1'b0;
-      if (stale_dynamic_write_pulse != expect_stale)
+      saw_stale = 1'b0;
+      repeat (4) begin
+        @(negedge clk);
+        saw_stale |= stale_dynamic_write_pulse;
+      end
+      if (saw_stale != expect_stale)
         $fatal(1, "dynamic stale result mismatch");
     end
   endtask
@@ -134,7 +148,6 @@ module tb_block_voice_state_store;
     repeat (3) @(posedge clk);
     @(negedge clk);
     rst = 1'b0;
-    if (active_bitmap != '0) $fatal(1, "active bitmap not clear after reset");
 
     initial_state = '0;
     initial_state.region.base_addr = 32'h0010_0000;
@@ -148,18 +161,13 @@ module tb_block_voice_state_store;
     initial_state.dynamic.phase = 32'h0000_0400;
     initial_state.dynamic.env_state.stage = ENV_DELAY;
     install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
-    if (!active_bitmap[7]) $fatal(1, "install did not activate voice");
 
     changed_event = initial_state.event_params;
     changed_event.gain_l = 16'sh6000;
     changed_env = initial_state.env_params;
     changed_env.delay_samples = 24'd5;
-    write_params(16'h0051, changed_event, changed_env);
-    if (!stale_params_write_pulse)
-      $fatal(1, "stale parameter generation was accepted");
-    write_params(16'h0052, changed_event, changed_env);
-    if (stale_params_write_pulse)
-      $fatal(1, "matching parameter generation was rejected");
+    write_params(16'h0051, changed_event, changed_env, 1'b1);
+    write_params(16'h0052, changed_event, changed_env, 1'b0);
 
     render_busy = 1'b1;
     @(posedge clk);
@@ -176,12 +184,16 @@ module tb_block_voice_state_store;
     changed_dynamic.generation = 16'h0051;
     changed_dynamic.phase = 32'h0000_0900;
     write_dynamic(changed_dynamic, 1'b1);
-    if (!active_bitmap[7]) $fatal(1, "stale write changed active state");
+    read_state(observed);
+    if (!observed.dynamic.active ||
+        observed.dynamic.generation != initial_state.dynamic.generation)
+      $fatal(1, "stale write changed dynamic state");
 
     changed_dynamic.generation = 16'h0052;
     changed_dynamic.active = 1'b0;
     write_dynamic(changed_dynamic, 1'b0);
-    if (active_bitmap[7])
+    read_state(observed);
+    if (observed.dynamic.active)
       $fatal(1, "renderer completion did not remove inactive voice");
 
     render_busy = 1'b0;

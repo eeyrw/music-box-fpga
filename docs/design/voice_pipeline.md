@@ -6,7 +6,7 @@ This document describes the production renderer behind
 
 ## Block Contract
 
-One accepted request names a start frame and one through eight output frames.
+One accepted request names a start frame and one through sixteen output frames.
 The controller processes voices in voice-major order, accumulating every frame
 of one voice before advancing to the next voice. Completion publishes one mix
 buffer; the consumer reads its frames and explicitly releases it.
@@ -43,7 +43,8 @@ voice snapshot
   -> active-state writeback
 ```
 
-The envelope front end and DSP renderer are interleaved so memory stalls for one
+The envelope frontend advances one voice context at a time. The DSP renderer
+uses a fixed eight-lane modulo barrel so memory stalls for one
 work item do not force all arithmetic to idle. All memory movement uses
 ready/valid handshakes.
 

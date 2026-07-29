@@ -3,15 +3,18 @@ VIVADO ?= vivado
 BUILD_DIR := build
 NUM_VOICES ?= 512
 BLOCK_WORK_ENTRIES ?= 8
+MAX_BLOCK_FRAMES ?= 16
 VERILATOR_JOBS ?= -j 0
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
-	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES)
+	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+	-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
 VIVADO_BUILD_DIR := $(BUILD_DIR)/fpga/smart_artix/vivado
 VIVADO_SCRIPT_DIR := $(abspath fpga/smart_artix/vivado/scripts)
 VIVADO_CONFIG_ENV := SYNTH_NUM_VOICES=$(NUM_VOICES) \
-	SYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES)
+	SYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+	SYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES)
 HARNESS_INCLUDE_FLAGS := \
 	-I$(abspath sim/harness) \
 	-I$(abspath sim/harness/common) \
@@ -250,6 +253,7 @@ test-voice-major-512:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 \
 		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_render_core_512_obj_dir \
 		--top-module tb_voice_major_render_core \
@@ -260,6 +264,7 @@ measure-voice-major-throughput:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
 		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -269,7 +274,8 @@ measure-voice-major-throughput:
 measure-voice-major-throughput-filtered:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_FILTER_ENABLE \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_FILTER_ENABLE \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_filtered_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -280,7 +286,8 @@ measure-voice-major-throughput-ddr3:
 	mkdir -p $(BUILD_DIR)/ddr3_render_image
 	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
 	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -295,6 +302,7 @@ measure-voice-major-throughput-512:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
 		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -305,6 +313,7 @@ measure-voice-major-throughput-512-filtered:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
 		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
 		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -315,7 +324,8 @@ measure-voice-major-throughput-512-ddr3:
 	mkdir -p $(BUILD_DIR)/ddr3_render_image
 	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
 		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_obj_dir \
 		--top-module tb_voice_major_throughput \
@@ -330,7 +340,8 @@ measure-voice-major-throughput-512-ddr3-filtered:
 	mkdir -p $(BUILD_DIR)/ddr3_render_image
 	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) -DSYNTH_DDR3_MODEL \
+		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
+		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
 		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_filtered_obj_dir \
 		--top-module tb_voice_major_throughput \

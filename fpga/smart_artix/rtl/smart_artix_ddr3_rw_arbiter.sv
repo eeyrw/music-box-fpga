@@ -1,4 +1,6 @@
-module smart_artix_ddr3_rw_arbiter (
+module smart_artix_ddr3_rw_arbiter #(
+  parameter int READ_OUTSTANDING_DEPTH = 16
+) (
   input  logic                      clk,
   input  logic                      rst,
 
@@ -31,6 +33,8 @@ module smart_artix_ddr3_rw_arbiter (
   owner_t write_owner;
   owner_t cmd_owner;
   owner_t wdf_owner;
+  localparam int READ_COUNT_WIDTH = $clog2(READ_OUTSTANDING_DEPTH + 1);
+  logic [READ_COUNT_WIDTH-1:0] read_outstanding_count_q;
   logic write_cmd_sent;
   logic write_wdf_sent;
   logic command_accept;
@@ -40,12 +44,17 @@ module smart_artix_ddr3_rw_arbiter (
   logic selected_wdf_valid;
   logic write_pair_done;
   logic read_response_done;
+  logic read_command_accept;
 
   always_comb begin
     cmd_owner = OWNER_NONE;
     if (write_owner != OWNER_NONE) begin
       cmd_owner = write_owner;
-    end else if (read_command.en && read_owner == OWNER_NONE) begin
+    end else if (read_command.en &&
+                 ((read_owner == OWNER_NONE) ||
+                  ((read_owner == OWNER_READ) &&
+                   (read_outstanding_count_q <
+                    READ_COUNT_WIDTH'(READ_OUTSTANDING_DEPTH))))) begin
       cmd_owner = OWNER_READ;
     end else if (reg_access_command.en && read_owner == OWNER_NONE) begin
       cmd_owner = OWNER_REG_ACCESS;
@@ -98,6 +107,7 @@ module smart_artix_ddr3_rw_arbiter (
       && (write_cmd_sent || (selected_cmd_is_write && command_accept))
       && (write_wdf_sent || wdf_accept);
   assign read_response_done = mig_app_response.rd_data_valid && mig_app_response.rd_data_end;
+  assign read_command_accept = command_accept && selected_cmd_is_read;
 
   always_comb begin
     read_response = '0;
@@ -124,14 +134,27 @@ module smart_artix_ddr3_rw_arbiter (
   always_ff @(posedge clk) begin
     if (rst) begin
       read_owner <= OWNER_NONE;
+      read_outstanding_count_q <= '0;
       write_owner <= OWNER_NONE;
       write_cmd_sent <= 1'b0;
       write_wdf_sent <= 1'b0;
     end else begin
-      if (command_accept && selected_cmd_is_read)
-        read_owner <= cmd_owner;
-      if (read_response_done)
-        read_owner <= OWNER_NONE;
+      unique case ({read_command_accept, read_response_done})
+        2'b10: begin
+          if (read_outstanding_count_q == '0)
+            read_owner <= cmd_owner;
+          read_outstanding_count_q <= read_outstanding_count_q + 1'b1;
+        end
+        2'b01: begin
+          if (read_outstanding_count_q == READ_COUNT_WIDTH'(1)) begin
+            read_owner <= OWNER_NONE;
+            read_outstanding_count_q <= '0;
+          end else begin
+            read_outstanding_count_q <= read_outstanding_count_q - 1'b1;
+          end
+        end
+        default: begin end
+      endcase
 
       if (write_owner == OWNER_NONE) begin
         if (selected_cmd_is_write && command_accept) begin

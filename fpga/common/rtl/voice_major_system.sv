@@ -19,6 +19,7 @@ module voice_major_system #(
   input  logic                     ext_req_ready,
   output logic [31:0]              ext_req_addr,
   input  logic                     ext_rsp_valid,
+  output logic                     ext_rsp_ready,
   input  logic [LINE_WORDS*16-1:0] ext_rsp_data,
   output logic                     i2s_bclk,
   output logic                     i2s_lrclk,
@@ -152,13 +153,12 @@ module voice_major_system #(
   assign render_inflight = (output_state_q == OUTPUT_WAIT_BLOCK) ||
                            renderer_busy || effects_busy;
 
-  // The board line reader pulses responses without backpressure. Retain one
-  // response until the ordered window interface accepts it.
-  assign ext_req_valid = line_req_valid &&
-                         (!ext_rsp_pending_q || line_rsp_ready);
+  // One elastic response register decouples the board reader from the ordered
+  // window interface. External backpressure prevents response overwrite.
+  assign ext_req_valid = line_req_valid;
   assign ext_req_addr = line_req.aligned_line_addr;
-  assign line_req_ready = ext_req_ready &&
-                          (!ext_rsp_pending_q || line_rsp_ready);
+  assign line_req_ready = ext_req_ready;
+  assign ext_rsp_ready = !ext_rsp_pending_q || line_rsp_ready;
   assign line_rsp_valid = ext_rsp_pending_q;
   assign line_rsp.words = ext_rsp_data_q;
 
@@ -374,7 +374,7 @@ module voice_major_system #(
       mem_response_trace_pulse <= 1'b0;
       if (line_rsp_valid && line_rsp_ready)
         ext_rsp_pending_q <= 1'b0;
-      if (ext_rsp_valid) begin
+      if (ext_rsp_valid && ext_rsp_ready) begin
         ext_rsp_pending_q <= 1'b1;
         ext_rsp_data_q <= ext_rsp_data;
         mem_response_trace_pulse <= 1'b1;

@@ -41,10 +41,14 @@ module tb_block_interleaved_envelope_frontend;
     end
   endtask
 
-  task automatic accept_result(input int voice);
+  task automatic accept_result(input int voice, input int frames);
     logic [VOICE_ID_WIDTH-1:0] held_voice;
     block_envelope_result_t held_envelope;
+    logic [MAX_BLOCK_FRAMES-1:0] expected_mask;
     begin
+      expected_mask = '0;
+      for (int frame = 0; frame < frames; frame++)
+        expected_mask[frame] = 1'b1;
       do @(posedge clk); while (!result_valid);
       held_voice = result_voice_index;
       held_envelope = result_envelope;
@@ -53,17 +57,18 @@ module tb_block_interleaved_envelope_frontend;
           result_envelope != held_envelope)
         $fatal(1, "interleaved envelope result changed under backpressure");
       if (result_voice_index != VOICE_ID_WIDTH'(voice) ||
-          result_frame_count != BLOCK_FRAME_COUNT_WIDTH'(MAX_BLOCK_FRAMES) ||
+          result_frame_count != BLOCK_FRAME_COUNT_WIDTH'(frames) ||
           result_region.base_addr != ADDR_WIDTH'(voice * 64) ||
           result_params.phase_inc != PHASE_WIDTH'(voice + 1) ||
           result_dynamic.generation != VOICE_GENERATION_WIDTH'(voice + 16) ||
           !result_dynamic.active || result_dynamic.env_state.stage != ENV_SUSTAIN ||
           !result_envelope.active ||
-          result_envelope.phase_advance_mask != '1 ||
-          result_envelope.render_mask != '1)
+          result_envelope.phase_advance_mask != expected_mask ||
+          result_envelope.render_mask != expected_mask)
         $fatal(1, "interleaved envelope tag or state mismatch");
       for (int frame = 0; frame < MAX_BLOCK_FRAMES; frame++) begin
-        if (result_envelope.envelope_levels[frame] != 16'sh7fff)
+        if (result_envelope.envelope_levels[frame] !=
+            ((frame < frames) ? 16'sh7fff : 16'sh0000))
           $fatal(1, "interleaved envelope level mismatch");
       end
       @(negedge clk);
@@ -133,10 +138,25 @@ module tb_block_interleaved_envelope_frontend;
     @(negedge clk);
     rst = 1'b0;
 
-    for (int voice = 0; voice < BLOCK_WORK_ENTRY_COUNT; voice++)
+    for (int voice = 0; voice < BLOCK_WORK_ENTRY_COUNT; voice++) begin
       submit(voice);
-    for (int voice = 0; voice < BLOCK_WORK_ENTRY_COUNT; voice++)
-      accept_result(voice);
+      accept_result(voice, MAX_BLOCK_FRAMES);
+    end
+
+    begin
+      int frame_counts [0:5];
+      frame_counts[0] = 1;
+      frame_counts[1] = 2;
+      frame_counts[2] = 7;
+      frame_counts[3] = 8;
+      frame_counts[4] = 15;
+      frame_counts[5] = 16;
+      for (int index = 0; index < 6; index++) begin
+        start_frame_count = BLOCK_FRAME_COUNT_WIDTH'(frame_counts[index]);
+        submit(index);
+        accept_result(index, frame_counts[index]);
+      end
+    end
 
     start_params.released = 1'b1;
     start_env_params.release_step_cb_q12_20 =

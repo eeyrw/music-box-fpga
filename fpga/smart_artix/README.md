@@ -127,8 +127,9 @@ wavetable datapath RTL.
 
 ## DDR3 Line-Reader Assumptions
 
-The first `smart_artix_ddr3_line_reader` skeleton targets the 7-series MIG native
-application read interface:
+`smart_artix_ddr3_line_reader` targets the 7-series MIG native application read
+interface. It has bounded request and response FIFOs, issues ordered reads while
+credits are available, and holds each core response until `line_rsp_ready`:
 
 - `app_cmd = 3'b001` is treated as a read command.
 - `app_en && app_rdy` accepts one aligned read command.
@@ -137,9 +138,11 @@ application read interface:
   words.
 - The core-side address is a 16-bit word address. `WORD_ADDR_SHIFT = 1` converts
   it to a byte-addressed MIG app address.
+- The default queue depth is eight. The read/write arbiter independently tracks
+  up to 16 accepted render reads, preserving MIG response order.
 
 If the generated MIG uses a different app data width, address unit, burst mode,
-or clocking scheme, update the adapter before connecting hardware. The current
+or clocking scheme, update the adapter before connecting hardware. The
 adapter assumes one MIG read response contains the whole line.
 
 Smart Artix RTL uses `smart_artix_pkg.sv` as the local board-facing contract for

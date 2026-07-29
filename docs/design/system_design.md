@@ -107,12 +107,15 @@ or filter values through runtime commands.
 
 ## Rendering
 
-The controller renders up to eight output frames per request. It snapshots the
-active bitmap, scans only active voice groups, reads each mono voice state,
-advances its envelope and phase across the block, gathers interpolation
-endpoints through tagged work slots, and retires filtered/gained contributions
-into a ping-pong signed-25 block mix buffer. Published buffers are read by the
-top while the other bank can be filled.
+The controller renders up to sixteen output frames per request. It scans voice
+IDs 0 through 511 and uses the synchronous dynamic-state snapshot to skip
+inactive voices; there is no active-group priority encoder in the render path.
+The envelope frontend owns one recursive voice context. Prepared jobs overlap
+sample-window traffic with a fixed eight-lane DSP barrel whose modulo lane
+counter directly selects the next context; an unavailable lane produces a
+bubble rather than a ready search or filter-hazard comparison. Contributions
+retire into the ping-pong signed-25 block mix buffer. Published buffers are read
+by the top while the other bank can be filled.
 
 Linked SF2 stereo is represented by two host-owned mono voices. Each voice
 fetches two interpolation endpoints per audible output frame, duplicates the
@@ -127,8 +130,11 @@ generic external contract is ordered, untagged, 8-word/128-bit ready/valid.
 
 On Smart Artix this request enters `smart_artix_ddr3_line_reader`, then the
 existing `smart_artix_ddr3_rw_arbiter`, which shares MIG `app_*` with SD asset
-writes and the register debug aperture. The simulation-only DDR bridge and
-timing model exercise the same ordered contract but are not synthesis sources.
+writes and the register debug aperture. The line reader queues eight requests
+and responses, while the arbiter tracks multiple accepted render reads; both
+preserve response order and propagate core response backpressure. The
+simulation-only DDR bridge and timing model exercise the same ordered contract
+but do not instantiate these board wrappers and are not synthesis sources.
 
 ## RTL Interface Bundles
 

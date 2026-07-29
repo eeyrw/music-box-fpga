@@ -40,7 +40,6 @@ module voice_major_render_core (
 );
   import synth_pkg::*;
 
-  logic [NUM_VOICES-1:0] active_bitmap;
   logic state_read_req_valid;
   logic state_read_req_ready;
   logic [VOICE_ID_WIDTH-1:0] state_read_req_voice;
@@ -124,7 +123,6 @@ module voice_major_render_core (
     .dynamic_write_ready,
     .dynamic_write_voice,
     .dynamic_write_data,
-    .active_bitmap,
     .stale_params_write_pulse(stale_params_write),
     .stale_dynamic_write_pulse(stale_dynamic_write)
   );
@@ -135,7 +133,6 @@ module voice_major_render_core (
     .block_req_valid(block_req_valid && !command_action_pending),
     .block_req_ready(controller_block_req_ready),
     .block_req,
-    .active_bitmap,
     .render_busy,
     .state_read_req_valid,
     .state_read_req_ready,

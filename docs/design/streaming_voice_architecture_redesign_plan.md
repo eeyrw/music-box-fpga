@@ -16,11 +16,31 @@
 3. 32-word/voice window 与 DDR transaction 顺序；
 4. xc7a50t 当前 LUT/路由紧张、BRAM/DSP 有余量的资源结构。
 
+### 1.1 当前实施状态
+
+当前工作树已经切到 16-frame 候选、16-entry job storage 和固定 8-lane DSP；phase、memory
+和 lane 装载均使用单项 modulo 轮询，不再生成 job-ready 全表搜索。控制面已改为固定
+0..511 voice scan，envelope frontend 只保留一个 context。Smart Artix line reader 已改为
+8-entry 有界请求/响应队列，arbiter 可跟踪多个有序 render read。
+
+尚未完成的架构项是独立 ordered descriptor FIFO、sample-ready FIFO，以及第 12 节定义的
+8-voice group reducer + true-dual-port BRAM mix。当前 `voice_sample_window` 已在 generic
+`render-rtl-ddr3` 中使用，但该长仿真接 simulation bridge/timing model，不实例化 Smart
+Artix reader；板级队列由定向 SV test 覆盖。fresh synthesis、place/route 和资源退出条件也
+仍待执行，因此本节状态不能视为 Phase 5/6 signoff。
+
+2026-07-29 使用 SGM v2.01 SF2 和 `polyphony_stress_512.mid` 完成 2 秒
+`render-rtl-ddr3`：96,000 frames、12,000 render blocks、峰值 512 active voices，
+`max_render_cycles=16,347`、`deadline_misses=0`。该结果包含 `voice_sample_window` 和 timed
+DDR3 的 6,419,462 次 line read（3,852,561 row hits、2,566,901 row misses），满足第 6.2
+节 `<30,000` 的真实 SF2/MIDI generic-core 门槛。它不包含 Smart Artix queued reader，
+因此不能替代板级 wrapper 的吞吐或 post-route signoff。
+
 ## 2. 已知基线
 
 ### 2.1 配置和截止时间
 
-当前 Makefile 默认：
+重构前可复现基线（当前 Makefile 已切换为 16-frame 候选）：
 
 ```text
 NUM_VOICES=512

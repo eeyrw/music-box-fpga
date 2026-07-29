@@ -138,12 +138,21 @@ Focused tests are:
 | --- | --- |
 | `tb_voice_sample_window` | same-window hits, refill order, voice isolation, boundary fallback, and backpressure |
 | `tb_ddr3_timing_model` | row/refresh timing and exact request/response counts |
-| `tb_voice_major_throughput` | active-lane traversal and block deadline |
+| `tb_voice_major_throughput` | active-lane traversal and block deadline; the default memory path is an always-ready, next-cycle-response theoretical model |
 | `measure-voice-major-throughput-ddr3` | renderer plus timed DDR model |
 | `measure-voice-major-throughput-512` | full 10-bit voice IDs and capacity timing |
 | `render-rtl-ddr3` | real SF2/MIDI control, DDR image, PCM output, and JSON diagnostics |
-| `tb_smart_artix_ddr3_line_reader` | ordered line to MIG read conversion |
-| `tb_smart_artix_ddr3_rw_arbiter` | loader/read/register ownership and response routing |
+| `tb_smart_artix_ddr3_line_reader` | queued, ordered line-to-MIG conversion and response backpressure |
+| `tb_smart_artix_ddr3_rw_arbiter` | multiple outstanding render reads, loader/register ownership, and response routing |
+
+The non-DDR3 throughput targets measure the renderer's zero-wait ceiling only.
+Their cycle counts must not be used as evidence for the redesign plan's real
+SF2/MIDI plus DDR3 `<30,000`-clock acceptance gate.
+
+`render-rtl-ddr3` includes `voice_sample_window`, the ordered simulation bridge,
+and the timed DDR3 model. It deliberately does not instantiate the Smart Artix
+MIG reader and arbiter; those board wrappers use focused SV tests so long
+SF2/MIDI renders are not burdened with a second protocol model.
 
 Every accepted refill must have exactly one returned response. Deadline checks
 must use measured block cycles, not inferred memory bandwidth alone.

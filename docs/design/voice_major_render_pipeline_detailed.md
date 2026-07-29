@@ -1,10 +1,15 @@
-# Voice-Major 渲染流水线详细设计
+# Legacy 8-Slot Renderer Baseline
+
+> 本文保留被替换的八 slot 实现，供逐位和周期回归比较。production path 当前使用
+> 固定 0..511 state scan、单 envelope context、`MAX_BLOCK_FRAMES=16` 和 modulo
+> 八 lane DSP barrel；当前合同见 `system_design.md`、`voice_pipeline.md` 和
+> `streaming_voice_architecture_redesign_plan.md`。
 
 Updated: 2026-07-27
 
-本文是当前 voice-major block renderer 的详细设计说明。目标读者包括第一次接触
+本文是旧 voice-major block renderer 的基线说明。目标读者包括第一次接触
 FPGA 流水线、ready/valid 和递归 DSP hazard 的开发者。本文描述的是当前仓库中实际
-保留的生产 RTL，同时明确区分尚未接入顶层的后续整机流水。
+曾经保留的生产 RTL，用于理解重构前的比较基线。
 
 本文中的三个状态标记含义如下：
 

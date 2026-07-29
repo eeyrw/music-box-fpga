@@ -24,6 +24,7 @@ module smart_artix_ddr3_subsystem #(
   input  smart_artix_pkg::line_read_request_t line_req,
   output logic                              line_req_ready,
   output smart_artix_pkg::line_read_response_t line_rsp,
+  input  logic                              line_rsp_ready,
 
   input  smart_artix_pkg::ddr_reg_access_request_t ddr_reg_access_request,
   output smart_artix_pkg::ddr_reg_access_status_t  ddr_reg_access_status,
@@ -251,6 +252,7 @@ module smart_artix_ddr3_subsystem #(
     .line_req,
     .line_req_ready,
     .line_rsp,
+    .line_rsp_ready,
     .mig_init_calib_complete(ddr_init_calib_complete),
     .mig_app_command(read_command),
     .mig_app_response(read_response)

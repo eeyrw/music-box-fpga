@@ -197,6 +197,12 @@ module tb_voice_major_render_core;
 
   initial begin
     repeat (12000) @(posedge clk);
+    $display("TIMEOUT controller_state=%0d scan_voice=%0d pending=%0d outstanding=%0d envelope_ready=%0d renderer_ready=%0d",
+             dut.controller.state_q, dut.controller.scan_voice_q,
+             dut.controller.pending_state_valid_q,
+             dut.controller.outstanding_voices_q,
+             dut.controller.engine.envelope.start_ready,
+             dut.controller.engine.renderer.start_ready);
     $fatal(1, "testbench timeout");
   end
 endmodule

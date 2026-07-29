@@ -62,6 +62,7 @@ module smart_artix_top (
   smart_artix_pkg::line_read_request_t core_line_req;
   logic                     core_line_req_ready;
   smart_artix_pkg::line_read_response_t core_line_rsp;
+  logic                     core_line_rsp_ready;
   logic                     underrun_pulse;
   logic                     sample_drop_pulse;
   logic                     render_deadline_miss_pulse;
@@ -164,6 +165,7 @@ module smart_artix_top (
     .line_req(core_line_req),
     .line_req_ready(core_line_req_ready),
     .line_rsp(core_line_rsp),
+    .line_rsp_ready(core_line_rsp_ready),
     .ddr_reg_access_request,
     .ddr_reg_access_status,
     .platform_status,
@@ -208,6 +210,7 @@ module smart_artix_top (
     .ext_req_ready(core_line_req_ready),
     .ext_req_addr(core_line_req.addr),
     .ext_rsp_valid(core_line_rsp.valid),
+    .ext_rsp_ready(core_line_rsp_ready),
     .ext_rsp_data(core_line_rsp.data),
     .i2s_bclk(i2s_bclk),
     .i2s_lrclk(i2s_lrclk),

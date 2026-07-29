@@ -20,7 +20,7 @@ set bitstream_dir $build_dir/bitstream
 set log_dir $build_dir/logs
 set project_file [file join $build_dir ${board_name}.xpr]
 
-foreach required_env [list SYNTH_NUM_VOICES SYNTH_BLOCK_WORK_ENTRY_COUNT] {
+foreach required_env [list SYNTH_NUM_VOICES SYNTH_BLOCK_WORK_ENTRY_COUNT SYNTH_MAX_BLOCK_FRAMES] {
   if {![info exists ::env($required_env)] || $::env($required_env) eq ""} {
     error "$required_env is not set; invoke this flow through the repository Makefile"
   }
@@ -30,6 +30,7 @@ foreach required_env [list SYNTH_NUM_VOICES SYNTH_BLOCK_WORK_ENTRY_COUNT] {
 }
 set synth_num_voices $::env(SYNTH_NUM_VOICES)
 set synth_block_work_entry_count $::env(SYNTH_BLOCK_WORK_ENTRY_COUNT)
+set synth_max_block_frames $::env(SYNTH_MAX_BLOCK_FRAMES)
 if {$synth_num_voices > 1024} {
   error "SYNTH_NUM_VOICES exceeds the 10-bit command voice-ID capacity"
 }
@@ -147,7 +148,8 @@ if {[file exists $project_file]} {
 set_property target_language Verilog [current_project]
 set_property verilog_define [list \
   SYNTH_NUM_VOICES=$synth_num_voices \
-  SYNTH_BLOCK_WORK_ENTRY_COUNT=$synth_block_work_entry_count] [current_fileset]
+  SYNTH_BLOCK_WORK_ENTRY_COUNT=$synth_block_work_entry_count \
+  SYNTH_MAX_BLOCK_FRAMES=$synth_max_block_frames] [current_fileset]
 
 if {[llength [get_runs -quiet $synth_run_name]] == 0 && [llength [get_runs -quiet synth_1]] != 0} {
   set_property NAME $synth_run_name [get_runs synth_1]

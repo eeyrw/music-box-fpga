@@ -5,7 +5,6 @@ module voice_major_block_controller (
   input  logic                                      block_req_valid,
   output logic                                      block_req_ready,
   input  synth_pkg::render_block_req_t              block_req,
-  input  logic [synth_pkg::NUM_VOICES-1:0]          active_bitmap,
   output logic                                      render_busy,
 
   output logic                                      state_read_req_valid,
@@ -46,32 +45,15 @@ module voice_major_block_controller (
   typedef enum logic [2:0] {
     CTRL_IDLE,
     CTRL_WAIT_FILL,
-    CTRL_SELECT_GROUP,
-    CTRL_SELECT_VOICE,
     CTRL_REQUEST_STATE,
     CTRL_WAIT_STATE,
+    CTRL_DISPATCH_STATE,
     CTRL_DRAIN,
     CTRL_FINISH
   } controller_state_t;
 
-  localparam int ACTIVE_GROUP_SIZE = 32;
-  localparam int ACTIVE_GROUP_COUNT =
-      (NUM_VOICES + ACTIVE_GROUP_SIZE - 1) / ACTIVE_GROUP_SIZE;
-  localparam int ACTIVE_GROUP_INDEX_WIDTH =
-      (ACTIVE_GROUP_COUNT > 1) ? $clog2(ACTIVE_GROUP_COUNT) : 1;
-
   controller_state_t state_q;
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_count_q;
-  logic [NUM_VOICES-1:0] active_bitmap_q;
-  logic [ACTIVE_GROUP_COUNT-1:0] active_group_bitmap_q;
-  logic [ACTIVE_GROUP_COUNT-1:0] incoming_group_bitmap;
-  logic [ACTIVE_GROUP_INDEX_WIDTH-1:0] selected_group_q;
-  logic [ACTIVE_GROUP_INDEX_WIDTH-1:0] selected_group_next;
-  logic [4:0] selected_bit_next;
-  logic [ACTIVE_GROUP_SIZE-1:0] selected_group_bits;
-  logic [ACTIVE_GROUP_SIZE-1:0] selected_group_after_pick;
-  logic group_found;
-  logic bit_found;
   logic [VOICE_ID_WIDTH-1:0] scan_voice_q;
   logic pending_state_valid_q;
   logic [VOICE_ID_WIDTH-1:0] pending_state_voice_q;
@@ -107,7 +89,9 @@ module voice_major_block_controller (
 
   assign state_read_req_valid = state_q == CTRL_REQUEST_STATE;
   assign state_read_req_voice = scan_voice_q;
-  assign engine_start_valid = pending_state_valid_q;
+  assign engine_start_valid = (state_q == CTRL_DISPATCH_STATE) &&
+                              pending_state_valid_q &&
+                              pending_state_q.dynamic.active;
   assign engine_start_fire = engine_start_valid && engine_start_ready;
   assign state_read_rsp_ready = (state_q == CTRL_WAIT_STATE) &&
                                 (!pending_state_valid_q || engine_start_fire);
@@ -123,51 +107,6 @@ module voice_major_block_controller (
   assign mix_contribution.l = engine_contribution.contribution_l;
   assign mix_contribution.r = engine_contribution.contribution_r;
   assign mix_finish_valid = state_q == CTRL_FINISH;
-
-  always_comb begin
-    incoming_group_bitmap = '0;
-    for (int group_index = 0;
-         group_index < ACTIVE_GROUP_COUNT; group_index++) begin
-      for (int bit_index = 0;
-           bit_index < ACTIVE_GROUP_SIZE; bit_index++) begin
-        if ((group_index * ACTIVE_GROUP_SIZE + bit_index) < NUM_VOICES)
-          incoming_group_bitmap[group_index] |=
-              active_bitmap[group_index * ACTIVE_GROUP_SIZE + bit_index];
-      end
-    end
-
-    group_found = 1'b0;
-    selected_group_next = '0;
-    for (int group_index = 0;
-         group_index < ACTIVE_GROUP_COUNT; group_index++) begin
-      if (!group_found && active_group_bitmap_q[group_index]) begin
-        selected_group_next = ACTIVE_GROUP_INDEX_WIDTH'(group_index);
-        group_found = 1'b1;
-      end
-    end
-
-    selected_group_bits = '0;
-    for (int bit_index = 0;
-         bit_index < ACTIVE_GROUP_SIZE; bit_index++) begin
-      if ((int'(selected_group_q) * ACTIVE_GROUP_SIZE + bit_index) <
-          NUM_VOICES) begin
-        selected_group_bits[bit_index] = active_bitmap_q[
-            int'(selected_group_q) * ACTIVE_GROUP_SIZE + bit_index];
-      end
-    end
-
-    bit_found = 1'b0;
-    selected_bit_next = '0;
-    for (int bit_index = 0;
-         bit_index < ACTIVE_GROUP_SIZE; bit_index++) begin
-      if (!bit_found && selected_group_bits[bit_index]) begin
-        selected_bit_next = 5'(bit_index);
-        bit_found = 1'b1;
-      end
-    end
-    selected_group_after_pick = selected_group_bits;
-    if (bit_found) selected_group_after_pick[selected_bit_next] = 1'b0;
-  end
 
   block_mono_voice_engine engine (
     .clk,
@@ -226,9 +165,6 @@ module voice_major_block_controller (
     if (rst) begin
       state_q <= CTRL_IDLE;
       frame_count_q <= '0;
-      active_bitmap_q <= '0;
-      active_group_bitmap_q <= '0;
-      selected_group_q <= '0;
       scan_voice_q <= '0;
       pending_state_valid_q <= 1'b0;
       pending_state_voice_q <= '0;
@@ -256,47 +192,29 @@ module voice_major_block_controller (
         CTRL_IDLE: begin
           if (block_req_valid && block_req_ready) begin
             frame_count_q <= block_req.frame_count;
-            active_bitmap_q <= active_bitmap;
-            active_group_bitmap_q <= incoming_group_bitmap;
             scan_voice_q <= '0;
             state_q <= CTRL_WAIT_FILL;
           end
         end
         CTRL_WAIT_FILL: begin
-          if (mix_fill_ready) state_q <= CTRL_SELECT_GROUP;
-        end
-        CTRL_SELECT_GROUP: begin
-          if (!group_found) begin
-            state_q <= CTRL_DRAIN;
-          end else begin
-            selected_group_q <= selected_group_next;
-            state_q <= CTRL_SELECT_VOICE;
-          end
-        end
-        CTRL_SELECT_VOICE: begin
-          if (!bit_found) begin
-            active_group_bitmap_q[selected_group_q] <= 1'b0;
-            state_q <= CTRL_SELECT_GROUP;
-          end else begin
-            scan_voice_q <= VOICE_ID_WIDTH'(
-                int'(selected_group_q) * ACTIVE_GROUP_SIZE +
-                int'(selected_bit_next));
-            active_bitmap_q[
-                int'(selected_group_q) * ACTIVE_GROUP_SIZE +
-                int'(selected_bit_next)] <= 1'b0;
-            if (selected_group_after_pick == '0)
-              active_group_bitmap_q[selected_group_q] <= 1'b0;
-            state_q <= CTRL_REQUEST_STATE;
-          end
+          if (mix_fill_ready) state_q <= CTRL_REQUEST_STATE;
         end
         CTRL_REQUEST_STATE: begin
           if (state_read_req_valid && state_read_req_ready)
             state_q <= CTRL_WAIT_STATE;
         end
         CTRL_WAIT_STATE: begin
-          if (state_read_rsp_fire) begin
-            state_q <= active_group_bitmap_q[selected_group_q] ?
-                       CTRL_SELECT_VOICE : CTRL_SELECT_GROUP;
+          if (state_read_rsp_fire) state_q <= CTRL_DISPATCH_STATE;
+        end
+        CTRL_DISPATCH_STATE: begin
+          if (!pending_state_q.dynamic.active || engine_start_fire) begin
+            pending_state_valid_q <= 1'b0;
+            if (scan_voice_q == VOICE_ID_WIDTH'(NUM_VOICES - 1)) begin
+              state_q <= CTRL_DRAIN;
+            end else begin
+              scan_voice_q <= scan_voice_q + 1'b1;
+              state_q <= CTRL_REQUEST_STATE;
+            end
           end
         end
         CTRL_DRAIN: begin

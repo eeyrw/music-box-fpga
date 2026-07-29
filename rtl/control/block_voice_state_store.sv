@@ -34,7 +34,6 @@ module block_voice_state_store (
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]      dynamic_write_voice,
   input  synth_pkg::voice_dynamic_state_t           dynamic_write_data,
 
-  output logic [synth_pkg::NUM_VOICES-1:0]          active_bitmap,
   output logic                                      stale_params_write_pulse,
   output logic                                      stale_dynamic_write_pulse
 );
@@ -56,9 +55,6 @@ module block_voice_state_store (
   (* ram_style = "block" *) logic [DYNAMIC_MEM_WIDTH-1:0]
       dynamic_mem [0:NUM_VOICES-1];
 
-  logic [NUM_VOICES-1:0] active_q;
-  logic [VOICE_GENERATION_WIDTH-1:0] generation_tag [0:NUM_VOICES-1];
-
   typedef enum logic [2:0] {
     CONTROL_IDLE,
     CONTROL_READ,
@@ -66,6 +62,21 @@ module block_voice_state_store (
     CONTROL_APPLY
   } control_state_t;
   control_state_t control_state_q;
+  typedef enum logic [1:0] {
+    CHECK_IDLE,
+    CHECK_CAPTURE,
+    CHECK_APPLY
+  } check_state_t;
+  check_state_t check_state_q;
+  logic check_is_dynamic_q;
+  logic [VOICE_ID_WIDTH-1:0] check_voice_q;
+  logic [VOICE_GENERATION_WIDTH-1:0] check_generation_q;
+  voice_event_params_t check_event_q;
+  volume_env_params_t check_env_q;
+  voice_dynamic_state_t check_dynamic_q;
+  logic check_current_active_q;
+  logic [VOICE_GENERATION_WIDTH-1:0] check_current_generation_q;
+  logic check_generation_match;
   block_voice_event_t control_event_q;
   voice_event_params_t control_event_params_q;
   volume_env_params_t control_env_params_q;
@@ -105,29 +116,34 @@ module block_voice_state_store (
   logic [VOICE_ID_WIDTH-1:0] dynamic_mem_write_voice;
   voice_dynamic_state_t dynamic_mem_write_data;
 
-  assign install_ready = !render_busy && (control_state_q == CONTROL_IDLE);
+  assign install_ready = !render_busy && (control_state_q == CONTROL_IDLE) &&
+                         (check_state_q == CHECK_IDLE);
   assign params_write_ready = !render_busy && !install_valid &&
-                              (control_state_q == CONTROL_IDLE);
+                              (control_state_q == CONTROL_IDLE) &&
+                              (check_state_q == CHECK_IDLE);
   assign control_event_ready = !render_busy && !install_valid &&
                                !params_write_valid &&
-                               (control_state_q == CONTROL_IDLE);
+                               (control_state_q == CONTROL_IDLE) &&
+                               (check_state_q == CHECK_IDLE);
   assign state_read_req_ready = render_busy && !snapshot_capture_q &&
-                                !state_read_rsp_valid;
-  assign dynamic_write_ready = render_busy;
-  assign active_bitmap = active_q;
+                                !state_read_rsp_valid &&
+                                (check_state_q == CHECK_IDLE) &&
+                                !dynamic_write_valid;
+  assign dynamic_write_ready = render_busy &&
+                               (check_state_q == CHECK_IDLE);
   assign state_read_rsp = read_rsp_q;
 
   assign install_fire = install_valid && install_ready;
   assign params_write_fire = params_write_valid && params_write_ready;
   assign dynamic_write_fire = dynamic_write_valid && dynamic_write_ready;
   assign state_read_req_fire = state_read_req_valid && state_read_req_ready;
-  assign params_generation_match = active_q[params_write_voice] &&
-      (generation_tag[params_write_voice] == params_write_generation);
-  assign dynamic_generation_match = active_q[dynamic_write_voice] &&
-      (generation_tag[dynamic_write_voice] == dynamic_write_data.generation);
+  assign params_generation_match = check_generation_match;
+  assign dynamic_generation_match = check_generation_match;
   assign control_voice = control_event_q.host_voice_id[VOICE_ID_WIDTH-1:0];
-  assign control_generation_match = active_q[control_voice] &&
-      (generation_tag[control_voice] == control_event_q.generation);
+  assign control_generation_match = control_dynamic_q.active &&
+      (control_dynamic_q.generation == control_event_q.generation);
+  assign check_generation_match = check_current_active_q &&
+      (check_current_generation_q == check_generation_q);
 
   always_comb begin
     control_event_params_next = control_event_params_q;
@@ -163,9 +179,17 @@ module block_voice_state_store (
       default: begin end
     endcase
 
-    memory_read_enable = state_read_req_fire ||
+    memory_read_enable = dynamic_write_fire || params_write_fire ||
+                         state_read_req_fire ||
                          (control_state_q == CONTROL_READ);
-    memory_read_voice = state_read_req_fire ? state_read_req_voice : control_voice;
+    if (dynamic_write_fire)
+      memory_read_voice = dynamic_write_voice;
+    else if (params_write_fire)
+      memory_read_voice = params_write_voice;
+    else if (state_read_req_fire)
+      memory_read_voice = state_read_req_voice;
+    else
+      memory_read_voice = control_voice;
 
     region_write_enable = install_fire;
     region_write_voice = install_voice;
@@ -191,13 +215,14 @@ module block_voice_state_store (
       dynamic_mem_write_enable = 1'b1;
       dynamic_mem_write_voice = install_voice;
       dynamic_mem_write_data = install_state.dynamic;
-    end else if (params_write_fire && params_generation_match) begin
+    end else if ((check_state_q == CHECK_APPLY) &&
+                 !check_is_dynamic_q && params_generation_match) begin
       event_write_enable = 1'b1;
-      event_write_voice = params_write_voice;
-      event_write_data = params_write_event;
+      event_write_voice = check_voice_q;
+      event_write_data = check_event_q;
       env_write_enable = 1'b1;
-      env_write_voice = params_write_voice;
-      env_write_data = params_write_env;
+      env_write_voice = check_voice_q;
+      env_write_data = check_env_q;
     end else if ((control_state_q == CONTROL_APPLY) &&
                  control_generation_match) begin
       unique case (control_event_q.kind)
@@ -229,10 +254,11 @@ module block_voice_state_store (
         end
         default: begin end
       endcase
-    end else if (dynamic_write_fire && dynamic_generation_match) begin
+    end else if ((check_state_q == CHECK_APPLY) && check_is_dynamic_q &&
+                 dynamic_generation_match) begin
       dynamic_mem_write_enable = 1'b1;
-      dynamic_mem_write_voice = dynamic_write_voice;
-      dynamic_mem_write_data = dynamic_write_data;
+      dynamic_mem_write_voice = check_voice_q;
+      dynamic_mem_write_data = check_dynamic_q;
     end
   end
 
@@ -270,10 +296,10 @@ module block_voice_state_store (
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      active_q <= '0;
       snapshot_capture_q <= 1'b0;
       state_read_rsp_valid <= 1'b0;
       control_state_q <= CONTROL_IDLE;
+      check_state_q <= CHECK_IDLE;
       control_event_done_pulse <= 1'b0;
       stale_control_event_pulse <= 1'b0;
       stale_params_write_pulse <= 1'b0;
@@ -304,11 +330,7 @@ module block_voice_state_store (
             stale_control_event_pulse <= 1'b1;
           end else begin
             unique case (control_event_q.kind)
-              BLOCK_VOICE_STOP: active_q[control_voice] <= 1'b0;
-              BLOCK_VOICE_RELEASE: begin
-                if (control_event_q.env_params.release_step_cb_q12_20 == '0)
-                  active_q[control_voice] <= 1'b0;
-              end
+              BLOCK_VOICE_STOP, BLOCK_VOICE_RELEASE: begin end
               BLOCK_VOICE_GAIN, BLOCK_VOICE_PITCH, BLOCK_VOICE_FILTER,
               BLOCK_VOICE_ENV: begin end
               default: stale_control_event_pulse <= 1'b1;
@@ -322,6 +344,40 @@ module block_voice_state_store (
       if (state_read_rsp_valid && state_read_rsp_ready)
         state_read_rsp_valid <= 1'b0;
 
+      unique case (check_state_q)
+        CHECK_IDLE: begin
+          if (dynamic_write_fire) begin
+            check_is_dynamic_q <= 1'b1;
+            check_voice_q <= dynamic_write_voice;
+            check_generation_q <= dynamic_write_data.generation;
+            check_dynamic_q <= dynamic_write_data;
+            check_state_q <= CHECK_CAPTURE;
+          end else if (params_write_fire) begin
+            check_is_dynamic_q <= 1'b0;
+            check_voice_q <= params_write_voice;
+            check_generation_q <= params_write_generation;
+            check_event_q <= params_write_event;
+            check_env_q <= params_write_env;
+            check_state_q <= CHECK_CAPTURE;
+          end
+        end
+        CHECK_CAPTURE: begin
+          check_current_active_q <= dynamic_read_data_q.active;
+          check_current_generation_q <= dynamic_read_data_q.generation;
+          check_state_q <= CHECK_APPLY;
+        end
+        CHECK_APPLY: begin
+          if (!check_generation_match) begin
+            if (check_is_dynamic_q)
+              stale_dynamic_write_pulse <= 1'b1;
+            else
+              stale_params_write_pulse <= 1'b1;
+          end
+          check_state_q <= CHECK_IDLE;
+        end
+        default: check_state_q <= CHECK_IDLE;
+      endcase
+
       if (state_read_req_fire)
         snapshot_capture_q <= 1'b1;
       if (snapshot_capture_q) begin
@@ -333,19 +389,6 @@ module block_voice_state_store (
         state_read_rsp_valid <= 1'b1;
       end
 
-      if (install_fire) begin
-        generation_tag[install_voice] <= install_state.dynamic.generation;
-        active_q[install_voice] <= install_state.dynamic.active;
-      end else if (params_write_fire && !params_generation_match) begin
-        stale_params_write_pulse <= 1'b1;
-      end
-
-      if (!install_fire && dynamic_write_fire) begin
-        if (dynamic_generation_match)
-          active_q[dynamic_write_voice] <= dynamic_write_data.active;
-        else
-          stale_dynamic_write_pulse <= 1'b1;
-      end
     end
   end
 endmodule

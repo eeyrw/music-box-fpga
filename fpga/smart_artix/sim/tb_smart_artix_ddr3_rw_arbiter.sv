@@ -206,6 +206,44 @@ module tb_smart_artix_ddr3_rw_arbiter;
     check(!write_response.wdf_rdy,
           "arbiter returned loader write-data ready while reg-access write data active");
 
+    @(posedge clk);
+    @(negedge clk);
+    reg_access_command.en = 1'b0;
+    reg_access_write_data.wren = 1'b0;
+    write_command.en = 1'b0;
+    write_data.wren = 1'b0;
+    read_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0400);
+    read_command.en = 1'b1;
+    #1;
+    check(read_response.rdy, "arbiter rejected first queued render read");
+    @(posedge clk);
+    @(negedge clk);
+    read_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0440);
+    #1;
+    check(read_response.rdy, "arbiter rejected second outstanding render read");
+    @(posedge clk);
+    @(negedge clk);
+    read_command.en = 1'b0;
+    check(dut.read_outstanding_count_q == 2,
+          "arbiter did not retain two outstanding render reads");
+
+    mig_app_response.rd_data_valid = 1'b1;
+    mig_app_response.rd_data_end = 1'b1;
+    #1;
+    check(read_response.rd_data_valid,
+          "arbiter did not route first queued render response");
+    @(posedge clk);
+    @(negedge clk);
+    #1;
+    check(read_response.rd_data_valid,
+          "arbiter did not route second queued render response");
+    @(posedge clk);
+    @(negedge clk);
+    mig_app_response.rd_data_valid = 1'b0;
+    mig_app_response.rd_data_end = 1'b0;
+    check(dut.read_outstanding_count_q == 0,
+          "arbiter did not retire queued render reads");
+
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_rw_arbiter errors=%0d", errors);
 

@@ -136,7 +136,11 @@ module voice_major_render_harness (
     configured_cache_sets = '0;
     configured_cache_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
     configured_window_words = 32'd32;
-    active_voice_count = 16'($countones(core.active_bitmap));
+    active_voice_count = '0;
+    for (int voice = 0; voice < NUM_VOICES; voice++) begin
+      active_voice_count += 16'(core.state_store.dynamic_mem[voice][
+          $bits(voice_dynamic_state_t) - 1]);
+    end
   end
 
   voice_major_render_core core (

@@ -24,8 +24,11 @@ module block_interleaved_envelope_frontend (
   import synth_pkg::*;
   import synth_dsp_lut_pkg::*;
 
-  localparam int SLOT_COUNT = BLOCK_WORK_ENTRY_COUNT;
-  localparam int SLOT_ID_WIDTH = $clog2(SLOT_COUNT);
+  // The streaming frontend owns exactly one voice context. Variable-latency
+  // work is buffered after this boundary, rather than by duplicating the
+  // recursive envelope state and searching a slot array.
+  localparam int SLOT_COUNT = 1;
+  localparam int SLOT_ID_WIDTH = 1;
   localparam logic [1:0] LEVEL_ZERO = 2'd0;
   localparam logic [1:0] LEVEL_DIRECT = 2'd1;
   localparam logic [1:0] LEVEL_CB = 2'd2;
@@ -119,10 +122,8 @@ module block_interleaved_envelope_frontend (
   block_envelope_result_t envelope_q [0:SLOT_COUNT-1];
   logic [31:0] release_attenuation_q [0:SLOT_COUNT-1];
 
-  logic [SLOT_ID_WIDTH-1:0] walk_rr_q;
   logic walk_found;
   logic [SLOT_ID_WIDTH-1:0] walk_slot;
-  logic [SLOT_ID_WIDTH-1:0] result_rr_q;
   logic result_found;
   logic [SLOT_ID_WIDTH-1:0] result_slot;
   logic result_valid_q;
@@ -177,28 +178,11 @@ module block_interleaved_envelope_frontend (
   endfunction
 
   always_comb begin
-    walk_found = 1'b0;
+    walk_found = (slot_state_q[0] == SLOT_WALK) ||
+                 (slot_state_q[0] == SLOT_RELEASE_APPLY);
     walk_slot = '0;
-    for (int offset = 0; offset < SLOT_COUNT; offset++) begin
-      logic [SLOT_ID_WIDTH-1:0] candidate;
-      candidate = walk_rr_q + SLOT_ID_WIDTH'(offset);
-      if (!walk_found && ((slot_state_q[candidate] == SLOT_WALK) ||
-                          (slot_state_q[candidate] == SLOT_RELEASE_APPLY))) begin
-        walk_found = 1'b1;
-        walk_slot = candidate;
-      end
-    end
-
-    result_found = 1'b0;
+    result_found = slot_state_q[0] == SLOT_READY;
     result_slot = '0;
-    for (int offset = 0; offset < SLOT_COUNT; offset++) begin
-      logic [SLOT_ID_WIDTH-1:0] candidate;
-      candidate = result_rr_q + SLOT_ID_WIDTH'(offset);
-      if (!result_found && (slot_state_q[candidate] == SLOT_READY)) begin
-        result_found = 1'b1;
-        result_slot = candidate;
-      end
-    end
   end
 
   assign result_valid = result_valid_q;
@@ -442,8 +426,6 @@ module block_interleaved_envelope_frontend (
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      walk_rr_q <= '0;
-      result_rr_q <= '0;
       result_valid_q <= 1'b0;
       result_slot_q <= '0;
       level_s0_q.valid <= 1'b0;
@@ -468,7 +450,6 @@ module block_interleaved_envelope_frontend (
       release_q.valid <= release_attack_start;
       level_s0_q.valid <= advance_q.valid;
       if (walk_found) begin
-        walk_rr_q <= walk_slot + 1'b1;
         unique case (slot_state_q[walk_slot])
           SLOT_RELEASE_APPLY: begin
             dynamic_q[walk_slot].env_state.stage <= ENV_RELEASE;
@@ -589,7 +570,6 @@ module block_interleaved_envelope_frontend (
 
       if (result_fire) begin
         result_valid_q <= 1'b0;
-        result_rr_q <= result_slot_q + 1'b1;
         slot_state_q[result_slot_q] <= SLOT_FREE;
       end
 

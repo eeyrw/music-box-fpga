@@ -93,9 +93,11 @@ aperture.
 
 ## Voice And DSP Layers
 
-`voice_major_block_controller` visits configured voice slots for one requested
-block and publishes a completed mix buffer. `block_mono_voice_engine` overlaps
-envelope preparation, sample-window traffic, DSP execution, and accumulation.
+`voice_major_block_controller` scans every configured voice ID in ascending
+order for one requested block, skips snapshots whose dynamic state is inactive,
+and publishes a completed mix buffer. `block_mono_voice_engine` overlaps the
+single-context envelope frontend, sample-window traffic, fixed-lane DSP
+execution, and accumulation.
 
 `mono_phase_frame` derives the two interpolation endpoints and next phase for
 one mono voice. START clears phase to zero. Runtime PITCH changes only
@@ -103,8 +105,10 @@ one mono voice. START clears phase to zero. Runtime PITCH changes only
 wraps until RELEASE.
 
 `block_interleaved_voice_dsp` duplicates the interpolated mono sample before
-independent left/right gain, then applies filter/envelope arithmetic. Linked SF2
-stereo material has already become two mono voices in C++.
+independent left/right gain, then applies filter/envelope arithmetic. Its input
+is selected by a modulo eight-lane barrel; it does not search ready contexts or
+maintain a dynamic filter-hazard scoreboard. Linked SF2 stereo material has
+already become two mono voices in the host render flow.
 
 ## Memory Layer
 

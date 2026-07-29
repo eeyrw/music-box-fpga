@@ -20,7 +20,7 @@ module block_interleaved_voice_dsp (
       FILTER_SAMPLE_WIDTH + FILTER_COEFF_WIDTH;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -32,7 +32,7 @@ module block_interleaved_voice_dsp (
   } stage0_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -43,7 +43,7 @@ module block_interleaved_voice_dsp (
   } stage1_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -57,7 +57,7 @@ module block_interleaved_voice_dsp (
   } stage2_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -71,7 +71,7 @@ module block_interleaved_voice_dsp (
   } stage3_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -87,7 +87,7 @@ module block_interleaved_voice_dsp (
   } stage4_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_context_t voice_context;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index;
@@ -98,7 +98,7 @@ module block_interleaved_voice_dsp (
   } stage5_t;
 
   typedef struct packed {
-    logic [BLOCK_WORK_ID_WIDTH-1:0] work_id;
+    logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     logic [VOICE_GENERATION_WIDTH-1:0] generation;
     logic [VOICE_ID_WIDTH-1:0] voice_index;

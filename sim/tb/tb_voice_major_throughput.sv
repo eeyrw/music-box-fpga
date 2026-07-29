@@ -15,6 +15,15 @@ module tb_voice_major_throughput;
 `else
   localparam bit FILTER_ENABLE = 1'b0;
 `endif
+`ifdef SYNTH_DDR3_MODEL
+  localparam string MEMORY_PROFILE = "timed_ddr3";
+  localparam string QUALIFICATION = "timed_model_only";
+`else
+  // Requests are never backpressured and responses return on the next core
+  // clock. This measures the render datapath ceiling, not DDR3 performance.
+  localparam string MEMORY_PROFILE = "ideal_zero_wait";
+  localparam string QUALIFICATION = "theoretical_only";
+`endif
 
   logic clk = 1'b0;
 `ifdef SYNTH_DDR3_MODEL
@@ -70,7 +79,7 @@ module tb_voice_major_throughput;
   integer contribution_count;
   integer dsp_issue_count;
   integer dsp_select_count;
-  integer dsp_forward_count;
+  integer last_lane_issue_cycle [0:BLOCK_WORK_ENTRY_COUNT-1];
   integer dsp_issue_run;
   integer max_dsp_issue_run;
   integer frontend_dsp_overlap_cycles;
@@ -97,7 +106,6 @@ module tb_voice_major_throughput;
       contribution_count <= 0;
       dsp_issue_count <= 0;
       dsp_select_count <= 0;
-      dsp_forward_count <= 0;
       dsp_issue_run <= 0;
       max_dsp_issue_run <= 0;
       frontend_dsp_overlap_cycles <= 0;
@@ -106,6 +114,8 @@ module tb_voice_major_throughput;
       last_engine_start_cycle <= -1;
       for (int state_index = 0; state_index < 8; state_index++)
         controller_state_cycles[state_index] <= 0;
+      for (int lane = 0; lane < BLOCK_WORK_ENTRY_COUNT; lane++)
+        last_lane_issue_cycle[lane] <= -1;
     end else begin
       cycle_count <= cycle_count + 1;
       controller_state_cycles[dut.controller.state_q] <=
@@ -144,16 +154,14 @@ module tb_voice_major_throughput;
       end
       if (dut.controller.engine.renderer.issue_select_capture) begin
         dsp_select_count <= dsp_select_count + 1;
-        if (dut.controller.engine.renderer.work_hazard_q[
-                dut.controller.engine.renderer.issue_candidate_work_id] &&
-            !(dut.controller.engine.renderer.dsp_state_update_valid &&
-              (dut.controller.engine.renderer.dsp_state_update.work_id ==
-               dut.controller.engine.renderer.issue_candidate_work_id)))
-          $fatal(1, "DSP scheduler issued an unresolved RAW hazard");
-        if (dut.controller.engine.renderer.dsp_state_update_valid &&
-            (dut.controller.engine.renderer.dsp_state_update.work_id ==
-             dut.controller.engine.renderer.issue_candidate_work_id))
-          dsp_forward_count <= dsp_forward_count + 1;
+        if ((last_lane_issue_cycle[
+                dut.controller.engine.renderer.issue_candidate_lane] >= 0) &&
+            ((cycle_count - last_lane_issue_cycle[
+                dut.controller.engine.renderer.issue_candidate_lane]) <
+             BLOCK_WORK_ENTRY_COUNT))
+          $fatal(1, "DSP barrel reused a lane before the feedback distance");
+        last_lane_issue_cycle[
+            dut.controller.engine.renderer.issue_candidate_lane] <= cycle_count;
       end
       if ((dut.controller.engine.renderer.plan_found ||
            dut.controller.engine.renderer.cache_req_valid ||
@@ -252,8 +260,8 @@ module tb_voice_major_throughput;
   initial begin
     if (NUM_VOICES < ACTIVE_LANES)
       $fatal(1, "configured voice count is below the active-lane workload");
-    if (MAX_BLOCK_FRAMES != 8)
-      $fatal(1, "throughput baseline is defined for eight-frame blocks");
+    if ((MAX_BLOCK_FRAMES != 8) && (MAX_BLOCK_FRAMES != 16))
+      $fatal(1, "throughput test supports eight- or sixteen-frame blocks");
 
     bus_req = '0;
     cmd_stream_valid = 1'b0;
@@ -297,26 +305,25 @@ module tb_voice_major_throughput;
       $fatal(1, "throughput run lost voice work or contributions");
     if ((ACTIVE_LANES > 1) &&
         ((max_outstanding_voices < 2) ||
-         (frontend_dsp_overlap_cycles == 0) ||
-         (FILTER_ENABLE && (dsp_forward_count == 0))))
+         (frontend_dsp_overlap_cycles == 0)))
       $fatal(1, "voice frontend and DSP did not overlap");
     if (block_cycles > BLOCK_DEADLINE_CYCLES)
       $fatal(1, "%0d-lane memory workload missed the block deadline",
              ACTIVE_LANES);
 
-    $display("VOICE_MAJOR_THROUGHPUT active_lanes=%0d frames=%0d filter=%0d cycles=%0d deadline=%0d cycles_per_lane=%0d",
-             ACTIVE_LANES, MAX_BLOCK_FRAMES, FILTER_ENABLE, block_cycles,
-             BLOCK_DEADLINE_CYCLES, block_cycles / ACTIVE_LANES);
-    $display("VOICE_MAJOR_STAGES voices=%0d max_outstanding=%0d frontend_dsp_overlap=%0d line_requests=%0d dsp_issues=%0d max_issue_run=%0d forwards=%0d contributions=%0d",
+    $display("VOICE_MAJOR_THROUGHPUT active_lanes=%0d frames=%0d filter=%0d memory=%s qualification=%s cycles=%0d deadline=%0d cycles_per_lane=%0d",
+             ACTIVE_LANES, MAX_BLOCK_FRAMES, FILTER_ENABLE, MEMORY_PROFILE,
+             QUALIFICATION, block_cycles, BLOCK_DEADLINE_CYCLES,
+             block_cycles / ACTIVE_LANES);
+    $display("VOICE_MAJOR_STAGES voices=%0d max_outstanding=%0d frontend_dsp_overlap=%0d line_requests=%0d dsp_issues=%0d max_issue_run=%0d contributions=%0d",
              engine_start_count, max_outstanding_voices,
              frontend_dsp_overlap_cycles, line_request_count,
-             dsp_issue_count, max_dsp_issue_run, dsp_forward_count,
-             contribution_count);
-    $display("VOICE_MAJOR_CONTROLLER idle=%0d wait_fill=%0d select_group=%0d select_voice=%0d request=%0d wait_state=%0d drain=%0d finish=%0d first_start=%0d last_start=%0d",
+             dsp_issue_count, max_dsp_issue_run, contribution_count);
+    $display("VOICE_MAJOR_CONTROLLER idle=%0d wait_fill=%0d request=%0d wait_state=%0d dispatch=%0d drain=%0d finish=%0d first_start=%0d last_start=%0d",
              controller_state_cycles[0], controller_state_cycles[1],
              controller_state_cycles[2], controller_state_cycles[3],
              controller_state_cycles[4], controller_state_cycles[5],
-             controller_state_cycles[6], controller_state_cycles[7],
+             controller_state_cycles[6],
              first_engine_start_cycle, last_engine_start_cycle);
 `ifdef SYNTH_DDR3_MODEL
     if (ddr3_stat_accepted != 64'(line_request_count) ||
