@@ -41,10 +41,19 @@ module tb_block_interleaved_voice_renderer;
 /* verilator lint_off UNUSEDSIGNAL */
   sample_window_diagnostics_t sample_window_diagnostics;
 /* verilator lint_on UNUSEDSIGNAL */
+  integer dual_descriptor_emit_count;
 
   always #5 clk <= ~clk;
 
   block_interleaved_voice_renderer dut (.*);
+
+  always_ff @(posedge clk) begin
+    if (rst)
+      dual_descriptor_emit_count <= 0;
+    else if (dut.descriptor_plan_q.valid &&
+             dut.plan_descriptor_emit_count == 2)
+      dual_descriptor_emit_count <= dual_descriptor_emit_count + 1;
+  end
 
   task automatic start_voice;
     begin
@@ -111,21 +120,21 @@ module tb_block_interleaved_voice_renderer;
   initial begin
     start_valid = 1'b0;
     start_voice_index = VOICE_ID_WIDTH'(12);
-    start_frame_count = BLOCK_FRAME_COUNT_WIDTH'(2);
+    start_frame_count = BLOCK_FRAME_COUNT_WIDTH'(3);
     start_phase_advance_mask = '1;
-    start_render_mask = MAX_BLOCK_FRAMES'(2'b11);
+    start_render_mask = MAX_BLOCK_FRAMES'(3'b101);
     start_envelope_levels = '0;
     start_envelope_levels[0] = 16'sh7fff;
-    start_envelope_levels[1] = 16'sh7fff;
+    start_envelope_levels[2] = 16'sh7fff;
     start_active = 1'b1;
     start_generation = 16'h005a;
-    start_phase = '0;
+    start_phase = 32'h0000_0080;
     start_region = '0;
     start_region.base_addr = 32'd100;
-    start_region.length = 24'd8;
+    start_region.length = 24'd32;
     start_region.loop_mode = LOOP_MODE_NONE;
     start_params = '0;
-    start_params.phase_inc = 32'h0000_0100;
+    start_params.phase_inc = 32'h0000_0580;
     start_params.gain_l = 16'sh7fff;
     start_params.gain_r = 16'sh4000;
     start_params.filter_enable = 1'b1;
@@ -151,19 +160,21 @@ module tb_block_interleaved_voice_renderer;
       $fatal(1, "renderer did not expose its multi-block input window");
     service_line(32'd96);
     expect_contribution(BLOCK_FRAME_INDEX_WIDTH'(0), 16'sd49, 16'sd25);
-    expect_contribution(BLOCK_FRAME_INDEX_WIDTH'(1), 16'sd74, 16'sd37);
+    expect_contribution(BLOCK_FRAME_INDEX_WIDTH'(2), 16'sd79, 16'sd40);
 
     do @(posedge clk); while (!result_valid);
     if (result_voice_index != start_voice_index || !result_env_active ||
         result_env_state.stage != ENV_SUSTAIN ||
         result.phase_result.generation != 16'h005a ||
         !result.phase_result.active ||
-        result.phase_result.phase != 32'h0000_0200 ||
-        result.phase_result.frames_walked != BLOCK_FRAME_COUNT_WIDTH'(2) ||
-        $signed(result.filter_z1) != FILTER_STATE_WIDTH'(413696) ||
+        result.phase_result.phase != 32'h0000_1100 ||
+        result.phase_result.frames_walked != BLOCK_FRAME_COUNT_WIDTH'(3) ||
+        $signed(result.filter_z1) != FILTER_STATE_WIDTH'(454656) ||
         $signed(result.filter_z2) != 0) begin
       $fatal(1, "renderer final state mismatch");
     end
+    if (dual_descriptor_emit_count != 1)
+      $fatal(1, "renderer did not preserve dual descriptor emission");
     @(posedge clk);
     if (!result_valid) $fatal(1, "renderer result dropped under backpressure");
     @(negedge clk);
@@ -173,7 +184,7 @@ module tb_block_interleaved_voice_renderer;
     result_ready = 1'b0;
     if (!start_ready) $fatal(1, "renderer did not release voice ownership");
 
-    $display("PASS: end-to-end mono voice block renderer");
+    $display("PASS: ordered-run descriptors, skipped frame, and dual emit");
     $finish;
   end
 

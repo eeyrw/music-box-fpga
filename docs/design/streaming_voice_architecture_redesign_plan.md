@@ -27,14 +27,21 @@ frontend 只保留一个 context。Smart Artix line reader 已是 8-entry 有界
 arbiter 可跟踪多个有序 render read。
 
 renderer 的 job payload、sample-0、sample-1 和 ordered line descriptor 已改为同步 BRAM。
-规划阶段把相邻同 line endpoint 合并为 `{line_addr, endpoint_mask, word_index[]}`，memory
-阶段按 descriptor 次序直接发请求，不再扫描 endpoint 全表。descriptor 生成前增加一级
-端点地址流水，切断 loop wrap 到 BRAM data 的长组合路径。8-frame fresh synthesis 将两个
-descriptor bank 映射为 `64x93`，每 bank 一个 RAMB18 和一个 RAMB36；sample 和 payload
-也保持 BRAM，不再使用原来的 44 个 RAM64M。
+规划阶段把相邻且同 line 的 endpoint 合并成连续 run；descriptor 只保存
+`{line_addr, last_endpoint}`，起点由每个 work 的顺序 cursor 隐含。memory 阶段按 descriptor
+次序直接发请求，response gather 顺序遍历闭区间，不再保存或优先扫描 32-bit endpoint
+mask。每个 job 的两个 3-bit word offset 另存为 `128x6` distributed RAM，避免每条
+descriptor 重复 offset。descriptor 生成前有一级端点地址流水，切断 loop wrap 到 BRAM
+data 的长组合路径。16-frame fresh synthesis 将两个 `128x34` descriptor bank 各映射为
+一个 RAMB18；sample 和 payload 仍为三个 RAMB18，word-offset 表映射为 4 个 RAM64M。
 
 尚未完成的架构项是 sample-ready FIFO，以及第 12 节定义的 8-voice group reducer +
 true-dual-port BRAM mix。ordered line descriptor 已完成，下一步不再回到 endpoint scan。
+
+2026-07-30 使用最终 34-bit descriptor、默认 16-frame 配置和 SGM v2.01 SF2 对
+`polyphony_stress_512.mid` 重跑 0.02 秒 RTL DDR3 smoke：960 frames、60 blocks、峰值 465
+active voices、`max_render_cycles=26,847`、zero deadline miss、58,804 DDR reads 和 18,752
+row misses。该单配置复测与下方既有 16-frame 数据一致；本次没有重跑 8/16 A/B。
 
 2026-07-29 使用同一 descriptor RTL 完成 8/16 A/B。定向 512-voice SV 压力中，8-frame
 零等待理论值为 15,544 clocks，timed DDR3 为 15,552 clocks；16-frame 两者均为

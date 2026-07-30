@@ -50,23 +50,37 @@ A fresh Vivado 2025.2 synthesis on 2026-07-30 used the Makefile defaults of
 
 | Resource or estimate | Current result |
 | --- | ---: |
-| LUT | 27,136 / 32,600 (83.24%) |
-| FF | 26,775 / 65,200 (41.07%) |
+| LUT | 25,938 / 32,600 (79.56%) |
+| FF | 25,562 / 65,200 (39.21%) |
 | DSP48E1 | 39 / 120 (32.50%) |
-| BRAM tiles | 50 / 75 (66.67%) |
+| BRAM tiles | 46 / 75 (61.33%) |
 | Post-synthesis WNS/TNS | +0.400 ns / 0 ns |
 
-The immediate pre-change fresh baseline was 27,414 LUTs, 27,043 FFs, 39 DSPs,
-50 BRAM tiles, and the same +0.400 ns WNS. Slimming the DSP tail payload and
-replacing wide signed saturation comparisons with equivalent sign-extension
-overflow checks therefore saved 278 LUTs and 268 FFs without changing memories,
-DSP count, or the timing estimate. The engine moved from 9,903 to 9,655 LUTs;
-the DSP submodule moved from 3,645 LUT / 1,229 FF to 3,418 LUT / 954 FF.
+The immediate pre-change fresh baseline was 27,136 LUTs, 26,775 FFs, 39 DSPs,
+50 BRAM tiles, and +0.400 ns WNS. First moving per-job offsets out of the
+descriptor reduced it from 157 to 61 bits; then replacing its 32-bit endpoint
+mask with an inclusive 5-bit range end reduced it to 34 bits. Together these
+changes saved 1,198 LUTs, 1,213 FFs, and four BRAM tiles. Each `128 x 34`
+descriptor bank now uses one RAMB18 instead of two RAMB36 plus one RAMB18. The
+separate `128 x 6` per-job word-offset table uses four RAM64M primitives. The
+engine moved from 9,655 to 8,459 LUTs and the renderer from 8,513 LUT / 9,093 FF
+to 7,315 LUT / 7,880 FF. DSP count remains 39.
+
+The intermediate 61-bit version measured 26,261 LUTs, 25,770 FFs, 47 BRAM
+tiles, and +0.171 ns WNS. Removing its response mask scan saved another 323
+LUTs, 208 FFs, and one BRAM tile while restoring the fresh synthesis WNS to
++0.400 ns. No implementation run was performed for this experiment.
 
 The four 512-voice directed runs, with ideal/timed-DDR3 memory and filter off/on,
 all remained at 28,000 clocks for 16 frames. Each accepted 8,192 DSP issues and
 retired 8,192 contributions. Ordinary synthesis is sufficient for this local
 A/B; these numbers are not implementation timing signoff.
+
+The current 34-bit RTL also passed a default 16-frame, 0.02-second SGM v2.01
+SF2 and `polyphony_stress_512.mid` smoke: 960 output frames, 465 peak active
+voices, 26,847 maximum render clocks, zero deadline misses, 58,804 DDR reads,
+and 18,752 row misses. This was a single-configuration regression, not a new
+8/16 block-size A/B.
 
 `vivado-synth` resets and rebuilds its synthesis run every time. Configuration
 or RTL comparisons must still preserve reports from separate fresh runs; never
@@ -76,9 +90,9 @@ compare an ordinary-synthesis hierarchy against post-route utilization.
 
 The current LUT total is not dominated by one removable register array. The
 post-synthesis hierarchy attributes 5,114 LUTs to the generated DDR3 MIG, 5,931
-LUTs to the effects chain, and 12,620 LUTs to the generic render core. Within
-the core, the controller uses 10,770 LUTs, its engine uses 9,655, and its
-renderer uses 8,513. These totals include parent and child ownership and cannot
+LUTs to the effects chain, and 11,425 LUTs to the generic render core. Within
+the core, the controller uses 9,574 LUTs, its engine uses 8,459, and its
+renderer uses 7,315. These totals include parent and child ownership and cannot
 be added together.
 
 Hierarchical LUT attribution can move across module boundaries after

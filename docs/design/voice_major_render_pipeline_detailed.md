@@ -359,14 +359,23 @@ fraction
 envelope_level
 ```
 
-8 个 slot、每 slot 最多 8 个 frame 时，该 payload 是 `64 x 27`，Vivado 映射为一块
+8 个 slot、每 slot 最多 16 个 frame 时，该 payload 是 `128 x 28`，Vivado 映射为一块
 RAMB18。issue select 到 DSP token 本来就有一级寄存，因此同步读不会增加 DSP issue
-间隔。每个 job 的两个 endpoint address 单独保留；memory scheduler 不再同拍比较全部
-16 个 endpoint，而是每拍扫描 4 个。第一轮 FIND 最多用 4 拍找到一条尚未覆盖的 DDR
-line，第二轮 MASK 从命中组继续、最多再用 4 拍收集落在该 line 的 endpoint；FIND 已
-证明更早的组没有 missing endpoint。扫描直接累加到现有 request mask 和 word-index
-寄存器，不复制第二套 16 路暂存。所有 job 的 `endpoint_mask` 恒为 `2'b11`，不再逐项
-存储。
+间隔。
+
+planner 每拍处理一个 frame pair，并把相邻同 line endpoint 合并到 ordered descriptor。
+endpoint 按紧凑 job 顺序生成，因此每条 descriptor 覆盖连续 endpoint 区间。descriptor
+是 34 bit：29-bit line address 加 5-bit inclusive `last_endpoint`；区间起点由每个 work
+的顺序 cursor 隐含。每个 job 的两个 3-bit word offset 只在独立 `128 x 6` distributed
+RAM 中保存一次，response gather 根据 work ID、pair index 和 endpoint parity 组合读出。
+它顺序遍历区间，不再存储或优先扫描 32-bit endpoint mask。
+
+若旧 open line 在 endpoint 0 前结束、而 endpoint 0 和 endpoint 1 又跨 line，同一个
+planner clock 会关闭两条 line。双 descriptor bank 可在该拍各写一条，保持每拍一个
+frame pair、最多双 emit；response gather 仍是每拍写回一个 endpoint sample。2026-07-30
+的定向 testbench 跳过中间一个 block frame，并使用 `line 96 -> line 104/112` 明确命中
+一次双 emit，证明 compact job endpoint 仍然连续，同时用 fractional phase 检查两个
+offset 的精确采样结果。
 
 job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 render，payload 自身
 携带原始 `block_frame_index`，退休时仍会累加到正确 mix frame。
@@ -388,16 +397,20 @@ job 按该 voice 的 frame 顺序紧凑存储。即使某些 block frame 不 ren
 
 ### 11.2 Segment 的选择
 
-memory scheduler round-robin 找到一个 `WORK_MEM_WAIT` slot 后，以 4 endpoint/拍扫描
-remaining endpoint。FIND 阶段锁存第一条未覆盖 endpoint 所在的 8-word line：
+memory scheduler round-robin 找到一个 `WORK_MEM_WAIT` slot 后，按 descriptor issue
+cursor 同步读取下一条 ordered descriptor。descriptor 给出 line address 和连续 endpoint
+区间的 inclusive end；区间 start 来自该 work 的 endpoint cursor：
 
 ```text
-line_base = floor(endpoint_addr / 8) * 8
+line_base      = descriptor.line_addr * 8
+first_endpoint = work.next_endpoint
+last_endpoint  = descriptor.last_endpoint
 ```
 
-MASK 阶段从 FIND 命中的组扫描到最后一组，生成该 line 覆盖的 endpoint mask 和每个
-endpoint 的 word index，然后向 `voice_sample_window` 发出一条 client request。sample
-window 可把 miss 扩展为 32-word refill：
+request 被接受后，work cursor 更新为 `last_endpoint + 1`。response gather 从 first 到
+last 每拍写回一个 sample；word index 从独立 per-job offset RAM 读取。这里没有 endpoint
+FIND/MASK 扫描。随后向 `voice_sample_window` 发出一条 client request，sample window 可把
+miss 扩展为 32-word refill：
 
 ```text
 window_base + 0
@@ -406,8 +419,8 @@ window_base + 16
 window_base + 24
 ```
 
-扫描新增的拍数与其他 slot 的 DSP、已有 line response 和 DDR 等待重叠。这样把地址
-比较扇出从 16 路降到 4 路，同时保留八个 slot 覆盖 DDR latency 的能力。
+descriptor issue、其他 slot 的 DSP、已有 line response 和 DDR 等待可以重叠。连续区间
+表示消除了 mask 优先选择器，同时保留八个 slot 覆盖 DDR latency 的能力。
 
 ### 11.3 Request 和 response 独立计数
 
@@ -1239,7 +1252,8 @@ overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也�
 生产路径的 focused SV TB 包括：
 
 - `tb_block_interleaved_envelope_frontend`：8-context tag、level 和 backpressure；
-- `tb_block_interleaved_voice_renderer`：基础 endpoint/memory/DSP/result 和 stall；
+- `tb_block_interleaved_voice_renderer`：endpoint offset、双 descriptor emit、
+  memory/DSP/result 和 stall；
 - `tb_block_interleaved_voice_dsp`：精确整数运算、tag、state update 和 retire stall；
 - `tb_block_mono_voice_engine`：envelope 到最终 dynamic result；
 - `tb_voice_major_block_controller`：active scan、state dispatch、drain 和 mix；
@@ -1261,7 +1275,7 @@ loop-wrap 的直接 renderer 回归。
 
 ### 24.2 Synthesis and timing
 
-当前环境没有 Vivado。必须确认：
+当前环境可运行 Vivado；每次内部存储或调度变化仍必须确认：
 
 - slot descriptor/job/sample array 推断成 LUTRAM/BRAM 还是大量寄存器；
 - DSP 乘法是否映射到 DSP48，数量是否符合器件预算；

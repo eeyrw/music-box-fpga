@@ -80,6 +80,16 @@ endpoints; hits return locally. A miss requests aligned 8-word chunks in order
 until the needed portion of the window is populated. A boundary endpoint that
 falls outside the current window uses the documented fallback read path.
 
+The phase planner accepts one frame pair per clock. It groups consecutive
+endpoints on the same 8-word line into ordered 34-bit descriptors containing a
+29-bit line address and the inclusive 5-bit index of the last endpoint in that
+run. The first endpoint is implicit in a per-work cursor. The two 3-bit word
+offsets belong to the job, not the line, and are stored once in a separate
+`128 x 6` distributed RAM. Crossing from an existing open line through two new
+lines can emit two descriptors in one clock; the two descriptor banks preserve
+that case without stalling the planner. Responses walk each descriptor's
+contiguous endpoint range and still write one endpoint sample per clock.
+
 The external 8-word object is a refill transaction, not the removed line-cache
 architecture. Smart Artix sends it through its DDR3 line reader and existing
 read/write arbiter to the MIG app interface.

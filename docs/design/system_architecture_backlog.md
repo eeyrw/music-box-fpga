@@ -274,6 +274,34 @@ All ideal-memory and timed-DDR3 filter-off/on runs remained at 28,000 clocks,
 local area result, not post-route signoff, and it does not close the ownership
 refactor described above.
 
+The follow-up descriptor compaction kept the planner at one frame pair per
+clock and retained its maximum two descriptor emits in one clock. Moving the
+two 3-bit word offsets into one `128 x 6` per-job distributed RAM reduced each
+ordered descriptor from 157 to 61 bits. A second compaction used the planner's
+ordered-run invariant: each descriptor now stores only the 29-bit line address
+and inclusive 5-bit last endpoint, while a per-work cursor supplies the first
+endpoint. This reduced the descriptor to 34 bits and removed the 32-bit mask
+priority scan from response gathering. Fresh ordinary synthesis produced:
+
+| Metric | 157-bit | 61-bit | 34-bit | Total delta |
+| --- | ---: | ---: | ---: | ---: |
+| Full-device Slice LUT | 27,136 | 26,261 | 25,938 | -1,198 |
+| Full-device Slice FF | 26,775 | 25,770 | 25,562 | -1,213 |
+| Block RAM tiles | 50 | 47 | 46 | -4 |
+| Voice engine LUT | 9,655 | 8,782 | 8,459 | -1,196 |
+| Renderer LUT / FF | 8,513 / 9,093 | 7,631 / 8,088 | 7,315 / 7,880 | -1,198 / -1,213 |
+| Post-synthesis WNS | +0.400 ns | +0.171 ns | +0.400 ns | unchanged |
+
+Both descriptor banks now map as `128 x 34`, one RAMB18 each; the offset table
+uses four RAM64M primitives. The same four 512-voice ideal/timed-DDR3 runs stay
+at 28,000 clocks, 8,192 DSP issues, and 8,192 contributions. A focused renderer
+test skips one block frame, forces a dual emit, and checks fractional sampling
+across three lines. A default 16-frame, 0.02-second SGM v2.01 SF2 and
+`polyphony_stress_512.mid` smoke also passed with 465 peak active voices,
+26,847 maximum render clocks, zero deadline misses, 58,804 DDR reads, and
+18,752 row misses. No 8/16 A/B was rerun. This is a retained area win, not
+updated implementation signoff.
+
 ### A7: Effect Sends Are Global
 
 The renderer produces one dry stereo mix. Global chorus and reverb sends apply
