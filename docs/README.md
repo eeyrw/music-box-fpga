@@ -90,6 +90,9 @@ change.
   Smart Artix source-list ownership, BRAM inference repairs, per-module timing
   case studies, residual path clusters, run-freshness checks, and closure
   criteria.
+- [`verification/vivado_strategy_and_report_analysis.md`](verification/vivado_strategy_and_report_analysis.md):
+  Vivado 2025.2 synthesis/implementation strategy research, measured Smart
+  Artix strategy comparison, report inspection order, and signoff gates.
 - [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
   local copy of the Standard MIDI File format reference used when validating the
   C++ MIDI parser.

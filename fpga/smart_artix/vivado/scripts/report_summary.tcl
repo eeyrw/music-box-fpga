@@ -63,6 +63,14 @@ proc report_to_string {command temp_path} {
   return $text
 }
 
+proc write_optional_report {label command output_path} {
+  if {[catch {uplevel 1 [concat $command [list -file $output_path]]} message]} {
+    puts "WARNING: Could not generate $label report: $message"
+    return 0
+  }
+  return 1
+}
+
 proc parse_table_row_metrics {text labels} {
   set result [dict create]
   foreach line [split $text "\n"] {
@@ -200,6 +208,8 @@ proc collect_drc {stage report_dir} {
 
 proc write_vivado_summary {stage output_path} {
   global report_dir board_name part_name top_name synth_run_name impl_run_name
+  global synth_num_voices synth_block_work_entry_count
+  global synth_block_job_entry_count synth_max_block_frames
 
   set summary [dict create]
   dict set summary schema_version 1
@@ -211,6 +221,16 @@ proc write_vivado_summary {stage output_path} {
   dict set summary generated_at [clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%S%z}]
   dict set summary synth_run $synth_run_name
   dict set summary impl_run $impl_run_name
+  dict set summary configuration num_voices $synth_num_voices
+  dict set summary configuration block_work_entries $synth_block_work_entry_count
+  dict set summary configuration block_job_entries $synth_block_job_entry_count
+  dict set summary configuration max_block_frames $synth_max_block_frames
+  if {[llength [get_runs -quiet $synth_run_name]] != 0} {
+    dict set summary synth_strategy [get_property STRATEGY [get_runs $synth_run_name]]
+  }
+  if {[llength [get_runs -quiet $impl_run_name]] != 0} {
+    dict set summary impl_strategy [get_property STRATEGY [get_runs $impl_run_name]]
+  }
   if {![catch {version -short} vivado_version]} {
     dict set summary vivado_version $vivado_version
   }

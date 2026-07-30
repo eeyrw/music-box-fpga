@@ -18,8 +18,10 @@ for SPI, native-SD, and I2S constraint analysis and completion gates.
 
 - FPGA family target: Xilinx Artix-7 `XC7A50T`.
 - FPGA device reported by the board owner: `XC7A50T-2FGG484I`.
-- Vivado 2018.3 part name: `xc7a50tfgg484-2`. Vivado does not encode the
-  industrial temperature suffix in the part name used by `create_project`.
+- The current Vivado 2025.2 batch flow uses part name `xc7a50tfgg484-2`.
+  Vivado does not encode the industrial temperature suffix in the part name
+  used by `create_project`; this is a device identifier, not a tool-version
+  lock.
 - External wave memory: Micron `MT41K256M16TW` DDR3.
 - DDR3 capacity and width: `256M x 16-bit`, total `512 MB`.
 - DDR3 FPGA bank: `BANK34`.
@@ -215,7 +217,9 @@ contains one complete wavetable cache line.
 
 Latest forced full implementation result with `smart_artix_clk_50m_to_200m`,
 `smart_artix_ddr3_mig`, the generated MIG XDC, the complete generic RTL
-filelist, and the board RTL filelist merged by `project.tcl`:
+filelist, and the board RTL filelist merged by `project.tcl`. The run used
+`Flow_PerfOptimized_high` synthesis and
+`Performance_ExplorePostRoutePhysOpt` implementation:
 
 ```text
 Design: smart_artix_top
@@ -223,7 +227,7 @@ Device: 7a50tfgg484-2
 Vivado result: route_design completed successfully
 Errors: 0
 Critical warnings: 0
-Synthesis checksum: d17fba4
+Synthesis checksum: 1c312326
 ```
 
 Warnings remain visible and include generated-IP and board I/O timing messages.
@@ -233,30 +237,37 @@ constraints still require measured board timing contracts.
 Post-route utilization:
 
 ```text
-Slice LUTs       19306 / 32600  59.22%
-Slice Registers 20750 / 65200  31.83%
-DSP48E1            47 / 120    39.17%
-Block RAM tiles  39.5 / 75     52.67%
+Slice LUTs       25633 / 32600  78.63%
+Slice Registers 26874 / 65200  41.22%
+DSP48E1            39 / 120    32.50%
+Block RAM tiles    50 / 75     66.67%
 ```
 
 Post-route timing at the MIG 100 MHz `ui_clk`:
 
 ```text
-WNS  +0.226 ns
+WNS  +0.047 ns
 TNS  0.000 ns
 Failing setup endpoints: 0
-WHS  +0.036 ns
+WHS  +0.053 ns
 THS  0.000 ns
 Failing hold endpoints: 0
-Fully routed nets: 39892 / 39892
+Fully routed nets: 48436 / 48436
 Route errors: 0
 DRC errors: 0
 ```
 
+The LUT line above is `25633 / 32600 (78.63%)`; this relatively high occupancy
+is a QoR and growth-budget concern even though the design fits. The DRC report
+also contains 127 warnings, which require classification rather than being
+treated as errors or silently waived.
+
 Timing closure required BRAM-safe chorus/reverb memories and explicit numeric
 stages in the chorus, reverb, return mixer, compressor, and control executor.
 The reusable coding patterns, path-cluster history, and failure signatures are
-recorded in `../../docs/verification/vivado_synthesis_timing.md`.
+recorded in `../../docs/verification/vivado_synthesis_timing.md`. Strategy
+selection, the comparison experiment, and report inspection gates are recorded
+in `../../docs/verification/vivado_strategy_and_report_analysis.md`.
 
 The timing report also shows expected board-level gaps: SPI input ports and I2S
 or status output ports do not yet have external input/output delays. Add those
@@ -264,10 +275,10 @@ only after the real board timing contract is known.
 
 ## Resource Follow-Up
 
-The design now fits with useful headroom in every reported programmable
-resource. Preserve synchronous BRAM templates and re-run full implementation
-after effects, voice-count, or control-record changes; post-synthesis timing is
-not sufficient for signoff.
+The design fits, but the current 78.63% LUT occupancy and +0.047 ns setup slack
+leave little growth or placement margin. Preserve synchronous BRAM templates and
+re-run full implementation after effects, voice-count, or control-record
+changes; post-synthesis timing is not sufficient for signoff.
 
 ## Bring-Up Order
 

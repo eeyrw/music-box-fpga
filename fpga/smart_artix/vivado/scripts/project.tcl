@@ -36,6 +36,22 @@ if {$synth_num_voices > 1024} {
   error "SYNTH_NUM_VOICES exceeds the 10-bit command voice-ID capacity"
 }
 
+set vivado_jobs 4
+if {[info exists ::env(VIVADO_JOBS)] && $::env(VIVADO_JOBS) ne ""} {
+  if {![string is integer -strict $::env(VIVADO_JOBS)] || $::env(VIVADO_JOBS) < 1} {
+    error "VIVADO_JOBS must be a positive integer"
+  }
+  set vivado_jobs $::env(VIVADO_JOBS)
+}
+set synth_strategy Flow_PerfOptimized_high
+if {[info exists ::env(VIVADO_SYNTH_STRATEGY)] && $::env(VIVADO_SYNTH_STRATEGY) ne ""} {
+  set synth_strategy $::env(VIVADO_SYNTH_STRATEGY)
+}
+set impl_strategy Performance_ExplorePostRoutePhysOpt
+if {[info exists ::env(VIVADO_IMPL_STRATEGY)] && $::env(VIVADO_IMPL_STRATEGY) ne ""} {
+  set impl_strategy $::env(VIVADO_IMPL_STRATEGY)
+}
+
 proc load_ddr_ucf_pin_map {ucf_path} {
   if {![file exists $ucf_path]} {
     error "DDR pin source file is missing: $ucf_path"
@@ -141,24 +157,76 @@ if {$force_rebuild && [file exists $project_file]} {
     [file join $build_dir ${board_name}.srcs]
 }
 
+set project_inputs_changed 0
+set source_set_changed 0
 if {[file exists $project_file]} {
   open_project $project_file
 } else {
   create_project $board_name $build_dir -part $part_name
+  set project_inputs_changed 1
 }
-set_property target_language Verilog [current_project]
-set_property verilog_define [list \
+if {[get_property target_language [current_project]] ne "Verilog"} {
+  set_property target_language Verilog [current_project]
+  set project_inputs_changed 1
+}
+set synth_defines [list \
   SYNTH_NUM_VOICES=$synth_num_voices \
   SYNTH_BLOCK_WORK_ENTRY_COUNT=$synth_block_work_entry_count \
   SYNTH_BLOCK_JOB_ENTRY_COUNT=$synth_block_job_entry_count \
-  SYNTH_MAX_BLOCK_FRAMES=$synth_max_block_frames] [current_fileset]
+  SYNTH_MAX_BLOCK_FRAMES=$synth_max_block_frames]
+if {[get_property verilog_define [current_fileset]] ne $synth_defines} {
+  set_property verilog_define $synth_defines [current_fileset]
+  set project_inputs_changed 1
+}
 
 if {[llength [get_runs -quiet $synth_run_name]] == 0 && [llength [get_runs -quiet synth_1]] != 0} {
   set_property NAME $synth_run_name [get_runs synth_1]
+  set project_inputs_changed 1
 }
 if {[llength [get_runs -quiet $impl_run_name]] == 0 && [llength [get_runs -quiet impl_1]] != 0} {
   set_property NAME $impl_run_name [get_runs impl_1]
+  set project_inputs_changed 1
 }
+
+# UG901 and UG904 define strategies as coherent sets of otherwise interdependent
+# command options. Apply the named strategies before launching either run so a
+# command-line override also invalidates stale results in the generated project.
+set synth_run [get_runs $synth_run_name]
+set run_settings_changed 0
+if {[get_property STRATEGY $synth_run] ne $synth_strategy} {
+  if {[catch {set_property STRATEGY $synth_strategy $synth_run} strategy_error]} {
+    error "Unsupported Vivado synthesis strategy '$synth_strategy': $strategy_error"
+  }
+  set run_settings_changed 1
+}
+# Flow_PerfOptimized_high enables automatic incremental synthesis in 2025.2.
+# Keep it off: synth.tcl deliberately requests fresh synthesis, while impl.tcl
+# should reuse an up-to-date completed synthesis instead of replacing a
+# reference DCP and needlessly relaunching the same netlist.
+if {[get_property AUTO_INCREMENTAL_CHECKPOINT $synth_run]} {
+  set_property AUTO_INCREMENTAL_CHECKPOINT 0 $synth_run
+  set run_settings_changed 1
+}
+if {[get_property INCREMENTAL_CHECKPOINT $synth_run] ne ""} {
+  set_property INCREMENTAL_CHECKPOINT {} $synth_run
+  set run_settings_changed 1
+}
+set impl_run [get_runs $impl_run_name]
+if {[get_property STRATEGY $impl_run] ne $impl_strategy} {
+  if {[catch {set_property STRATEGY $impl_strategy $impl_run} strategy_error]} {
+    error "Unsupported Vivado implementation strategy '$impl_strategy': $strategy_error"
+  }
+  set run_settings_changed 1
+}
+set impl_to_step route_design
+if {[get_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED $impl_run]} {
+  # launch_runs uses the displayed run-step name, not the property namespace.
+  set impl_to_step {phys_opt_design (Post-Route)}
+}
+puts "INFO: Vivado synthesis strategy: $synth_strategy"
+puts "INFO: Vivado implementation strategy: $impl_strategy"
+puts "INFO: Vivado implementation target step: $impl_to_step"
+puts "INFO: Vivado parallel jobs: $vivado_jobs"
 
 file mkdir $build_ip_root
 foreach ip_name [list smart_artix_clk_50m_to_200m smart_artix_ddr3_mig] {
@@ -177,6 +245,8 @@ foreach ip [list \
   if {[file exists $ip]} {
     if {[llength [get_files -quiet $ip]] == 0} {
       read_ip $ip
+      set project_inputs_changed 1
+      set source_set_changed 1
     }
     set ip_files [get_files $ip]
     set ip_dir [file dirname $ip]
@@ -230,18 +300,34 @@ foreach existing [get_files -quiet -of_objects [get_filesets sources_1]] {
   set is_expected [expr {[lsearch -exact $expected_sources $existing_path] >= 0}]
   if {$is_managed_rtl && !$is_expected} {
     remove_files -quiet $existing_path
+    set project_inputs_changed 1
+    set source_set_changed 1
   }
 }
 
 foreach src $expected_sources {
   if {[llength [get_files -quiet $src]] == 0} {
     add_files $src
+    set project_inputs_changed 1
+    set source_set_changed 1
   }
 }
 
 set board_xdc [file normalize [file join $board_dir constraints/smart_artix.xdc]]
 if {[llength [get_files -quiet $board_xdc]] == 0} {
   add_files -fileset constrs_1 $board_xdc
+  set project_inputs_changed 1
 }
-set_property top $top_name [current_fileset]
-update_compile_order -fileset sources_1
+if {[get_property top [current_fileset]] ne $top_name} {
+  set_property top $top_name [current_fileset]
+  set project_inputs_changed 1
+  set source_set_changed 1
+}
+if {$source_set_changed} {
+  update_compile_order -fileset sources_1
+}
+if {$project_inputs_changed || $run_settings_changed} {
+  save_project
+}
+puts "INFO: Synthesis run state: [get_property STATUS $synth_run]; needs refresh: [get_property NEEDS_REFRESH $synth_run]"
+puts "INFO: Implementation run state: [get_property STATUS $impl_run]; needs refresh: [get_property NEEDS_REFRESH $impl_run]"

@@ -114,7 +114,7 @@ the DDR3 throughput test and synthesis. Storage attributes alone are not an
 adequate acceptance criterion.
 
 The current `check_timing` section reports zero unconstrained internal endpoints,
-but also reports 9 input ports without input delay and 12 output ports without
+but also reports 9 input ports without input delay and 13 output ports without
 output delay. Those I/O warnings must be resolved against external device and
 board timing before claiming complete board-interface signoff.
 
@@ -126,13 +126,13 @@ The current post-route timing report carries these methodology results:
 | --- | ---: | --- |
 | `LUTAR-1` | 1 warning | A LUT participates in an asynchronous-reset path; inspect reset safety and recovery/removal timing |
 | `PDRC-190` | 12 warnings | Synchronizer registers are not placed optimally; identify each CDC chain before applying placement attributes |
-| `SYNTH-6` | 39 warnings | Some RAM timing structures may be suboptimal; inspect output-register and surrounding mux paths, but do not infer that BRAM mapping failed from this warning alone |
+| `SYNTH-6` | 57 warnings | Some RAM timing structures may be suboptimal; inspect output-register and surrounding mux paths, but do not infer that BRAM mapping failed from this warning alone |
 | `XDCB-5` | 1 warning | A constraint query is runtime-inefficient; this affects Tcl execution, not circuit timing directly |
 | `REQP-1959` | 16 advisories | SERDES reset-driver structure should be reviewed in the board/IP hierarchy |
 
 The report itself says its methodology section may not be up to date. Rerun
 `report_methodology` on the current routed design before assigning or waiving a
-specific warning. Do not combine these counts with the 134 DRC warnings in the
+specific warning. Do not combine these counts with the 127 DRC warnings in the
 JSON summary; they are different report sets.
 
 Zero unconstrained internal endpoints is the important internal coverage result,
@@ -143,14 +143,14 @@ slack does not waive reset, CDC, or RAM methodology warnings.
 
 The first effects-enabled synthesis had the following result:
 
-| Resource | Failed inference | Timing-closed implementation |
+| Resource | Failed inference | Earlier timing-closed implementation |
 | --- | ---: | ---: |
 | LUT | 112,573 / 32,600 | 19,306 / 32,600 (59.22%) |
 | FF | 215,876 / 65,200 | 20,750 / 65,200 (31.83%) |
 | DSP48E1 | 48 / 120 | 47 / 120 (39.17%) |
 | BRAM tiles | 17.5 / 75 | 39.5 / 75 (52.67%) |
 
-The failed build used 195,126 more FFs than the current implementation. The
+The failed build used 195,126 more FFs than that earlier implementation. The
 hierarchical report showed that chorus history and reverb pre-delay arrays were
 the dominant owners; FDN history also became thousands of LUTRAM primitives.
 This is the characteristic signature of memories that Vivado could not map to
@@ -354,24 +354,24 @@ generated artifacts, not repository history or signoff artifacts.
 | `impl_timing_signoff.log` | -0.061 ns | -0.191 ns | Compressor magnitude/index split exposed executor release conversion |
 | `impl_envelope_pipeline_signoff.log` | +0.236 ns | 0 ns | Release conversion split; route estimate closed |
 
-The current signoff report was regenerated after that saved log and is the
-authoritative present-state result: WNS `+0.226 ns`, TNS `0 ns`, WHS
-`+0.036 ns`, THS `0 ns`, and zero setup/hold failing endpoints. Its worst setup path is
-still a real near-critical path: `control_action_executor` current-action opcode
-to prepared-RAM write enable, with a 9.241 ns data-path delay and 12 logic levels.
-It is passing, not absent. This path should be watched when DEFINE decode changes.
+The current strategy-qualified signoff report supersedes that saved closure
+log. It records WNS `+0.047 ns`, TNS `0 ns`, WHS `+0.053 ns`, THS `0 ns`, and
+zero setup/hold failing endpoints. Its worst setup path runs from renderer
+descriptor-plan control to a descriptor BRAM write port, with a 9.446 ns data
+path and 14 logic levels. It is passing, not absent, and should be watched when
+descriptor scheduling or storage changes.
 
-The current top 100 report contains only two source clusters, but both have
-little margin:
+The historical critical clusters remain useful RTL examples, but they are no
+longer the present worst path:
 
 | Source cluster | Slack range in top 100 | Current physical signature | Next action if margin is needed |
 | --- | ---: | --- | --- |
-| Executor action opcode to prepared-RAM WE | +0.226 to +0.290 ns | 12 levels; about 75% route delay; RAMB36E1 endpoint | Register validated DEFINE/write command immediately beside the RAM |
-| Compressor gain mantissa to sample-scale DSP | +0.263 to +0.333 ns | 11 levels; two DSPs visible in the path; about 58% logic delay | Make the coefficient boundary survive synthesis or reformulate to avoid the cascade |
+| Executor action opcode to prepared-RAM WE | Earlier +0.226 to +0.290 ns | 12 levels; about 75% route delay; RAMB36E1 endpoint | Register validated DEFINE/write command immediately beside the RAM |
+| Compressor gain mantissa to sample-scale DSP | Earlier +0.263 to +0.333 ns | 11 levels; two DSPs visible in the path; about 58% logic delay | Make the coefficient boundary survive synthesis or reformulate to avoid the cascade |
 
-Thus the design meets 100 MHz but has only about 0.23 ns worst-case setup
-headroom in this implementation. Any meaningful change to DEFINE validation or
-compressor gain conversion requires another forced route, even if simulation and
+Thus the design meets 100 MHz but has only 0.047 ns worst-case setup headroom in
+the current implementation. Any meaningful RTL, hierarchy, constraint, or
+strategy change requires another forced route, even if simulation and
 post-synthesis timing remain clean.
 
 The earliest effects-enabled measurement (`-10.770 ns` WNS and grossly excessive
@@ -550,10 +550,9 @@ EXEC_READ
 the registered RAM write has been launched. This was the final structural change
 that moved setup slack positive.
 
-The present worst passing setup path still ends at prepared RAM write enable.
-Therefore future DEFINE opcode/validation changes should be implemented as a
-registered decode or precomputed write command if they consume the remaining
-0.226 ns margin; adding logic directly to `prepared_write` is high risk.
+The prepared-RAM path was the earlier worst passing setup path. Future DEFINE
+opcode/validation changes should still use registered decode or a precomputed
+write command; adding logic directly to `prepared_write` remains high risk.
 
 The extra cycles are legal because the action interface is transactional and
 already exposes completion. They must not change shadow/active atomicity, action
@@ -782,7 +781,7 @@ change, but it is suspicious after an intended RTL structural change.
 
 ## When Full Implementation Is Mandatory
 
-With only +0.226 ns worst setup slack, synthesis-only checks are insufficient for
+With only +0.047 ns worst setup slack, synthesis-only checks are insufficient for
 changes that can affect placement or either residual critical cluster. Force a
 new `impl.tcl` run after any of the following:
 
@@ -799,7 +798,7 @@ new `impl.tcl` run after any of the following:
 - adding enough logic or replicated voices/effects to move utilization or
   congestion materially, even outside the current top hierarchy.
 
-A small unrelated RTL edit can still perturb placement and consume 0.226 ns, so
+A small unrelated RTL edit can still perturb placement and consume 0.047 ns, so
 the list is intentionally broad. `make lint` and `make test` establish functional
 and RTL-quality confidence; they cannot substitute for routed timing.
 
@@ -825,11 +824,11 @@ not as evidence that the architectural cone is robust.
 9. Record final utilization, timing, checksum, and critical-path identity beside
    the board flow.
 
-The signed-off Smart Artix implementation used synthesis checksum `d17fba4` and
+The signed-off Smart Artix implementation used synthesis checksum `1c312326` and
 closed the constrained MIG `ui_clk` (`clk_pll_i`) domain at 100 MHz with WNS
-`+0.226 ns`, TNS `0 ns`, WHS `+0.036 ns`, THS `0 ns`, zero setup/hold failing
-endpoints, all 39,892 nets routed, and zero DRC errors. Utilization is 19,306 LUTs
-(59.22%), 20,750 registers (31.83%), 47 DSPs (39.17%), and 39.5 BRAM tiles
-(52.67%). The JSON summary also records 134 DRC warnings. Separately, the timing
+`+0.047 ns`, TNS `0 ns`, WHS `+0.053 ns`, THS `0 ns`, zero setup/hold failing
+endpoints, all 48,436 nets routed, and zero DRC errors. Utilization is 25,633 LUTs
+(78.63%), 26,874 registers (41.22%), 39 DSPs (32.50%), and 50 BRAM tiles
+(66.67%). The JSON summary also records 127 DRC warnings. Separately, the timing
 report flags the incomplete board I/O delay coverage described above; internal
 timing closure is not a waiver for either warning set.

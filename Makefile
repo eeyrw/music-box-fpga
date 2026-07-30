@@ -1,5 +1,10 @@
 VERILATOR ?= verilator
 VIVADO ?= /opt/Xilinx2051.1/2025.2/Vivado/bin/vivado
+VIVADO_JOBS ?= 4
+# Timing-oriented 2025.2 strategies for the routed Smart Artix image. Override
+# these on the make command line when comparing QoR against another strategy.
+VIVADO_SYNTH_STRATEGY ?= Flow_PerfOptimized_high
+VIVADO_IMPL_STRATEGY ?= Performance_ExplorePostRoutePhysOpt
 BUILD_DIR := build
 NUM_VOICES ?= 512
 BLOCK_WORK_ENTRIES ?= 8
@@ -21,7 +26,10 @@ VIVADO_SCRIPT_DIR := $(abspath fpga/smart_artix/vivado/scripts)
 VIVADO_CONFIG_ENV := SYNTH_NUM_VOICES=$(NUM_VOICES) \
 	SYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 	SYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
-	SYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES)
+	SYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
+	VIVADO_JOBS=$(VIVADO_JOBS) \
+	VIVADO_SYNTH_STRATEGY=$(VIVADO_SYNTH_STRATEGY) \
+	VIVADO_IMPL_STRATEGY=$(VIVADO_IMPL_STRATEGY)
 HARNESS_INCLUDE_FLAGS := \
 	-I$(abspath sim/harness) \
 	-I$(abspath sim/harness/common) \
