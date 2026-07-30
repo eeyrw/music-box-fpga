@@ -166,6 +166,45 @@ post-place WNS 为 `+0.231 ns`，优于另一策略的 `+0.162 ns`。但是第�
 
 ## 报告查验顺序
 
+推荐先生成权威 Vivado 报告，再运行：
+
+```bash
+make vivado-analyze
+python3 tools/vivado_report_summary.py analyze \
+  --margin-ns 0.200 --top-clusters 8 \
+  --output-json build/fpga/smart_artix/vivado/reports/post_route_analysis.json
+```
+
+分析器把 top 100 setup/hold 路径中的 bit index 和物理优化 replica 名称规范化，
+再按 source cell、destination cell 和 path group 聚类。当前 100 条 setup 路径
+归并为 4 个主要簇，其中前三个都是 renderer descriptor-plan 到 descriptor
+BRAM bank，第四个是 compressor 到 DSP。相比只保存一条 worst path，路径簇在
+布局扰动后更稳定，也更容易判断一次 RTL 修改是否真正消除了整类关键锥。
+
+分析器的 `PASS`、`REVIEW`、`FAIL` 是项目策略层：负裕量、routing error、DRC
+Error/Critical Warning 和未约束内部端点属于 `FAIL`；低于 margin、资源高占用、
+缺少 I/O delay 及普通 warning 属于 `REVIEW`。它不替代 Vivado signoff，也不
+自动生成 XDC 或修改 RTL。
+
+### 通用性边界
+
+Python 解析器不包含 `spi_*`、`i2s_*`、`sd_*` 或 Smart Artix 层级名称的判断
+规则。输出中出现这些名称，是因为当前 `smart_artix_top` 的 Vivado 报告列出了
+这些真实端口；分析器只保留并分类 `check_timing` 提供的数据。同一个解析函数
+处理其他设计时会输出那个设计自己的端口、时钟和 cell 名称。
+
+需要区分三层：
+
+1. 原始事实：slack、delay、logic levels、path group、端口名单和 Vivado rule。
+2. 通用分析：端点规范化、路径聚类、报告完整性和前后结果比较。
+3. 项目策略：默认报告目录、`post_route_*` 文件名、`0.200 ns` review margin、
+   资源预警阈值和哪些 warning 必须清零。
+
+前两层位于通用 Python 脚本。第三层目前通过 Smart Artix 的 Makefile 入口和 CLI
+默认值提供，因此是“通用解析器配项目默认配置”，不是完全脱离项目策略的工具。
+后续若服务多个 FPGA target，应把第三层移到各 target 的配置文件，而不是在
+Python 中增加接口名称分支。
+
 ### 1. 确认运行身份和新鲜度
 
 先检查 `post_route_summary.json`：

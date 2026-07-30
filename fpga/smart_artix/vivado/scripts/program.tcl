@@ -1,7 +1,6 @@
 # Smart Artix Vivado hardware programming flow.
-# Usage:
-#   cd build/fpga/smart_artix/vivado
-#   vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/program.tcl
+# Usage from the repository root, with one Smart Artix FPGA attached:
+#   make vivado-program
 
 set top_name smart_artix_top
 set script_dir [file dirname [file normalize [info script]]]
@@ -19,10 +18,15 @@ open_hw_manager
 connect_hw_server
 open_hw_target
 
-set hw_device [lindex [get_hw_devices] 0]
-if {$hw_device eq ""} {
-  error "No hardware device found"
+set all_hw_devices [get_hw_devices -quiet]
+set matching_hw_devices [get_hw_devices -quiet xc7a50t*]
+if {[llength $matching_hw_devices] == 0} {
+  error "No xc7a50t hardware device found; detected devices: $all_hw_devices"
 }
+if {[llength $matching_hw_devices] != 1} {
+  error "Expected exactly one xc7a50t hardware device, found: $matching_hw_devices"
+}
+set hw_device [lindex $matching_hw_devices 0]
 
 current_hw_device $hw_device
 refresh_hw_device $hw_device
@@ -31,3 +35,4 @@ if {[file exists $ltx_file]} {
   set_property PROBES.FILE $ltx_file $hw_device
 }
 program_hw_devices $hw_device
+puts "INFO: Programmed volatile FPGA configuration on $hw_device from $bit_file"

@@ -196,7 +196,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -462,6 +462,7 @@ test-cpp-unit:
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
 	python3 tools/compare_reference_fluidsynth_test.py
+	python3 tools/vivado_report_summary_test.py
 
 test-rtl-core:
 	mkdir -p $(BUILD_DIR)
@@ -702,8 +703,17 @@ vivado-bitstream:
 		-source $(VIVADO_SCRIPT_DIR)/bitstream.tcl \
 		-journal logs/bitstream.jou -log logs/bitstream.log
 
+vivado-program:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/program.tcl \
+		-journal logs/program.jou -log logs/program.log
+
 vivado-summary:
 	python3 tools/vivado_report_summary.py show
+
+vivado-analyze:
+	python3 tools/vivado_report_summary.py analyze
 
 clean:
 	rm -rf $(BUILD_DIR)

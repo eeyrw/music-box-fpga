@@ -22,7 +22,15 @@ make vivado-project
 make vivado-synth
 make vivado-impl
 make vivado-bitstream
+# Run only when one xc7a50t board is attached and its pins have been verified.
+make vivado-program
 ```
+
+`vivado-bitstream` is an offline build step. `vivado-program` opens the hardware
+manager and loads the `.bit` file into FPGA configuration SRAM over JTAG, so the
+configuration is lost when power is removed. Persistent configuration-memory
+programming is not implemented because the board's configuration flash part and
+boot mode have not yet been verified from the schematic.
 
 The default Vivado 2025.2 run configuration is timing-oriented:
 
@@ -101,7 +109,10 @@ Read the JSON summaries from the repository root with:
 
 ```bash
 make vivado-summary
+make vivado-analyze
 python3 tools/vivado_report_summary.py show
+python3 tools/vivado_report_summary.py analyze --top-clusters 8 \
+  --output-json build/fpga/smart_artix/vivado/reports/post_route_analysis.json
 python3 tools/vivado_report_summary.py compare \
   build/fpga/smart_artix/vivado/reports/post_synth_summary.json \
   build/fpga/smart_artix/vivado/reports/post_route_summary.json
@@ -110,6 +121,25 @@ python3 tools/vivado_report_summary.py compare \
 The JSON format is intentionally small and project-owned. The Tcl exporter uses
 Vivado object/report queries and avoids depending on Vivado's internal `.rpx` or
 `.pb` files as a long-term parsing interface.
+
+The `analyze` command combines that stable summary with the text reports. It
+parses the top setup/hold paths, normalizes generated replica and bit indices,
+clusters repeated source/destination cones, and reports logic-versus-route
+delay, hard-block boundaries, constraint gaps, methodology findings, congestion,
+and prioritized follow-up actions. Its default `0.200 ns` margin is a review
+threshold, not a Vivado timing constraint; override it with `--margin-ns` for a
+different project policy. The command exits nonzero for hard timing, routing,
+DRC, or internal-constraint failures, while low margin and warnings produce a
+`REVIEW` result with exit status zero.
+
+The parser does not contain interface-specific rules or names. For example,
+SPI, I2S, and SD port names appear in analysis output only when Vivado lists
+those real design ports in `check_timing`; they are extracted data, not Python
+classifications. The parsing and clustering functions operate on the supplied
+summary and report text. The default report directory, `post_route_*` filenames,
+and `0.200 ns` review margin are conveniences for this Smart Artix flow and can
+be overridden at the command line. Project policy must remain separate from the
+raw report facts, and the analysis output retains both.
 
 `impl.tcl` and `bitstream.tcl` also reuse an up-to-date completed
 `impl_smart_artix_top` run. If implementation inputs become stale, the scripts

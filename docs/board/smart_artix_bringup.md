@@ -125,18 +125,14 @@ the regression floor before hardware bring-up starts.
 
 ## Vivado Flow
 
-Run Vivado from `fpga/smart_artix`. The commands create and enter the generated
-build directory so project output stays under `build/`:
+Use the repository-root targets. They create and enter the generated build
+directory so project output stays under `build/`:
 
 ```bash
-mkdir -p ../../build/fpga/smart_artix/vivado/logs
-cd ../../build/fpga/smart_artix/vivado
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/project.tcl \
-  -journal logs/project.jou -log logs/project.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/impl.tcl \
-  -journal logs/impl.jou -log logs/impl.log
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/bitstream.tcl \
-  -journal logs/bitstream.jou -log logs/bitstream.log
+make vivado-project
+make vivado-impl
+make vivado-analyze
+make vivado-bitstream
 ```
 
 Review at least:
@@ -146,16 +142,50 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The documented recent route result met setup and hold timing with the full Smart
-Artix board top. Treat that as a useful baseline, not as proof that a changed XDC
-or changed IP configuration is hardware-safe.
+The 2026-07-30 route met setup and hold timing with WNS `+0.047 ns` and WHS
+`+0.053 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
+because both margins are below `0.2 ns`, LUT utilization is `78.63%`, and the
+external I/O timing constraints are incomplete. Treat it as a useful baseline,
+not as proof that a changed XDC or IP configuration is hardware-safe.
 
-Program the board only after the pin constraints have been checked:
+### Current Bitstream and Programming Status
+
+`make vivado-bitstream` completed successfully on 2026-07-30 with Vivado 2025.2.
+The write-bitstream precondition DRC reported zero errors, and the generated file
+was identified as an image for `7a50tfgg484`:
+
+```text
+build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
+size:   2,192,139 bytes
+sha256: a496184e268ed4df473598ec418a4bca2ff2b2c3d4265ce5615c95b36461c522
+```
+
+Generated files under `build/` are intentionally not committed. Regenerate the
+image from the checked-in sources and record a new checksum whenever RTL, XDC,
+IP configuration, Vivado version, or run strategy changes.
+
+No board is currently available. Therefore JTAG device discovery, FPGA
+programming, post-program status, and power-cycle behavior have **not** been
+tested. Do not describe the current state as hardware-programmed or burned.
+
+When the board is available and its pins, I/O bank voltages, power rails, FPGA
+part, and JTAG connection have been checked, load the image with:
 
 ```bash
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/program.tcl \
-  -journal logs/program.jou -log logs/program.log
+make vivado-program
 ```
+
+The programming script requires exactly one detected `xc7a50t` device instead
+of selecting the first device in an arbitrary JTAG chain. This command loads the
+`.bit` file into the FPGA's volatile configuration SRAM; it must be repeated
+after power is removed.
+
+Persistent boot-image programming is a separate operation. No configuration
+flash part, wiring, Vivado `cfgmem` device, or FPGA boot mode has been confirmed
+in this repository, so an `.mcs`/`.bin` generation and configuration-memory
+programming flow is deliberately not provided yet. Add that flow only after the
+schematic identifies the exact flash device and configuration mode; then verify
+program, readback/verify, and cold boot on the physical board.
 
 ## First Power-On Checks
 

@@ -341,9 +341,12 @@ make vivado-bitstream
 Program hardware with the generated bitstream:
 
 ```bash
-vivado -mode batch -source ../../../../fpga/smart_artix/vivado/scripts/program.tcl \
-  -journal logs/program.jou -log logs/program.log
+make vivado-program
 ```
+
+This JTAG operation loads volatile FPGA configuration SRAM. It is not a
+persistent configuration-flash programming flow. Run it only with one matching
+`xc7a50t` device attached and after checking the XDC against the schematic.
 
 For GUI work, open `../../build/fpga/smart_artix/vivado/smart_artix.xpr` from
 this directory. If IP settings are changed in the GUI, copy only the updated
