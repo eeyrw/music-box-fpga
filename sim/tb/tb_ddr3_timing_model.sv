@@ -56,7 +56,7 @@ module tb_ddr3_timing_model;
   );
 
 /* verilator lint_off BLKSEQ */
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
   always @(posedge clk) cycle_count = cycle_count + 1;
 /* verilator lint_on BLKSEQ */
 

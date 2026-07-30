@@ -113,7 +113,7 @@ module tb_smart_artix_platform_regs;
     repeat (2) @(posedge clk);
     rst = 1'b0;
 
-    expect_read(REG_PLATFORM_STATUS, 32'h0001_d2b7);
+    expect_read(REG_PLATFORM_STATUS, 32'h0001_8037);
     expect_read(REG_PLATFORM_ERRORS, 32'hb56a_3412);
     expect_read(REG_PLATFORM_BYTES_LOADED, 32'h5566_7788);
     expect_read(REG_PLATFORM_SF2_SIZE, 32'hddee_ff00);

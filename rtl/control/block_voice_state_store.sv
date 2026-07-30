@@ -18,7 +18,11 @@ module block_voice_state_store (
 
   input  logic                                      control_event_valid,
   output logic                                      control_event_ready,
+/* verilator lint_off UNUSEDSIGNAL */
+  // This store consumes runtime-event fields only; START-only fields are
+  // handled by the command plane's install path.
   input  synth_pkg::block_voice_event_t             control_event,
+/* verilator lint_on UNUSEDSIGNAL */
   output logic                                      control_event_done_pulse,
   output logic                                      stale_control_event_pulse,
 
@@ -77,7 +81,14 @@ module block_voice_state_store (
   logic check_current_active_q;
   logic [VOICE_GENERATION_WIDTH-1:0] check_current_generation_q;
   logic check_generation_match;
-  block_voice_event_t control_event_q;
+  block_voice_event_kind_t control_event_kind_q;
+  logic [VOICE_ID_WIDTH-1:0] control_event_voice_q;
+  logic [VOICE_GENERATION_WIDTH-1:0] control_event_generation_q;
+/* verilator lint_off UNUSEDSIGNAL */
+  // The released bit is store-owned; the remaining event fields are updates.
+  voice_event_params_t control_event_update_params_q;
+/* verilator lint_on UNUSEDSIGNAL */
+  volume_env_params_t control_event_update_env_q;
   voice_event_params_t control_event_params_q;
   volume_env_params_t control_env_params_q;
   voice_dynamic_state_t control_dynamic_q;
@@ -139,9 +150,9 @@ module block_voice_state_store (
   assign state_read_req_fire = state_read_req_valid && state_read_req_ready;
   assign params_generation_match = check_generation_match;
   assign dynamic_generation_match = check_generation_match;
-  assign control_voice = control_event_q.host_voice_id[VOICE_ID_WIDTH-1:0];
+  assign control_voice = control_event_voice_q;
   assign control_generation_match = control_dynamic_q.active &&
-      (control_dynamic_q.generation == control_event_q.generation);
+      (control_dynamic_q.generation == control_event_generation_q);
   assign check_generation_match = check_current_active_q &&
       (check_current_generation_q == check_generation_q);
 
@@ -149,33 +160,33 @@ module block_voice_state_store (
     control_event_params_next = control_event_params_q;
     control_env_params_next = control_env_params_q;
     control_dynamic_next = control_dynamic_q;
-    unique case (control_event_q.kind)
+    unique case (control_event_kind_q)
       BLOCK_VOICE_STOP: control_dynamic_next.active = 1'b0;
       BLOCK_VOICE_RELEASE: begin
         control_event_params_next.released = 1'b1;
         control_env_params_next.release_step_cb_q12_20 =
-            control_event_q.env_params.release_step_cb_q12_20;
+            control_event_update_env_q.release_step_cb_q12_20;
         control_dynamic_next.env_state.stage = ENV_RELEASE;
         control_dynamic_next.env_state.elapsed = '0;
-        if (control_event_q.env_params.release_step_cb_q12_20 == '0)
+        if (control_event_update_env_q.release_step_cb_q12_20 == '0)
           control_dynamic_next.active = 1'b0;
       end
       BLOCK_VOICE_GAIN: begin
-        control_event_params_next.gain_l = control_event_q.event_params.gain_l;
-        control_event_params_next.gain_r = control_event_q.event_params.gain_r;
+        control_event_params_next.gain_l = control_event_update_params_q.gain_l;
+        control_event_params_next.gain_r = control_event_update_params_q.gain_r;
       end
       BLOCK_VOICE_PITCH:
-        control_event_params_next.phase_inc = control_event_q.event_params.phase_inc;
+        control_event_params_next.phase_inc = control_event_update_params_q.phase_inc;
       BLOCK_VOICE_FILTER: begin
         control_event_params_next.filter_enable =
-            control_event_q.event_params.filter_enable;
-        control_event_params_next.filter_b0 = control_event_q.event_params.filter_b0;
-        control_event_params_next.filter_b1 = control_event_q.event_params.filter_b1;
-        control_event_params_next.filter_b2 = control_event_q.event_params.filter_b2;
-        control_event_params_next.filter_a1 = control_event_q.event_params.filter_a1;
-        control_event_params_next.filter_a2 = control_event_q.event_params.filter_a2;
+            control_event_update_params_q.filter_enable;
+        control_event_params_next.filter_b0 = control_event_update_params_q.filter_b0;
+        control_event_params_next.filter_b1 = control_event_update_params_q.filter_b1;
+        control_event_params_next.filter_b2 = control_event_update_params_q.filter_b2;
+        control_event_params_next.filter_a1 = control_event_update_params_q.filter_a1;
+        control_event_params_next.filter_a2 = control_event_update_params_q.filter_a2;
       end
-      BLOCK_VOICE_ENV: control_env_params_next = control_event_q.env_params;
+      BLOCK_VOICE_ENV: control_env_params_next = control_event_update_env_q;
       default: begin end
     endcase
 
@@ -225,7 +236,7 @@ module block_voice_state_store (
       env_write_data = check_env_q;
     end else if ((control_state_q == CONTROL_APPLY) &&
                  control_generation_match) begin
-      unique case (control_event_q.kind)
+      unique case (control_event_kind_q)
         BLOCK_VOICE_STOP: begin
           dynamic_mem_write_enable = 1'b1;
           dynamic_mem_write_voice = control_voice;
@@ -313,7 +324,12 @@ module block_voice_state_store (
       unique case (control_state_q)
         CONTROL_IDLE: begin
           if (control_event_valid && control_event_ready) begin
-            control_event_q <= control_event;
+            control_event_kind_q <= control_event.kind;
+            control_event_voice_q <=
+                control_event.host_voice_id[VOICE_ID_WIDTH-1:0];
+            control_event_generation_q <= control_event.generation;
+            control_event_update_params_q <= control_event.event_params;
+            control_event_update_env_q <= control_event.env_params;
             control_state_q <= CONTROL_READ;
           end
         end
@@ -329,7 +345,7 @@ module block_voice_state_store (
           if (!control_generation_match) begin
             stale_control_event_pulse <= 1'b1;
           end else begin
-            unique case (control_event_q.kind)
+            unique case (control_event_kind_q)
               BLOCK_VOICE_STOP, BLOCK_VOICE_RELEASE: begin end
               BLOCK_VOICE_GAIN, BLOCK_VOICE_PITCH, BLOCK_VOICE_FILTER,
               BLOCK_VOICE_ENV: begin end

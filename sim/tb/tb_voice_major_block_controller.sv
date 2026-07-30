@@ -10,7 +10,9 @@ module tb_voice_major_block_controller;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
+/* verilator lint_off UNUSEDSIGNAL */
   logic render_busy;
+/* verilator lint_on UNUSEDSIGNAL */
   logic state_read_req_valid;
   logic state_read_req_ready;
   logic [VOICE_ID_WIDTH-1:0] state_read_req_voice;
@@ -39,8 +41,11 @@ module tb_voice_major_block_controller;
   logic block_release_valid;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
+/* verilator lint_off UNUSEDSIGNAL */
+  sample_window_diagnostics_t sample_window_diagnostics;
+/* verilator lint_on UNUSEDSIGNAL */
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   voice_major_block_controller dut (.*);
 

@@ -26,8 +26,11 @@ module tb_block_mono_voice_engine;
   logic result_ready;
   logic [VOICE_ID_WIDTH-1:0] result_voice_index;
   voice_dynamic_state_t result_dynamic;
+/* verilator lint_off UNUSEDSIGNAL */
+  sample_window_diagnostics_t sample_window_diagnostics;
+/* verilator lint_on UNUSEDSIGNAL */
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_mono_voice_engine dut (.*);
 
@@ -84,7 +87,9 @@ module tb_block_mono_voice_engine;
   endtask
 
   initial begin
+/* verilator lint_off UNUSEDSIGNAL */
     voice_dynamic_state_t final_state;
+/* verilator lint_on UNUSEDSIGNAL */
 
     start_valid = 1'b0;
     start_voice_index = VOICE_ID_WIDTH'(5);

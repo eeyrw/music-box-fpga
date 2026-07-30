@@ -18,12 +18,14 @@ module tb_block_interleaved_envelope_frontend;
   logic result_ready;
   logic [VOICE_ID_WIDTH-1:0] result_voice_index;
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] result_frame_count;
+/* verilator lint_off UNUSEDSIGNAL */
   voice_playback_region_t result_region;
   voice_event_params_t result_params;
   voice_dynamic_state_t result_dynamic;
+/* verilator lint_on UNUSEDSIGNAL */
   block_envelope_result_t result_envelope;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_interleaved_envelope_frontend dut (.*);
 
@@ -112,7 +114,8 @@ module tb_block_interleaved_envelope_frontend;
       if (!result_dynamic.active ||
           result_dynamic.env_state.stage != ENV_RELEASE ||
           result_dynamic.env_state.attenuation_cb_q12_20 != expected_attenuation ||
-          !result_envelope.active || result_envelope.render_mask != 1'b1)
+          !result_envelope.active ||
+          result_envelope.render_mask != MAX_BLOCK_FRAMES'(1))
         $fatal(1, "attack release did not preserve the current envelope level");
       @(negedge clk);
       result_ready = 1'b1;

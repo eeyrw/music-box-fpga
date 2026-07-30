@@ -7,7 +7,9 @@ module tb_voice_major_render_effects_harness;
   logic ddr_clk = 1'b0;
   logic rst;
   logic cmd_stream_valid;
+  /* verilator lint_off UNUSEDSIGNAL */
   logic cmd_stream_ready;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] cmd_stream_data;
   logic block_req_valid;
   logic block_req_ready;
@@ -16,7 +18,9 @@ module tb_voice_major_render_effects_harness;
   logic renderer_complete_valid;
   logic block_complete_valid;
   logic block_complete_ready;
+  /* verilator lint_off UNUSEDSIGNAL */
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_complete_buffer;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] block_complete_start_frame;
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] block_complete_frame_count;
   logic effect_flush_valid;
@@ -37,9 +41,10 @@ module tb_voice_major_render_effects_harness;
   int output_frames = 0;
   int errors = 0;
 
-  always #16 core_clk = ~core_clk;
-  always #4 ddr_clk = ~ddr_clk;
+  always #16 core_clk <= ~core_clk;
+  always #4 ddr_clk <= ~ddr_clk;
 
+  /* verilator lint_off PINCONNECTEMPTY */
   voice_major_render_effects_harness dut (
     .core_clk,
     .ddr_clk,
@@ -97,7 +102,9 @@ module tb_voice_major_render_effects_harness;
     .debug_plan_addr_0(),
     .debug_plan_addr_1()
   );
+  /* verilator lint_on PINCONNECTEMPTY */
 
+  /* verilator lint_off BLKSEQ */
   always @(posedge core_clk) begin
     if (renderer_complete_valid)
       renderer_completions++;
@@ -111,6 +118,7 @@ module tb_voice_major_render_effects_harness;
       end
     end
   end
+  /* verilator lint_on BLKSEQ */
 
   task automatic submit_block(input int start_frame);
     begin

@@ -268,8 +268,7 @@ The useful first reads are:
 | `0x9000` | `VERSION` | Proves SPI can reach the register map. |
 | `0x9010` | `SYSTEM_STATUS` | Shows core, FIFO, I2S, and external-memory handshake state. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | Shows sticky underrun/drop/deadline/memory events. |
-| `0x9018` | `AUDIO_STATUS` | Shows FIFO level and sticky audio errors. |
-| `0x9020` | `MEMORY_STATUS` | Shows cache/memory request status and response latency. |
+| `0x901c` | `PIPELINE_LATENCY_STATUS` | Shows last render and memory-response latency. |
 | `0x9040` | `PLATFORM_STATUS` | Main DDR/SD/asset-loader status word. |
 | `0x9044` | `PLATFORM_ERRORS` | SD error, loader error, and loader state. |
 | `0x9048` | `PLATFORM_BYTES_LOADED` | Loaded byte count. |
@@ -284,16 +283,16 @@ The useful first reads are:
 bit 0      platform register window present
 bit 1      SD or loader error present
 bit 2      DDR calibration complete
-bit 3      DDR UI reset
 bit 4      SD initialized
 bit 5      asset loaded
 bit 6      asset loader busy
-bit 7      MIG app ready
-bit 8      MIG write-data ready
-bit 9      MIG read-data valid
-bit 10     MIG read-data end
-bits 14:11 asset-loader state
+bits 14:7  reserved, zero
+bit 15     SD card present
+bit 16     SD High Speed active
 ```
+
+Detailed DDR UI reset/MIG handshake fields are in `PLATFORM_DDR_STATUS`, and
+the asset-loader state is in `PLATFORM_ERRORS[19:16]`.
 
 `PLATFORM_ERRORS` packs:
 
@@ -434,12 +433,13 @@ Start with:
 
 The command payload and ordering are documented in
 `../design/control_command_stream_plan.md`. Inspect command/parser state through
-`CMD_FIFO_STATUS`, `CMD_ERROR_STATUS`, and `CMD_ACTION_STATUS`.
+`CMD_FIFO_STATUS`.
 
 If audio is silent after `VOICE_START_MONO`:
 
-- Read `AUDIO_STATUS`, `RENDER_STATUS`, and `MEMORY_STATUS`.
-- Check whether `MEMORY_STATUS` shows line-memory requests and memory responses.
+- Read `SYSTEM_STATUS`, `COMMON_EVENT_FLAGS`, and `PIPELINE_LATENCY_STATUS`.
+- Check the sample-window counters at `0x9160` through `0x9178` for hits,
+  refills, fallback reads, external reads, evictions, and stalls.
 - Check `COMMON_EVENT_FLAGS` for underrun, sample drop, or render deadline miss.
 - Confirm the programmed `BASE_ADDR` includes the SF2 `smpl` payload offset and is
   expressed as a 16-bit word address.

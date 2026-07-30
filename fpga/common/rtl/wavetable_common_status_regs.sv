@@ -21,15 +21,15 @@ module wavetable_common_status_regs #(
   input  logic                     mem_response_trace_pulse,
   input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
-  input  synth_pkg::audio_diagnostics_t audio_diagnostics
+  input  synth_pkg::audio_diagnostics_t audio_diagnostics,
+  input  synth_pkg::sample_window_diagnostics_t sample_window_diagnostics
 );
   import synth_register_pkg::*;
 
   localparam logic [15:0] ADDR_SYSTEM_STATUS = REG_SYSTEM_STATUS;
   localparam logic [15:0] ADDR_COMMON_EVENT_FLAGS = REG_COMMON_EVENT_FLAGS;
-  localparam logic [15:0] ADDR_AUDIO_STATUS = REG_AUDIO_STATUS;
-  localparam logic [15:0] ADDR_RENDER_STATUS = REG_RENDER_STATUS;
-  localparam logic [15:0] ADDR_MEMORY_STATUS = REG_MEMORY_STATUS;
+  localparam logic [15:0] ADDR_PIPELINE_LATENCY_STATUS =
+      REG_PIPELINE_LATENCY_STATUS;
   localparam logic [15:0] ADDR_UNDERRUN_COUNT = REG_UNDERRUN_COUNT;
   localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = REG_SAMPLE_DROP_COUNT;
   localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = REG_RENDER_DEADLINE_MISS_COUNT;
@@ -64,6 +64,20 @@ module wavetable_common_status_regs #(
   localparam logic [15:0] ADDR_REVERB_SATURATION_COUNT = REG_REVERB_SATURATION_COUNT;
   localparam logic [15:0] ADDR_REVERB_MAX_PROCESSING_CYCLES =
       REG_REVERB_MAX_PROCESSING_CYCLES;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_REQUEST_COUNT =
+      REG_SAMPLE_WINDOW_REQUEST_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_HIT_COUNT =
+      REG_SAMPLE_WINDOW_HIT_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_REFILL_COUNT =
+      REG_SAMPLE_WINDOW_REFILL_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_FALLBACK_READ_COUNT =
+      REG_SAMPLE_WINDOW_FALLBACK_READ_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_MEMORY_READ_COUNT =
+      REG_SAMPLE_WINDOW_MEMORY_READ_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_EVICTION_COUNT =
+      REG_SAMPLE_WINDOW_EVICTION_COUNT;
+  localparam logic [15:0] ADDR_SAMPLE_WINDOW_STALL_CYCLE_COUNT =
+      REG_SAMPLE_WINDOW_STALL_CYCLE_COUNT;
 
   logic [31:0] common_event_flags;
   logic [31:0] underrun_count;
@@ -74,8 +88,8 @@ module wavetable_common_status_regs #(
 
   function automatic logic is_common_status_address(input logic [15:0] address);
     unique case (address)
-      ADDR_SYSTEM_STATUS, ADDR_COMMON_EVENT_FLAGS, ADDR_AUDIO_STATUS,
-      ADDR_RENDER_STATUS, ADDR_MEMORY_STATUS, ADDR_UNDERRUN_COUNT,
+      ADDR_SYSTEM_STATUS, ADDR_COMMON_EVENT_FLAGS, ADDR_PIPELINE_LATENCY_STATUS,
+      ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
       ADDR_MEM_RESPONSE_COUNT, ADDR_COMPRESSOR_STATUS,
       ADDR_COMPRESSOR_GAIN_REDUCTION, ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION,
@@ -87,7 +101,11 @@ module wavetable_common_status_regs #(
       ADDR_EFFECT_SATURATION_COUNT, ADDR_EFFECT_MAX_PROCESSING_CYCLES,
       ADDR_CHORUS_HISTORY_LEVEL, ADDR_CHORUS_LFO_PHASE,
       ADDR_CHORUS_SATURATION_COUNT, ADDR_REVERB_STATUS,
-      ADDR_REVERB_SATURATION_COUNT, ADDR_REVERB_MAX_PROCESSING_CYCLES: begin
+      ADDR_REVERB_SATURATION_COUNT, ADDR_REVERB_MAX_PROCESSING_CYCLES,
+      ADDR_SAMPLE_WINDOW_REQUEST_COUNT, ADDR_SAMPLE_WINDOW_HIT_COUNT,
+      ADDR_SAMPLE_WINDOW_REFILL_COUNT, ADDR_SAMPLE_WINDOW_FALLBACK_READ_COUNT,
+      ADDR_SAMPLE_WINDOW_MEMORY_READ_COUNT, ADDR_SAMPLE_WINDOW_EVICTION_COUNT,
+      ADDR_SAMPLE_WINDOW_STALL_CYCLE_COUNT: begin
         is_common_status_address = 1'b1;
       end
       default: is_common_status_address = 1'b0;
@@ -116,7 +134,8 @@ module wavetable_common_status_regs #(
     unique case (bus_req.address)
       ADDR_SYSTEM_STATUS: begin
         bus_rsp.rdata = {
-          24'd0,
+          8'd0,
+          16'(output_fifo_level),
           ext_rsp_valid,
           ext_req_ready,
           ext_req_valid,
@@ -128,28 +147,8 @@ module wavetable_common_status_regs #(
         };
       end
       ADDR_COMMON_EVENT_FLAGS: bus_rsp.rdata = common_event_flags;
-      ADDR_AUDIO_STATUS: begin
-        bus_rsp.rdata = {
-          14'd0,
-          common_event_flags[1],
-          common_event_flags[0],
-          16'(output_fifo_level)
-        };
-      end
-      ADDR_RENDER_STATUS: begin
-        bus_rsp.rdata = {14'd0, common_event_flags[2], render_inflight,
-                         render_latency_cycles};
-      end
-      ADDR_MEMORY_STATUS: begin
-        bus_rsp.rdata = {
-          12'd0,
-          common_event_flags[3],
-          ext_rsp_valid,
-          ext_req_ready,
-          ext_req_valid,
-          mem_response_trace_latency
-        };
-      end
+      ADDR_PIPELINE_LATENCY_STATUS:
+          bus_rsp.rdata = {mem_response_trace_latency, render_latency_cycles};
       ADDR_UNDERRUN_COUNT: bus_rsp.rdata = underrun_count;
       ADDR_SAMPLE_DROP_COUNT: bus_rsp.rdata = sample_drop_count;
       ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rsp.rdata = render_deadline_miss_count;
@@ -213,6 +212,20 @@ module wavetable_common_status_regs #(
       ADDR_REVERB_MAX_PROCESSING_CYCLES:
           bus_rsp.rdata = {16'd0,
                        audio_diagnostics.effects.reverb_max_processing_cycles};
+      ADDR_SAMPLE_WINDOW_REQUEST_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.client_request_count;
+      ADDR_SAMPLE_WINDOW_HIT_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.window_hit_count;
+      ADDR_SAMPLE_WINDOW_REFILL_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.window_refill_count;
+      ADDR_SAMPLE_WINDOW_FALLBACK_READ_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.fallback_read_count;
+      ADDR_SAMPLE_WINDOW_MEMORY_READ_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.memory_read_count;
+      ADDR_SAMPLE_WINDOW_EVICTION_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.eviction_count;
+      ADDR_SAMPLE_WINDOW_STALL_CYCLE_COUNT:
+          bus_rsp.rdata = sample_window_diagnostics.stall_cycle_count;
       default: bus_rsp.rdata = 32'd0;
     endcase
   end

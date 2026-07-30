@@ -154,7 +154,7 @@ module block_interleaved_voice_dsp (
   logic signed [16:0] input_difference;
   logic signed [PHASE_FRAC_WIDTH:0] input_fraction;
   logic signed [16:0] interp_scaled_difference;
-  logic signed [17:0] interpolated;
+  pcm_t interpolated;
   logic signed [FILTER_RAW_WIDTH-1:0] filter_y_raw;
   logic signed [63:0] filter_y_ext;
   logic signed [FILTER_RAW_WIDTH-1:0] next_z1_raw;
@@ -231,9 +231,9 @@ module block_interleaved_voice_dsp (
     input_fraction = $signed({1'b0, token.sample.job.fraction});
     interp_scaled_difference =
         s0_q.interp_product[PHASE_FRAC_WIDTH +: 17];
-    interpolated =
+    interpolated = PCM_WIDTH'(
         $signed({{2{s0_q.sample_0[PCM_WIDTH-1]}}, s0_q.sample_0}) +
-        $signed({interp_scaled_difference[16], interp_scaled_difference});
+        $signed({interp_scaled_difference[16], interp_scaled_difference}));
 
     filter_y_raw =
         $signed({{(FILTER_RAW_WIDTH-32){s2_q.b0_x[31]}}, s2_q.b0_x}) +
@@ -406,7 +406,7 @@ module block_interleaved_voice_dsp (
         s1_q.filter_a2 <= s0_q.filter_a2;
         s1_q.frame_index <= s0_q.frame_index;
         s1_q.envelope_level <= s0_q.envelope_level;
-        s1_q.x <= interpolated[PCM_WIDTH-1:0];
+        s1_q.x <= interpolated;
         s1_q.filter_z1 <= s0_q.filter_z1;
         s1_q.filter_z2 <= s0_q.filter_z2;
       end

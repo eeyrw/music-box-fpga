@@ -21,13 +21,21 @@ namespace {
 constexpr uint16_t kVersion = render::regs::kVersion;
 constexpr uint16_t kSystemStatus = render::regs::kSystemStatus;
 constexpr uint16_t kCommonEventFlags = render::regs::kCommonEventFlags;
-constexpr uint16_t kAudioStatus = render::regs::kAudioStatus;
-constexpr uint16_t kRenderStatus = render::regs::kRenderStatus;
-constexpr uint16_t kMemoryStatus = render::regs::kMemoryStatus;
+constexpr uint16_t kPipelineLatencyStatus = render::regs::kPipelineLatencyStatus;
 constexpr uint16_t kUnderrunCount = render::regs::kUnderrunCount;
 constexpr uint16_t kSampleDropCount = render::regs::kSampleDropCount;
 constexpr uint16_t kRenderDeadlineMissCount = render::regs::kRenderDeadlineMissCount;
 constexpr uint16_t kMemResponseCount = render::regs::kMemResponseCount;
+constexpr uint16_t kSampleWindowRequestCount = render::regs::kSampleWindowRequestCount;
+constexpr uint16_t kSampleWindowHitCount = render::regs::kSampleWindowHitCount;
+constexpr uint16_t kSampleWindowRefillCount = render::regs::kSampleWindowRefillCount;
+constexpr uint16_t kSampleWindowFallbackReadCount =
+    render::regs::kSampleWindowFallbackReadCount;
+constexpr uint16_t kSampleWindowMemoryReadCount =
+    render::regs::kSampleWindowMemoryReadCount;
+constexpr uint16_t kSampleWindowEvictionCount = render::regs::kSampleWindowEvictionCount;
+constexpr uint16_t kSampleWindowStallCycleCount =
+    render::regs::kSampleWindowStallCycleCount;
 constexpr uint16_t kPlatformStatus = render::regs::kPlatformStatus;
 constexpr uint16_t kPlatformErrors = render::regs::kPlatformErrors;
 constexpr uint16_t kPlatformBytesLoaded = render::regs::kPlatformBytesLoaded;
@@ -43,7 +51,6 @@ constexpr uint16_t kDdrAccessData0 = render::regs::kDdrAccessData0;
 constexpr uint32_t kPlatformRegsPresent = render::regs::kPlatformStatusPlatformRegsPresentMask;
 constexpr uint32_t kPlatformErrorPresent = render::regs::kPlatformStatusErrorPresentMask;
 constexpr uint32_t kPlatformDdrCalibrated = render::regs::kPlatformStatusDdrCalibratedMask;
-constexpr uint32_t kPlatformDdrUiReset = render::regs::kPlatformStatusDdrUiResetMask;
 constexpr uint32_t kPlatformSdInitialized = render::regs::kPlatformStatusSdInitializedMask;
 constexpr uint32_t kPlatformAssetLoaded = render::regs::kPlatformStatusAssetLoadedMask;
 constexpr uint32_t kDdrAccessControlStart = render::regs::kDdrAccessControlStartMask;
@@ -301,19 +308,15 @@ class BoardAccess : public host::RegisterIo, public render::CommandWordSink {
 };
 
 void decode_platform(uint32_t status, uint32_t errors) {
-  uint32_t state = (status >> 11) & 0xfu;
   uint32_t sd_error = errors & 0xffu;
   uint32_t loader_error = (errors >> 8) & 0xffu;
   std::cout << "  platform bits: platform_regs=" << ((status & kPlatformRegsPresent) ? 1 : 0)
             << " error=" << ((status & kPlatformErrorPresent) ? 1 : 0)
             << " ddr_calib=" << ((status & kPlatformDdrCalibrated) ? 1 : 0)
-            << " ui_rst=" << ((status & kPlatformDdrUiReset) ? 1 : 0)
             << " sd_init=" << ((status & kPlatformSdInitialized) ? 1 : 0)
             << " asset_loaded=" << ((status & kPlatformAssetLoaded) ? 1 : 0)
             << " loader_busy=" << ((status >> 6) & 1u)
-            << " mig_rdy=" << ((status >> 7) & 1u)
-            << " mig_wdf_rdy=" << ((status >> 8) & 1u)
-            << " loader_state=" << state << "\n";
+            << "\n";
   std::cout << "  errors: sd=" << sd_error << " loader=" << loader_error
             << " state=" << ((errors >> 16) & 0xfu) << "\n";
 }
@@ -323,9 +326,7 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
   uint32_t version = board.read(kVersion);
   uint32_t system = board.read(kSystemStatus);
   uint32_t events = board.read(kCommonEventFlags);
-  uint32_t audio = board.read(kAudioStatus);
-  uint32_t render = board.read(kRenderStatus);
-  uint32_t memory = board.read(kMemoryStatus);
+  uint32_t latency = board.read(kPipelineLatencyStatus);
   uint32_t platform = board.read(kPlatformStatus);
   uint32_t errors = board.read(kPlatformErrors);
   uint32_t bytes_loaded = board.read(kPlatformBytesLoaded);
@@ -337,9 +338,7 @@ bool read_snapshot(BoardAccess& board, bool dry_run) {
   print_reg("VERSION", kVersion, version);
   print_reg("SYSTEM_STATUS", kSystemStatus, system);
   print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
-  print_reg("AUDIO_STATUS", kAudioStatus, audio);
-  print_reg("RENDER_STATUS", kRenderStatus, render);
-  print_reg("MEMORY_STATUS", kMemoryStatus, memory);
+  print_reg("PIPELINE_LATENCY_STATUS", kPipelineLatencyStatus, latency);
   print_reg("PLATFORM_STATUS", kPlatformStatus, platform);
   print_reg("PLATFORM_ERRORS", kPlatformErrors, errors);
   print_reg("PLATFORM_BYTES_LOADED", kPlatformBytesLoaded, bytes_loaded);
@@ -502,13 +501,27 @@ void run_voice_smoke(BoardAccess& board, const Args& args) {
 
   if (!args.dry_run) std::this_thread::sleep_for(std::chrono::milliseconds(250));
   uint32_t events = board.read(kCommonEventFlags);
-  uint32_t audio = board.read(kAudioStatus);
-  uint32_t memory = board.read(kMemoryStatus);
+  uint32_t system = board.read(kSystemStatus);
+  uint32_t latency = board.read(kPipelineLatencyStatus);
   uint32_t mem_rsp_count = board.read(kMemResponseCount);
   print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
-  print_reg("AUDIO_STATUS", kAudioStatus, audio);
-  print_reg("MEMORY_STATUS", kMemoryStatus, memory);
+  print_reg("SYSTEM_STATUS", kSystemStatus, system);
+  print_reg("PIPELINE_LATENCY_STATUS", kPipelineLatencyStatus, latency);
   print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, mem_rsp_count);
+  print_reg("SAMPLE_WINDOW_REQUEST_COUNT", kSampleWindowRequestCount,
+            board.read(kSampleWindowRequestCount));
+  print_reg("SAMPLE_WINDOW_HIT_COUNT", kSampleWindowHitCount,
+            board.read(kSampleWindowHitCount));
+  print_reg("SAMPLE_WINDOW_REFILL_COUNT", kSampleWindowRefillCount,
+            board.read(kSampleWindowRefillCount));
+  print_reg("SAMPLE_WINDOW_FALLBACK_READ_COUNT", kSampleWindowFallbackReadCount,
+            board.read(kSampleWindowFallbackReadCount));
+  print_reg("SAMPLE_WINDOW_MEMORY_READ_COUNT", kSampleWindowMemoryReadCount,
+            board.read(kSampleWindowMemoryReadCount));
+  print_reg("SAMPLE_WINDOW_EVICTION_COUNT", kSampleWindowEvictionCount,
+            board.read(kSampleWindowEvictionCount));
+  print_reg("SAMPLE_WINDOW_STALL_CYCLE_COUNT", kSampleWindowStallCycleCount,
+            board.read(kSampleWindowStallCycleCount));
 
   if (events & (1u << 3)) {
     print_result("PASS", "Voice caused memory response activity");

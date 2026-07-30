@@ -25,7 +25,8 @@ module block_mono_voice_engine (
   output logic                                      result_valid,
   input  logic                                      result_ready,
   output logic [synth_pkg::VOICE_ID_WIDTH-1:0]      result_voice_index,
-  output synth_pkg::voice_dynamic_state_t           result_dynamic
+  output synth_pkg::voice_dynamic_state_t           result_dynamic,
+  output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
 
@@ -35,7 +36,11 @@ module block_mono_voice_engine (
   logic [BLOCK_FRAME_COUNT_WIDTH-1:0] envelope_result_frame_count;
   voice_playback_region_t envelope_result_region;
   voice_event_params_t envelope_result_params;
+/* verilator lint_off UNUSEDSIGNAL */
+  // The renderer consumes phase/filter state; envelope state is returned on a
+  // dedicated output after the block walk.
   voice_dynamic_state_t envelope_result_dynamic;
+/* verilator lint_on UNUSEDSIGNAL */
   block_envelope_result_t envelope_result;
   logic renderer_start_ready;
   logic renderer_result_valid;
@@ -98,7 +103,8 @@ module block_mono_voice_engine (
     .result(renderer_result),
     .result_voice_index(renderer_result_voice_index),
     .result_env_active(renderer_result_env_active),
-    .result_env_state(renderer_result_env_state)
+    .result_env_state(renderer_result_env_state),
+    .sample_window_diagnostics
   );
 
   assign envelope_result_ready = renderer_start_ready;

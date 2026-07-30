@@ -25,15 +25,15 @@ module tb_voice_sample_window;
   logic memory_rsp_valid;
   logic memory_rsp_ready;
   ordered_line_rsp_t memory_rsp;
-  logic [63:0] stat_client_requests;
-  logic [63:0] stat_window_hits;
-  logic [63:0] stat_window_refills;
-  logic [63:0] stat_fallback_reads;
-  logic [63:0] stat_memory_reads;
-  logic [63:0] stat_evictions;
-  logic [63:0] stat_stall_cycles;
+  logic [31:0] stat_client_requests;
+  logic [31:0] stat_window_hits;
+  logic [31:0] stat_window_refills;
+  logic [31:0] stat_fallback_reads;
+  logic [31:0] stat_memory_reads;
+  logic [31:0] stat_evictions;
+  logic [31:0] stat_stall_cycles;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   voice_sample_window #(
     .WINDOW_WORDS(32),

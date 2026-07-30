@@ -70,11 +70,14 @@ module voice_major_render_harness (
   import synth_pkg::*;
 
   reg_bus_req_t bus_req;
+  /* verilator lint_off UNUSEDSIGNAL */
   reg_bus_rsp_t bus_rsp;
+  /* verilator lint_on UNUSEDSIGNAL */
   render_block_req_t block_req;
   render_block_complete_t block_complete;
   render_block_read_req_t block_read_req;
   render_block_read_rsp_t block_read_rsp;
+  sample_window_diagnostics_t sample_window_diagnostics;
   logic line_req_valid;
   logic line_req_ready;
   ordered_line_req_t line_req;
@@ -123,16 +126,16 @@ module voice_major_render_harness (
     block_read_sample_l = block_read_rsp.sample.l;
     block_read_sample_r = block_read_rsp.sample.r;
     line_rsp.words = ddr_rsp_data;
-    cache_requests = core.controller.engine.renderer.cache_stat_client_requests;
-    cache_hits = core.controller.engine.renderer.cache_stat_cache_hits;
-    cache_mshr_merges = core.controller.engine.renderer.cache_stat_mshr_merges;
-    cache_misses = core.controller.engine.renderer.cache_stat_memory_misses;
-    cache_evictions = core.controller.engine.renderer.cache_stat_evictions;
+    cache_requests = 64'(sample_window_diagnostics.client_request_count);
+    cache_hits = 64'(sample_window_diagnostics.window_hit_count);
+    cache_mshr_merges = '0;
+    cache_misses = 64'(sample_window_diagnostics.memory_read_count);
+    cache_evictions = 64'(sample_window_diagnostics.eviction_count);
     cache_miss_stall_cycles =
-        core.controller.engine.renderer.cache_stat_miss_stall_cycles;
-    window_refills = core.controller.engine.renderer.cache_stat_window_refills;
+        64'(sample_window_diagnostics.stall_cycle_count);
+    window_refills = 64'(sample_window_diagnostics.window_refill_count);
     window_fallback_reads =
-        core.controller.engine.renderer.cache_stat_fallback_reads;
+        64'(sample_window_diagnostics.fallback_read_count);
     configured_cache_sets = '0;
     configured_cache_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
     configured_window_words = 32'd32;
@@ -177,7 +180,8 @@ module voice_major_render_harness (
     .block_read_rsp,
     .block_release_valid,
     .block_release_ready,
-    .block_release_buffer_id(block_release_buffer)
+    .block_release_buffer_id(block_release_buffer),
+    .sample_window_diagnostics
   );
 
   logic unused_audio_control;

@@ -15,7 +15,9 @@ module tb_global_audio_effects_chain;
   logic out_ready;
   pcm_t out_l;
   pcm_t out_r;
+/* verilator lint_off UNUSEDSIGNAL */
   logic busy;
+/* verilator lint_on UNUSEDSIGNAL */
   audio_diagnostics_t diagnostics_o;
   int errors = 0;
 

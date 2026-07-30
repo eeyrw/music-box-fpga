@@ -38,7 +38,8 @@ module voice_major_block_controller (
   input  logic                                      block_release_valid,
   output logic                                      block_release_ready,
   input  logic [synth_pkg::BLOCK_BUFFER_ID_WIDTH-1:0]
-                                                    block_release_buffer_id
+                                                    block_release_buffer_id,
+  output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
 
@@ -74,7 +75,11 @@ module voice_major_block_controller (
   logic engine_start_ready;
   logic engine_contribution_valid;
   logic engine_contribution_ready;
+/* verilator lint_off UNUSEDSIGNAL */
+  // Generation and voice ID are renderer diagnostics; mixing needs frame and
+  // channel contributions only.
   block_voice_contribution_t engine_contribution;
+/* verilator lint_on UNUSEDSIGNAL */
   logic engine_result_valid;
   logic engine_result_ready;
   logic [VOICE_ID_WIDTH-1:0] engine_result_voice_index;
@@ -131,7 +136,8 @@ module voice_major_block_controller (
     .result_valid(engine_result_valid),
     .result_ready(engine_result_ready),
     .result_voice_index(engine_result_voice_index),
-    .result_dynamic(engine_result)
+    .result_dynamic(engine_result),
+    .sample_window_diagnostics
   );
 
   block_mix_buffer mix_buffer (

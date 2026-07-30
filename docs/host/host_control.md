@@ -30,7 +30,8 @@ replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identi
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
 Global status and board control remain separate behind `host::RegisterIo`.
-This interface is not used for voice configuration.
+This interface is not used for voice configuration. In particular, the host
+does not submit command words through the debug-only `CMD_FIFO_DATA` register.
 
 ## SPI Transactions
 

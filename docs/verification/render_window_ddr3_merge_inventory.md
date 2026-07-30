@@ -28,7 +28,7 @@ status、effects 和 I2S 边界为基础做语义合并。
 MIDI + SF2 C++ policy
   -> mono Region allocation (stereo pair = two voices)
   -> version-10 command words
-  -> SPI direct stream or CMD_FIFO_DATA
+  -> SPI opcode-0xa5 production command stream
   -> voice_major_command_plane
   -> block_voice_state_store
   -> voice_major_block_controller
@@ -99,7 +99,7 @@ Generated output belongs under `build/` and is not committed.
 
 ## Stable Contracts
 
-- [`../register_map.md`](../register_map.md): version-10 commands and register ingress.
+- [`../register_map.md`](../register_map.md): version-10 commands and debug/status registers.
 - [`../memory_format.md`](../memory_format.md): mono layout, SF2 expansion, window and DDR refill path.
 - [`../design/system_design.md`](../design/system_design.md): production architecture and board boundary.
 - [`simulation_design.md`](simulation_design.md): self-checking and render-flow details.

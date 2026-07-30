@@ -25,6 +25,9 @@ plane, and `Ch347RegisterTransport` on 2026-07-30.
   and does not currently preflight `CMD_FIFO_STATUS`. Its transport API can
   carry multiple complete commands but rejects malformed framing and more than
   63 total words.
+- `CMD_FIFO_DATA` is retained for controlled debug injection only. Production
+  software does not submit commands through register writes, so it is outside
+  the reliable SPI command-transaction contract.
 - Current register targets acknowledge immediately. DDR debug uses START plus
   later status polling; MIG latency is never held inside one SPI transaction.
 
@@ -111,8 +114,8 @@ Open design choices:
 - [ ] Define how the receiver proves/reserves FIFO capacity before commit.
 - [ ] Decide whether a READY GPIO is needed or whether sparse host traffic plus
   software-readable counters is sufficient.
-- [ ] Define parser recovery for legacy partial FIFO contents across reset and
-  `STREAM_FLUSH`.
+- [ ] Define an out-of-band recovery operation that clears both FIFO and parser
+  state; an in-band `STREAM_FLUSH` cannot recover a missing-payload desync.
 
 This path fixes SPI-001 and SPI-002 for the current CH347 workflow. It does not
 provide CRC, lost-ACK recovery, or exactly-once retry.
@@ -173,8 +176,9 @@ For the compatible transport:
 - [x] preserve complete command boundaries within each CS assertion;
 - [x] enforce the 63-word CH347 transfer maximum, 16-word per-command payload
   maximum, and declared payload lengths;
-- [ ] optionally read capacity/status before bursts, while recognizing that
-  preflight is not the atomicity mechanism;
+- [ ] preflight complete-transaction capacity as an interim mitigation under
+  the documented single-producer contract; this prevents FIFO overflow but is
+  not the truncation/framing atomicity mechanism;
 - [ ] read sticky rejection/framing status after a failed operation or during
   health polling;
 - [ ] bound retries and issue `STREAM_FLUSH` or reset only according to the
@@ -195,12 +199,12 @@ Compatible hardening is complete only when focused tests prove:
   as specified;
 - [ ] consecutive accepted/rejected transactions cannot desynchronize the
   command parser;
-- [ ] FIFO wrap and simultaneous `CMD_FIFO_DATA` traffic preserve ordering and
-  the direct-stream priority rule;
+- [ ] FIFO wrap and multiple commands in one `0xa5` transaction preserve
+  ordering;
 - [ ] reset in receive, validate, and commit states leaves no visible prefix;
 - [ ] all sticky counters saturate and clear according to the register contract;
-- [ ] sparse register traffic and the maximum intended command workload do not
-  cause audio underrun, drop, or hidden transport loss.
+- [ ] sparse diagnostic register traffic and the maximum intended `0xa5`
+  command workload do not cause audio underrun, drop, or hidden transport loss.
 
 A packetized protocol additionally requires CRC corruption, lost response,
 duplicate retry, request/response FIFO exhaustion, and exactly-once execution

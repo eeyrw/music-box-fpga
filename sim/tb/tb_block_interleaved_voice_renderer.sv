@@ -35,9 +35,14 @@ module tb_block_interleaved_voice_renderer;
   block_voice_dsp_result_t result;
   logic [VOICE_ID_WIDTH-1:0] result_voice_index;
   logic result_env_active;
+/* verilator lint_off UNUSEDSIGNAL */
   volume_env_state_t result_env_state;
+/* verilator lint_on UNUSEDSIGNAL */
+/* verilator lint_off UNUSEDSIGNAL */
+  sample_window_diagnostics_t sample_window_diagnostics;
+/* verilator lint_on UNUSEDSIGNAL */
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_interleaved_voice_renderer dut (.*);
 

@@ -36,7 +36,8 @@ module voice_major_render_core (
   input  logic                                      block_release_valid,
   output logic                                      block_release_ready,
   input  logic [synth_pkg::BLOCK_BUFFER_ID_WIDTH-1:0]
-                                                    block_release_buffer_id
+                                                    block_release_buffer_id,
+  output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
 
@@ -161,7 +162,8 @@ module voice_major_render_core (
     .block_read_rsp,
     .block_release_valid,
     .block_release_ready,
-    .block_release_buffer_id
+    .block_release_buffer_id,
+    .sample_window_diagnostics
   );
 
   assign block_req_ready = controller_block_req_ready && !command_action_pending;

@@ -3,6 +3,8 @@
 module tb_block_interleaved_voice_dsp;
   import synth_pkg::*;
 
+  localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
+
   logic clk = 1'b0;
   logic rst = 1'b1;
   logic token_valid;
@@ -20,7 +22,7 @@ module tb_block_interleaved_voice_dsp;
   logic signed [FILTER_STATE_WIDTH-1:0] update_z2
       [0:BLOCK_WORK_ENTRY_COUNT-1];
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_interleaved_voice_dsp dut (
     .clk,
@@ -107,8 +109,8 @@ module tb_block_interleaved_voice_dsp;
 
   function automatic block_dsp_sample_token_t make_token(
       input int work_id,
-      input int voice_id,
-      input int frame_index,
+      input logic [VOICE_ID_WIDTH-1:0] voice_id,
+      input logic [BLOCK_FRAME_INDEX_WIDTH-1:0] frame_index,
       input logic filter_enable,
       input logic last,
       input logic signed [15:0] sample_0,

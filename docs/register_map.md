@@ -14,21 +14,17 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000a0000`. Version 10 introduces the mono voice-major command payloads below. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000b0000`. Version 11 simplifies diagnostics while retaining the version-10 command encoding. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
-| `0x9018` | `AUDIO_STATUS` | platform | Audio FIFO and playback state. |
-| `0x901c` | `RENDER_STATUS` | platform | Renderer state. |
-| `0x9020` | `MEMORY_STATUS` | platform | Memory interface state. |
+| `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
 | `0x9024` | `UNDERRUN_COUNT` | platform | Saturating underrun counter. |
 | `0x9028` | `SAMPLE_DROP_COUNT` | platform | Saturating dropped-sample counter. |
 | `0x902c` | `RENDER_DEADLINE_MISS_COUNT` | platform | Saturating deadline counter. |
 | `0x9030` | `CURRENT_SAMPLE` | RO | Accepted renderer-output timeline. |
 | `0x9034` | `CMD_FIFO_STATUS` | RO | Command-word FIFO, parser state, and error flags. |
 | `0x9038` | `MEM_RESPONSE_COUNT` | platform | Saturating memory response counter. |
-| `0x903c` | `CMD_FIFO_DATA` | WO | One 32-bit command word. |
-| `0x9094` | `CMD_ERROR_STATUS` | RO | Command and stale-sequence error summary. |
-| `0x909c` | `CMD_ACTION_STATUS` | RO | Parser/dispatcher execution state. |
+| `0x903c` | `CMD_FIFO_DATA` | WO | Debug-only injection of one 32-bit command word. |
 | `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
 | `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
 | `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
@@ -50,11 +46,47 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9154` | `REVERB_STATUS` | RO | Reverb pre-delay occupancy and valid-line mask. |
 | `0x9158` | `REVERB_SATURATION_COUNT` | RO | Saturating reverb signed-25 channel clamp count. |
 | `0x915c` | `REVERB_MAX_PROCESSING_CYCLES` | RO | Maximum clocks used by the reverb FSM. |
+| `0x9160` | `SAMPLE_WINDOW_REQUEST_COUNT` | RO | Accepted sample-window requests. |
+| `0x9164` | `SAMPLE_WINDOW_HIT_COUNT` | RO | Requests served from a valid window. |
+| `0x9168` | `SAMPLE_WINDOW_REFILL_COUNT` | RO | Full-window refill misses. |
+| `0x916c` | `SAMPLE_WINDOW_FALLBACK_READ_COUNT` | RO | One-line fallback misses. |
+| `0x9170` | `SAMPLE_WINDOW_MEMORY_READ_COUNT` | RO | External line reads issued. |
+| `0x9174` | `SAMPLE_WINDOW_EVICTION_COUNT` | RO | Valid windows replaced. |
+| `0x9178` | `SAMPLE_WINDOW_STALL_CYCLE_COUNT` | RO | Blocked client-request cycles. |
 
-The generic control plane accepts writes only at `CMD_FIFO_DATA`. Unknown
-addresses and writes to read-only generic registers return `bus_error`.
-Board-level register fabric may own platform addresses in the same global
-window.
+The command-plane block accepts writes only at `CMD_FIFO_DATA`; writes to its
+read-only registers return `bus_error`. The common-status and Smart Artix
+platform-status blocks acknowledge writes to their recognized read-only
+addresses and ignore the data. `COMMON_EVENT_FLAGS` is the exception in the
+common block because it implements write-one-to-clear. The DDR debug aperture
+also has the explicitly writable registers listed below. Unknown addresses
+return `bus_error`.
+
+### Common Status Fields
+
+`SYSTEM_STATUS` contains live signals rather than sticky history:
+
+| Bits | Field | Meaning |
+| ---: | --- | --- |
+| `0` | `CORE_BUSY` | renderer core is busy |
+| `1` | `RENDER_INFLIGHT` | an admitted render block is in flight |
+| `2` | `CORE_SAMPLE_VALID` | renderer is presenting a completed sample |
+| `3` | `FIFO_SAMPLE_VALID` | output FIFO is presenting a sample |
+| `4` | `I2S_SAMPLE_READY` | I2S output can accept a sample |
+| `5` | `EXT_REQ_VALID` | external-memory request is valid |
+| `6` | `EXT_REQ_READY` | external-memory request sink is ready |
+| `7` | `EXT_RSP_VALID` | external-memory response is valid |
+| `23:8` | `OUTPUT_FIFO_LEVEL` | current output FIFO occupancy |
+| `31:24` | reserved | zero |
+
+`PIPELINE_LATENCY_STATUS[15:0]` is the most recently reported render latency;
+bits `31:16` are the most recently traced external-memory response latency.
+Both values count system clocks.
+
+The four event flags clear on `core_reset` or by
+writing ones to `COMMON_EVENT_FLAGS`; a new event in the same clock as a clear
+wins. The four saturating event counters clear only on the enclosing system
+reset, not on `core_reset`.
 
 ### CMD_FIFO_STATUS
 
@@ -69,9 +101,8 @@ window.
 | `30` | `command_error_count != 0` |
 | `31` | `stale_seq_count != 0` |
 
-`CMD_ERROR_STATUS[0]` reports malformed or semantically invalid commands;
-bit 1 reports stale generations. `CMD_ACTION_STATUS[0]` is one only when the
-parser/dispatcher is idle; bit 1 reports pending work. Bits `31:2` are zero.
+Version 11 removed `CMD_ERROR_STATUS` and `CMD_ACTION_STATUS` because they were
+exact aliases of `CMD_FIFO_STATUS[31:30]` and `[17:16]`.
 
 ### Compressor Diagnostics
 
@@ -121,12 +152,29 @@ three saturation counters count clamped channels, not frames, and stop at
 `0xffffffff`. `EFFECT_CLEAR` clears spatial histories and their diagnostics,
 including these counters and maxima; compressor diagnostics are unchanged.
 
+### Sample-Window Diagnostics
+
+All seven sample-window registers are 32-bit saturating counters and clear on
+`core_reset`. A request eventually contributes to exactly one hit, refill, or
+fallback count. A refill issues one external read per line in the window, so
+`MEMORY_READ_COUNT` is intentionally not a duplicate of `REFILL_COUNT`.
+`EVICTION_COUNT` increments only when a refill replaces a previously valid
+window. `STALL_CYCLE_COUNT` counts blocked cycles, not blocked requests, and
+excludes the reset-time metadata initialization sweep.
+
 ## Command Ingress
 
-Software may write individual words through `CMD_FIFO_DATA`, but normal voice
-traffic uses SPI opcode `0xa5` followed by consecutive big-endian 32-bit words.
-Both paths feed the same FIFO and parser. The direct stream has priority; a
-simultaneous `CMD_FIFO_DATA` write is rejected.
+Production voice and global control uses SPI opcode `0xa5` followed by
+consecutive big-endian 32-bit words. `CMD_FIFO_STATUS` is the diagnostic
+observation of that path.
+
+`CMD_FIFO_DATA` is retained only for controlled debug injection into the same
+FIFO and parser. It is not a production command-submit interface: individual
+register writes have no complete-command transaction boundary, no acceptance
+response on the SPI wire, and no reliable recovery if injection stops between
+header and payload. No production host code writes commands through this
+register. Debug injection must occur with normal `0xa5` traffic quiescent; the
+direct stream has priority and a simultaneous register write is rejected.
 
 ### Voice-Major Mono Commands (Version 10)
 
@@ -141,8 +189,8 @@ carries its generation in payload word 0:
 | `31:16` | reserved, zero |
 
 This layout supports the 512-voice configuration without truncating IDs 256
-through 511. A stale generation is rejected and counted in
-`CMD_ERROR_STATUS[1]`.
+through 511. A stale generation is rejected and summarized in
+`CMD_FIFO_STATUS[31]`.
 
 For `VOICE_START_MONO`, flags `[1:0]` are loop mode, bit 2 includes the
 three-word filter group, bit 3 includes the six-word envelope group, and bits
@@ -172,10 +220,23 @@ DDR status, and the debug DDR access aperture. Exact names, fields, and masks
 are generated from `spec/register_map.json`. They are board control registers,
 not voice-control aliases.
 
-`PLATFORM_STATUS[15]` reports the debounced active-low Smart Artix SD card-detect
-switch, and bit 16 reports that CMD6 successfully selected High Speed. Bit 4
-continues to mean that initialization completed; an initialized Default
-Speed-only card therefore has bit 4 set and bit 16 clear.
+`PLATFORM_STATUS` fields are:
+
+| Bits | Field | Meaning |
+| ---: | --- | --- |
+| `0` | `PLATFORM_REGS_PRESENT` | constant one when this platform window responds |
+| `1` | `ERROR_PRESENT` | SD or loader primary error code is nonzero |
+| `2` | `DDR_CALIBRATED` | MIG initialization/calibration completed |
+| `4` | `SD_INITIALIZED` | SD initialization completed |
+| `5` | `ASSET_LOADED` | WTSF payload load completed |
+| `6` | `ASSET_LOADER_BUSY` | asset loader is active |
+| `15` | `SD_CARD_PRESENT` | debounced active-low card-detect input reports a card |
+| `16` | `SD_HIGH_SPEED_ACTIVE` | CMD6 selected SD High Speed mode |
+
+Bits `3`, `14:7`, and `31:17` are zero. Detailed MIG handshake/reset state is
+reported only by `PLATFORM_DDR_STATUS`, and loader state is reported only by
+`PLATFORM_ERRORS`. An initialized Default Speed-only card has
+`SD_INITIALIZED` set and `SD_HIGH_SPEED_ACTIVE` clear.
 
 `PLATFORM_ERRORS` packs the SD error code in bits `7:0`, loader error code in
 bits `15:8`, loader state in bits `19:16`, and the saturating SD block-retry count
@@ -184,3 +245,30 @@ recovery failure, `1` means CMD12 transport/card-status failure, and `2` means
 CMD12 DAT0 busy timeout. When a failed CMD18 block is followed by a CMD12 failure,
 the primary SD error remains the original data error while this field records the
 stop failure.
+
+`PLATFORM_DDR_STATUS` separates the same live MIG signals from the loader
+summary:
+
+| Bits | Field | Meaning |
+| ---: | --- | --- |
+| `0` | `DDR_CALIBRATED` | MIG initialization/calibration completed |
+| `1` | `DDR_UI_RESET` | MIG UI clock domain is in reset |
+| `2` | `MIG_APP_READY` | application command channel ready |
+| `3` | `MIG_WRITE_DATA_READY` | write-data channel ready |
+| `4` | `MIG_READ_DATA_VALID` | read-data output valid |
+| `5` | `MIG_READ_DATA_END` | read-data burst end |
+| `27:16` | `DEVICE_TEMP_RAW` | raw 12-bit MIG device-temperature code |
+
+`DDR_ACCESS_CONTROL` is written with `START` at bit 0, `WRITE` at bit 1, and
+`CLEAR` at bit 2. `START` is accepted only while `DDR_ACCESS_STATUS.READY` is
+set. `CLEAR` clears the sticky completion and error flags. Reading the control
+register returns only the last accepted direction in bit 1.
+
+`DDR_ACCESS_STATUS` contains constant `PRESENT` at bit 0, live `READY` and
+`BUSY` at bits 1 and 2, sticky `DONE` and `ERROR` at bits 3 and 4, and the last
+accepted `WRITE` direction at bit 5. `DDR_ACCESS_ADDR` is a byte address and
+must be 16-byte aligned and within the MIG range. `DDR_ACCESS_BYTE_ENABLE[15:0]`
+selects bytes for writes and resets to all ones; an all-zero mask is rejected.
+Writes to `DDR_ACCESS_DATA0` through `DATA3` stage a 128-bit write beat, while
+reads return the most recently captured DDR read beat rather than the staged
+write data.

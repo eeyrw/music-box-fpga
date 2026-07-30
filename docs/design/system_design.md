@@ -71,9 +71,10 @@ register window and no compatibility register bank.
 
 The control plane contains a 1024-word FIFO, a length/semantic-checking parser,
 the block state store, generation validation, and command/stale-generation
-counters. Direct SPI command traffic and register writes to `CMD_FIFO_DATA`
-enter the same FIFO. A render block is admitted only after pending commands have
-drained, so state changes occur at an output-block boundary.
+counters. Production commands enter through the dedicated SPI `0xa5` stream.
+The debug-only `CMD_FIFO_DATA` register reaches the same FIFO but is not used by
+the host command path. A render block is admitted only after pending commands
+have drained, so state changes occur at an output-block boundary.
 
 `VOICE_START_MONO` installs a complete descriptor, runtime parameters, and fresh
 envelope state in a 5-to-16-word compact payload. Runtime ENV, RELEASE, STOP, GAIN, FILTER,

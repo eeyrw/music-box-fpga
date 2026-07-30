@@ -11,11 +11,32 @@
         "description": "Common and board platform register window.",
         "baseAddress": "0x9000",
         "registers": [
-          {"name": "VERSION", "addressOffset": "0x0000", "resetValue": "0x000a0000"},
-          {"name": "SYSTEM_STATUS", "addressOffset": "0x0010"},
+          {
+            "name": "VERSION",
+            "addressOffset": "0x0000",
+            "resetValue": "0x000b0000",
+            "description": "Read-only register and command interface version; current value 0x000b0000 identifies version 11."
+          },
+          {
+            "name": "SYSTEM_STATUS",
+            "addressOffset": "0x0010",
+            "description": "Read-only live summary of core/render activity, sample flow, output readiness, and external-memory request/response handshakes.",
+            "fields": [
+              {"name": "CORE_BUSY", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
+              {"name": "RENDER_INFLIGHT", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
+              {"name": "CORE_SAMPLE_VALID", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
+              {"name": "FIFO_SAMPLE_VALID", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
+              {"name": "I2S_SAMPLE_READY", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
+              {"name": "EXT_REQ_VALID", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"},
+              {"name": "EXT_REQ_READY", "bitOffset": 6, "bitWidth": 1, "mask": "0x00000040"},
+              {"name": "EXT_RSP_VALID", "bitOffset": 7, "bitWidth": 1, "mask": "0x00000080"},
+              {"name": "OUTPUT_FIFO_LEVEL", "bitOffset": 8, "bitWidth": 16}
+            ]
+          },
           {
             "name": "COMMON_EVENT_FLAGS",
             "addressOffset": "0x0014",
+            "description": "Sticky event flags for underrun, sample drop, render deadline miss, and observed memory response; write one to clear, with same-cycle events taking priority.",
             "fields": [
               {"name": "UNDERRUN", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "SAMPLE_DROP", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
@@ -23,16 +44,39 @@
               {"name": "MEM_RESPONSE", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"}
             ]
           },
-          {"name": "AUDIO_STATUS", "addressOffset": "0x0018"},
-          {"name": "RENDER_STATUS", "addressOffset": "0x001c"},
-          {"name": "MEMORY_STATUS", "addressOffset": "0x0020"},
-          {"name": "UNDERRUN_COUNT", "addressOffset": "0x0024"},
-          {"name": "SAMPLE_DROP_COUNT", "addressOffset": "0x0028"},
-          {"name": "RENDER_DEADLINE_MISS_COUNT", "addressOffset": "0x002c"},
-          {"name": "CURRENT_SAMPLE", "addressOffset": "0x0030"},
+          {
+            "name": "PIPELINE_LATENCY_STATUS",
+            "addressOffset": "0x001c",
+            "description": "Read-only most recently reported render latency and traced external-memory response latency, both in clocks.",
+            "fields": [
+              {"name": "RENDER_CYCLES", "bitOffset": 0, "bitWidth": 16},
+              {"name": "MEM_RESPONSE_CYCLES", "bitOffset": 16, "bitWidth": 16}
+            ]
+          },
+          {
+            "name": "UNDERRUN_COUNT",
+            "addressOffset": "0x0024",
+            "description": "Read-only saturating count of audio underrun pulses since system reset."
+          },
+          {
+            "name": "SAMPLE_DROP_COUNT",
+            "addressOffset": "0x0028",
+            "description": "Read-only saturating count of rendered samples dropped by the output path since system reset."
+          },
+          {
+            "name": "RENDER_DEADLINE_MISS_COUNT",
+            "addressOffset": "0x002c",
+            "description": "Read-only saturating count of render deadline miss pulses since system reset."
+          },
+          {
+            "name": "CURRENT_SAMPLE",
+            "addressOffset": "0x0030",
+            "description": "Read-only start-frame index of the most recently admitted render block."
+          },
           {
             "name": "CMD_FIFO_STATUS",
             "addressOffset": "0x0034",
+            "description": "Read-only command FIFO occupancy, parser/dispatcher activity, and nonzero command/stale-generation error summaries.",
             "fields": [
               {"name": "WORD_EMPTY", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "WORD_FULL", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
@@ -43,27 +87,20 @@
               {"name": "STALE_GENERATION", "bitOffset": 31, "bitWidth": 1, "mask": "0x80000000"}
             ]
           },
-          {"name": "MEM_RESPONSE_COUNT", "addressOffset": "0x0038"},
-          {"name": "CMD_FIFO_DATA", "addressOffset": "0x003c"},
           {
-            "name": "CMD_ERROR_STATUS",
-            "addressOffset": "0x0094",
-            "fields": [
-              {"name": "COMMAND_ERROR", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
-              {"name": "STALE_GENERATION", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"}
-            ]
+            "name": "MEM_RESPONSE_COUNT",
+            "addressOffset": "0x0038",
+            "description": "Read-only saturating count of traced external-memory response pulses since system reset."
           },
           {
-            "name": "CMD_ACTION_STATUS",
-            "addressOffset": "0x009c",
-            "fields": [
-              {"name": "IDLE", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
-              {"name": "PENDING", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"}
-            ]
+            "name": "CMD_FIFO_DATA",
+            "addressOffset": "0x003c",
+            "description": "Debug-only injection of one command word; production commands use SPI opcode 0xa5."
           },
           {
             "name": "COMPRESSOR_STATUS",
             "addressOffset": "0x010c",
+            "description": "Read-only compressor enable, look-ahead priming, nonzero current reduction, and delay-fill level summary.",
             "fields": [
               {"name": "ENABLED", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "PRIMED", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
@@ -71,18 +108,55 @@
               {"name": "DELAY_LEVEL", "bitOffset": 8, "bitWidth": 16}
             ]
           },
-          {"name": "COMPRESSOR_GAIN_REDUCTION", "addressOffset": "0x0110"},
-          {"name": "COMPRESSOR_TARGET_GAIN_REDUCTION", "addressOffset": "0x0114"},
-          {"name": "COMPRESSOR_DETECTOR_PEAK", "addressOffset": "0x0118"},
-          {"name": "COMPRESSOR_MAX_GAIN_REDUCTION", "addressOffset": "0x011c"},
-          {"name": "COMPRESSOR_MAX_DETECTOR_PEAK", "addressOffset": "0x0120"},
-          {"name": "COMPRESSOR_INPUT_FRAME_COUNT", "addressOffset": "0x0124"},
-          {"name": "COMPRESSOR_OUTPUT_FRAME_COUNT", "addressOffset": "0x0128"},
-          {"name": "COMPRESSOR_COMPRESSED_FRAME_COUNT", "addressOffset": "0x012c"},
-          {"name": "COMPRESSOR_SATURATION_COUNT", "addressOffset": "0x0130"},
+          {
+            "name": "COMPRESSOR_GAIN_REDUCTION",
+            "addressOffset": "0x0110",
+            "description": "Read-only applied linked-channel gain reduction in unsigned centibel Q12.20."
+          },
+          {
+            "name": "COMPRESSOR_TARGET_GAIN_REDUCTION",
+            "addressOffset": "0x0114",
+            "description": "Read-only detector target gain reduction for the current analyzed frame in unsigned centibel Q12.20."
+          },
+          {
+            "name": "COMPRESSOR_DETECTOR_PEAK",
+            "addressOffset": "0x0118",
+            "description": "Read-only zero-extended linked peak magnitude max(abs(left), abs(right)) from the current pre-compressor signed-25 mix frame."
+          },
+          {
+            "name": "COMPRESSOR_MAX_GAIN_REDUCTION",
+            "addressOffset": "0x011c",
+            "description": "Read-only maximum applied gain reduction since core reset in unsigned centibel Q12.20."
+          },
+          {
+            "name": "COMPRESSOR_MAX_DETECTOR_PEAK",
+            "addressOffset": "0x0120",
+            "description": "Read-only maximum linked pre-compressor peak magnitude observed since core reset."
+          },
+          {
+            "name": "COMPRESSOR_INPUT_FRAME_COUNT",
+            "addressOffset": "0x0124",
+            "description": "Read-only saturating count of stereo mix frames accepted by the look-ahead compressor since core reset."
+          },
+          {
+            "name": "COMPRESSOR_OUTPUT_FRAME_COUNT",
+            "addressOffset": "0x0128",
+            "description": "Read-only saturating count of valid stereo output frames emitted after the fixed look-ahead delay since core reset."
+          },
+          {
+            "name": "COMPRESSOR_COMPRESSED_FRAME_COUNT",
+            "addressOffset": "0x012c",
+            "description": "Read-only saturating count of emitted frames with the compressor enabled and nonzero applied gain reduction since core reset."
+          },
+          {
+            "name": "COMPRESSOR_SATURATION_COUNT",
+            "addressOffset": "0x0130",
+            "description": "Read-only saturating count of left/right PCM16 channel clamps after compressor and master gain since core reset."
+          },
           {
             "name": "EFFECT_STATUS",
             "addressOffset": "0x0134",
+            "description": "Read-only spatial-effect enable/activity, chorus-history, reverb-line-valid, and configuration-clamp summary.",
             "fields": [
               {"name": "CHORUS_ENABLED", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "REVERB_ENABLED", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
@@ -94,33 +168,106 @@
               {"name": "MIXER_CONFIG_CLAMPED", "bitOffset": 14, "bitWidth": 1, "mask": "0x00004000"}
             ]
           },
-          {"name": "EFFECT_INPUT_FRAME_COUNT", "addressOffset": "0x0138"},
-          {"name": "EFFECT_OUTPUT_FRAME_COUNT", "addressOffset": "0x013c"},
-          {"name": "EFFECT_SATURATION_COUNT", "addressOffset": "0x0140"},
-          {"name": "EFFECT_MAX_PROCESSING_CYCLES", "addressOffset": "0x0144"},
-          {"name": "CHORUS_HISTORY_LEVEL", "addressOffset": "0x0148"},
-          {"name": "CHORUS_LFO_PHASE", "addressOffset": "0x014c"},
-          {"name": "CHORUS_SATURATION_COUNT", "addressOffset": "0x0150"},
+          {
+            "name": "EFFECT_INPUT_FRAME_COUNT",
+            "addressOffset": "0x0138",
+            "description": "Read-only saturating count of stereo frames accepted by the spatial-effect chain since core reset or effect clear."
+          },
+          {
+            "name": "EFFECT_OUTPUT_FRAME_COUNT",
+            "addressOffset": "0x013c",
+            "description": "Read-only saturating count of spatial-effect output frame handshakes since core reset or effect clear."
+          },
+          {
+            "name": "EFFECT_SATURATION_COUNT",
+            "addressOffset": "0x0140",
+            "description": "Read-only saturating count of signed-25 left/right channel clamps in the dry/wet effect-return mixer since core reset or effect clear."
+          },
+          {
+            "name": "EFFECT_MAX_PROCESSING_CYCLES",
+            "addressOffset": "0x0144",
+            "description": "Read-only maximum spatial-chain clocks from input acceptance to mixer output valid since core reset or effect clear; value is in bits 15:0."
+          },
+          {
+            "name": "CHORUS_HISTORY_LEVEL",
+            "addressOffset": "0x0148",
+            "description": "Read-only number of valid stereo frames currently stored in chorus history; value is in bits 15:0."
+          },
+          {
+            "name": "CHORUS_LFO_PHASE",
+            "addressOffset": "0x014c",
+            "description": "Read-only current chorus LFO phase in unsigned Q0.32."
+          },
+          {
+            "name": "CHORUS_SATURATION_COUNT",
+            "addressOffset": "0x0150",
+            "description": "Read-only saturating count of signed-25 left/right channel clamps while writing chorus history since core reset or chorus clear."
+          },
           {
             "name": "REVERB_STATUS",
             "addressOffset": "0x0154",
+            "description": "Read-only reverb pre-delay occupancy in bits 15:0 and valid delay-line mask in bits 23:16.",
             "fields": [
               {"name": "PRE_DELAY_OCCUPANCY", "bitOffset": 0, "bitWidth": 16},
               {"name": "VALID_LINE_MASK", "bitOffset": 16, "bitWidth": 8}
             ]
           },
-          {"name": "REVERB_SATURATION_COUNT", "addressOffset": "0x0158"},
-          {"name": "REVERB_MAX_PROCESSING_CYCLES", "addressOffset": "0x015c"},
+          {
+            "name": "REVERB_SATURATION_COUNT",
+            "addressOffset": "0x0158",
+            "description": "Read-only saturating count of signed-25 reverb channel clamps since core reset or reverb clear."
+          },
+          {
+            "name": "REVERB_MAX_PROCESSING_CYCLES",
+            "addressOffset": "0x015c",
+            "description": "Read-only maximum clocks used by the reverb processing FSM since core reset or reverb clear; value is in bits 15:0."
+          },
+          {
+            "name": "SAMPLE_WINDOW_REQUEST_COUNT",
+            "addressOffset": "0x0160",
+            "description": "Read-only saturating count of sample-window client requests accepted since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_HIT_COUNT",
+            "addressOffset": "0x0164",
+            "description": "Read-only saturating count of accepted requests served from a valid per-voice sample window since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_REFILL_COUNT",
+            "addressOffset": "0x0168",
+            "description": "Read-only saturating count of window misses that requested a complete per-voice window refill since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_FALLBACK_READ_COUNT",
+            "addressOffset": "0x016c",
+            "description": "Read-only saturating count of window misses handled as one-line fallback reads since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_MEMORY_READ_COUNT",
+            "addressOffset": "0x0170",
+            "description": "Read-only saturating count of external line-read requests issued by the sample window since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_EVICTION_COUNT",
+            "addressOffset": "0x0174",
+            "description": "Read-only saturating count of valid per-voice windows replaced by refills since core reset."
+          },
+          {
+            "name": "SAMPLE_WINDOW_STALL_CYCLE_COUNT",
+            "addressOffset": "0x0178",
+            "description": "Read-only saturating count of cycles with a client request blocked after sample-window metadata initialization since core reset."
+          },
           {
             "name": "PLATFORM_STATUS",
             "addressOffset": "0x0040",
+            "description": "Read-only Smart Artix presence, error summary, DDR/MIG handshake, SD initialization, asset-loader, card-presence, and SD high-speed status.",
             "fields": [
               {"name": "PLATFORM_REGS_PRESENT", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "ERROR_PRESENT", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
               {"name": "DDR_CALIBRATED", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
-              {"name": "DDR_UI_RESET", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
               {"name": "SD_INITIALIZED", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
               {"name": "ASSET_LOADED", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"},
+              {"name": "ASSET_LOADER_BUSY", "bitOffset": 6, "bitWidth": 1, "mask": "0x00000040"},
               {"name": "SD_CARD_PRESENT", "bitOffset": 15, "bitWidth": 1, "mask": "0x00008000"},
               {"name": "SD_HIGH_SPEED_ACTIVE", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
             ]
@@ -128,6 +275,7 @@
           {
             "name": "PLATFORM_ERRORS",
             "addressOffset": "0x0044",
+            "description": "Read-only packed SD error, asset-loader error/state, SD retry count, and SD recovery error diagnostics.",
             "fields": [
               {"name": "SD_ERROR_CODE", "bitOffset": 0, "bitWidth": 8},
               {"name": "LOADER_ERROR_CODE", "bitOffset": 8, "bitWidth": 8},
@@ -136,13 +284,39 @@
               {"name": "SD_RECOVERY_ERROR_CODE", "bitOffset": 28, "bitWidth": 4}
             ]
           },
-          {"name": "PLATFORM_BYTES_LOADED", "addressOffset": "0x0048"},
-          {"name": "PLATFORM_SF2_SIZE", "addressOffset": "0x0050"},
-          {"name": "PLATFORM_CURRENT_LBA", "addressOffset": "0x0058"},
-          {"name": "PLATFORM_DDR_STATUS", "addressOffset": "0x005c"},
+          {
+            "name": "PLATFORM_BYTES_LOADED",
+            "addressOffset": "0x0048",
+            "description": "Read-only number of SF2 payload bytes written to DDR by the current asset-load session."
+          },
+          {
+            "name": "PLATFORM_SF2_SIZE",
+            "addressOffset": "0x0050",
+            "description": "Read-only SF2 payload size in bytes decoded from the validated WTSF image header."
+          },
+          {
+            "name": "PLATFORM_CURRENT_LBA",
+            "addressOffset": "0x0058",
+            "description": "Read-only SD logical block address currently selected by the asset loader."
+          },
+          {
+            "name": "PLATFORM_DDR_STATUS",
+            "addressOffset": "0x005c",
+            "description": "Read-only DDR calibration/reset, live MIG application-interface handshake, and raw 12-bit MIG device-temperature status.",
+            "fields": [
+              {"name": "DDR_CALIBRATED", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
+              {"name": "DDR_UI_RESET", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
+              {"name": "MIG_APP_READY", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
+              {"name": "MIG_WRITE_DATA_READY", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
+              {"name": "MIG_READ_DATA_VALID", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
+              {"name": "MIG_READ_DATA_END", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"},
+              {"name": "DEVICE_TEMP_RAW", "bitOffset": 16, "bitWidth": 12}
+            ]
+          },
           {
             "name": "DDR_ACCESS_CONTROL",
             "addressOffset": "0x0060",
+            "description": "DDR debug command control: START launches one operation when ready, WRITE selects direction, and CLEAR clears sticky DONE/ERROR; reads return the last accepted WRITE direction in bit 1.",
             "fields": [
               {"name": "START", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "WRITE", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
@@ -152,19 +326,46 @@
           {
             "name": "DDR_ACCESS_STATUS",
             "addressOffset": "0x0064",
+            "description": "Read-only DDR debug aperture presence, live ready/busy, sticky completion/error, and last accepted operation direction.",
             "fields": [
               {"name": "PRESENT", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"},
               {"name": "READY", "bitOffset": 1, "bitWidth": 1, "mask": "0x00000002"},
+              {"name": "BUSY", "bitOffset": 2, "bitWidth": 1, "mask": "0x00000004"},
               {"name": "DONE", "bitOffset": 3, "bitWidth": 1, "mask": "0x00000008"},
-              {"name": "ERROR", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"}
+              {"name": "ERROR", "bitOffset": 4, "bitWidth": 1, "mask": "0x00000010"},
+              {"name": "WRITE", "bitOffset": 5, "bitWidth": 1, "mask": "0x00000020"}
             ]
           },
-          {"name": "DDR_ACCESS_ADDR", "addressOffset": "0x0068"},
-          {"name": "DDR_ACCESS_BYTE_ENABLE", "addressOffset": "0x006c"},
-          {"name": "DDR_ACCESS_DATA0", "addressOffset": "0x0070"},
-          {"name": "DDR_ACCESS_DATA1", "addressOffset": "0x0074"},
-          {"name": "DDR_ACCESS_DATA2", "addressOffset": "0x0078"},
-          {"name": "DDR_ACCESS_DATA3", "addressOffset": "0x007c"}
+          {
+            "name": "DDR_ACCESS_ADDR",
+            "addressOffset": "0x0068",
+            "description": "Read/write byte address for the next one-beat DDR debug operation; START rejects addresses that are not 16-byte aligned or outside the MIG address range."
+          },
+          {
+            "name": "DDR_ACCESS_BYTE_ENABLE",
+            "addressOffset": "0x006c",
+            "description": "Read/write 16-bit byte-enable mask for the next DDR debug write; reset value enables all bytes and an all-zero write mask is rejected at START."
+          },
+          {
+            "name": "DDR_ACCESS_DATA0",
+            "addressOffset": "0x0070",
+            "description": "DDR debug data bits 31:0: writes stage the next write beat, while reads return the corresponding lane of the last captured DDR read beat."
+          },
+          {
+            "name": "DDR_ACCESS_DATA1",
+            "addressOffset": "0x0074",
+            "description": "DDR debug data bits 63:32: writes stage the next write beat, while reads return the corresponding lane of the last captured DDR read beat."
+          },
+          {
+            "name": "DDR_ACCESS_DATA2",
+            "addressOffset": "0x0078",
+            "description": "DDR debug data bits 95:64: writes stage the next write beat, while reads return the corresponding lane of the last captured DDR read beat."
+          },
+          {
+            "name": "DDR_ACCESS_DATA3",
+            "addressOffset": "0x007c",
+            "description": "DDR debug data bits 127:96: writes stage the next write beat, while reads return the corresponding lane of the last captured DDR read beat."
+          }
         ]
       }
     ]

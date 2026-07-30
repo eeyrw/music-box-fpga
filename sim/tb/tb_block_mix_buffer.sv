@@ -8,7 +8,9 @@ module tb_block_mix_buffer;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
+/* verilator lint_off UNUSEDSIGNAL */
   logic block_fill_ready;
+/* verilator lint_on UNUSEDSIGNAL */
   logic contribution_valid;
   logic contribution_ready;
   logic [BLOCK_FRAME_INDEX_WIDTH-1:0] contribution_frame_index;
@@ -28,7 +30,7 @@ module tb_block_mix_buffer;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_mix_buffer dut (.*);
 
@@ -45,7 +47,10 @@ module tb_block_mix_buffer;
     end
   endtask
 
-  task automatic add_contribution(input int index, input int left, input int right);
+  task automatic add_contribution(
+      input logic [BLOCK_FRAME_INDEX_WIDTH-1:0] index,
+      input logic signed [PCM_WIDTH-1:0] left,
+      input logic signed [PCM_WIDTH-1:0] right);
     begin
       @(negedge clk);
       contribution_frame_index = BLOCK_FRAME_INDEX_WIDTH'(index);

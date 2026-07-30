@@ -75,10 +75,10 @@ module tb_effect_return_mixer;
   initial begin
     reset_dut();
 
-    dry_l_i = 24'sd100;
-    dry_r_i = -24'sd100;
-    chorus_wet_l_i = -24'sd40;
-    chorus_wet_r_i = 24'sd40;
+    dry_l_i = 25'sd100;
+    dry_r_i = -25'sd100;
+    chorus_wet_l_i = -25'sd40;
+    chorus_wet_r_i = 25'sd40;
     reverb_config_i.input_send_q1_15 = 16'h7fff;
     reverb_config_i.chorus_to_reverb_q1_15 = 16'h4000;
     reverb_input_commit_i = 1'b1;
@@ -94,8 +94,8 @@ module tb_effect_return_mixer;
 
     chorus_config_i.return_gain_q1_15 = 16'h4000;
     reverb_config_i.return_gain_q1_15 = 16'h4000;
-    reverb_wet_l_i = 24'sd10;
-    reverb_wet_r_i = -24'sd10;
+    reverb_wet_l_i = 25'sd10;
+    reverb_wet_r_i = -25'sd10;
     accept_mix(85, -85);
 
     dry_l_i = 25'sh0ffffff;
@@ -130,8 +130,8 @@ module tb_effect_return_mixer;
       errors++;
     end
     reverb_config_i.input_send_q1_15 = 16'hffff;
-    dry_l_i = 24'sd111;
-    dry_r_i = -24'sd222;
+    dry_l_i = 25'sd111;
+    dry_r_i = -25'sd222;
     reverb_input_commit_i = 1'b1;
     @(negedge clk);
     reverb_input_commit_i = 1'b0;
@@ -146,8 +146,8 @@ module tb_effect_return_mixer;
       errors++;
     end
 
-    dry_l_i = 24'sd1234;
-    dry_r_i = -24'sd2345;
+    dry_l_i = 25'sd1234;
+    dry_r_i = -25'sd2345;
     chorus_config_i.return_gain_q1_15 = '0;
     reverb_config_i.return_gain_q1_15 = '0;
     out_ready = 1'b0;

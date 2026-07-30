@@ -1,6 +1,6 @@
 module voice_sample_window #(
   parameter int WINDOW_WORDS = 32,
-  parameter int TAG_COUNT = synth_pkg::BLOCK_WORK_ENTRY_COUNT,
+  parameter int TAG_COUNT = 8,
   parameter int TAG_WIDTH = $clog2(TAG_COUNT)
 ) (
   input  logic                                     clk,
@@ -25,13 +25,13 @@ module voice_sample_window #(
   output logic                                     memory_rsp_ready,
   input  synth_pkg::ordered_line_rsp_t             memory_rsp,
 
-  output logic [63:0]                              stat_client_requests,
-  output logic [63:0]                              stat_window_hits,
-  output logic [63:0]                              stat_window_refills,
-  output logic [63:0]                              stat_fallback_reads,
-  output logic [63:0]                              stat_memory_reads,
-  output logic [63:0]                              stat_evictions,
-  output logic [63:0]                              stat_stall_cycles
+  output logic [31:0]                              stat_client_requests,
+  output logic [31:0]                              stat_window_hits,
+  output logic [31:0]                              stat_window_refills,
+  output logic [31:0]                              stat_fallback_reads,
+  output logic [31:0]                              stat_memory_reads,
+  output logic [31:0]                              stat_evictions,
+  output logic [31:0]                              stat_stall_cycles
 );
   import synth_pkg::*;
 
@@ -89,6 +89,10 @@ module voice_sample_window #(
   logic memory_req_fire;
   logic memory_rsp_fire;
   logic rsp_slot_available;
+
+  function automatic logic [31:0] sat_inc(input logic [31:0] value);
+    sat_inc = (value == 32'hffff_ffff) ? value : value + 1'b1;
+  endfunction
 
   always_comb begin
     request_window_offset = request_line_q -
@@ -189,10 +193,10 @@ module voice_sample_window #(
         rsp_valid_q <= 1'b0;
 
       if (client_req_valid && !client_req_ready && !metadata_init_active_q)
-        stat_stall_cycles <= stat_stall_cycles + 1'b1;
+        stat_stall_cycles <= sat_inc(stat_stall_cycles);
 
       if (client_req_fire) begin
-        stat_client_requests <= stat_client_requests + 1'b1;
+        stat_client_requests <= sat_inc(stat_client_requests);
         request_addr_q <= client_req_addr;
         request_line_q <= client_req_addr[ADDR_WIDTH-1:LINE_SHIFT];
         request_tag_q <= client_req_tag;
@@ -206,7 +210,7 @@ module voice_sample_window #(
         rsp_tag_q <= request_tag_q;
         if (request_window_hit) begin
           state_q <= STATE_HIT_WAIT;
-          stat_window_hits <= stat_window_hits + 1'b1;
+          stat_window_hits <= sat_inc(stat_window_hits);
         end else begin
           state_q <= STATE_MISS;
           refill_q <= request_refill_q;
@@ -216,11 +220,11 @@ module voice_sample_window #(
           request_count_q <= '0;
           response_count_q <= '0;
           if (request_refill_q) begin
-            stat_window_refills <= stat_window_refills + 1'b1;
+            stat_window_refills <= sat_inc(stat_window_refills);
             if (window_meta_read_q[META_WIDTH-1])
-              stat_evictions <= stat_evictions + 1'b1;
+              stat_evictions <= sat_inc(stat_evictions);
           end else begin
-            stat_fallback_reads <= stat_fallback_reads + 1'b1;
+            stat_fallback_reads <= sat_inc(stat_fallback_reads);
           end
         end
       end
@@ -233,7 +237,7 @@ module voice_sample_window #(
 
       if (memory_req_fire) begin
         request_count_q <= request_count_q + 1'b1;
-        stat_memory_reads <= stat_memory_reads + 1'b1;
+        stat_memory_reads <= sat_inc(stat_memory_reads);
       end
 
       if (memory_rsp_fire) begin

@@ -14,7 +14,7 @@ measured simulation and Vivado results on 2026-07-30.
 The production path is:
 
 ```text
-SPI direct command stream or CMD_FIFO_DATA
+SPI opcode-0xa5 production command stream
   -> 1024-word command FIFO, parser, and generation validation
   -> banked mono voice state
   -> ascending scan of all configured voice IDs
@@ -29,6 +29,9 @@ SPI direct command stream or CMD_FIFO_DATA
   -> PCM output FIFO
   -> I2S
 ```
+
+`CMD_FIFO_DATA` reaches the same parser but is a debug-only injection register,
+not an alternate production command-submit path.
 
 One hardware voice renders one mono sample stream. Linked SoundFont stereo
 material is allocated as two mono voices by C++. A mono sample is interpolated
@@ -220,7 +223,40 @@ reordering, or early release. Acceptance requires the same 512-voice timed-DDR3
 plus RTL-effects workload and a meaningful margin below the 33,333-clock full
 block deadline.
 
-### A6: Effect Sends Are Global
+### A6: Render Hierarchy Hides Ownership And Resource Hotspots
+
+The routed hierarchy is reasonable at the board boundary: MIG, DDR/SD service,
+platform registers, and the common synth system are separate top-level blocks.
+The problematic branch is inside `voice_major_render_core`. The nominal
+controller owns 10,505 LUTs only because it instantiates both the 9,375-LUT
+voice engine and the 1,101-LUT mix buffer; the controller's own logic is only
+35 LUTs. The engine then nests envelope, sample-window, and DSP work under one
+more wrapper. This makes scheduler ownership and synthesis attribution harder
+to read without providing an architectural boundary.
+
+Refactor behavior-preservingly toward sibling ownership:
+
+```text
+voice_major_render_core
++- command_plane
++- voice_state_store
++- block_scheduler          # traversal and outstanding-work policy only
++- envelope_frontend
++- sample_fetch_pipeline
+|  +- voice_sample_window
++- voice_dsp_pipeline
++- block_mix_buffer
+```
+
+Do not add cosmetic wrappers. First extract the scheduling FSM from
+`voice_major_block_controller`, then remove `block_mono_voice_engine` only when
+the explicit ready/valid connections can be owned by the core or a genuine
+pipeline boundary. Preserve exact backpressure and block-publication behavior
+with the existing focused tests. Compare post-route hierarchy, timing, and LUT
+combining before claiming a resource improvement; the primary goal is ownership
+clarity, not an assumed area reduction.
+
+### A7: Effect Sends Are Global
 
 The renderer produces one dry stereo mix. Global chorus and reverb sends apply
 to that complete mix, so MIDI and SoundFont per-voice send semantics cannot be
@@ -229,7 +265,7 @@ chorus-send, and reverb-send stereo accumulators. Accumulator RAM, multiplier
 scheduling, return routing, and the C++ reference contract must be designed
 together.
 
-### A7: DDR Transactions Have No Bounded Failure Recovery
+### A8: DDR Transactions Have No Bounded Failure Recovery
 
 The line reader and register access master can wait indefinitely for MIG command
 acceptance or read completion. Queue depth bounds occupancy, not latency. This
@@ -244,7 +280,7 @@ is required, define command/response timeouts, cancellation or local reset, and
 mute/reprime/restart behavior. Tests must then inject missing responses, stuck
 ready, calibration loss, and local resets.
 
-### A8: Asset Readiness Does Not Establish Address Ownership
+### A9: Asset Readiness Does Not Establish Address Ownership
 
 The native-SD loader now has substantial protocol and retry coverage and
 publishes `asset_loaded` only after its raw-image load completes. That still
@@ -258,7 +294,7 @@ validation against that manifest, and coherency rules for diagnostic DDR
 writes. Full-SF2 loading should also be compared with a compact wave-bank
 format.
 
-### A9: START Repeats Sample Metadata
+### A10: START Repeats Sample Metadata
 
 Compact START still sends base address, length, loop points, envelope, and
 filter parameters for each note. Layered presets and repeated notes consume
@@ -269,7 +305,7 @@ START could carry generation, descriptor ID, gains/pitch overrides, and runtime
 policy. Descriptor loading, manifest validation, command-transaction atomicity,
 generations, and host cache ownership form one contract.
 
-### A10: Point Updates Are Expensive For Modulation
+### A11: Point Updates Are Expensive For Modulation
 
 Periodic GAIN, PITCH, and FILTER commands consume transport bandwidth and
 produce parameter steps. Compact ramp events should define target, start frame,
@@ -277,7 +313,7 @@ duration, exact rounding, replacement rules, and interaction with STOP,
 RELEASE, and generation reuse. Gain and phase-increment ramps are the first
 candidates; filter ramps need a stability-preserving coefficient policy.
 
-### A11: PCM16 Voice Contributions May Lose Headroom
+### A12: PCM16 Voice Contributions May Lose Headroom
 
 Each voice is saturated to PCM16 after filter, channel gain, and envelope gain,
 then accumulated exactly into the signed 25-bit block mix. A filter-amplified
@@ -288,7 +324,7 @@ benefit. Any change requires an exact accumulator-width derivation, clip/peak
 statistics, bit-exact C++/RTL tests, listening comparisons, and post-route
 resource/timing results.
 
-### A12: Audio Timeline, Clocking, And Recovery Are Incomplete
+### A13: Audio Timeline, Clocking, And Recovery Are Incomplete
 
 The compressor contributes 48 frames of algorithmic look-ahead and the output
 FIFO normally contributes another 48 frames of scheduling lead. Rendered,
@@ -299,7 +335,7 @@ Define algorithmic delay versus safety reservoir, coherent frame counters,
 sample-rate policy, codec clock/slot/reset/mute requirements, pop-free underrun,
 FIFO reprime, and played-frame resynchronization.
 
-### A13: Diagnostics Need Profiles And Coherent Capture
+### A14: Diagnostics Need Profiles And Coherent Capture
 
 Fresh hierarchical utilization and post-route timing reports now exist, so the
 old request for an integrated report is closed. The remaining diagnostic issue

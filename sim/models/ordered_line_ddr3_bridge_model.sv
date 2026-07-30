@@ -49,9 +49,13 @@ module ordered_line_ddr3_bridge_model #(
   mailbox #(address_t) request_cdc;
   mailbox #(line_t) response_cdc;
   address_t next_request_addr;
+  /* verilator lint_off UNUSEDSIGNAL */
   address_t discarded_request_addr;
+  /* verilator lint_on UNUSEDSIGNAL */
   line_t next_response_data;
+  /* verilator lint_off UNUSEDSIGNAL */
   line_t discarded_response_data;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic ddr_req_valid;
   logic ddr_req_ready;
   address_t ddr_req_addr;

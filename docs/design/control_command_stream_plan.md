@@ -1,6 +1,7 @@
 # Mono Voice-Major Control And Render Contract
 
-This document defines interface version 10 (`0x000a0000`). The old
+This document defines the version-10 command encoding retained by interface
+version 11 (`0x000b0000`). The old
 DEFINE_MONO/DEFINE_STEREO plus prepared/active START protocol is not part of
 this interface.
 
@@ -25,9 +26,11 @@ host MIDI/SF2 policy
   -> I2S FIFO
 ```
 
-There is one control plane in simulation and hardware. Test harnesses send the
-same command words as SPI opcode `0xa5` or register `CMD_FIFO_DATA`; they do not
-install typed voice records through private simulation ports.
+There is one control plane in simulation and hardware. Test harnesses and the
+production host send the same command words through the dedicated command
+stream; hardware maps that stream to SPI opcode `0xa5`. They do not install
+typed voice records through private simulation ports. `CMD_FIFO_DATA` remains a
+debug-only word injection register and is not used by the production host.
 
 ## Framing
 
@@ -50,12 +53,15 @@ payload0[31:16] reserved, zero
 
 The 10-bit ID supports builds through 512 voices. The 16-bit generation rejects
 late runtime commands after a slot has been reused. Invalid commands are fully
-consumed, make no state change, and set `CMD_ERROR_STATUS[0]`; stale generations
-set bit 1.
+consumed, make no state change, and set `CMD_FIFO_STATUS[30]`; stale generations
+set bit 31.
 
-The parser waits for a complete command before executing it. `STREAM_FLUSH`
-discards a partial command and all buffered command words without changing
-voice or effect state.
+The parser waits for a complete command before executing it. An aligned
+`STREAM_FLUSH` command discards later buffered FIFO words without changing voice
+or effect state. It cannot recover a parser already waiting for missing payload,
+because its header would be consumed as that payload; transport recovery must
+clear both the FIFO and parser state through reset or a future out-of-band
+control.
 
 ## Voice Commands
 
@@ -173,9 +179,9 @@ drained. Consequently every voice in a rendered block observes one coherent
 control boundary. Commands arriving after rendering starts apply to a later
 block.
 
-The control plane exposes ready/valid backpressure. A direct command stream has
-priority over a simultaneous `CMD_FIFO_DATA` write; the register write returns
-an error rather than silently dropping a word.
+The production command stream exposes ready/valid backpressure. The debug-only
+`CMD_FIFO_DATA` ingress shares the FIFO; a simultaneous direct-stream word has
+priority and the register write returns an error.
 
 ## SPI Transport
 

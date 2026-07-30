@@ -78,7 +78,11 @@ module voice_major_system #(
   logic renderer_busy;
   logic block_complete_valid;
   logic block_complete_ready;
+/* verilator lint_off UNUSEDSIGNAL */
+  // The output scheduler advances its own timeline and consumes only buffer ID
+  // and frame count from the completion payload.
   render_block_complete_t block_complete;
+/* verilator lint_on UNUSEDSIGNAL */
   logic block_read_req_valid;
   logic block_read_req_ready;
   render_block_read_req_t block_read_req;
@@ -96,6 +100,7 @@ module voice_major_system #(
   ordered_line_rsp_t line_rsp;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+  sample_window_diagnostics_t sample_window_diagnostics;
   global_audio_config_t audio_config;
   logic [1:0] effect_clear;
 
@@ -219,7 +224,8 @@ module voice_major_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
-    .audio_diagnostics
+    .audio_diagnostics,
+    .sample_window_diagnostics
   );
 
   voice_major_render_core core (
@@ -255,7 +261,8 @@ module voice_major_system #(
     .block_read_rsp,
     .block_release_valid,
     .block_release_ready,
-    .block_release_buffer_id
+    .block_release_buffer_id,
+    .sample_window_diagnostics
   );
 
   global_audio_effects_chain effects (

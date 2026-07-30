@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 package synth_pkg;
   // Shared widths keep the audio, phase, and memory-address contracts in one
   // place. Modules import this package instead of repeating magic numbers.
@@ -24,12 +26,13 @@ package synth_pkg;
       MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
   // Eight independent block contexts cover the five-cycle recursive-filter
   // feedback distance while keeping the slot ID and round-robin wrap binary.
+/* verilator lint_off UNUSEDPARAM */
 `ifdef SYNTH_BLOCK_WORK_ENTRY_COUNT
   localparam int BLOCK_WORK_ENTRY_COUNT = `SYNTH_BLOCK_WORK_ENTRY_COUNT;
 `else
   localparam int BLOCK_WORK_ENTRY_COUNT = 8;
 `endif
-  localparam int BLOCK_WORK_ID_WIDTH = $clog2(BLOCK_WORK_ENTRY_COUNT);
+/* verilator lint_on UNUSEDPARAM */
 `ifdef SYNTH_BLOCK_JOB_ENTRY_COUNT
   localparam int BLOCK_JOB_ENTRY_COUNT = `SYNTH_BLOCK_JOB_ENTRY_COUNT;
 `else
@@ -90,6 +93,16 @@ package synth_pkg;
     logic [TIMELINE_FRAME_WIDTH-1:0] start_frame;
     logic [BLOCK_FRAME_COUNT_WIDTH-1:0] frame_count;
   } render_block_complete_t;
+
+  typedef struct packed {
+    logic [31:0] client_request_count;
+    logic [31:0] window_hit_count;
+    logic [31:0] window_refill_count;
+    logic [31:0] fallback_read_count;
+    logic [31:0] memory_read_count;
+    logic [31:0] eviction_count;
+    logic [31:0] stall_cycle_count;
+  } sample_window_diagnostics_t;
 
   typedef struct packed {
     logic [BLOCK_BUFFER_ID_WIDTH-1:0] buffer_id;

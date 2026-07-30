@@ -1,7 +1,8 @@
 # SPI Command-Stream Throughput
 
 This document sizes Smart Artix SPI opcode `0xa5` traffic for interface version
-10. Register timing and transport correctness are documented separately in
+11, which retains the version-10 command encoding. Register timing and
+transport correctness are documented separately in
 [`spi_register_timing.md`](spi_register_timing.md) and
 [`spi_transport_backlog.md`](spi_transport_backlog.md).
 
@@ -37,9 +38,9 @@ SPI mode 0, CS low, opcode 0xa5
   -> next admitted render block
 ```
 
-`CMD_FIFO_DATA` writes enter the same FIFO. A simultaneous direct SPI word has
-priority and the register write is rejected. Simulation and hardware use the
-same command parser; there is no typed state-install bypass.
+`CMD_FIFO_DATA` is a debug-only word injection register into the same FIFO. It
+is not used to submit production commands. Simulation and hardware use the same
+command parser; there is no typed state-install bypass.
 
 The bridge cannot backpressure SPI after CS is asserted. It tests `cmd_ready`
 only when a complete word arrives. If the FIFO becomes unavailable, it drops
@@ -53,11 +54,15 @@ earlier words committed. This is not packet atomic and is tracked as SPI-001 in
 free_words = 1024 - CMD_FIFO_STATUS[15:2]
 ```
 
-That is a useful diagnostic and a possible future preflight rule, but the
-current `Ch347RegisterTransport::write_command_words` does not perform this
+The current `Ch347RegisterTransport::write_command_words` does not perform this
 read. It sends the supplied command immediately and relies on the normal sparse
-workload and FIFO capacity. Capacity preflight alone would not make the
-transaction atomic because occupancy may change before or during the transfer.
+workload and FIFO capacity. In the current board topology, production traffic
+has one SPI producer and does not use `CMD_FIFO_DATA`; after a level read, only
+the parser can change occupancy before the next command transaction, and it can
+only free space. Reserving the complete transaction size in host software can
+therefore prevent FIFO-capacity loss under that single-producer contract. It
+still cannot make a transaction atomic against partial CS termination, sampled
+bit/edge errors, reset, or a host that violates the producer contract.
 
 ## Current Host Framing
 

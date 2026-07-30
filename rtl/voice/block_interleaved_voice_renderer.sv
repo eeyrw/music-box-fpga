@@ -40,14 +40,15 @@ module block_interleaved_voice_renderer (
   output synth_pkg::block_voice_dsp_result_t        result,
   output logic [synth_pkg::VOICE_ID_WIDTH-1:0]      result_voice_index,
   output logic                                      result_env_active,
-  output synth_pkg::volume_env_state_t              result_env_state
+  output synth_pkg::volume_env_state_t              result_env_state,
+  output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
 
   localparam int JOB_RING_ENTRY_COUNT = BLOCK_JOB_ENTRY_COUNT;
   localparam int JOB_RING_ID_WIDTH = BLOCK_JOB_ID_WIDTH;
   localparam int DSP_LANE_COUNT = BLOCK_WORK_ENTRY_COUNT;
-  localparam int DSP_LANE_ID_WIDTH = BLOCK_WORK_ID_WIDTH;
+  localparam int DSP_LANE_ID_WIDTH = $clog2(DSP_LANE_COUNT);
   localparam int ENDPOINT_COUNT = MAX_BLOCK_FRAMES * BLOCK_ENDPOINT_COUNT;
   localparam int LINE_SHIFT = $clog2(BLOCK_LINE_WORDS);
   localparam int LINE_ADDR_WIDTH = ADDR_WIDTH - LINE_SHIFT;
@@ -233,17 +234,20 @@ module block_interleaved_voice_renderer (
   logic [VOICE_ID_WIDTH-1:0] cache_req_voice;
   logic cache_req_refill;
   logic cache_rsp_valid;
+/* verilator lint_off UNUSEDSIGNAL */
+  // The generic window returns the address for standalone clients; this
+  // ordered renderer associates responses by tag and does not need it.
   logic [ADDR_WIDTH-1:0] cache_rsp_addr;
+/* verilator lint_on UNUSEDSIGNAL */
   logic [JOB_RING_ID_WIDTH-1:0] cache_rsp_tag;
   ordered_line_rsp_t cache_rsp;
-  logic [63:0] cache_stat_client_requests;
-  logic [63:0] cache_stat_cache_hits;
-  logic [63:0] cache_stat_mshr_merges;
-  logic [63:0] cache_stat_memory_misses;
-  logic [63:0] cache_stat_evictions;
-  logic [63:0] cache_stat_miss_stall_cycles;
-  logic [63:0] cache_stat_window_refills;
-  logic [63:0] cache_stat_fallback_reads;
+  logic [31:0] cache_stat_client_requests;
+  logic [31:0] cache_stat_cache_hits;
+  logic [31:0] cache_stat_memory_misses;
+  logic [31:0] cache_stat_evictions;
+  logic [31:0] cache_stat_miss_stall_cycles;
+  logic [31:0] cache_stat_window_refills;
+  logic [31:0] cache_stat_fallback_reads;
 
   logic free_found;
   logic [JOB_RING_ID_WIDTH-1:0] free_work_id;
@@ -368,7 +372,17 @@ module block_interleaved_voice_renderer (
     .stat_stall_cycles(cache_stat_miss_stall_cycles)
   );
 
-  assign cache_stat_mshr_merges = '0;
+  always_comb begin
+    sample_window_diagnostics.client_request_count =
+        cache_stat_client_requests;
+    sample_window_diagnostics.window_hit_count = cache_stat_cache_hits;
+    sample_window_diagnostics.window_refill_count = cache_stat_window_refills;
+    sample_window_diagnostics.fallback_read_count =
+        cache_stat_fallback_reads;
+    sample_window_diagnostics.memory_read_count = cache_stat_memory_misses;
+    sample_window_diagnostics.eviction_count = cache_stat_evictions;
+    sample_window_diagnostics.stall_cycle_count = cache_stat_miss_stall_cycles;
+  end
 
   assign start_fire = start_valid && start_ready;
   assign memory_action = cache_req_valid && cache_req_ready;

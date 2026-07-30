@@ -89,7 +89,7 @@ module voice_major_command_plane #(
   block_voice_state_snapshot_t install_state_q;
 
   function automatic logic [7:0] start_payload_words(
-    input logic [5:0] flags
+    input logic [3:0] flags
   );
     start_payload_words = 8'd5 +
         ((flags[1:0] != 2'b00) ? 8'd2 : 8'd0) +
@@ -105,7 +105,7 @@ module voice_major_command_plane #(
     unique case (opcode)
       CMD_VOICE_START_MONO: payload_length_valid =
           (flags[5:4] == 2'b00) && (flags[1:0] != 2'b11) &&
-          (count == start_payload_words(flags));
+        (count == start_payload_words(flags[3:0]));
       CMD_VOICE_ENV:        payload_length_valid = count == 8'd7;
       CMD_VOICE_RELEASE:    payload_length_valid = count == 8'd2;
       CMD_VOICE_STOP:       payload_length_valid = count == 8'd1;
@@ -122,6 +122,8 @@ module voice_major_command_plane #(
     endcase
   endfunction
 
+  // Retain register writes for controlled debug injection. Production command
+  // traffic uses cmd_stream_valid and must not be serialized through this port.
   assign bus_cmd_write = bus_req.valid && bus_req.write &&
                          (bus_req.address == REG_CMD_FIFO_DATA);
   assign fifo_push = cmd_stream_valid || bus_cmd_write;
@@ -271,15 +273,6 @@ module voice_major_command_plane #(
           bus_rsp.rdata[17] = action_pending;
           bus_rsp.rdata[30] = command_error_count != '0;
           bus_rsp.rdata[31] = stale_generation_count != '0;
-          bus_rsp.error = bus_req.write;
-        end
-        REG_CMD_ERROR_STATUS: begin
-          bus_rsp.rdata = {30'd0, stale_generation_count != '0,
-                           command_error_count != '0};
-          bus_rsp.error = bus_req.write;
-        end
-        REG_CMD_ACTION_STATUS: begin
-          bus_rsp.rdata = {30'd0, action_pending, !action_pending};
           bus_rsp.error = bus_req.write;
         end
         REG_CMD_FIFO_DATA: begin

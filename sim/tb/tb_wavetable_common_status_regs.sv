@@ -25,6 +25,7 @@ module tb_wavetable_common_status_regs;
   logic [15:0] mem_response_trace_latency;
   logic [3:0] output_fifo_level;
   audio_diagnostics_t audio_diagnostics;
+  sample_window_diagnostics_t sample_window_diagnostics;
 
   always #5 clk <= ~clk;
 
@@ -51,7 +52,8 @@ module tb_wavetable_common_status_regs;
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
-    .audio_diagnostics
+    .audio_diagnostics,
+    .sample_window_diagnostics
   );
 
   task automatic expect_read(input logic [15:0] address,
@@ -95,6 +97,7 @@ module tb_wavetable_common_status_regs;
     mem_response_trace_latency = '0;
     output_fifo_level = '0;
     audio_diagnostics = '0;
+    sample_window_diagnostics = '0;
 
     repeat (3) @(posedge clk);
     @(negedge clk);
@@ -102,7 +105,10 @@ module tb_wavetable_common_status_regs;
 
     render_inflight = 1'b1;
     render_latency_cycles = 16'h1234;
-    expect_read(REG_RENDER_STATUS, 32'h0001_1234);
+    mem_response_trace_latency = 16'h5678;
+    output_fifo_level = 4'd5;
+    expect_read(REG_SYSTEM_STATUS, 32'h0000_0502);
+    expect_read(REG_PIPELINE_LATENCY_STATUS, 32'h5678_1234);
 
     @(negedge clk);
     render_deadline_miss_pulse = 1'b1;
@@ -112,7 +118,6 @@ module tb_wavetable_common_status_regs;
     expect_read(REG_COMMON_EVENT_FLAGS,
                 REG_COMMON_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK);
     expect_read(REG_RENDER_DEADLINE_MISS_COUNT, 32'd1);
-    expect_read(REG_RENDER_STATUS, 32'h0003_1234);
 
     write_flags(REG_COMMON_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK);
     expect_read(REG_COMMON_EVENT_FLAGS, 32'd0);
@@ -136,6 +141,23 @@ module tb_wavetable_common_status_regs;
     #1;
     core_reset = 1'b0;
     expect_read(REG_COMMON_EVENT_FLAGS, 32'd0);
+
+    sample_window_diagnostics = '{
+      client_request_count: 32'd11,
+      window_hit_count: 32'd7,
+      window_refill_count: 32'd2,
+      fallback_read_count: 32'd2,
+      memory_read_count: 32'd66,
+      eviction_count: 32'd1,
+      stall_cycle_count: 32'd9
+    };
+    expect_read(REG_SAMPLE_WINDOW_REQUEST_COUNT, 32'd11);
+    expect_read(REG_SAMPLE_WINDOW_HIT_COUNT, 32'd7);
+    expect_read(REG_SAMPLE_WINDOW_REFILL_COUNT, 32'd2);
+    expect_read(REG_SAMPLE_WINDOW_FALLBACK_READ_COUNT, 32'd2);
+    expect_read(REG_SAMPLE_WINDOW_MEMORY_READ_COUNT, 32'd66);
+    expect_read(REG_SAMPLE_WINDOW_EVICTION_COUNT, 32'd1);
+    expect_read(REG_SAMPLE_WINDOW_STALL_CYCLE_COUNT, 32'd9);
 
     $display("PASS: wavetable_common_status_regs");
     $finish;

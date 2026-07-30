@@ -14,7 +14,9 @@ module tb_global_effects_chain;
   logic out_ready;
   mix_t out_l;
   mix_t out_r;
+/* verilator lint_off UNUSEDSIGNAL */
   spatial_effect_diagnostics_t diagnostics_o;
+/* verilator lint_on UNUSEDSIGNAL */
   int errors = 0;
 
   always #5 clk <= ~clk;
@@ -103,8 +105,8 @@ module tb_global_effects_chain;
     chorus_config_i.return_gain_q1_15 = 16'h7fff;
     push_and_expect(3000, -3000, 3000, -3000);
     while (!in_ready) @(negedge clk);
-    in_l = 24'sd100;
-    in_r = -24'sd100;
+    in_l = 25'sd100;
+    in_r = -25'sd100;
     in_valid = 1'b1;
     @(negedge clk);
     in_valid = 1'b0;

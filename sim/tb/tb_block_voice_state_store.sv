@@ -17,10 +17,13 @@ module tb_block_voice_state_store;
   voice_event_params_t params_write_event;
   volume_env_params_t params_write_env;
   logic control_event_valid;
+/* verilator lint_off UNUSEDSIGNAL */
+  // Runtime control-event signaling is connected but outside this bank test.
   logic control_event_ready;
   block_voice_event_t control_event;
   logic control_event_done_pulse;
   logic stale_control_event_pulse;
+/* verilator lint_on UNUSEDSIGNAL */
   logic state_read_req_valid;
   logic state_read_req_ready;
   logic [VOICE_ID_WIDTH-1:0] state_read_req_voice;
@@ -34,7 +37,7 @@ module tb_block_voice_state_store;
   logic stale_params_write_pulse;
   logic stale_dynamic_write_pulse;
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   block_voice_state_store dut (.*);
 

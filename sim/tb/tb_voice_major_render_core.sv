@@ -6,6 +6,9 @@ module tb_voice_major_render_core;
   logic clk = 1'b0;
   logic rst = 1'b1;
   reg_bus_req_t bus_req;
+/* verilator lint_off UNUSEDSIGNAL */
+  // This focused render test drives no register reads and observes only the
+  // audio-control/completion fields relevant to its scenario.
   reg_bus_rsp_t bus_rsp;
   logic cmd_stream_valid;
   logic [31:0] cmd_stream_data;
@@ -36,8 +39,10 @@ module tb_voice_major_render_core;
   logic block_release_valid;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
+  sample_window_diagnostics_t sample_window_diagnostics;
+/* verilator lint_on UNUSEDSIGNAL */
 
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 
   voice_major_render_core dut (.*);
 

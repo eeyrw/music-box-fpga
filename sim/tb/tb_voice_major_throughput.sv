@@ -61,6 +61,7 @@ module tb_voice_major_throughput;
   logic block_release_valid;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
+  sample_window_diagnostics_t sample_window_diagnostics;
 `ifdef SYNTH_DDR3_MODEL
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr3_rsp_data;
   logic [63:0] ddr3_stat_accepted;
@@ -89,7 +90,7 @@ module tb_voice_major_throughput;
   integer last_engine_start_cycle;
 
 /* verilator lint_off BLKSEQ */
-  always #5 clk = ~clk;
+  always #5 clk <= ~clk;
 `ifdef SYNTH_DDR3_MODEL
   always #1.25 ddr3_clk = ~ddr3_clk;
 `endif

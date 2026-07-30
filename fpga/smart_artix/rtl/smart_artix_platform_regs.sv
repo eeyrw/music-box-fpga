@@ -62,15 +62,9 @@ module smart_artix_platform_regs (
         bus_rdata[1] = (platform_status.sd_error_code != 8'd0) ||
                          (platform_status.loader_error_code != 8'd0);
         bus_rdata[2] = platform_status.ddr_init_calib_complete;
-        bus_rdata[3] = platform_status.ddr_ui_rst;
         bus_rdata[4] = platform_status.sd_initialized;
         bus_rdata[5] = platform_status.asset_loaded;
         bus_rdata[6] = platform_status.asset_loader_busy;
-        bus_rdata[7] = platform_status.mig_app_rdy;
-        bus_rdata[8] = platform_status.mig_app_wdf_rdy;
-        bus_rdata[9] = platform_status.mig_app_rd_data_valid;
-        bus_rdata[10] = platform_status.mig_app_rd_data_end;
-        bus_rdata[14:11] = platform_status.asset_loader_state;
         bus_rdata[15] = platform_status.sd_card_present;
         bus_rdata[16] = platform_status.sd_high_speed_active;
       end
