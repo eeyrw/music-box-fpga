@@ -256,6 +256,24 @@ with the existing focused tests. Compare post-route hierarchy, timing, and LUT
 combining before claiming a resource improvement; the primary goal is ownership
 clarity, not an assumed area reduction.
 
+The 2026-07-30 ordinary-synthesis experiment reduced a narrower hotspot without
+changing that hierarchy. Removing redundant voice/generation/final-state fields
+from the DSP tail and expressing signed saturation as sign-extension overflow
+detection produced this fresh A/B with identical 512-voice directed throughput:
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Full-device Slice LUT | 27,414 | 27,136 | -278 |
+| Full-device Slice FF | 27,043 | 26,775 | -268 |
+| Voice engine LUT | 9,903 | 9,655 | -248 |
+| DSP pipeline LUT / FF | 3,645 / 1,229 | 3,418 / 954 | -227 / -275 |
+| Post-synthesis WNS | +0.400 ns | +0.400 ns | unchanged |
+
+All ideal-memory and timed-DDR3 filter-off/on runs remained at 28,000 clocks,
+8,192 DSP issues, and 8,192 contributions for a 16-frame block. This is a useful
+local area result, not post-route signoff, and it does not close the ownership
+refactor described above.
+
 ### A7: Effect Sends Are Global
 
 The renderer produces one dry stereo mix. Global chorus and reverb sends apply

@@ -326,8 +326,8 @@ if {[get_property top [current_fileset]] ne $top_name} {
 if {$source_set_changed} {
   update_compile_order -fileset sources_1
 }
-if {$project_inputs_changed || $run_settings_changed} {
-  save_project
-}
+# Project-mode add/set commands update the open .xpr directly. Vivado has no
+# zero-argument save_project command; Tcl otherwise abbreviates this to
+# save_project_as and fails whenever inputs or run settings change.
 puts "INFO: Synthesis run state: [get_property STATUS $synth_run]; needs refresh: [get_property NEEDS_REFRESH $synth_run]"
 puts "INFO: Implementation run state: [get_property STATUS $impl_run]; needs refresh: [get_property NEEDS_REFRESH $impl_run]"

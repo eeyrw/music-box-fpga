@@ -159,7 +159,8 @@ renderer，也不是 8 套 DSP。
 - `block_endpoint_job_t`：输出 frame index、fraction、两个 endpoint 地址和 envelope level。
 - `block_dsp_sample_token_t`：`work_id`、job、两个 sample、voice context 和输入 `z1/z2`。
 - `block_dsp_state_update_t`：DSP 中段提前返回的 tag 和新 `z1/z2`。
-- `block_dsp_retire_t`：最终左右 contribution、tag、last 和最终 filter state。
+- `block_dsp_retire_t`：`work_id`、last、frame index 和最终左右 contribution；voice
+  identity 与最终 filter state 由 renderer 的 work entry 保持。
 
 ready/valid 不放进这些 payload。模块端口显式给出 `*_valid` 和 `*_ready`，只有
 `valid && ready` 为 1 的上升沿才发生一次 transfer。
@@ -478,7 +479,8 @@ filter bypass 不产生递归状态依赖，因此 bypass token 不设置 hazard
 ## 13. DSP 每一级到底计算什么
 
 `block_interleaved_voice_dsp` 是一条共享的 tagged pipeline。每一级寄存器同时保存数据
-和 `work_id/last/voice/frame` 等控制，不能只延迟 sample 而漏延迟 tag。
+和 `work_id/last/frame` 等控制，不能只延迟 sample 而漏延迟 tag。voice identity 和
+generation 不进入 DSP，而是由 `work_id` 关联 renderer work entry。
 
 | 级 | 主要运算 | 主要寄存结果 |
 | --- | --- | --- |
@@ -489,7 +491,7 @@ filter bypass 不产生递归状态依赖，因此 bypass token 不设置 hazard
 | S4 | `a1*y`、`a2*y` | feedback products |
 | S5 | 计算并 sat34 新 z1/z2；选择 filter/bypass sample | selected sample、new state |
 | S6 | selected sample 分别乘 `gain_l/gain_r` | 左右 gain product |
-| retire | 再乘 envelope、缩放、sat16 | contribution、final state、last |
+| retire | 再乘 envelope、缩放、sat16 | contribution、work ID、last |
 
 线性插值公式：
 
@@ -644,13 +646,13 @@ active，renderer 必须保持其 association，不能因为 DSP stall 而切换
 普通 token retire 时：
 
 - contribution 携带 `block_frame_index` 送 mix buffer；
-- filter state 更新 slot 中的最终状态；
+- slot 中的 filter state 已由更早的 tagged `state_update` 更新；
 - slot 已在发完全部 job 后处于 `WORK_DRAIN`。
 
 last token retire 时，还会形成 `block_voice_dsp_result_t`：
 
 - `phase_result`：最终 phase、active、generation 和 walked frame 数；
-- `filter_z1/z2`：最终递归状态；
+- `filter_z1/z2`：从 `work_id` 关联的 renderer work entry 读取最终递归状态；
 - renderer 旁带保留 envelope final active/state。
 
 `block_mono_voice_engine` 合并三种动态结果：
@@ -762,7 +764,7 @@ stream。当前已有模块边界：
 | D4 | DSP S4 | 计算 `a1*y/a2*y` | feedback products |
 | D5 | DSP S5 | 生成新 z1/z2，filter/bypass 选择 | early state update |
 | D6 | DSP S6 | 左右 channel gain multiply | gain products |
-| D7 | DSP retire | envelope multiply、sat16 | contribution、final state |
+| D7 | DSP retire | envelope multiply、sat16 | contribution、work ID、last |
 | R0 | renderer/engine | last result 合并 | phase/env/filter final state |
 | R1 | state store | generation 检查和 dynamic write | next-block voice state |
 | B2 | mix buffer | contribution 累加 | selected frame accumulator |
@@ -1219,7 +1221,8 @@ overhead、refresh、row miss、其他 master、ECC、总线宽度填充，也�
 修改流水线时至少保持以下条件：
 
 1. 同一 voice 的 envelope、phase 和 filter state 按 frame 顺序演进。
-2. 不同 voice 可以交错，但 contribution 必须携带正确 voice/generation/frame tag。
+2. 不同 voice 可以交错；contribution 必须携带正确 frame index，并由 retire 的
+   `work_id` 关联 renderer 保存的 voice/generation。
 3. filtered slot 有未返回 state update 时不得使用旧 z1/z2 发下一 token。
 4. state update 与再发同拍时必须 forwarding。
 5. DSP stall 时 valid、数据和 tag 全部保持。

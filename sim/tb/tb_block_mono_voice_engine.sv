@@ -120,9 +120,7 @@ module tb_block_mono_voice_engine;
     start_voice();
     service_line(32'd96);
     do @(posedge clk); while (!contribution_valid);
-    if (contribution.voice_index != start_voice_index ||
-        contribution.generation != 16'h0028 ||
-        contribution.block_frame_index != '0 ||
+    if (contribution.block_frame_index != '0 ||
         $signed(contribution.contribution_l) != 16'sd99 ||
         $signed(contribution.contribution_r) != 16'sd99)
       $fatal(1, "engine contribution mismatch");

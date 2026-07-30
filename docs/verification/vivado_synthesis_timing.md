@@ -45,73 +45,55 @@ does not claim closure for every future external I/O interface.
 
 ### Current 512-Voice Post-Synthesis Baseline
 
-A forced Vivado 2025.2 synthesis on 2026-07-29 used the Makefile defaults of
-`NUM_VOICES=512` and `BLOCK_WORK_ENTRIES=8`. This is the current architecture's
-resource baseline; the older routed results later in this document describe an
-earlier, smaller configuration and are not 512-voice timing signoff.
+A fresh Vivado 2025.2 synthesis on 2026-07-30 used the Makefile defaults of
+`NUM_VOICES=512`, `BLOCK_WORK_ENTRIES=8`, and `MAX_BLOCK_FRAMES=16`.
 
-| Resource or estimate | Current 8-slot result |
+| Resource or estimate | Current result |
 | --- | ---: |
-| LUT | 31,674 / 32,600 (97.16%) |
-| FF | 31,869 / 65,200 (48.88%) |
+| LUT | 27,136 / 32,600 (83.24%) |
+| FF | 26,775 / 65,200 (41.07%) |
 | DSP48E1 | 39 / 120 (32.50%) |
-| BRAM tiles | 44 / 75 (58.67%) |
-| Post-synthesis WNS/TNS | +0.401 ns / 0 ns |
+| BRAM tiles | 50 / 75 (66.67%) |
+| Post-synthesis WNS/TNS | +0.400 ns / 0 ns |
 
-An earlier incremental run reported 29,045 LUTs and 24,948 FFs for the same
-requested configuration. A source rename forced Vivado to rebuild every
-partition and exposed that result as stale reuse, so it is not an acceptance
-baseline. `vivado-synth` now resets and rebuilds the synthesis run every time;
-voice-count or slot-count comparisons must come from separate forced runs.
+The immediate pre-change fresh baseline was 27,414 LUTs, 27,043 FFs, 39 DSPs,
+50 BRAM tiles, and the same +0.400 ns WNS. Slimming the DSP tail payload and
+replacing wide signed saturation comparisons with equivalent sign-extension
+overflow checks therefore saved 278 LUTs and 268 FFs without changing memories,
+DSP count, or the timing estimate. The engine moved from 9,903 to 9,655 LUTs;
+the DSP submodule moved from 3,645 LUT / 1,229 FF to 3,418 LUT / 954 FF.
 
-Vivado maps the packed valid bit and 29-bit per-voice sample-window base as one
-512 x 30 RAMB18. The renderer's 64 x 27 job payload store is also a synchronous
-RAMB18 instead of per-slot FF storage. Endpoint addresses remain separate, but
-the memory scheduler now compares four at a time in a two-pass FIND/MASK scan.
-It reuses the request mask and word-index registers as scan accumulators instead
-of adding a second 16-entry copy.
+The four 512-voice directed runs, with ideal/timed-DDR3 memory and filter off/on,
+all remained at 28,000 clocks for 16 frames. Each accepted 8,192 DSP issues and
+retired 8,192 contributions. Ordinary synthesis is sufficient for this local
+A/B; these numbers are not implementation timing signoff.
 
-With the DDR3 timing model and the filter path enabled, the grouped endpoint
-scan completes a 512-voice block in 9,929 cycles. The previous all-parallel
-scan took 8,367 cycles. Both are below the 16,666-cycle deadline, but eight
-slots retain substantially more
-latency tolerance without increasing the job-payload BRAM count.
-
-The design uses 97.16% of the device LUTs. This is too dense to treat the
-positive post-synthesis slack as closure, and no current 512-voice route has
-been completed. The grouped scan reduces the controller from 14,751 to 14,406
-LUTs and the renderer from 9,790 to 9,443 LUTs. Total LUT use falls by 342 while
-FF use rises by 39; BRAM and DSP use are unchanged.
-Further LUT reduction and a forced implementation are required before the
-512-voice configuration can replace the older routed signoff baseline.
+`vivado-synth` resets and rebuilds its synthesis run every time. Configuration
+or RTL comparisons must still preserve reports from separate fresh runs; never
+compare an ordinary-synthesis hierarchy against post-route utilization.
 
 ### Why LUT Reduction Is Difficult
 
 The current LUT total is not dominated by one removable register array. The
-post-synthesis hierarchy attributes 5,114 LUTs to the generated DDR3 MIG,
-5,347 LUTs to the effects chain, and 18,339 LUTs to the generic render core.
-Within the core, the controller uses 14,406 LUTs and its renderer uses 9,443.
-These totals include both storage and the logic needed to select, compare, and
-route that storage.
+post-synthesis hierarchy attributes 5,114 LUTs to the generated DDR3 MIG, 5,931
+LUTs to the effects chain, and 12,620 LUTs to the generic render core. Within
+the core, the controller uses 10,770 LUTs, its engine uses 9,655, and its
+renderer uses 8,513. These totals include parent and child ownership and cannot
+be added together.
 
-Moving an array to RAM only removes LUTs when its access pattern matches the
-physical memory ports. The job payload has one sequential writer and one
-pipelined reader, so a single synchronous RAMB18 is a good match. Endpoint
-addresses are different. The implemented four-at-a-time scan demonstrates the
-trade: it saves 342 total LUTs but raises the filtered 512-voice directed test
-from 8,367 to 9,929 cycles. A one- or two-port BRAM would require still more
-serialization or replication. Each option must therefore be measured against
-both LUT use and the latency hidden by the eight slots.
+Hierarchical LUT attribution can move across module boundaries after
+optimization. Payload slimming reduced the DSP submodule by 207 LUTs but the
+flat device total by only five; the stable benefit in that step was 261 FFs.
+The saturation rewrite then reduced the flat total by another 273 LUTs. Use the
+flat report for device fit and the hierarchy only to locate candidates.
 
 LUTRAM is also not a general solution to high Slice LUT utilization. It is
 useful for shallow, narrow arrays with compatible synchronous writes, but every
 LUT used as distributed RAM still counts in the device's Slice LUT total.
 Converting FF state to LUTRAM can reduce FFs while leaving the limiting LUT
-percentage unchanged or higher. The remaining useful work is therefore
-architectural: reduce replicated comparisons and wide muxes, pipeline or bank
-the endpoint scan without losing DDR overlap, and measure each change with both
-the DDR3 throughput test and synthesis. Storage attributes alone are not an
-adequate acceptance criterion.
+percentage unchanged or higher. Remaining work must continue to measure both
+the DDR3 throughput tests and fresh synthesis. Storage attributes or a
+module-local LUT delta alone are not adequate acceptance criteria.
 
 The current `check_timing` section reports zero unconstrained internal endpoints,
 but also reports 9 input ports without input delay and 13 output ports without

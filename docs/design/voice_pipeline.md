@@ -91,6 +91,19 @@ transposed direct-form-II biquad filtering, channel gain, envelope gain, and
 explicit saturation. One mono result is duplicated before channel gain. There
 is no dual-sample stereo voice.
 
+The renderer work entry owns voice identity, generation, and the latest biquad
+state. A DSP token carries `work_id` while it is in flight. The stage-4 state
+update writes the new `z1/z2` back to that work entry before the later retire;
+the retire payload therefore contains only `work_id`, `last`, frame index, and
+the two PCM contributions. On a last retire, the renderer publishes identity
+and final filter state from the associated work entry. This avoids carrying the
+same identity and 68-bit filter state through the tail stages and retire FIFO,
+without changing pipeline latency, issue interval, or backpressure behavior.
+
+Signed saturation is implemented by checking whether discarded high bits are
+a valid sign extension of the retained result. This is numerically equivalent
+to signed min/max comparisons and maps to less LUT logic.
+
 For the 512-voice project configuration, signed 25-bit block mix samples preserve
 the exact worst-case PCM16 sum without requiring mix headroom.
 

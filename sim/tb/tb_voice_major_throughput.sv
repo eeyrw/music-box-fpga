@@ -31,26 +31,35 @@ module tb_voice_major_throughput;
 `endif
   logic rst = 1'b1;
   reg_bus_req_t bus_req;
+/* verilator lint_off UNUSEDSIGNAL */
   reg_bus_rsp_t bus_rsp;
+/* verilator lint_on UNUSEDSIGNAL */
   logic cmd_stream_valid;
   logic [31:0] cmd_stream_data;
   logic cmd_stream_ready;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+/* verilator lint_off UNUSEDSIGNAL */
   global_audio_config_t audio_config;
   logic [1:0] effect_clear;
+/* verilator lint_on UNUSEDSIGNAL */
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;
+/* verilator lint_off UNUSEDSIGNAL */
   logic render_busy;
+/* verilator lint_on UNUSEDSIGNAL */
   logic line_req_valid;
   logic line_req_ready;
   ordered_line_req_t line_req;
   logic line_rsp_valid;
+/* verilator lint_off UNUSEDSIGNAL */
   logic line_rsp_ready;
+/* verilator lint_on UNUSEDSIGNAL */
   ordered_line_rsp_t line_rsp;
   logic block_complete_valid;
   logic block_complete_ready;
+/* verilator lint_off UNUSEDSIGNAL */
   render_block_complete_t block_complete;
   logic block_read_req_valid;
   logic block_read_req_ready;
@@ -62,6 +71,7 @@ module tb_voice_major_throughput;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
   sample_window_diagnostics_t sample_window_diagnostics;
+/* verilator lint_on UNUSEDSIGNAL */
 `ifdef SYNTH_DDR3_MODEL
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr3_rsp_data;
   logic [63:0] ddr3_stat_accepted;
@@ -159,8 +169,9 @@ module tb_voice_major_throughput;
                 dut.controller.engine.renderer.issue_candidate_lane] >= 0) &&
             ((cycle_count - last_lane_issue_cycle[
                 dut.controller.engine.renderer.issue_candidate_lane]) <
-             BLOCK_WORK_ENTRY_COUNT))
+             BLOCK_WORK_ENTRY_COUNT)) begin
           $fatal(1, "DSP barrel reused a lane before the feedback distance");
+        end
         last_lane_issue_cycle[
             dut.controller.engine.renderer.issue_candidate_lane] <= cycle_count;
       end

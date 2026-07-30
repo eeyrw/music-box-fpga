@@ -148,8 +148,6 @@ package synth_pkg;
   } block_sample_job_t;
 
   typedef struct packed {
-    logic [VOICE_GENERATION_WIDTH-1:0] generation;
-    logic [VOICE_ID_WIDTH-1:0] voice_index;
     logic [BLOCK_FRAME_INDEX_WIDTH-1:0] block_frame_index;
     pcm_t contribution_l;
     pcm_t contribution_r;
@@ -197,8 +195,6 @@ package synth_pkg;
     logic [BLOCK_JOB_ID_WIDTH-1:0] work_id;
     logic last;
     block_voice_contribution_t contribution;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z1;
-    logic signed [FILTER_STATE_WIDTH-1:0] filter_z2;
   } block_dsp_retire_t;
 
   typedef struct packed {

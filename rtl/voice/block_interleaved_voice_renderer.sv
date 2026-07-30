@@ -934,8 +934,8 @@ module block_interleaved_voice_renderer (
       if (dsp_last_publish) begin
         result_valid_q <= 1'b1;
         result_q.phase_result <= work_phase_result_q[dsp_retire.work_id];
-        result_q.filter_z1 <= dsp_retire.filter_z1;
-        result_q.filter_z2 <= dsp_retire.filter_z2;
+        result_q.filter_z1 <= work_z1_q[dsp_retire.work_id];
+        result_q.filter_z2 <= work_z2_q[dsp_retire.work_id];
         result_voice_index_q <=
             work_context_q[dsp_retire.work_id].voice_index;
         result_env_active_q <= work_env_active_q[dsp_retire.work_id];

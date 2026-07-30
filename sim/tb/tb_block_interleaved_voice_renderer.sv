@@ -92,9 +92,7 @@ module tb_block_interleaved_voice_renderer;
       @(posedge clk);
       if (!contribution_valid || contribution != held)
         $fatal(1, "renderer contribution changed under backpressure");
-      if (contribution.voice_index != start_voice_index ||
-          contribution.generation != start_generation ||
-          contribution.block_frame_index != expected_index ||
+      if (contribution.block_frame_index != expected_index ||
           $signed(contribution.contribution_l) != expected_l ||
           $signed(contribution.contribution_r) != expected_r) begin
         $fatal(1, "renderer contribution mismatch: index=%0d l=%0d r=%0d",

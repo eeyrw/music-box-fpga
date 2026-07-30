@@ -65,12 +65,9 @@ module tb_block_interleaved_voice_dsp;
   task automatic retire_expect(
       input logic [BLOCK_WORK_ID_WIDTH-1:0] expected_work_id,
       input logic expected_last,
-      input logic [VOICE_ID_WIDTH-1:0] expected_voice,
       input logic [BLOCK_FRAME_INDEX_WIDTH-1:0] expected_frame,
       input logic signed [15:0] expected_l,
       input logic signed [15:0] expected_r,
-      input logic signed [FILTER_STATE_WIDTH-1:0] expected_z1,
-      input logic signed [FILTER_STATE_WIDTH-1:0] expected_z2,
       input logic hold_first);
     block_dsp_retire_t held;
     begin
@@ -85,19 +82,15 @@ module tb_block_interleaved_voice_dsp;
       end
       if (retire.work_id != expected_work_id ||
           retire.last != expected_last ||
-          retire.contribution.voice_index != expected_voice ||
           retire.contribution.block_frame_index != expected_frame ||
           $signed(retire.contribution.contribution_l) != expected_l ||
-          $signed(retire.contribution.contribution_r) != expected_r ||
-          $signed(retire.filter_z1) != expected_z1 ||
-          $signed(retire.filter_z2) != expected_z2) begin
+          $signed(retire.contribution.contribution_r) != expected_r) begin
         $fatal(1,
-               "retire mismatch work=%0d voice=%0d frame=%0d l=%0d r=%0d z1=%0d z2=%0d",
-               retire.work_id, retire.contribution.voice_index,
+               "retire mismatch work=%0d frame=%0d l=%0d r=%0d",
+               retire.work_id,
                retire.contribution.block_frame_index,
                $signed(retire.contribution.contribution_l),
-               $signed(retire.contribution.contribution_r),
-               $signed(retire.filter_z1), $signed(retire.filter_z2));
+               $signed(retire.contribution.contribution_r));
       end
       @(negedge clk);
       retire_ready = 1'b1;
@@ -164,9 +157,8 @@ module tb_block_interleaved_voice_dsp;
     value = make_token(1, 10, 1, 1'b1, 1'b0,
                        16'sd1000, 16'sd1000, '0, '0, '0);
     send_token(value);
-    retire_expect(0, 1'b1, 9, 0, 16'sd1499, 16'sd750, '0, '0, 1'b1);
-    retire_expect(1, 1'b0, 10, 1, 16'sd499, 16'sd499,
-                  FILTER_STATE_WIDTH'(4096000), '0, 1'b0);
+    retire_expect(0, 1'b1, 0, 16'sd1499, 16'sd750, 1'b1);
+    retire_expect(1, 1'b0, 1, 16'sd499, 16'sd499, 1'b0);
     if (!update_seen[1] || $signed(update_z1[1]) != 4096000 ||
         $signed(update_z2[1]) != 0)
       $fatal(1, "filtered state feedback was not tagged to work entry 1");
@@ -175,8 +167,24 @@ module tb_block_interleaved_voice_dsp;
                        16'sd1000, 16'sd1000, '0,
                        update_z1[1], update_z2[1]);
     send_token(value);
-    retire_expect(1, 1'b1, 10, 2, 16'sd749, 16'sd749,
-                  FILTER_STATE_WIDTH'(4096000), '0, 1'b0);
+    retire_expect(1, 1'b1, 2, 16'sd749, 16'sd749, 1'b0);
+
+    // Drive the filter output beyond the PCM range in both directions. These
+    // vectors cover the sign-extension overflow test used by output saturation.
+    value = make_token(0, 9, 3, 1'b1, 1'b1,
+                       '0, '0, '0,
+                       {1'b0, {(FILTER_STATE_WIDTH-1){1'b1}}}, '0);
+    value.voice_context.filter_b0 = '0;
+    value.voice_context.filter_b1 = '0;
+    send_token(value);
+    value = make_token(1, 10, 4, 1'b1, 1'b1,
+                       '0, '0, '0,
+                       {1'b1, {(FILTER_STATE_WIDTH-1){1'b0}}}, '0);
+    value.voice_context.filter_b0 = '0;
+    value.voice_context.filter_b1 = '0;
+    send_token(value);
+    retire_expect(0, 1'b1, 3, 16'sh7fff, 16'sh7fff, 1'b0);
+    retire_expect(1, 1'b1, 4, 16'sh8000, 16'sh8000, 1'b0);
 
     $display("PASS: tagged interleaved voice DSP, feedback, and backpressure");
     $finish;
