@@ -47,11 +47,13 @@ change.
   implementation plan for voice-major N-frame rendering, block accumulation,
   event boundaries, state ownership, DDR locality, and ping-pong output.
 - [`design/voice_major_render_pipeline_detailed.md`](design/voice_major_render_pipeline_detailed.md):
-  archived cycle-level baseline for the superseded 512-voice eight-slot
-  renderer, retained for regression comparison.
+  current cycle-level voice-major pipeline design, including state ownership,
+  one-context envelope processing, compact descriptors, sample-window traffic,
+  the fixed DSP hazard barrel, mix ownership, and measured implementation limits.
 - [`design/streaming_voice_architecture_redesign_plan.md`](design/streaming_voice_architecture_redesign_plan.md):
-  review plan for replacing the eight-slot scheduler with an ordered streaming
-  pipeline, including resource and throughput budgets and complexity limits.
+  destructive renderer redesign plan and implementation record, including
+  resource and throughput budgets, completed compact-descriptor work, and the
+  remaining sample-ready/mix-reducer candidates.
 - [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
   SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
   generated tables, error bounds, and synthesis history.
