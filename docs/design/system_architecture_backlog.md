@@ -55,6 +55,14 @@ of a 32-word refill before their responses return. On Smart Artix,
 read/write arbiter tracks up to 16 accepted render reads while preserving
 response order.
 
+The Smart Artix arbiter is not intended to share sustained loader, playback,
+and debug bandwidth concurrently. The asset loader runs only during system
+initialization while the render core is held in reset. After `asset_loaded`,
+render reads have fixed priority and the register DDR aperture provides only
+sparse, short diagnostic accesses. A diagnostic request may wait for the
+current finite render-read sequence to drain; fairness for continuous debug
+traffic is not a product requirement.
+
 `voice_major_system` still owns one output block at a time. It does not request
 block N+1 until block N has been read through the effects input and its mix
 buffer has been released. The two-bank mix buffer therefore protects ownership
@@ -182,13 +190,12 @@ arbiter, asset writer, register DDR master, or MIG-ready behavior in one long
 render top.
 
 A board-equivalent performance harness must include the asset-load-to-playback
-ownership transition and playback reads competing with permitted diagnostic
-traffic, plus representative MIG command and return gaps,
-arbitration-delay/starvation counters, render deadlines, output lead, and
-underrun accounting. The normal system holds playback in reset while the loader
-owns asset writes, so loader/playback concurrency is not a required workload.
-Directed unit tests of the reader and arbiter do not replace this integrated
-workload.
+ownership transition, representative MIG command/return gaps, and occasional
+single diagnostic DDR transactions during playback. It should verify response
+ownership and ordering, debug completion after finite render bursts, render
+deadlines, output lead, and underrun accounting. Loader/playback concurrency and
+sustained diagnostic traffic are not required workloads. Directed unit tests of
+the reader and arbiter do not replace this integrated workload.
 
 ### A5: Renderer And Effects Are Serialized At Block Ownership
 
@@ -221,15 +228,18 @@ together.
 
 ### A7: DDR Transactions Have No Bounded Failure Recovery
 
-The line reader, register access master, and arbiter can wait indefinitely for
-command acceptance or read completion. Queue depth bounds occupancy, not
-latency. There is no timeout, cancellation, local reinitialization, or defined
-response to calibration loss with work in flight.
+The line reader and register access master can wait indefinitely for MIG command
+acceptance or read completion. Queue depth bounds occupancy, not latency. This
+is distinct from arbitration fairness: sparse debug traffic is allowed to wait
+behind render reads, and the loader does not overlap playback. There is no
+timeout, cancellation, local reinitialization, or defined response to
+calibration loss with work in flight.
 
-Define service bounds and arbitration guarantees, sticky first-failure status,
-command/response timeouts, cancellation or local reset, and mute/reprime/restart
-behavior. Tests must inject missing responses, stuck ready, calibration loss,
-and local resets.
+Decide whether missing MIG progress should leave the system held, reset the
+system, or raise sticky first-failure status before reset. If bounded recovery
+is required, define command/response timeouts, cancellation or local reset, and
+mute/reprime/restart behavior. Tests must then inject missing responses, stuck
+ready, calibration loss, and local resets.
 
 ### A8: Asset Readiness Does Not Establish Address Ownership
 
@@ -337,17 +347,18 @@ serialization.
   register master, asset-load-to-playback transition, and representative MIG
   behavior.
 - [ ] Replay maximum-polyphony mono and linked-stereo workloads with long
-  stalls, ready gaps, row conflicts, refresh, and permitted diagnostic traffic.
+  stalls, ready gaps, row conflicts, refresh, and sparse diagnostic accesses.
 - [ ] Record render/effects-release distributions, deadline misses, output lead,
   underruns, useful fetched words, refill/fallback counts, queue occupancy, and
-  arbitration delay.
+  diagnostic completion latency.
 - [ ] Re-run fresh implementation and required placement seeds after the
   scheduler ownership change.
 
 ### P0: Reliable Control And DDR Fault Handling
 
 - [ ] Complete the P0 packet/CDC work in `spi_transport_backlog.md`.
-- [ ] Add DDR service timeouts, arbitration guarantees, and sticky fault data.
+- [ ] Decide whether missing DDR progress requires a timeout/reset contract and
+  sticky fault data.
 - [ ] Define calibration-loss, mute, reservoir-reprime, and restart behavior.
 - [ ] Test truncation, CRC/sequence retry, missing DDR responses, stuck ready,
   calibration failure/loss, and local reset.
@@ -410,10 +421,10 @@ Every architecture change must meet the applicable gates:
    envelopes, filtering, mixing, effects, compression, rounding, and saturation.
 2. Command eligibility is deterministic at block and target-frame boundaries.
 3. Qualified 512-voice workloads meet every full and shortened-block deadline
-   under the board-equivalent DDR/arbitration profile.
+   under the board-equivalent DDR profile with sparse debug accesses.
 4. Output lead stays positive after startup and underrun/drop counters stay zero.
 5. Memory reports distinguish window hits, refills, fallback reads, stalls,
-   useful words, arbitration delay, and outstanding occupancy.
+   useful words, diagnostic completion latency, and outstanding occupancy.
 6. Packet tests cover truncation, bad length/CRC, capacity exhaustion, ACK loss,
    duplicate retry, and clock/reset interaction.
 7. `make lint` and `make test` pass with focused self-checking tests for every
@@ -435,7 +446,8 @@ Every architecture change must meet the applicable gates:
   pipeline decoupling required?
 - [ ] Does the core window need multiple miss contexts after board-equivalent
   measurement, and if so how are responses associated and cancelled?
-- [ ] What are the DDR timeouts, arbitration guarantees, and recovery sequence?
+- [ ] Does missing MIG progress require a timeout, and if so what reset and
+  recovery sequence follows it?
 - [ ] What manifest/descriptor format and integrity/generation contract owns
   playable addresses?
 - [ ] What are target-frame width, wrap, horizon, late-event, and ramp rules?
