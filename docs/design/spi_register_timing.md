@@ -11,10 +11,14 @@ SCLK falling-edge detection, MISO update latency, register-bus response time,
 and the master's next sampling edge. Gapless burst reads are the most
 restrictive current transaction type.
 
-The frequencies below are RTL timing estimates and hardware-validation targets,
-not a board-level guarantee. The Smart Artix XDC does not yet constrain SPI
-input/output delays, and no physical SPI timing report or cable measurement is
-available.
+The frequencies below are RTL timing estimates and candidate measurement
+points, not a board-level guarantee. The Smart Artix XDC does not yet constrain
+SPI input/output delays, and no physical SPI timing report or cable measurement
+is available.
+
+The status was refreshed against the current Smart Artix clocking, CH347 host,
+board I/O backlog, and SPI RTL on 2026-07-30. No physical SCLK rate has been
+qualified yet.
 
 ## Current Clock And Protocol
 
@@ -30,7 +34,9 @@ MISO advanced after synchronized SCLK falling edges
 
 The external `spi_sclk`, `spi_cs_n`, and `spi_mosi` inputs pass through two-bit
 synchronizing shift registers. Edge detection and the protocol state machine
-run on `clk`, not on `spi_sclk`.
+run on `clk`, not on `spi_sclk`. The RTL does not yet attach the planned
+`ASYNC_REG` attributes, and the board XDC does not yet contain the scoped input
+exceptions or physical MISO maximum delay from the I/O backlog.
 
 The register frames are:
 
@@ -44,6 +50,24 @@ burst write:   0xc0, address[15:8], address[7:0], N * 4 data bytes
 All fields are transmitted most-significant byte first. Burst transactions
 increment the register address by four after each 32-bit word.
 
+`Ch347RegisterTransport` requests mode 0 and 1 MHz by default. Its discrete
+clock table selects the highest supported rate not greater than the request:
+
+| Requested | Actual selected rate |
+| ---: | ---: |
+| 1 MHz | 937.5 kHz |
+| 2 MHz | 1.875 MHz |
+| 5 MHz | 3.75 MHz |
+| 7.5 MHz | 7.5 MHz |
+| 10 MHz | 7.5 MHz |
+| 15 MHz | 15 MHz |
+
+Requests below the minimum `468.75 kHz` step are rejected because no supported
+rate can satisfy the not-greater-than rule. SPI modes other than mode 0 are also
+rejected before the adapter is opened.
+
+Hardware reports must record the actual rate, not only the CLI request.
+
 ## Current Register-Bus Response
 
 The current generic, common-status, and Smart Artix platform register windows
@@ -56,9 +80,11 @@ to the master. If a future register target can hold `bus_ready` low, gapless
 burst traffic can overrun the bridge unless the target is snapshotted, buffered,
 or the SPI transaction defines explicit dummy clocks.
 
-An MCU DMA cannot react to an in-transaction BUSY indication. The packetized
-request/response transport, posted-write behavior, and split-phase read tasks
-needed to remove this assumption are tracked in
+An MCU DMA cannot react to an in-transaction BUSY indication. Keep the current
+immediate register contract and represent long work through posted START plus
+later status polling. A queued request/response transport is needed only if a
+future external contract requires blocking targets or split-phase returned
+payloads; options are tracked in
 [`spi_transport_backlog.md`](spi_transport_backlog.md).
 
 The DDR debug aperture remains a register protocol, not a blocking DDR read.
@@ -98,13 +124,16 @@ For a 50% duty-cycle SCLK:
 | ---: | ---: | --- |
 | 7.5 MHz | 6.67 | Large margin |
 | 10 MHz | 5.00 | Large margin |
-| 15 MHz | 3.33 | Practical validation target |
+| 15 MHz | 3.33 | Nominal samples remain; physically unqualified |
 | 30 MHz | 1.67 | Too little asynchronous sampling margin for a safe contract |
 | 60 MHz | 0.83 | SCLK levels can be missed |
 
-The recommended current write target is therefore `15 MHz`, with `7.5 MHz` as
-the initial hardware qualification rate. `30 MHz` may work in a favorable lab
-setup but is not a safe operating point for the current oversampling design.
+The table is an oversampling estimate, not a released write rating. The current
+hardware plan starts at the 937.5 kHz default, then measures 1.875 MHz and
+3.75 MHz. Actual 7.5 MHz is an upper stress point for the present bridge.
+Although 15 MHz has enough nominal system-clock samples for writes, it must not
+be promoted before the CDC attributes, physical constraints, duty-cycle
+measurements, and register-read behavior are qualified.
 
 ## Single-Read Timing
 
@@ -130,8 +159,9 @@ low half period > about 20 ns + physical timing margin
 ```
 
 The pure RTL boundary is therefore near `25 MHz`, but that leaves no phase or
-I/O margin. `10 MHz` is a reasonable single-read validation target; `5` to
-`7.5 MHz` is the conservative operating range until board timing is measured.
+I/O margin. The current CH347 path has no exact 10 MHz step: a 10 MHz request
+selects 7.5 MHz. Treat actual 7.5 MHz as an upper single-read stress point until
+board timing is measured; begin qualification at the lower discrete rates.
 
 ## Burst-Read Word Boundary
 
@@ -155,12 +185,10 @@ SCLK = 10 MHz: low half period = 50.0 ns, about 10 ns RTL margin
 SCLK = 15 MHz: low half period = 33.3 ns, below the worst-case estimate
 ```
 
-Consequently:
-
-- `15 MHz` must not be considered safe for current gapless burst reads.
-- `10 MHz` is an RTL validation target with limited physical margin.
-- `5` to `7.5 MHz` is the recommended range before board-level timing is
-  characterized.
+Consequently 15 MHz must not be considered safe for current gapless burst
+reads. The analytical 10 MHz point has limited physical margin, and the CH347
+selects 7.5 MHz for a 10 MHz request. Actual 7.5 MHz is therefore the highest
+planned stress point, not a released default.
 
 An inter-word pause of at least one or two SCLK half periods could raise the
 safe burst-read SCLK, but the current CH347 `read_registers` transaction emits a
@@ -202,41 +230,42 @@ payload efficiency = 252 / 255 = 98.82%
 | 10 MHz | 1.235 MB/s |
 | 15 MHz | 1.853 MB/s |
 
-The write table can use the `15 MHz` validation target. The read table is only
-a throughput calculation; current gapless burst reads should use the lower
-frequency recommendation above.
+Both tables are wire-throughput calculations. They do not authorize a physical
+rate. Current qualification stops at the lower discrete CH347 steps described
+below; 15 MHz remains an unqualified write-only analysis point.
 
-## Recommended Operating Points
+## Current Operating And Qualification Points
 
-| Transaction | Initial rate | Validation target | Current position |
+| Transaction | Initial actual rate | Next measured steps | Current position |
 | --- | ---: | ---: | --- |
-| Single register write | 7.5 MHz | 15 MHz | Same input-only limit as command stream |
-| Burst register write | 7.5 MHz | 15 MHz | No SCLK gap required with current immediate-ready targets |
-| Single register read | 5-7.5 MHz | 10 MHz | MISO bit-update timing limits margin |
-| Gapless burst register read | 5 MHz | 7.5 MHz; test 10 MHz | Most restrictive word-boundary refill path |
-| Opcode-`0xa5` command stream | 7.5 MHz | 15 MHz | See the command-stream analysis |
+| Single register write | 937.5 kHz | 1.875, 3.75, then 7.5 MHz | Input oversampling; no physical qualification yet |
+| Burst register write | 937.5 kHz | 1.875, 3.75, then 7.5 MHz | Immediate-ready target required |
+| Single register read | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | MISO update is more restrictive than writes |
+| Gapless burst register read | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | Most restrictive word-boundary path |
+| Opcode-`0xa5` command stream | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | See command workload analysis |
 
-These values deliberately keep separate host profiles for reads and writes. If
-one application must use a single fixed SCLK for every transaction, use
-`5 MHz` conservatively or `7.5 MHz` after successful burst-read qualification.
-Do not select `15 MHz` globally merely because command writes pass at that rate.
+Use one conservative profile for bring-up because the current CLI configures
+one device rate. Separate faster write and slower read profiles may be adopted
+only after physical measurement. A 15 MHz write-only mode remains a possible
+future qualification point, not the current recommendation.
 
 ## Hardware Qualification
 
 Register timing must be tested independently for each transaction class:
 
-1. Verify single writes and readback at `1 MHz` before increasing frequency.
-2. Sweep single and 63-word burst writes at `7.5 MHz` and `15 MHz`.
-3. Sweep single reads at `5`, `7.5`, and `10 MHz` with patterns including
+1. Verify single writes and readback with the 1 MHz request, recording the
+   actual 937.5 kHz selection.
+2. Sweep single and 63-word burst writes at actual 1.875, 3.75, and 7.5 MHz.
+3. Sweep single reads at the same actual rates with patterns including
    `0x00000000`, `0xffffffff`, `0xaaaaaaaa`, `0x55555555`, and walking bits.
-4. Sweep burst-read lengths from 1 through 63 words at `5` and `7.5 MHz`, then
-   treat `10 MHz` as a measured stress point.
+4. Sweep burst-read lengths from 1 through 63 words at each actual rate and
+   treat 7.5 MHz as an upper stress point.
 5. Repeat tests with different CS-to-first-clock delays, transaction gaps, and
    cable/header configurations.
 6. Measure actual SCLK duty cycle and MISO validity relative to the master's
    rising sampling edge.
 7. Check `spi_error`, returned addresses/data, common event flags, and audio
-   underrun/drop/deadline status during simultaneous rendering and DDR traffic.
+   underrun/drop/deadline status during rendering and sparse DDR debug access.
 
 Before declaring a release frequency, add or document the corresponding SPI
 input/output timing constraints and CDC treatment in the board integration.

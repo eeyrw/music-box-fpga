@@ -186,10 +186,11 @@ With chip select low, opcode `0xa5` is followed by consecutive big-endian
 CS low -> 0xa5 -> word0 -> word1 -> ... -> wordN -> CS high
 ```
 
-The host preflights capacity from `CMD_FIFO_STATUS[15:2]` and sends no more than
-the available word count. Register transactions remain the path for status,
-diagnostics, asset loading, and board control. Transport limitations and SCLK
-budget are tracked in
+`CMD_FIFO_STATUS[15:2]` exposes capacity for software preflight, but the current
+CH347 transport sends each complete command without reading it first. Register
+transactions remain the path for status, diagnostics, and board control.
+Transport limitations, compatible atomic staging, and SCLK budget are tracked
+in
 [`spi_command_stream_throughput.md`](spi_command_stream_throughput.md).
 
 ## Verification

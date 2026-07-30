@@ -73,7 +73,8 @@ change.
   read/write timing paths, burst boundaries, wire throughput, separate SCLK
   targets, and hardware-qualification requirements.
 - [`design/spi_transport_backlog.md`](design/spi_transport_backlog.md): known
-  SPI transaction-atomicity bugs and the packetized DMA transport backlog.
+  SPI transaction-atomicity bugs, compatible staging fixes, physical timing,
+  and the optional packetized DMA transport.
 
 ## Verification And Render Flows
 

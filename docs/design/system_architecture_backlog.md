@@ -150,9 +150,12 @@ normal backpressure, but it does not provide complete-command atomicity at the
 physical boundary, pre-publication length/CRC validation, sequence numbers,
 ACK/NACK, retry, duplicate suppression, or a formally constrained SCLK CDC.
 
-The transport should receive and validate a complete request in the SCLK domain
-and cross it through an explicit packet boundary. Credits must describe
-complete packets or bytes. Detailed tasks remain in `spi_transport_backlog.md`.
+The immediate requirement is all-or-nothing visibility for one CS-delimited
+`0xa5` transaction. A bounded staging buffer can provide that while preserving
+the current wire format. Sequence, CRC, ACK/NACK, retry, and an SCLK-domain
+packet protocol are a larger optional design if the selected MCU requires
+unsupervised DMA or exactly-once retry. Detailed choices remain in
+`spi_transport_backlog.md`.
 
 ### A2: Command Timing Is Block-Boundary Based, Not Timestamped
 
@@ -263,8 +266,8 @@ transport bandwidth for mostly invariant data.
 
 Evaluate an atomically published, asset-owned descriptor table. A descriptor
 START could carry generation, descriptor ID, gains/pitch overrides, and runtime
-policy. Descriptor loading, manifest validation, packet atomicity, generations,
-and host cache ownership form one contract.
+policy. Descriptor loading, manifest validation, command-transaction atomicity,
+generations, and host cache ownership form one contract.
 
 ### A10: Point Updates Are Expensive For Modulation
 
@@ -356,12 +359,14 @@ serialization.
 
 ### P0: Reliable Control And DDR Fault Handling
 
-- [ ] Complete the P0 packet/CDC work in `spi_transport_backlog.md`.
+- [ ] Complete the compatible transaction-staging and SPI physical-timing work
+  in `spi_transport_backlog.md`; add a new packet protocol only if required.
 - [ ] Decide whether missing DDR progress requires a timeout/reset contract and
   sticky fault data.
 - [ ] Define calibration-loss, mute, reservoir-reprime, and restart behavior.
-- [ ] Test truncation, CRC/sequence retry, missing DDR responses, stuck ready,
-  calibration failure/loss, and local reset.
+- [ ] Test SPI truncation/capacity rejection, missing DDR responses, stuck
+  ready, calibration failure/loss, and local reset; add CRC/sequence retry tests
+  only if the optional packet protocol is selected.
 
 ### P0: Asset Integrity
 
@@ -406,7 +411,8 @@ serialization.
    add core memory contexts only if that evidence still requires more margin.
 3. Define DDR fault recovery and asset address ownership within the existing
    system clock domain.
-4. Fix physical command packet atomicity before expanding command semantics.
+4. Fix CS-delimited command transaction atomicity before expanding command
+   semantics.
 5. Add timestamped events, ramps, and descriptor-based START on the validated
    transport and asset contracts.
 6. Add per-voice effect sends and evaluate wider contribution precision only
@@ -425,8 +431,9 @@ Every architecture change must meet the applicable gates:
 4. Output lead stays positive after startup and underrun/drop counters stay zero.
 5. Memory reports distinguish window hits, refills, fallback reads, stalls,
    useful words, diagnostic completion latency, and outstanding occupancy.
-6. Packet tests cover truncation, bad length/CRC, capacity exhaustion, ACK loss,
-   duplicate retry, and clock/reset interaction.
+6. Compatible SPI tests cover truncation, capacity exhaustion, atomic commit,
+   and clock/reset interaction. If packet transport is selected, they also
+   cover bad length/CRC, ACK loss, and duplicate retry.
 7. `make lint` and `make test` pass with focused self-checking tests for every
    changed protocol or behavior.
 8. Smart Artix fits, closes setup and hold, is fully routed, has no DRC errors,

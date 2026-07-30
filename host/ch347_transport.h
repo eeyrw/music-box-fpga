@@ -33,6 +33,10 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   std::vector<uint32_t> read_registers(uint16_t start_address, size_t count);
   void write_command_words(const std::vector<uint32_t>& words) override;
 
+  int configured_clock_hz() const { return configured_clock_hz_; }
+  static int selected_clock_hz(int requested_hz);
+  static void validate_command_transaction(const std::vector<uint32_t>& words);
+
  private:
   using SpiConfig = mSpiCfgS;
   using OpenDeviceFn = decltype(&::CH347OpenDevice);
@@ -42,7 +46,6 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   using SpiWriteFn = decltype(&::CH347SPI_Write);
   using SpiWriteReadFn = decltype(&::CH347SPI_WriteRead);
 
-  static unsigned char clock_code_for_hz(int requested_hz);
   static std::string dl_error();
 
   template <typename T>
@@ -52,8 +55,10 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
 
   void write_spi(const uint8_t* data, size_t size);
   void transfer_spi(uint8_t* data, size_t size);
+  void close() noexcept;
 
   Ch347Options options_;
+  int configured_clock_hz_ = 0;
   void* library_ = nullptr;
   int fd_ = -1;
   bool opened_ = false;

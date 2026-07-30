@@ -1,189 +1,213 @@
 # SPI Transport Backlog
 
-This document tracks correctness defects and follow-up work for SPI masters
-driven by fixed-length MCU DMA. It covers both opcode-`0xa5` command traffic and
-register transactions. Throughput estimates remain in
+This document tracks correctness and timing work for the current Smart Artix
+SPI bridge and separates near-term hardening from an optional packetized DMA
+protocol. Throughput and register timing remain in
 [`spi_command_stream_throughput.md`](spi_command_stream_throughput.md) and
 [`spi_register_timing.md`](spi_register_timing.md).
 
-The tasks in this document are not implemented by the current RTL. Frequency
-qualification must not be treated as a substitute for completing the
-correctness work below.
+The status was refreshed against `spi_register_bridge`, the version-10 command
+plane, and `Ch347RegisterTransport` on 2026-07-30.
 
-## P0 Correctness Defects
+## Implemented Baseline
 
-### SPI-001: Command Transaction Can Be Partially Accepted
+- `spi_register_bridge` runs entirely in the 100 MHz MIG UI clock domain.
+- SCLK, CS, and MOSI pass through two-register vectors and are edge-detected in
+  that domain; SCLK is not an FPGA clock.
+- Mode-0-style register opcodes are `0x00`, `0x40`, `0x80`, and `0xc0`.
+- Opcode `0xa5` publishes consecutive big-endian command words directly into
+  the shared 1024-word FIFO.
+- The parser waits for a complete version-10 command before executing it, but
+  words already accepted by the FIFO are not grouped by SPI transaction.
+- `spi_error` is an output indication. It is cleared at the start of the next
+  CS-low transaction and is not a packet ACK or a software-readable history.
+- The CH347 host requests 1 MHz by default, sends one complete command per CS,
+  and does not currently preflight `CMD_FIFO_STATUS`. Its transport API can
+  carry multiple complete commands but rejects malformed framing and more than
+  63 total words.
+- Current register targets acknowledge immediately. DDR debug uses START plus
+  later status polling; MIG latency is never held inside one SPI transaction.
+
+## Open Correctness Defects
+
+### SPI-001: A Command Transaction Can Be Partially Published
 
 Status: open bug.
 
-`STATE_STREAM_DATA` checks `cmd_ready` only when each complete 32-bit word
-arrives. If the command FIFO becomes unavailable during one CS-low transaction,
-earlier words have already been committed while the current and later words are
-discarded. `spi_error` is set, but the parser can be left holding an incomplete
-command or a transaction prefix.
+`STATE_STREAM_DATA` checks `cmd_ready` only at each 32-bit boundary. If the FIFO
+becomes unavailable during one CS-low transaction, earlier words remain in the
+FIFO while the rejected word is dropped. A parser waiting on an incomplete
+command may then consume words from a later transaction as its payload.
 
-This violates transaction atomicity. A DMA master cannot react to `cmd_ready`
-or `spi_error` until its fixed-length transfer has completed, so per-word
-accept/reject is not valid transport-level flow control.
+The current one-command-per-CS host reduces the affected scope but does not
+remove the bug. A near-full FIFO can still accept the header and reject a later
+payload word.
 
-Required behavior:
+Required invariant:
 
-- accept every word in the declared SPI packet, or accept none of them;
-- never expose a packet prefix to the command parser;
-- report one packet-level ACK or NACK after the complete DMA transfer;
-- allow a NACKed packet to be retried safely by sequence number;
-- count and expose rejected packets without relying only on an LED-level
-  `spi_error` signal.
+- one CS-delimited `0xa5` transaction becomes wholly visible to the command
+  FIFO, or none of it does;
+- a rejected transaction cannot change parser state;
+- software can observe a sticky accepted/rejected/framing count or status.
 
 ### SPI-002: Partial Final Word Is Silently Discarded
 
 Status: open bug.
 
-If CS is deasserted after only part of a 32-bit command word, the bridge resets
-its bit counter and silently discards those bits. No half word is pushed into
-the FIFO, but the malformed transaction is not reported, and any earlier words
-from the same transaction remain committed.
+If CS is deasserted partway through a command word, the bridge resets its bit
+counter without recording a framing error. Earlier complete words from the same
+transaction remain committed.
 
-Required behavior:
+Required invariant:
 
-- detect CS deassertion when the packet is not on a legal word boundary;
-- reject the complete packet rather than retaining its prefix;
-- set a sticky framing-error counter/status field;
-- verify that the parser state is unchanged after the rejected packet.
+- CS may end an `0xa5` transaction only on a legal word boundary;
+- a partial word rejects the complete staged transaction;
+- no transaction prefix reaches the parser;
+- a sticky framing indication records the failure.
 
-### SPI-003: Register Ready/Busy Is Not Representable To DMA
+### SPI-003: Register Targets Must Remain Immediate
 
-Status: open architectural bug for any non-immediate register target.
+Status: current design constraint, not a defect in the implemented register
+map.
 
-The internal register bus exposes `ready`, but SPI has no current wire-level
-mechanism to pause or reject an in-progress DMA transaction. `STATE_WRITE_WAIT`
-and `STATE_READ_WAIT` work only because all current register targets respond
-immediately. A future target that holds `bus_ready` low can cause incoming SCLK
-edges to be ignored and corrupt a gapless transaction.
+The SPI wire protocol has no ready/wait indication. `STATE_WRITE_WAIT` and
+`STATE_READ_WAIT` are safe only because the generic, common-status, and Smart
+Artix platform register windows acknowledge immediately. A future target that
+holds `bus_ready` low can cause the bridge to ignore gapless SCLK edges.
 
-Required behavior:
+The DDR debug aperture already follows the correct model: a register write
+starts a MIG operation and software polls status in later SPI transactions.
+Keep every variable-latency operation split-phase instead of placing a blocking
+target behind the direct bridge.
 
-- prohibit non-immediate targets behind the current direct bridge until a
-  queued transport exists;
-- use posted writes and split-phase reads for variable-latency targets;
-- distinguish request `ACCEPTED` from operation `COMPLETED`;
-- represent long operations as `START`, followed by `BUSY`, `DONE`, or `ERROR`
-  status rather than holding an SPI transaction open.
+## Near-Term Compatible Hardening
 
-## Target DMA Transport
+The first correction does not need a new CRC/sequence packet protocol. It can
+preserve the existing wire format:
 
-An MCU DMA descriptor cannot branch on an in-transaction BUSY indication. The
-FPGA must therefore be able to sink one complete packet at line rate, and flow
-control may affect only a later DMA descriptor.
+```text
+CS low -> 0xa5 -> word0 -> ... -> wordN -> CS high
+```
 
-The target data path is:
+Recommended implementation:
+
+1. receive a bounded complete CS-delimited command transaction into staging
+   storage instead of publishing each word immediately;
+2. detect partial words and overlength transactions while receiving;
+3. after CS rises, validate legal word framing and reserve enough command-FIFO
+   capacity for the entire staged transaction;
+4. commit every staged word in order, or discard all of them;
+5. expose sticky accepted, rejected, framing, and capacity counters through the
+   register map;
+6. block a new staged transaction only through a documented inter-transaction
+   readiness rule, never by dropping words after CS falls.
+
+Open design choices:
+
+- [ ] Select a maximum staged transaction size. The current CH347 limit permits
+  63 words, while the largest production command is 17 words.
+- [ ] Decide whether the compatible bridge accepts exactly one command per CS
+  or permits multiple complete commands in one staged transaction.
+- [ ] Define how the receiver proves/reserves FIFO capacity before commit.
+- [ ] Decide whether a READY GPIO is needed or whether sparse host traffic plus
+  software-readable counters is sufficient.
+- [ ] Define parser recovery for legacy partial FIFO contents across reset and
+  `STREAM_FLUSH`.
+
+This path fixes SPI-001 and SPI-002 for the current CH347 workflow. It does not
+provide CRC, lost-ACK recovery, or exactly-once retry.
+
+## Optional Packetized DMA Transport
+
+A new packet protocol is justified only if the selected MCU must queue multiple
+DMA descriptors without per-transaction software supervision, requires CRC on
+the physical link, or must retry after a lost response.
+
+Candidate data path:
 
 ```text
 SPI SCLK domain
-  -> fixed-length packet receiver
-  -> ping-pong staging buffers
+  -> fixed-length packet receiver and ping-pong buffers
   -> length, sequence, and CRC validation
-  -> atomic packet accept or reject
   -> asynchronous request FIFO
   -> 100 MHz command/register executor
   -> asynchronous response FIFO
-  -> later SPI response DMA
+  -> later SPI response transaction
 ```
 
-The target packet contract is:
+Candidate packet contract:
 
 ```text
 request:  sync | opcode | sequence | address | word_count | payload | CRC
 response: sync | sequence | status | word_count | payload | CRC
 ```
 
-Required response states include `ACCEPTED`, `BUSY`, `DONE`, `BAD_ADDRESS`,
-`BAD_LENGTH`, `FIFO_FULL`, `CRC_ERROR`, and `EXEC_ERROR`.
+This would require packet credits, ACK/NACK, duplicate suppression, response
+storage, bounded retries, and statuses such as `ACCEPTED`, `DONE`,
+`BAD_LENGTH`, `FIFO_FULL`, `CRC_ERROR`, and `EXEC_ERROR`. It is an external
+protocol change and must not be implemented merely to solve a local FIFO
+reservation problem.
 
-## Implementation Tasks
+## Clock-Domain And Physical Timing
 
-### Packet Ingress
+The present oversampling bridge still needs:
 
-- [ ] Select a fixed maximum DMA packet size, initially 32 or 64 words.
-- [ ] Add two packet staging buffers so one packet can be validated/committed
-  while the other receives the next DMA transfer.
-- [ ] Receive and count the complete packet in the SPI SCLK domain.
-- [ ] Add declared word count, transaction sequence, and CRC32.
-- [ ] Commit a validated packet atomically into the request/command FIFO.
-- [ ] Reject the complete packet on bad length, partial word, CRC failure, or
-  insufficient reserved capacity.
-- [ ] Add sticky accepted/rejected/framing/CRC/overflow counters.
+- [ ] `ASYNC_REG` attributes and scoped asynchronous input exceptions for the
+  SCLK, CS, and MOSI synchronizers;
+- [ ] protection against unintended shift-register extraction;
+- [ ] an output-IOB or otherwise bounded system-clock-to-MISO path;
+- [ ] measurements of SCLK duty cycle, CS setup/hold, MOSI timing, and MISO
+  timing for the selected adapter and cable;
+- [ ] qualification beginning at the 1 MHz host default, then the actual CH347
+  1.875 MHz, 3.75 MHz, and 7.5 MHz steps.
 
-### Flow Control Between DMA Descriptors
+If higher rates or formal SCLK-relative I/O timing are required, move shifting
+into the SCLK domain and cross complete staged transactions through explicit
+asynchronous FIFOs. That larger CDC change should be combined with, not used as
+a substitute for, transaction atomicity.
 
-- [ ] Define packet credits, where one credit reserves space for one maximum
-  packet rather than advertising only instantaneous word FIFO level.
-- [ ] Decide whether the board exposes a `READY`/`IRQ` GPIO. If present, READY
-  may authorize the next DMA only and must not be withdrawn after DMA starts.
-- [ ] Without a GPIO, provide a status transaction that returns packet credits
-  and response-FIFO availability.
-- [ ] Make the host cap every DMA transfer to the granted packet credit.
-- [ ] Add sequence-based retry and duplicate suppression so a lost ACK does not
-  apply one command packet twice.
+## Host Work
 
-### Register Requests And Responses
+For the compatible transport:
 
-- [ ] Keep bounded-latency cached status registers available for immediate
-  bring-up reads.
-- [ ] Convert variable-latency register writes to posted requests.
-- [ ] Add a response FIFO for split-phase register reads.
-- [ ] Return read data in a later DMA transaction with matching sequence.
-- [ ] Add coherent snapshot commands for multiword status blocks.
-- [ ] Preserve the existing DDR debug model of START plus status polling; do not
-  turn MIG latency into an SPI wait state.
+- [x] preserve complete command boundaries within each CS assertion;
+- [x] enforce the 63-word CH347 transfer maximum, 16-word per-command payload
+  maximum, and declared payload lengths;
+- [ ] optionally read capacity/status before bursts, while recognizing that
+  preflight is not the atomicity mechanism;
+- [ ] read sticky rejection/framing status after a failed operation or during
+  health polling;
+- [ ] bound retries and issue `STREAM_FLUSH` or reset only according to the
+  documented recovery contract.
 
-### Clock-Domain And Board Timing
+For a future packetized transport, additionally implement sequence-based retry,
+duplicate suppression, response polling or READY/IRQ, and CRC errors.
 
-- [ ] Move high-speed SPI shifting into the SCLK domain instead of relying only
-  on `100 MHz` oversampling.
-- [ ] Cross complete requests/responses through explicit asynchronous FIFOs.
-- [ ] Mark and constrain synchronizers and asynchronous FIFO paths.
-- [ ] Add board SPI input/output delays after MCU timing and physical routing
-  are known.
-- [ ] Measure CS setup/hold, SCLK duty cycle, MOSI timing, and MISO timing on the
-  selected MCU and connection.
+## Verification Acceptance
 
-### Host And MCU Software
+Compatible hardening is complete only when focused tests prove:
 
-- [ ] Build one DMA descriptor per complete packet; never split a packet across
-  independent CS assertions.
-- [ ] Process ACK/NACK only after DMA completion.
-- [ ] Retry NACKed packets with the same sequence and payload.
-- [ ] Keep writes queued until `ACCEPTED`; wait for `DONE` only when operation
-  completion is semantically required.
-- [ ] Issue reads as request DMA followed by READY/IRQ or status polling and a
-  separate response DMA.
-- [ ] Bound retry count and surface permanent protocol/CRC/overflow errors.
+- [ ] every possible CS termination within a word rejects the entire staged
+  transaction;
+- [ ] FIFO capacity loss at every commit boundary produces all-or-nothing
+  visibility;
+- [ ] sizes zero through the selected maximum are accepted or rejected exactly
+  as specified;
+- [ ] consecutive accepted/rejected transactions cannot desynchronize the
+  command parser;
+- [ ] FIFO wrap and simultaneous `CMD_FIFO_DATA` traffic preserve ordering and
+  the direct-stream priority rule;
+- [ ] reset in receive, validate, and commit states leaves no visible prefix;
+- [ ] all sticky counters saturate and clear according to the register contract;
+- [ ] sparse register traffic and the maximum intended command workload do not
+  cause audio underrun, drop, or hidden transport loss.
 
-## Verification Acceptance Criteria
-
-- [ ] Exhaust every possible CS position within a 32-bit word and prove that no
-  packet prefix reaches the parser.
-- [ ] Force command FIFO capacity to disappear at every word boundary and prove
-  all-or-nothing packet visibility.
-- [ ] Test packet sizes from zero through the selected maximum and reject
-  declared/actual length mismatches.
-- [ ] Corrupt every header field, payload bit class, and CRC byte.
-- [ ] Lose an ACK, retry the same sequence, and prove exactly-once command
-  application.
-- [ ] Fill request and response FIFOs while DMA continues at the qualified SCLK;
-  prove bounded NACK behavior without word loss or parser desynchronization.
-- [ ] Stall a register target for arbitrary cycles and prove that later SPI
-  packets remain framed correctly.
-- [ ] Run sustained command and register traffic during maximum intended
-  polyphony, DDR misses, and audio FIFO pressure without underrun or hidden
-  transport loss.
-- [ ] Add focused self-checking RTL tests before changing the documented SPI
-  transport contract.
+A packetized protocol additionally requires CRC corruption, lost response,
+duplicate retry, request/response FIFO exhaustion, and exactly-once execution
+tests.
 
 ## Completion Rule
 
-SPI-001 and SPI-002 are complete only when the parser can observe either the
-entire validated DMA packet or no part of it. Merely setting `spi_error`, asking
-firmware to inspect BUSY during DMA, increasing FIFO depth, or lowering SCLK
-does not fix either bug.
+SPI-001 and SPI-002 are not fixed by lowering SCLK, increasing FIFO depth,
+checking `spi_error` after DMA, or reading FIFO capacity before CS falls. The
+parser must observe the entire accepted transaction or no part of it.

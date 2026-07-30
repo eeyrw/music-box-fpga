@@ -137,6 +137,7 @@ class DryRunTransport : public host::RegisterIo, public render::CommandWordSink 
   }
 
   void write_command_words(const std::vector<uint32_t>& words) override {
+    host::Ch347RegisterTransport::validate_command_transaction(words);
     std::cout << "command frame= a5";
     for (uint32_t word : words) {
       std::cout << ' ' << std::hex << std::setw(8) << std::setfill('0') << word;
@@ -193,9 +194,9 @@ void print_usage(const char* argv0) {
       << "  " << argv0 << " [transport options] --start-voice VOICE [voice options]\n"
       << "\nTransport options:\n"
       << "  --lib PATH              CH347 shared library path, default third_party/ch347_linux/lib/x64/libch347.so\n"
-      << "  --device PATH|N         CH347 device path, default /dev/ch34x_pis0; N maps to /dev/ch34x_pisN\n"
-      << "  --clock-hz HZ           SPI clock request, default 1000000\n"
-      << "  --mode N                SPI mode 0..3, default 0\n"
+      << "  --device PATH|N         CH347 device path, default /dev/ch34x_pis2; N maps to /dev/ch34x_pisN\n"
+      << "  --clock-hz HZ           SPI clock request rounded down to a CH347 step, default 1000000\n"
+      << "  --mode N                SPI mode; Smart Artix requires 0\n"
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
       << "  --dry-run               Print register frames without opening CH347\n"
       << "  --ddr-byte-enable MASK  Byte-enable mask for later --ddr-write, default 0xffff\n"
@@ -467,10 +468,17 @@ void execute_ddr_read(host::RegisterIo& sink, host::Ch347RegisterTransport* tran
 int main(int argc, char** argv) {
   try {
     Args args = parse_args(argc, argv);
+    if (args.ch347.spi_mode != 0) {
+      throw std::runtime_error("--mode must be 0 for the Smart Artix SPI bridge");
+    }
+    const int configured_clock_hz =
+        host::Ch347RegisterTransport::selected_clock_hz(args.ch347.clock_hz);
     if (args.actions.empty()) {
       print_usage(argv[0]);
       return 1;
     }
+    std::cout << "CH347 SPI requested=" << args.ch347.clock_hz
+              << " Hz configured=" << configured_clock_hz << " Hz mode=0\n";
 
     std::unique_ptr<host::Ch347RegisterTransport> transport;
     DryRunTransport dry_run;

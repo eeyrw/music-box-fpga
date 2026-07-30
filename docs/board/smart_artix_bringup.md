@@ -225,20 +225,21 @@ Then use the selected CH347 library and conservative SPI speed. Start around
 `1 MHz` until the board-level SPI timing contract is measured. The common SPI
 register bridge samples SCLK into the FPGA system clock and cannot backpressure a
 fast master, so do not treat burst register frames as gapless high-speed streams.
-After `1 MHz` smoke tests pass, try `2 MHz` and `5 MHz`; treat `10 MHz` as a
-board-measured target rather than a guaranteed setting.
-
-The detailed register-path analysis recommends separate profiles: validate
-writes through `15 MHz`, keep single reads at or below the `10 MHz` target, and
-use `5` to `7.5 MHz` for gapless burst reads until physical MISO timing is
-measured. See
+After the `1 MHz` request smoke test passes, try requests of `2 MHz` and
+`5 MHz`; the current CH347 mapping selects actual rates of `937.5 kHz`,
+`1.875 MHz`, and `3.75 MHz` respectively. A `10 MHz` request selects
+`7.5 MHz`; treat that as an upper stress point rather than a guaranteed setting.
+Do not use the old `15 MHz` write target until CDC, I/O constraints, duty cycle,
+and physical MISO timing are qualified. See
 [`../design/spi_register_timing.md`](../design/spi_register_timing.md).
 
 That sequence applies to bidirectional register transactions. Dedicated
 opcode-`0xa5` command writes do not use MISO and have no per-word register-bus
 wait state. After register access is stable, qualify command-only streams
-separately at `7.5 MHz` and then the `15 MHz` target. The workload derivation
-and stress criteria are documented in
+separately at each actual CH347 step through the measured 7.5 MHz stress point.
+The command workload may require more throughput than the current bridge can
+safely provide; that is not permission to skip physical qualification. The
+workload derivation and stress criteria are documented in
 [`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md).
 
 ```bash

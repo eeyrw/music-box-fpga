@@ -102,6 +102,7 @@ class DryRunTransport : public host::RegisterIo, public render::CommandWordSink 
   }
 
   void write_command_words(const std::vector<uint32_t>& words) override {
+    host::Ch347RegisterTransport::validate_command_transaction(words);
     std::cout << "dry-run command";
     for (uint32_t word : words) {
       std::cout << " 0x" << std::hex << std::setw(8) << std::setfill('0') << word;
@@ -150,8 +151,8 @@ void print_usage(const char* argv0) {
       << "\nTransport options:\n"
       << "  --lib PATH              CH347 shared library path\n"
       << "  --device PATH|N         CH347 device path; N maps to /dev/ch34x_pisN\n"
-      << "  --clock-hz HZ           SPI clock request, default 1000000\n"
-      << "  --mode N                SPI mode 0..3, default 0\n"
+      << "  --clock-hz HZ           SPI clock request rounded down to a CH347 step, default 1000000\n"
+      << "  --mode N                SPI mode; Smart Artix requires 0\n"
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
       << "  --dry-run               Print register accesses without opening CH347\n"
       << "\nTest options:\n"
@@ -532,7 +533,14 @@ void read_counters(BoardAccess& board) {
 int main(int argc, char** argv) {
   try {
     Args args = parse_args(argc, argv);
+    if (args.ch347.spi_mode != 0) {
+      throw std::runtime_error("--mode must be 0 for the Smart Artix SPI bridge");
+    }
+    const int configured_clock_hz =
+        host::Ch347RegisterTransport::selected_clock_hz(args.ch347.clock_hz);
     if (args.poll_ms == 0) throw std::runtime_error("--poll-ms must be nonzero");
+    std::cout << "CH347 SPI requested=" << args.ch347.clock_hz
+              << " Hz configured=" << configured_clock_hz << " Hz mode=0\n";
 
     std::unique_ptr<host::Ch347RegisterTransport> hardware;
     DryRunTransport dry_run;

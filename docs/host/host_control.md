@@ -36,20 +36,34 @@ This interface is not used for voice configuration.
 
 `Ch347RegisterTransport` implements both boundaries:
 
-- normal register read/write frames for status, asset loading, and board debug;
+- normal register read/write frames for status, DDR diagnostics, and board
+  control;
 - opcode `0xa5` followed by consecutive big-endian command words for voice
   control.
 
-The register and command-stream timing limits are intentionally separate. The
-current command-stream workload model selects `15 MHz` as the physical
-validation target and `7.5 MHz` as its fallback; register reads retain the
-conservative board bring-up sequence because MISO turnaround is more
-restrictive. See
+The CH347 command API accepts one or more complete commands in a CS assertion,
+up to the adapter buffer's 63-word transfer limit. It rejects empty vectors,
+incomplete final commands, and headers above the command parser's 16-word
+payload limit before opening a transfer. Current command producers still send
+one command per CS. This host-side framing guard does not fix the FPGA bridge's
+near-full-FIFO atomicity defect.
+
+The register and command-stream timing limits are intentionally separate, but
+neither has a released physical rating yet. The current host requests `1 MHz`
+by default, which selects the CH347 `937.5 kHz` step. Bring-up then measures the
+actual `1.875 MHz` and `3.75 MHz` steps; `7.5 MHz` is an upper stress point for
+the present oversampling bridge. The former `15 MHz` write target is retained
+only as a throughput-analysis point until CDC, I/O constraints, and hardware
+measurements justify it. See
 [`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md)
 for the derivation, FIFO-capacity rule, CH347 transaction limit, and required
 hardware stress test. Register transaction limits and wire throughput are
 analyzed separately in
 [`../design/spi_register_timing.md`](../design/spi_register_timing.md).
+Only SPI mode 0 is accepted. Both host CLIs print the requested and selected
+clock so dry runs and hardware runs use the same discrete-frequency policy.
+Requests below the CH347 minimum `468.75 kHz` step are rejected rather than
+silently selecting a faster clock.
 
 Build the low-level tool with:
 

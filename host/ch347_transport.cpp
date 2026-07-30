@@ -18,42 +18,72 @@ constexpr ClockChoice kClockChoices[] = {
     {3750000, 4},  {1875000, 5},  {937500, 6},   {468750, 7},
 };
 
+constexpr size_t kMaxCommandPayloadWords = 16;
+constexpr size_t kMaxCommandTransactionWords = 63;
+
+ClockChoice clock_choice_for_hz(int requested_hz) {
+  if (requested_hz <= 0) {
+    throw std::runtime_error("CH347 SPI clock must be positive");
+  }
+  for (const ClockChoice& choice : kClockChoices) {
+    if (requested_hz >= choice.hz) return choice;
+  }
+  throw std::runtime_error(
+      "CH347 SPI clock request is below the 468750 Hz minimum");
+}
+
 }  // namespace
 
 Ch347RegisterTransport::Ch347RegisterTransport(const Ch347Options& options)
     : options_(options) {
+  if (options_.spi_mode != 0) {
+    throw std::runtime_error("Smart Artix SPI bridge requires mode 0");
+  }
+  const ClockChoice clock = clock_choice_for_hz(options_.clock_hz);
+  configured_clock_hz_ = clock.hz;
+
   library_ = dlopen(options_.library_path.c_str(), RTLD_NOW);
   if (!library_) throw std::runtime_error("failed to load " + options_.library_path + ": " + dl_error());
 
-  open_device_ = resolve<OpenDeviceFn>("CH347OpenDevice");
-  close_device_ = resolve<CloseDeviceFn>("CH347CloseDevice");
-  spi_init_ = resolve<SpiInitFn>("CH347SPI_Init");
-  spi_set_frequency_ = resolve_optional<SpiSetFrequencyFn>("CH347SPI_SetFrequency");
-  spi_write_ = resolve<SpiWriteFn>("CH347SPI_Write");
-  spi_write_read_ = resolve_optional<SpiWriteReadFn>("CH347SPI_WriteRead");
+  try {
+    open_device_ = resolve<OpenDeviceFn>("CH347OpenDevice");
+    close_device_ = resolve<CloseDeviceFn>("CH347CloseDevice");
+    spi_init_ = resolve<SpiInitFn>("CH347SPI_Init");
+    spi_set_frequency_ = resolve_optional<SpiSetFrequencyFn>("CH347SPI_SetFrequency");
+    spi_write_ = resolve<SpiWriteFn>("CH347SPI_Write");
+    spi_write_read_ = resolve_optional<SpiWriteReadFn>("CH347SPI_WriteRead");
 
-  fd_ = open_device_(options_.device_path.c_str());
-  if (fd_ < 0) throw std::runtime_error("CH347OpenDevice failed for " + options_.device_path);
-  opened_ = true;
+    fd_ = open_device_(options_.device_path.c_str());
+    if (fd_ < 0) throw std::runtime_error("CH347OpenDevice failed for " + options_.device_path);
+    opened_ = true;
 
-  if (spi_set_frequency_ && !spi_set_frequency_(fd_, uint32_t(options_.clock_hz))) {
-    throw std::runtime_error("CH347SPI_SetFrequency failed for " + std::to_string(options_.clock_hz) + " Hz");
-  }
-
-  SpiConfig config = {};
-  config.iMode = uint8_t(options_.spi_mode & 0x3);
-  config.iClock = clock_code_for_hz(options_.clock_hz);
-  config.iByteOrder = 1;
-  config.iChipSelect = options_.chip_select_mask;
-  config.iIsAutoDeativeCS = 1;
-  if (!spi_init_(fd_, &config)) {
-    throw std::runtime_error("CH347SPI_Init failed for " + options_.device_path);
+    SpiConfig config = {};
+    config.iMode = 0;
+    config.iClock = clock.code;
+    config.iByteOrder = 1;
+    config.iChipSelect = options_.chip_select_mask;
+    config.iIsAutoDeativeCS = 1;
+    if (!spi_init_(fd_, &config)) {
+      throw std::runtime_error("CH347SPI_Init failed for " + options_.device_path);
+    }
+    if (spi_set_frequency_ &&
+        !spi_set_frequency_(fd_, uint32_t(configured_clock_hz_))) {
+      throw std::runtime_error("CH347SPI_SetFrequency failed for " +
+                               std::to_string(configured_clock_hz_) + " Hz");
+    }
+  } catch (...) {
+    close();
+    throw;
   }
 }
 
-Ch347RegisterTransport::~Ch347RegisterTransport() {
+Ch347RegisterTransport::~Ch347RegisterTransport() { close(); }
+
+void Ch347RegisterTransport::close() noexcept {
   if (opened_ && close_device_) close_device_(fd_);
   if (library_) dlclose(library_);
+  opened_ = false;
+  library_ = nullptr;
 }
 
 void Ch347RegisterTransport::write_register(uint16_t address, uint32_t data) {
@@ -105,6 +135,7 @@ void Ch347RegisterTransport::write_registers(uint16_t start_address, const std::
 }
 
 void Ch347RegisterTransport::write_command_words(const std::vector<uint32_t>& words) {
+  validate_command_transaction(words);
   std::vector<uint8_t> bytes;
   bytes.reserve(1 + words.size() * 4);
   bytes.push_back(0xa5);
@@ -139,12 +170,34 @@ std::vector<uint32_t> Ch347RegisterTransport::read_registers(uint16_t start_addr
   return data;
 }
 
-unsigned char Ch347RegisterTransport::clock_code_for_hz(int requested_hz) {
-  if (requested_hz <= 0) throw std::runtime_error("CH347 SPI clock must be positive");
-  for (const ClockChoice& choice : kClockChoices) {
-    if (requested_hz >= choice.hz) return choice.code;
+int Ch347RegisterTransport::selected_clock_hz(int requested_hz) {
+  return clock_choice_for_hz(requested_hz).hz;
+}
+
+void Ch347RegisterTransport::validate_command_transaction(
+    const std::vector<uint32_t>& words) {
+  if (words.empty()) {
+    throw std::invalid_argument("CH347 command transaction must not be empty");
   }
-  return kClockChoices[sizeof(kClockChoices) / sizeof(kClockChoices[0]) - 1].code;
+  if (words.size() > kMaxCommandTransactionWords) {
+    throw std::invalid_argument(
+        "CH347 command transaction exceeds the 63-word transfer limit");
+  }
+
+  size_t offset = 0;
+  while (offset < words.size()) {
+    const size_t payload_words = size_t(words[offset] & 0xffu);
+    if (payload_words > kMaxCommandPayloadWords) {
+      throw std::invalid_argument(
+          "CH347 command header exceeds the current 16-word payload limit");
+    }
+    const size_t command_words = payload_words + 1u;
+    if (command_words > words.size() - offset) {
+      throw std::invalid_argument(
+          "CH347 command transaction ends with an incomplete command");
+    }
+    offset += command_words;
+  }
 }
 
 std::string Ch347RegisterTransport::dl_error() {

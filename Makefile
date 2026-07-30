@@ -461,6 +461,10 @@ test-cpp-unit:
 		sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
+	$(CXX) $(CXX_STD_FLAGS) -I. \
+		host/ch347_transport.cpp host/ch347_transport_test.cpp \
+		-o $(BUILD_DIR)/ch347_transport_test -ldl
+	$(BUILD_DIR)/ch347_transport_test
 	python3 tools/compare_reference_fluidsynth_test.py
 	python3 tools/vivado_report_summary_test.py
 
