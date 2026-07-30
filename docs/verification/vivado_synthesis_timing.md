@@ -652,9 +652,87 @@ Choose based on the current resource balance and endpoint path:
 - use symmetry or a smaller table only when the reconstruction arithmetic is
   cheaper than the saved memory and still closes timing.
 
-The current design has 52.67% BRAM use, so an extra lookup BRAM is possible in
-principle, but it must be evaluated against placement near existing DSP/BRAM
-clusters rather than from capacity alone.
+The signed-off implementation has 66.67% BRAM-tile use, so an extra lookup BRAM
+is possible in principle, but it must be evaluated against placement near
+existing DSP/BRAM clusters rather than from capacity alone.
+
+#### Generated Lookup-ROM Mapping Audit
+
+The 2026-07-30 audit used the signed-off Vivado 2025.2 Smart Artix build for
+`xc7a50tfgg484-2`, synthesis checksum `1c312326`. It checked both the synthesis
+log and the routed checkpoint. This distinction matters: an RTL attribute or a
+preliminary inference message is not proof that the final design contains the
+intended primitive.
+
+Use this procedure after changing a generated table, its address pipeline, or
+the number of lookup consumers:
+
+1. Run a forced, non-incremental project synthesis and implementation. Confirm
+   the tool version, source checksum, and completion time before using the
+   reports.
+2. Inspect `smart_artix.runs/synth_smart_artix_top/runme.log` under `ROM:
+   Preliminary Mapping Report`. This report names the RTL object, normalized
+   depth and width, and whether Vivado initially selected `LUT` or `Block RAM`.
+   Do not rely only on `Block RAM: Final Mapping Report`; constant ROMs are not
+   listed there in this Vivado run.
+3. Open the routed checkpoint and enumerate the physical block-memory cells in
+   each consumer hierarchy. For example:
+
+   ```tcl
+   open_checkpoint build/fpga/smart_artix/vivado/checkpoints/post_route.dcp
+   foreach cell [get_cells -hierarchical -filter {
+       REF_NAME == RAMB18E1 || REF_NAME == RAMB36E1
+   }] {
+     puts "[get_property REF_NAME $cell] [get_property NAME $cell]"
+   }
+   ```
+
+4. Correlate primitive names, inferred dimensions, and the RTL access stage.
+   Synthesis may name a ROM after its registered address or destination rather
+   than after the package constant.
+5. Check distributed RAM separately. In this build, the compressor's 50
+   `RAMS64E` cells implement the explicitly attributed 64 x 50 lookahead delay
+   line; they are not generated DSP lookup tables.
+6. Use an isolated synthesis or an A/B implementation to measure the exact LUT
+   cost of a combinational ROM. Hierarchy utilization includes its arithmetic,
+   control, and muxing, and optimization may merge table logic with consumers.
+
+The generated arrays are declared in
+`rtl/generated/synth_dsp_lut_pkg.sv`. Vivado normalized unused or redundant
+address/data bits, so the inferred dimensions below do not always match the
+source declaration exactly.
+
+| Generated table | Source shape | Vivado ROM mapping | Routed result |
+| --- | ---: | --- | --- |
+| `ENV_CB_TO_Q15_MANTISSA_LUT` | 121 x 24 | 128 x 23 Block RAM | 1 `RAMB18E1` |
+| `ENV_Q15_TO_CB_MANTISSA_LUT` | 64 x 32 | 64 x 26 Block RAM | 1 `RAMB18E1` |
+| `COMP_CB_TO_Q15_MANTISSA_LUT` | 121 x 24 | 128 x 23 Block RAM | 1 `RAMB18E1` |
+| `COMP_MAG_TO_CB_MANTISSA_LUT` | 129 x 26 | 256 x 26 Block RAM | 1 `RAMB18E1` |
+| `ENV_CB_OCTAVE_Q12_20_LUT` | 17 x 32 | four 32 x 26 LUT ROM reads | Slice LUT logic |
+| `COMP_CB_OCTAVE_Q12_20_LUT` | 17 x 32 | eight 32 x 26 LUT ROM reads | Slice LUT logic |
+| `CHORUS_SINE_QUARTER_Q1_15_LUT` | 257 x 16 | two 512 x 15 LUT ROM reads | Slice LUT logic |
+| `FDN_DELAY_LENGTH_LUT`, `FDN_DELAY_BASE_LUT` | 8 x 16 each | 3-bit-address ROMs below the BRAM threshold | Slice LUT/constant logic |
+
+The four large mantissa tables therefore consume four `RAMB18E1` primitives,
+equivalent to two BRAM36 tiles. They are not responsible for a large Slice-FF
+array. The LUT-mapped tables are combinational ROM logic; only their surrounding
+address, result, and pipeline state uses flip-flops.
+
+The remaining table cost is meaningful but not the main source of the design's
+25,633 Slice LUTs. A naive six-input-LUT decomposition budgets about 240 LUTs
+for the two 512 x 15 ROM reads and 312 table-output LUTs for the twelve 32 x 26
+octave-table reads. Treat these as structural estimates, not reportable
+post-route attribution, because Vivado can simplify constants, use dedicated
+mux resources, and merge downstream logic.
+
+The first lookup-specific optimization candidate is the chorus sine table. A
+single synchronous true-dual-port ROM could serve the left and right lookup in
+one cycle and should fit in one `RAMB18E1`. This requires an explicit module-local
+ROM template, one additional lookup cycle in the chorus pipeline, exact-output
+regression tests, and a fresh synthesis/route comparison. The octave tables are
+small enough that forcing each copy into BRAM would waste capacity; reduce
+duplicate read sites or share a registered result before considering block RAM.
+Keep the four existing mantissa-ROM mappings as a synthesis acceptance gate.
 
 ### Eliminate Or Reorder Expensive Arithmetic
 

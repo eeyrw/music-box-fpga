@@ -122,6 +122,16 @@ the active voice RAM write path rather than either conversion pipeline. DRC
 reports zero errors and zero critical warnings. These figures are an
 optimization checkpoint, not post-route timing closure.
 
+The current 2026-07-30 routed implementation provides a more precise lookup
+mapping result. `ENV_CB_TO_Q15_MANTISSA_LUT` occupies one `RAMB18E1` after being
+normalized to 128 x 23, and `ENV_Q15_TO_CB_MANTISSA_LUT` occupies one
+`RAMB18E1` after being normalized to 64 x 26. The shared 17-entry octave table
+is implemented as Slice LUT logic at each combinational read site. It is not a
+large flip-flop array. The complete method, generated-table inventory, physical
+primitive check, and current resource interpretation are recorded in
+`docs/verification/vivado_synthesis_timing.md` under "Generated Lookup-ROM
+Mapping Audit".
+
 ## Verification
 
 Run the following checks after changing the algorithm or table precision:
