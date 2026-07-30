@@ -1,10 +1,13 @@
 # System Architecture Backlog
 
 This document records unresolved architecture work for the production
-voice-major wavetable synthesizer. Items here may change internal protocols,
-scheduling, software-visible commands, latency, or ownership boundaries. Each
-change requires a focused migration, matching contract updates, and
-self-checking verification.
+voice-major wavetable synthesizer. It is not an implementation plan for work
+that has already landed. Current module ownership and stable contracts remain
+in `system_design.md`, `rtl_module_map.md`, `../fixed_point.md`,
+`../memory_format.md`, and `../register_map.md`.
+
+The status in this document was refreshed against the production RTL and the
+measured simulation and Vivado results on 2026-07-30.
 
 ## Current Baseline
 
@@ -12,14 +15,16 @@ The production path is:
 
 ```text
 SPI direct command stream or CMD_FIFO_DATA
-  -> compact command FIFO and semantic validation
+  -> 1024-word command FIFO, parser, and generation validation
   -> banked mono voice state
-  -> hierarchical active-voice selection
-  -> voice-major blocks of up to eight output frames
+  -> ascending scan of all configured voice IDs
+  -> voice-major blocks of up to 16 output frames
+  -> single-context envelope frontend and 8-entry voice-job storage
+  -> per-voice endpoint planning into ordered line descriptors
   -> one persistent 32-word sample window per voice
-  -> ordered 8-word DDR refill requests
-  -> signed 25-bit stereo block mix
-  -> chorus/reverb and return mix
+  -> ordered 8-word DDR requests
+  -> fixed eight-lane DSP barrel and signed 25-bit stereo block mix
+  -> global chorus/reverb and return mix
   -> look-ahead compressor and master gain
   -> PCM output FIFO
   -> I2S
@@ -29,28 +34,103 @@ One hardware voice renders one mono sample stream. Linked SoundFont stereo
 material is allocated as two mono voices by C++. A mono sample is interpolated
 once and duplicated before independent left/right gain.
 
-START installs one complete voice and clears phase and filter history. Runtime
-GAIN, FILTER, PITCH, ENV, RELEASE, and STOP commands require the active
-generation. PITCH changes `phase_inc` without reloading phase.
+`VOICE_START_MONO` installs one complete voice and clears phase and filter
+history. Runtime GAIN, FILTER, PITCH, ENV, RELEASE, and STOP commands require the
+active 16-bit generation. PITCH changes `phase_inc` without reloading phase.
+Commands are visible at render-block boundaries; the external command format
+does not carry a requested target frame.
 
-Commands enter one 1024-word FIFO through either the dedicated SPI stream or the
-register plane. The renderer does not accept a block until pending commands have
-drained. Commands therefore become visible at block boundaries, but the
-external command format does not carry a requested target frame.
+The renderer no longer uses the earlier hierarchical active-voice selector or
+dynamic eight-slot scheduler. It scans voice IDs 0 through 511, skips inactive
+synchronous snapshots, and stores up to eight prepared jobs. Job payload,
+endpoint samples, and ordered line descriptors use synchronous BRAM. A fixed
+eight-lane modulo barrel covers filter feedback latency without a dynamic
+hazard search.
 
-Voice state is physically split into region, event parameter, envelope
-parameter, and dynamic-state BRAM banks. The renderer writes advancing phase,
-envelope state, active state, and filter history back through the dynamic bank.
-A two-bank block mix buffer separates fill and read ownership.
+The generic memory contract remains ordered and untagged: one 128-bit response
+per accepted 8-word request. `voice_sample_window` owns one request state
+machine and one current miss/refill context, but it may issue all four requests
+of a 32-word refill before their responses return. On Smart Artix,
+`smart_artix_ddr3_line_reader` has eight request/response entries and the
+read/write arbiter tracks up to 16 accepted render reads while preserving
+response order.
 
-The generic memory contract is one ordered, untagged 128-bit response per
-accepted 8-word request. A 32-word window refill issues four requests. On Smart
-Artix, requests pass through `smart_artix_ddr3_line_reader` and
-`smart_artix_ddr3_rw_arbiter` to the MIG app interface.
+`voice_major_system` still owns one output block at a time. It does not request
+block N+1 until block N has been read through the effects input and its mix
+buffer has been released. The two-bank mix buffer therefore protects ownership
+and backpressure but is not yet used for render/effects block overlap.
 
-The Smart Artix system uses the MIG UI clock as the system clock. System reset
-remains asserted until MIG calibration completes, and renderer reset remains
-asserted until the asset loader publishes `asset_loaded`.
+The Smart Artix top uses the MIG 100 MHz UI clock as the render, control, and
+audio system clock. System reset remains asserted until MIG calibration
+completes, and renderer reset remains asserted until the SD asset loader
+publishes `asset_loaded`.
+
+## Measured Baseline
+
+The current project defaults are 512 voices, 16-frame blocks, eight job entries,
+100 MHz system clock, and 48 kHz output.
+
+The 2026-07-29 one-second timed-DDR3 renderer stress reached 512 active voices
+and 48,000 output frames with zero renderer deadline misses. Its maximum
+renderer latency was 29,164 clocks in the measured DDR phase. This is useful
+renderer evidence, but the simulation bridge is not board-equivalent.
+
+The 2026-07-30 one-second timed-DDR3 plus production RTL effects stress also
+reached 512 active voices and produced 48,000 frames. It measured:
+
+| Metric | Result |
+| --- | ---: |
+| Maximum renderer latency | 31,905 clocks |
+| Maximum render-to-effects-release latency | 33,228 clocks |
+| Renderer deadline misses | 0 |
+| End-to-end deadline misses | 4 |
+| Effects maximum processing cost | 87 clocks/frame |
+| DDR reads / row misses | 3,864,271 / 1,405,786 |
+
+The four end-to-end misses were short eight-frame blocks cut by the simulation
+harness at MIDI/control boundaries. The board wrapper always requests 16-frame
+blocks, but a full block has only 33,333 clocks at 48 kHz and the measured
+33,228-clock end-to-end maximum leaves only 105 clocks of margin. The generic
+renderer/effects path therefore has functional coverage but not a comfortable
+capacity margin.
+
+The latest forced Smart Artix implementation fits and closes the constrained
+internal 100 MHz domain:
+
+| Item | Post-route result |
+| --- | ---: |
+| Slice LUTs | 25,633 / 32,600 (78.63%) |
+| Slice registers | 26,874 / 65,200 (41.22%) |
+| DSP48E1 | 39 / 120 (32.50%) |
+| Block RAM tiles | 50 / 75 (66.67%) |
+| Setup WNS / TNS | +0.047 ns / 0 ns |
+| Hold WHS / THS | +0.053 ns / 0 ns |
+| Routed nets / DRC errors | 48,436 of 48,436 / 0 |
+
+This establishes fit and internal timing closure for the current source and
+constraints. It does not close external SPI/I2S delays, physical DDR/SD/audio
+qualification, multiple placement seeds, or architecture growth margin.
+
+## Closed Since The Previous Baseline
+
+These items should not be carried as open architecture work:
+
+- The project default and command voice ID now support 512 voices.
+- Render requests use up to 16 frames; the default was selected from an 8/16
+  timed-DDR3 comparison.
+- The dynamic slot scheduler was replaced by bounded job storage, a
+  single-context frontend, ordered line descriptors, and a fixed DSP barrel.
+- Renderer working records and line descriptors were moved to synchronous BRAM.
+- The Smart Artix line reader now queues eight requests/responses and the
+  arbiter supports multiple ordered render reads.
+- Control, rendering, effects, and audio intentionally use the MIG UI clock.
+  DDR calibration is a prerequisite for the complete system; an independent
+  always-on control island is not required, avoiding otherwise unnecessary CDC
+  and reset-domain complexity.
+- RTL DDR3 renders can instantiate the production chorus, reverb, compressor,
+  and master-gain path and report renderer and end-to-end latency separately.
+- A fresh 512-voice Smart Artix implementation fits, is fully routed, and closes
+  the currently constrained internal setup and hold checks.
 
 ## Open Architectural Findings
 
@@ -58,411 +138,311 @@ asserted until the asset loader publishes `asset_loaded`.
 
 `spi_register_bridge` samples synchronized SPI signals in the system-clock
 domain and publishes command words individually. The command FIFO protects
-normal backpressure, but it does not provide:
+normal backpressure, but it does not provide complete-command atomicity at the
+physical boundary, pre-publication length/CRC validation, sequence numbers,
+ACK/NACK, retry, duplicate suppression, or a formally constrained SCLK CDC.
 
-- complete-command atomicity at the physical transport boundary;
-- length and CRC validation before publication;
-- sequence numbers, ACK/NACK, retry, or duplicate suppression;
-- a formally constrained SCLK-to-system-clock crossing.
-
-The transport should receive and validate a complete request in the SCLK domain,
-then cross it through an explicit clock-domain-safe packet boundary. Credits
-must describe complete packets or bytes rather than optimistic word capacity.
-
-Detailed electrical and protocol tasks belong in
-`spi_transport_backlog.md`.
+The transport should receive and validate a complete request in the SCLK domain
+and cross it through an explicit packet boundary. Credits must describe
+complete packets or bytes. Detailed tasks remain in `spi_transport_backlog.md`.
 
 ### A2: Command Timing Is Block-Boundary Based, Not Timestamped
 
 The command plane drains before a block is admitted. This gives deterministic
 block-boundary visibility, but the host cannot request an exact future audio
-frame. A command arriving during an eight-frame block waits for the next block,
-and the system cannot distinguish an intentionally scheduled event from a late
-event.
+frame. The fixed board wrapper always requests 16 frames, while simulation may
+shorten blocks at MIDI/control boundaries; neither path carries an event target
+frame in the hardware command.
 
-A timestamped scheduler should define:
+A timestamped scheduler must define target width and wrap, scheduling horizon,
+late-event policy, simultaneous ordering, generation interaction, and whether a
+block is shortened or split at an event boundary.
 
-- target-frame width and wrap behavior;
-- scheduling horizon and host lead requirements;
-- late-event policy;
-- whether a block is shortened or split at an event boundary;
-- ordering of simultaneous commands;
-- reset, retry, and generation interaction.
+### A3: Core Memory Service Has One Miss/Refill Context
 
-### A3: The Sample Window Allows Only One Memory Transaction Sequence
+Board-side single-outstanding service is no longer the limitation: the line
+reader and arbiter accept multiple ordered reads. The remaining serialization
+is inside `voice_sample_window`. It accepts one client lookup at a time and one
+miss or refill sequence owns its state machine until the response sequence
+completes. A 32-word refill can have four ordered reads in flight, but another
+job cannot begin an independent lookup or miss during that sequence.
 
-The per-voice 32-word windows provide useful locality and remove cross-voice
-replacement, but `voice_sample_window` has one global request state machine.
-Only one refill or fallback sequence can be active at a time. A refill consumes
-four ordered DDR requests before another miss can progress.
-
-The next memory study should measure whether the current single-outstanding
-contract is sufficient at qualified polyphony and DDR stalls. If it is not,
-evaluate a bounded tagged interface with:
-
-- multiple refill contexts;
-- demand merging for the same voice/window;
-- explicit response IDs or a proven ordered multi-request contract;
-- separate demand and prefetch accounting;
-- bounded storage and cancellation behavior.
-
-Do not replace the window policy from average hit rate alone. Selection requires
-worst-case deadline results and post-route resource/timing comparison.
+First measure the current context under a board-equivalent memory profile. If
+deadlines require more concurrency, evaluate a bounded number of core miss
+contexts, same-window demand merging, response identification, cancellation,
+and reset behavior. Do not replace the window policy from average hit rate
+alone; require worst-case deadline and post-route comparisons.
 
 ### A4: The Long RTL DDR3 Render Is Not Board-Equivalent
 
-`render-rtl-ddr3` exercises the production command plane, block renderer,
-32-word windows, 8-word ordered transactions, and a timed DDR3 model. It does
-not instantiate the Smart Artix line reader, read/write arbiter, asset writer,
-register DDR master, or MIG-ready behavior in one render top.
+`render-rtl-ddr3` covers the production command plane, renderer, windows,
+ordered transactions, timed DDR3 behavior, and optionally the production RTL
+effects chain. It still does not instantiate the Smart Artix line reader,
+arbiter, asset writer, register DDR master, or MIG-ready behavior in one long
+render top.
 
-A board-equivalent performance harness must include:
+A board-equivalent performance harness must include the asset-load-to-playback
+ownership transition and playback reads competing with permitted diagnostic
+traffic, plus representative MIG command and return gaps,
+arbitration-delay/starvation counters, render deadlines, output lead, and
+underrun accounting. The normal system holds playback in reset while the loader
+owns asset writes, so loader/playback concurrency is not a required workload.
+Directed unit tests of the reader and arbiter do not replace this integrated
+workload.
 
-- the Smart Artix line reader and arbiter;
-- playback reads competing with permitted register and loader traffic;
-- representative MIG command-ready and read-return gaps;
-- arbitration delay and starvation measurements;
-- render deadline, output lead, and underrun accounting.
+### A5: Renderer And Effects Are Serialized At Block Ownership
 
-The behavioral DDR3 harness remains useful for renderer and row-timing
-regression, but it is not sufficient for board capacity sign-off.
+The measured RTL-effects path confirms that effects cost and block release now
+matter to the real-time budget. `voice_major_system` waits for the current block
+to render, drains every frame into the effects chain, and releases it before
+requesting the next block. The second mix-buffer bank is not used concurrently.
 
-### A5: Renderer And Effects Are Not Fully Overlapped
-
-The block mix buffer has two banks, but `voice_major_system` owns one
-output block at a time and requests the next block only after the current block
-has passed through effects and been released. Renderer, spatial effects,
-compressor, and FIFO transfer therefore do not form a fully overlapped block
-pipeline.
-
-Evaluate whether the wrapper can safely run:
+The next throughput change should evaluate:
 
 ```text
 renderer block N+1
-effects block N
-compressor/output block N-1
+effects and output ingestion for block N
+compressor/output FIFO work from earlier frames
 ```
 
 Every boundary must retain data under backpressure without duplication,
-reordering, or early block release. The benefit must be measured as additional
-deadline margin or reduced output lead.
+reordering, or early release. Acceptance requires the same 512-voice timed-DDR3
+plus RTL-effects workload and a meaningful margin below the 33,333-clock full
+block deadline.
 
 ### A6: Effect Sends Are Global
 
 The renderer produces one dry stereo mix. Global chorus and reverb sends apply
 to that complete mix, so MIDI and SoundFont per-voice send semantics cannot be
-represented.
+represented. A complete design needs per-voice send values and separate dry,
+chorus-send, and reverb-send stereo accumulators. Accumulator RAM, multiplier
+scheduling, return routing, and the C++ reference contract must be designed
+together.
 
-A complete implementation needs per-voice chorus and reverb send values and
-three exact-width stereo accumulators:
-
-```text
-dry mix
-chorus-send mix
-reverb-send mix
-```
-
-The accumulator RAM cost, voice DSP multiplier schedule, return routing, and C++
-reference contract must be designed together.
-
-### A7: Control And Mute Depend On DDR Calibration
-
-SPI, platform status, renderer, and audio logic run from the MIG UI clock and
-share reset ownership with DDR calibration. If calibration never completes,
-the control interface needed to diagnose the failure is unavailable.
-
-The board needs an always-on island driven by a stable board clock. It should
-retain:
-
-- reset cause and calibration timeout;
-- loader and memory fault status;
-- output mute authority;
-- a minimal readable status interface;
-- controlled reset of the memory/render domain.
-
-Clock-domain crossings and reset ordering between this island, MIG/render, and
-audio must be explicit.
-
-### A8: DDR Transactions Have No Bounded Failure Recovery
+### A7: DDR Transactions Have No Bounded Failure Recovery
 
 The line reader, register access master, and arbiter can wait indefinitely for
-command acceptance or read completion. There is no timeout, cancellation,
-local reinitialization, or specified response to calibration loss with work in
-flight.
+command acceptance or read completion. Queue depth bounds occupancy, not
+latency. There is no timeout, cancellation, local reinitialization, or defined
+response to calibration loss with work in flight.
 
-Define:
+Define service bounds and arbitration guarantees, sticky first-failure status,
+command/response timeouts, cancellation or local reset, and mute/reprime/restart
+behavior. Tests must inject missing responses, stuck ready, calibration loss,
+and local resets.
 
-- maximum service latency for playback reads;
-- arbitration guarantees for playback, loader, and diagnostics;
-- command and response timeouts;
-- sticky fault and first-failure information;
-- cancellation or local-reset behavior;
-- mute, reprime, and restart sequence.
+### A8: Asset Readiness Does Not Establish Address Ownership
 
-Tests must inject missing responses, stuck ready signals, calibration loss, and
-local resets.
+The native-SD loader now has substantial protocol and retry coverage and
+publishes `asset_loaded` only after its raw-image load completes. That still
+does not prove that every later START address belongs to a validated playable
+sample. Voice commands validate local length and loop relationships but not an
+authoritative manifest-owned region.
 
-### A9: Asset Readiness Does Not Fully Establish Address Ownership
+Remaining work includes complete image integrity validation, overflow-safe DDR
+range proof, a versioned manifest of playable mono regions, START/descriptor
+validation against that manifest, and coherency rules for diagnostic DDR
+writes. Full-SF2 loading should also be compared with a compact wave-bank
+format.
 
-`asset_loaded` should prove that every playable address belongs to a validated
-asset. The loader and command plane currently validate local lengths and loop
-relationships, but voice addresses are not checked against an authoritative
-manifest-owned range.
+### A9: START Repeats Sample Metadata
 
-Required work includes:
+Compact START still sends base address, length, loop points, envelope, and
+filter parameters for each note. Layered presets and repeated notes consume
+transport bandwidth for mostly invariant data.
 
-- complete header, version, flag, reserved-field, and checksum validation;
-- overflow-safe proof that the loaded byte range fits installed DDR;
-- a versioned manifest of valid mono sample regions;
-- validation of base, length, and exclusive loop endpoints against that
-  manifest;
-- generation or cache-invalidation rules for diagnostic DDR writes;
-- comparison of full-SF2 loading with a compact wave-bank format.
+Evaluate an atomically published, asset-owned descriptor table. A descriptor
+START could carry generation, descriptor ID, gains/pitch overrides, and runtime
+policy. Descriptor loading, manifest validation, packet atomicity, generations,
+and host cache ownership form one contract.
 
-### A10: START Repeats Sample Metadata
+### A10: Point Updates Are Expensive For Modulation
 
-The compact START command removes wide intermediate actions, but it still sends
-base address, length, loop points, envelope parameters, and filter parameters
-for each note. Layered presets and repeated notes therefore consume command
-bandwidth for data that is often invariant.
+Periodic GAIN, PITCH, and FILTER commands consume transport bandwidth and
+produce parameter steps. Compact ramp events should define target, start frame,
+duration, exact rounding, replacement rules, and interaction with STOP,
+RELEASE, and generation reuse. Gain and phase-increment ramps are the first
+candidates; filter ramps need a stability-preserving coefficient policy.
 
-Evaluate a validated descriptor table loaded with the asset. A descriptor-based
-START could contain generation, descriptor ID, gains/pitch overrides, and
-runtime policy. Descriptor publication must be atomic so a partially loaded
-descriptor is never observable.
+### A11: PCM16 Voice Contributions May Lose Headroom
 
-Descriptor loading, asset generation, command packet atomicity, and host cache
-ownership must be defined as one contract.
+Each voice is saturated to PCM16 after filter, channel gain, and envelope gain,
+then accumulated exactly into the signed 25-bit block mix. A filter-amplified
+voice can therefore clip before the compressor or master gain sees the sum.
 
-### A11: Point Updates Are Expensive For Modulation
+Keep PCM16 unless measured 20- or 24-bit contributions demonstrate audible
+benefit. Any change requires an exact accumulator-width derivation, clip/peak
+statistics, bit-exact C++/RTL tests, listening comparisons, and post-route
+resource/timing results.
 
-The host sends periodic GAIN, PITCH, and FILTER commands for controller changes,
-vibrato, and modulation. At high polyphony this consumes transport bandwidth and
-can produce frame-to-frame parameter steps.
-
-Compact ramp events should define:
-
-- target value;
-- target start frame;
-- duration;
-- exact rounding;
-- interruption and replacement rules;
-- interaction with STOP, RELEASE, and generation reuse.
-
-Gain and phase-increment ramps are the first candidates. Filter ramps require a
-stability-preserving coefficient policy.
-
-### A12: PCM16 Voice Contributions May Lose Headroom
-
-Each voice is saturated to signed PCM16 after filter, channel gain, and envelope
-gain, then accumulated into the signed 25-bit block mix. A filter-amplified voice
-can clip before the global compressor or master gain can manage the sum.
-
-Evaluate 20- and 24-bit voice contributions with:
-
-- exact accumulator-width derivation;
-- explicit internal-headroom policy;
-- clipping and saturation statistics;
-- listening comparisons;
-- bit-exact C++/RTL regressions;
-- DSP, BRAM, timing, and power comparison.
-
-Keep PCM16 unless wider contributions demonstrate a useful audible benefit
-within the implementation budget.
-
-### A13: Audio Timeline, Clocking, And Recovery Are Incomplete
+### A12: Audio Timeline, Clocking, And Recovery Are Incomplete
 
 The compressor contributes 48 frames of algorithmic look-ahead and the output
 FIFO normally contributes another 48 frames of scheduling lead. Rendered,
 effect-complete, compressed, queued, and played positions are not represented
-as one coherent timeline.
+as one coherent timeline. The current effects and host presets assume 48 kHz.
 
-The product contract must also decide whether audio is fixed at 48 kHz or truly
-sample-rate configurable. Effect delays and host presets currently assume
-48 kHz.
+Define algorithmic delay versus safety reservoir, coherent frame counters,
+sample-rate policy, codec clock/slot/reset/mute requirements, pop-free underrun,
+FIFO reprime, and played-frame resynchronization.
 
-Required decisions include:
+### A13: Diagnostics Need Profiles And Coherent Capture
 
-- algorithmic delay versus underrun reservoir;
-- one coherent set of audio-frame counters;
-- codec MCLK, slot format, reset, configuration, and mute;
-- pop-free underrun behavior;
-- FIFO reprime and played-frame resynchronization;
-- generation of every sample-rate-dependent constant.
+Fresh hierarchical utilization and post-route timing reports now exist, so the
+old request for an integrated report is closed. The remaining diagnostic issue
+is architectural: multiword observations are not uniformly captured at one
+instant, and detailed qualification counters consume routing and carry chains.
 
-### A14: Diagnostics And Timing Need Production Profiles
+Define a small health set in the existing system domain, a coherent snapshot
+operation, qualification-only counters, overflow/clear semantics, and a
+repeatable multi-seed implementation margin target.
 
-Detailed counters are valuable for qualification but consume routing, carry
-chains, and status logic. Multiword observations are not uniformly captured at
-one coherent instant, and the integrated voice-major Smart Artix top needs a
-fresh implementation report.
+## Immediate Next Change
 
-Define:
+A5 block ownership overlap is the next implementation target. The current
+timed-DDR3 plus RTL-effects result leaves only 105 clocks below a full 16-frame
+deadline, and the serialization point is explicit in `voice_major_system`.
+Unlike command transport, asset descriptors, per-voice sends, or wider voice
+precision, this change does not require a new external contract.
 
-- a small always-on health set;
-- a coherent diagnostic snapshot operation;
-- qualification-only performance counters;
-- counter overflow and clear semantics;
-- hierarchical utilization and critical-path reports;
-- setup-margin targets across multiple placement seeds.
+The first implementation should remain narrowly scoped:
 
-## Workstreams
+- allow the renderer to acquire the free mix-buffer bank for block N+1 while
+  the output path drains block N into the effects chain;
+- track render-owned and output-owned buffer IDs independently;
+- retain completed blocks and effect input data under backpressure;
+- release each buffer only after its final frame is accepted exactly once;
+- define reset behavior for a rendering block and a draining block;
+- preserve command visibility at the next admitted render-block boundary.
 
-### P0: Board-Equivalent Measurement
+Focused tests must cover consecutive blocks, effects backpressure, output FIFO
+pressure, reset in each ownership state, exact frame ordering, and absence of
+duplicate or early releases. Then repeat the existing 512-voice timed-DDR3 plus
+RTL-effects workload and report both renderer latency and render-to-effects
+release latency. A4 board-equivalent integration follows as validation of the
+same scheduler change, not as a prerequisite for removing the known
+serialization.
 
-- [ ] Build a render top containing the Smart Artix line reader, arbiter, and
-  representative MIG behavior.
-- [ ] Include permitted register DDR traffic and loader arbitration.
-- [ ] Add deterministic maximum-polyphony mono and linked-stereo-pair workloads.
-- [ ] Inject qualified long stalls, ready gaps, row conflicts, and refresh.
-- [ ] Record render-cycle distribution, deadline misses, minimum output lead,
-  useful fetched words, refill count, fallback count, and arbitration delay.
-- [ ] Produce fresh hierarchical Vivado utilization and timing reports.
-- [ ] Run the required placement seeds and enforce a setup-margin target.
+## Prioritized Workstreams
 
-### P0: Reliable Control Transport
+### P0: Block Overlap And Board-Equivalent Validation
 
-- [ ] Complete the P0 items in `spi_transport_backlog.md`.
-- [ ] Define atomic packet length, sequence, CRC, ACK/NACK, and retry.
-- [ ] Implement an SCLK-domain receiver and explicit CDC queues.
-- [ ] Publish only validated complete commands.
-- [ ] Prove duplicate retry produces exactly-once command publication.
-- [ ] Establish a measured maximum SPI rate.
+- [ ] Allow rendering into the free mix-buffer bank while effects drain the
+  published bank.
+- [ ] Prove independent bank ownership, backpressure, release, reset, and frame
+  ordering with focused self-checking tests.
+- [ ] Re-run the 512-voice timed-DDR3 plus RTL-effects workload and require a
+  meaningful end-to-end margin below the full-block deadline.
+- [ ] Build a long render top containing the Smart Artix line reader, arbiter,
+  register master, asset-load-to-playback transition, and representative MIG
+  behavior.
+- [ ] Replay maximum-polyphony mono and linked-stereo workloads with long
+  stalls, ready gaps, row conflicts, refresh, and permitted diagnostic traffic.
+- [ ] Record render/effects-release distributions, deadline misses, output lead,
+  underruns, useful fetched words, refill/fallback counts, queue occupancy, and
+  arbitration delay.
+- [ ] Re-run fresh implementation and required placement seeds after the
+  scheduler ownership change.
 
-### P0: Clock And Fault Domains
+### P0: Reliable Control And DDR Fault Handling
 
-- [ ] Define an always-on control/status/mute island.
-- [ ] Specify reset ordering and CDC boundaries.
-- [ ] Add DDR command and response timeouts.
-- [ ] Define playback, loading, and diagnostic arbitration guarantees.
-- [ ] Test calibration failure and loss, missing responses, and local reset.
-- [ ] Define mute, reservoir reprime, and restart behavior.
+- [ ] Complete the P0 packet/CDC work in `spi_transport_backlog.md`.
+- [ ] Add DDR service timeouts, arbitration guarantees, and sticky fault data.
+- [ ] Define calibration-loss, mute, reservoir-reprime, and restart behavior.
+- [ ] Test truncation, CRC/sequence retry, missing DDR responses, stuck ready,
+  calibration failure/loss, and local reset.
 
 ### P0: Asset Integrity
 
-- [ ] Validate every enabled header and content-integrity field.
-- [ ] Prove the complete load range fits installed DDR without overflow.
-- [ ] Define the versioned sample-region manifest.
+- [ ] Prove the complete loaded range fits installed DDR without overflow.
+- [ ] Define the versioned sample-region manifest and integrity fields.
 - [ ] Validate every START or descriptor against the manifest.
 - [ ] Define diagnostic-write coherency during playback.
 - [ ] Compare full-SF2 and compact wave-bank loading.
 
-### P1: Timestamped Events And Ramps
+### P1: Timestamped Events, Ramps, And Descriptors
 
-- [ ] Define target-frame and late-event semantics.
-- [ ] Split or shorten blocks at event boundaries.
-- [ ] Define gain and phase-increment ramp commands.
-- [ ] Add exact tests for simultaneous, late, overlapping, and interrupted
-  events.
-- [ ] Measure command-bandwidth reduction with real MIDI/SF2 workloads.
+- [ ] Define target-frame, wrap, ordering, and late-event semantics.
+- [ ] Split or shorten blocks at event boundaries without invalidating in-flight
+  work.
+- [ ] Define exact gain and phase-increment ramp commands and interruption rules.
+- [ ] Define atomically loaded descriptors, generations, and compact START.
+- [ ] Measure transport reduction and latency with real MIDI/SF2 workloads.
 
-### P1: Memory Concurrency
+### P1: Core Memory Concurrency
 
-- [ ] Establish the worst-case capacity of the current single-outstanding
-  window interface.
-- [ ] Prototype bounded multi-refill contexts only if measurements require them.
-- [ ] Define response ordering, IDs, cancellation, and reset behavior.
-- [ ] Measure demand merging and prefetch usefulness independently.
-- [ ] Compare post-route BRAM, LUT, DSP, and timing cost.
+- [ ] Measure the one-context window under the board-equivalent profile.
+- [ ] Prototype bounded multi-context lookup/refill only if deadlines require it.
+- [ ] Define response IDs or prove sufficient ordered association, plus reset
+  and cancellation behavior.
+- [ ] Compare demand merging, prefetch utility, and post-route cost.
 
-### P1: Descriptor-Based START
+### P2: Effects, Precision, Timeline, And Diagnostics
 
-- [ ] Define descriptor contents and asset ownership.
-- [ ] Define validated bulk descriptor loading.
-- [ ] Define descriptor generation and invalidation.
-- [ ] Add a compact descriptor-based START command.
-- [ ] Compare command traffic and start latency against inline START.
-
-### P1: Overlapped Audio Pipeline
-
-- [ ] Allow the renderer to fill a free block bank while effects drain another.
-- [ ] Define block ownership through effects and compressor.
-- [ ] Prove backpressure, release, reset, and starvation behavior.
-- [ ] Measure deadline margin and minimum FIFO lead.
-
-### P2: Per-Voice Effect Sends
-
-- [ ] Add chorus and reverb send values to descriptors/runtime controls.
-- [ ] Carry sends through voice DSP.
-- [ ] Add dry, chorus-send, and reverb-send block accumulators.
-- [ ] Update C++ models and exact RTL tests.
-- [ ] Add representative listening regressions.
-
-### P2: Internal Precision
-
-- [ ] Report per-voice pre-saturation peaks and clipping counts.
-- [ ] Compare PCM16, 20-bit, and 24-bit contribution formats.
-- [ ] Derive exact mix widths for supported voice counts.
-- [ ] Run listening, exact arithmetic, resource, power, and timing comparisons.
-
-### P2: Unified Audio Timeline
-
-- [ ] Define rendered, effect-complete, compressed, queued, and played counters.
-- [ ] Separate algorithmic latency from safety lead.
-- [ ] Evaluate shared versus separate delay/reservoir memories.
-- [ ] Specify underrun mute, reprime, and restart frame sequences.
-- [ ] Freeze 48 kHz or define coherent multi-rate generation and validation.
+- [ ] Design per-voice chorus and reverb sends with three mix accumulators.
+- [ ] Compare PCM16, 20-bit, and 24-bit contribution formats with peak/clip
+  telemetry and exact models.
+- [ ] Define the unified audio timeline, underrun mute/reprime sequence, and
+  fixed-48-kHz or coherent multi-rate policy.
+- [ ] Split production health from qualification diagnostics and add coherent
+  snapshots in the existing system domain.
 
 ## Dependency Order
 
-1. Establish board-equivalent measurement and implementation baselines.
-2. Define always-on control, fault recovery, and asset address ownership.
-3. Fix physical command packet atomicity.
-4. Define timestamped events and block-split behavior.
-5. Measure the current ordered window path under qualified board stalls.
-6. Add memory concurrency only if the measured deadline requires it.
-7. Add descriptor-based START and parameter ramps.
-8. Overlap renderer, effects, compressor, and output ownership.
-9. Add per-voice effect sends and evaluate internal precision.
-10. Finalize the audio clock, timeline, codec, mute, and recovery contract.
+1. Overlap renderer and effects block ownership, then re-run the existing
+   timed-DDR3 plus RTL-effects stress.
+2. Establish the integrated Smart Artix memory/effects capacity baseline and
+   add core memory contexts only if that evidence still requires more margin.
+3. Define DDR fault recovery and asset address ownership within the existing
+   system clock domain.
+4. Fix physical command packet atomicity before expanding command semantics.
+5. Add timestamped events, ramps, and descriptor-based START on the validated
+   transport and asset contracts.
+6. Add per-voice effect sends and evaluate wider contribution precision only
+   after resource and timing margin is known.
+7. Finalize the audio timeline, codec, mute, and recovery contract.
 
 ## Acceptance Gates
 
 Every architecture change must meet the applicable gates:
 
-1. Exact integer results match an independent C++ model for mono playback,
-   linked stereo voice pairs, interpolation, loop modes, envelopes, runtime
-   changes, filtering, mixing, effects, compression, rounding, and saturation.
+1. Exact integer results match an independent C++ model for playback, looping,
+   envelopes, filtering, mixing, effects, compression, rounding, and saturation.
 2. Command eligibility is deterministic at block and target-frame boundaries.
-3. The qualified polyphony workload meets every block deadline under the
-   board-equivalent DDR and arbitration profile.
-4. Output lead remains positive after startup; underrun and drop counters remain
-   zero for the qualified workload.
-5. Memory reports distinguish window hits, refills, fallback reads, useful
-   fetched words, stalls, and outstanding occupancy.
+3. Qualified 512-voice workloads meet every full and shortened-block deadline
+   under the board-equivalent DDR/arbitration profile.
+4. Output lead stays positive after startup and underrun/drop counters stay zero.
+5. Memory reports distinguish window hits, refills, fallback reads, stalls,
+   useful words, arbitration delay, and outstanding occupancy.
 6. Packet tests cover truncation, bad length/CRC, capacity exhaustion, ACK loss,
    duplicate retry, and clock/reset interaction.
 7. `make lint` and `make test` pass with focused self-checking tests for every
    changed protocol or behavior.
-8. Smart Artix implementation fits, closes setup and hold timing, and meets the
-   setup-margin target across required placement seeds.
-9. Register, fixed-point, memory, command, host, and verification documents are
-   updated in the same change.
-10. Control status remains readable and can force mute during DDR calibration
-    failure, memory timeout, or recovery.
-11. Asset publication proves integrity and all playable ranges fit one validated
-    manifest region without overflow or MIG-address truncation.
-12. Audio startup, starvation, reprime, and restart produce the specified frame
+8. Smart Artix fits, closes setup and hold, is fully routed, has no DRC errors,
+   and meets the selected multi-seed margin target.
+9. Register, numeric, memory, command, host, board, and verification documents
+   change with their matching contracts.
+10. DDR timeout or calibration loss drives the system to its specified reset or
+    mute state without accepting further playback work.
+11. Asset publication proves integrity and every playable range belongs to one
+    validated manifest region without overflow or MIG-address truncation.
+12. Startup, starvation, reprime, and restart produce the specified frame
     sequence without uncontrolled output discontinuities.
 
 ## Open Decisions
 
-- [ ] Keep the ordered single-outstanding DDR contract or introduce bounded
-  tagged concurrency.
-- [ ] Define the always-on clock, retained status, reset ownership, and mute
-  authority.
-- [ ] Define DDR timeouts, arbitration guarantees, and in-flight cancellation.
-- [ ] Define the asset manifest, descriptor table, integrity fields, and
-  generation behavior.
-- [ ] Define target-frame width, wrap semantics, scheduling horizon, and late
-  event behavior.
-- [ ] Select parameters that support ramps and define interruption rules.
-- [ ] Decide whether diagnostic DDR writes are forbidden during playback or
-  participate in an explicit coherency protocol.
-- [ ] Keep PCM16 voice contributions or adopt wider internal headroom.
-- [ ] Decide whether compressor look-ahead and output lead share a logical or
-  physical reservoir.
-- [ ] Freeze a 48 kHz contract or define complete multi-rate generation.
-- [ ] Define codec clocking, MCLK, slot format, reset, mute, and restart.
-- [ ] Define always-on versus qualification-only diagnostics and coherent
-  snapshot scope.
+- [ ] Is block-level render/effects overlap sufficient, or is deeper output
+  pipeline decoupling required?
+- [ ] Does the core window need multiple miss contexts after board-equivalent
+  measurement, and if so how are responses associated and cancelled?
+- [ ] What are the DDR timeouts, arbitration guarantees, and recovery sequence?
+- [ ] What manifest/descriptor format and integrity/generation contract owns
+  playable addresses?
+- [ ] What are target-frame width, wrap, horizon, late-event, and ramp rules?
+- [ ] Are diagnostic DDR writes forbidden during playback or coherent with it?
+- [ ] Do measured clips justify wider-than-PCM16 voice contributions?
+- [ ] Is 48 kHz fixed, or must every effect/audio constant support multiple
+  rates?
+- [ ] What codec clocking, slot, reset, mute, and restart behavior is required?
+- [ ] Which diagnostics remain in production, which are qualification-only, and
+  what is the coherent snapshot scope?
