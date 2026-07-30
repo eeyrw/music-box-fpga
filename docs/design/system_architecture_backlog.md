@@ -110,17 +110,22 @@ internal 100 MHz domain:
 
 | Item | Post-route result |
 | --- | ---: |
-| Slice LUTs | 25,633 / 32,600 (78.63%) |
-| Slice registers | 26,874 / 65,200 (41.22%) |
+| Slice LUTs | 24,365 / 32,600 (74.74%) |
+| Slice registers | 25,525 / 65,200 (39.15%) |
 | DSP48E1 | 39 / 120 (32.50%) |
-| Block RAM tiles | 50 / 75 (66.67%) |
-| Setup WNS / TNS | +0.047 ns / 0 ns |
-| Hold WHS / THS | +0.053 ns / 0 ns |
-| Routed nets / DRC errors | 48,436 of 48,436 / 0 |
+| Block RAM tiles | 46 / 75 (61.33%) |
+| Setup WNS / TNS | +0.194 ns / 0 ns |
+| Hold WHS / THS | +0.056 ns / 0 ns |
+| Routed nets / DRC errors | 45,561 of 45,561 / 0 |
 
-This establishes fit and internal timing closure for the current source and
-constraints. It does not close external SPI/I2S delays, physical DDR/SD/audio
-qualification, multiple placement seeds, or architecture growth margin.
+This is the 2026-07-30 implementation after compacting the ordered descriptor.
+Against the preceding implementation it removes 1,268 LUTs, 1,349 registers,
+and four BRAM tiles while leaving DSP use unchanged. Setup WNS improves by
+0.147 ns, and the worst setup path moves out of descriptor storage into the
+compressor output path. This establishes fit and internal timing closure for
+the current source and constraints. It does not close the reported external
+SPI/I2S delay gaps, physical DDR/SD/audio qualification, multiple placement
+seeds, or architecture growth margin.
 
 ## Closed Since The Previous Baseline
 

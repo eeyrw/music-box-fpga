@@ -35,6 +35,16 @@ descriptor 重复 offset。descriptor 生成前有一级端点地址流水，切
 data 的长组合路径。16-frame fresh synthesis 将两个 `128x34` descriptor bank 各映射为
 一个 RAMB18；sample 和 payload 仍为三个 RAMB18，word-offset 表映射为 4 个 RAM64M。
 
+2026-07-30 完成默认 16-frame 配置的 Smart Artix implementation。仓库
+`vivado_report_summary.py compare` 对前一版 post-route 基线给出：LUT
+`25,633 -> 24,365`（-1,268），FF `26,874 -> 25,525`（-1,349），BRAM tile
+`50 -> 46`（-4），DSP 保持 39；WNS `+0.047 -> +0.194 ns`，WHS
+`+0.053 -> +0.056 ns`。全部 45,561 个 routable nets 完成路由，setup/hold failing
+endpoints 和 DRC error 均为 0。层级报告中 engine 从 9,375 LUT、10,793 FF、11 RAMB36
+降为 8,145 LUT、9,491 FF、7 RAMB36，RAMB18 仍为 9，说明主要收益确实来自 descriptor
+紧凑化。最差 setup path 已从 descriptor BRAM 写入路径转移到 compressor 输出饱和路径；
+descriptor count 路径以 `+0.260 ns` 成为第二组 setup cluster，不再是 WNS。
+
 尚未完成的架构项是 sample-ready FIFO，以及第 12 节定义的 8-voice group reducer +
 true-dual-port BRAM mix。ordered line descriptor 已完成，下一步不再回到 endpoint scan。
 
@@ -208,6 +218,12 @@ post-synthesis 层次的主要占用为：
 
 8-frame 相对 16-frame 减少 2,138 LUT、2,940 FF 和 2 个 BRAM tile。两组 DRC error 均为
 0；以上是 post-synthesis，不是 post-route 结果。
+
+最终 34-bit descriptor 的 16-frame post-synthesis 为 25,938 LUT、25,562 FF、46 BRAM
+tile、39 DSP 和 `+0.400 ns` WNS；对应的上述 post-route 结果为 24,365 LUT、25,525 FF、
+46 BRAM tile、39 DSP 和 `+0.194 ns` WNS。`analyze` 仍标记为 `REVIEW`：内部时序和路由
+已经闭合，但 setup/hold 裕量低于工具默认 0.25 ns 审查阈值，且板级仍有 9 个未约束输入、
+1 个 false-path 输入和 13 个未约束输出，以及需要分类的 DRC/methodology warning。
 
 ### 2.3 当前真实压力证据
 

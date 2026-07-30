@@ -898,11 +898,20 @@ not as evidence that the architectural cone is robust.
 9. Record final utilization, timing, checksum, and critical-path identity beside
    the board flow.
 
-The signed-off Smart Artix implementation used synthesis checksum `1c312326` and
+The current Smart Artix implementation uses synthesis checksum `ba319fb3` and
 closed the constrained MIG `ui_clk` (`clk_pll_i`) domain at 100 MHz with WNS
-`+0.047 ns`, TNS `0 ns`, WHS `+0.053 ns`, THS `0 ns`, zero setup/hold failing
-endpoints, all 48,436 nets routed, and zero DRC errors. Utilization is 25,633 LUTs
-(78.63%), 26,874 registers (41.22%), 39 DSPs (32.50%), and 50 BRAM tiles
-(66.67%). The JSON summary also records 127 DRC warnings. Separately, the timing
-report flags the incomplete board I/O delay coverage described above; internal
-timing closure is not a waiver for either warning set.
+`+0.194 ns`, TNS `0 ns`, WHS `+0.056 ns`, THS `0 ns`, zero setup/hold failing
+endpoints, all 45,561 nets routed, and zero DRC errors. Utilization is 24,365 LUTs
+(74.74%), 25,525 registers (39.15%), 39 DSPs (32.50%), and 46 BRAM tiles
+(61.33%). Against checksum `1c312326`, `vivado_report_summary.py compare` reports
+-1,268 LUTs, -1,349 registers, -4 BRAM tiles, unchanged DSP use, and +0.147 ns
+setup WNS. The critical setup path moved from the descriptor storage path to the
+compressor output saturation path.
+
+The JSON summary records 124 DRC warnings. `vivado_report_summary.py analyze`
+also reports 9 inputs without delay, 1 false-pathed input without delay, 13
+outputs without delay, and methodology findings `LUTAR-1=1`, `PDRC-190=12`,
+`SYNTH-6=52`, `XDCB-5=1`, and `REQP-1959=16`. It therefore classifies the run as
+`REVIEW` even though internal setup, hold, route, and DRC-error acceptance all
+pass. Internal timing closure is not a waiver for external I/O coverage or the
+remaining warning classification.
