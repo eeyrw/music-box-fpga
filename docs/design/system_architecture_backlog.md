@@ -66,10 +66,11 @@ sparse, short diagnostic accesses. A diagnostic request may wait for the
 current finite render-read sequence to drain; fairness for continuous debug
 traffic is not a product requirement.
 
-`voice_major_system` still owns one output block at a time. It does not request
-block N+1 until block N has been read through the effects input and its mix
-buffer has been released. The two-bank mix buffer therefore protects ownership
-and backpressure but is not yet used for render/effects block overlap.
+`voice_major_system` owns one draining output block while independently tracking
+one active render request. After block N is published and owned for drain, it
+may request block N+1 into the free mix bank before N reaches the effects input
+or is released. A completed N+1 remains published under backpressure until N is
+released and output ownership can advance in order.
 
 The Smart Artix top uses the MIG 100 MHz UI clock as the render, control, and
 audio system clock. System reset remains asserted until MIG calibration
@@ -87,7 +88,8 @@ renderer latency was 29,164 clocks in the measured DDR phase. This is useful
 renderer evidence, but the simulation bridge is not board-equivalent.
 
 The 2026-07-30 one-second timed-DDR3 plus production RTL effects stress also
-reached 512 active voices and produced 48,000 frames. It measured:
+reached 512 active voices and produced 48,000 frames. This was the serialized
+pre-overlap harness baseline; it measured:
 
 | Metric | Result |
 | --- | ---: |
@@ -100,10 +102,52 @@ reached 512 active voices and produced 48,000 frames. It measured:
 
 The four end-to-end misses were short eight-frame blocks cut by the simulation
 harness at MIDI/control boundaries. The board wrapper always requests 16-frame
-blocks, but a full block has only 33,333 clocks at 48 kHz and the measured
-33,228-clock end-to-end maximum leaves only 105 clocks of margin. The generic
-renderer/effects path therefore has functional coverage but not a comfortable
-capacity margin.
+blocks. More importantly, the old harness waited for effects release before
+submitting the next block, so its 33,228-clock end-to-end value was a serialized
+initiation interval rather than an unavoidable renderer limit.
+
+A directed 2026-07-30 RTL test then enabled chorus, reverb, and compressor for
+512 looping voices over timed DDR3 and issued four fixed 16-frame blocks using
+the split render/drain ownership rule. It measured a maximum renderer latency
+of 27,999 clocks, a maximum block initiation interval of 28,000 clocks, and a
+maximum request-to-release latency of 29,307 clocks. Block N+1 started 1,307
+clocks before block N was released. Thus effects drain remains part of each
+block's end-to-end latency, but no longer extends the steady-state render
+initiation interval when the other mix bank is free. This directed test proves
+the overlap contract; it does not replace the one-second real-SF2 stress.
+
+On 2026-07-31 the timed-DDR effects harness was changed to share
+`voice_major_block_output_manager` with the production scheduler. C++ supplies
+MIDI/control-aligned block requests and observes PCM, but no longer waits for
+mix-bank release or tracks overlapping bank ownership. A one-second real-SF2
+regression used SGM v2.01, `polyphony_stress_512.mid`, the hall chorus/reverb
+preset, and the compressor. It completed 48,000 frames and reached 512 active
+voices with these RTL-handshake measurements:
+
+| Metric | Shared-manager result |
+| --- | ---: |
+| Maximum renderer latency | 30,061 clocks |
+| Renderer deadline misses | 0 |
+| Maximum request-to-release latency | 31,385 clocks |
+| Maximum accepted-request interval | 35,805 clocks |
+| Effects maximum processing cost | 87 clocks/frame |
+| DDR reads / row misses | 3,865,900 / 1,412,058 |
+| Whole simulation core cycles | 85,117,393 |
+
+The accepted-request interval includes time spent writing MIDI/control command
+bursts before the next request is presented; it is not renderer compute
+latency. Two release-deadline misses remain on the 78 short eight-frame boundary
+blocks. There were 2,961 full 16-frame blocks. Compared with the serialized
+harness's 89,085,874 core cycles, shared RTL overlap removes 3,968,481 cycles
+(4.455%) for the same audio workload and output count.
+
+The 2026-07-30 block-overlap and explicit signed-25 accumulator experiment used
+a fresh synthesis with the same strategy. It changed whole-chip utilization
+from 25,938 to 25,923 LUTs and from 25,562 to 25,567 FFs; BRAM remained 46,
+DSP remained 39, and post-synthesis WNS remained +0.400 ns. The mix-buffer
+hierarchy remained 1,063 LUTs / 1,671 FFs, showing that synthesis had already
+trimmed the unobservable upper seven accumulator bits in the former signed-32
+declaration. A fresh implementation result is still pending.
 
 The latest forced Smart Artix implementation fits and closes the constrained
 internal 100 MHz domain:
@@ -208,14 +252,15 @@ deadlines, output lead, and underrun accounting. Loader/playback concurrency and
 sustained diagnostic traffic are not required workloads. Directed unit tests of
 the reader and arbiter do not replace this integrated workload.
 
-### A5: Renderer And Effects Are Serialized At Block Ownership
+### A5: Renderer And Effects Block Overlap Implemented, Workload Pending
 
-The measured RTL-effects path confirms that effects cost and block release now
-matter to the real-time budget. `voice_major_system` waits for the current block
-to render, drains every frame into the effects chain, and releases it before
-requesting the next block. The second mix-buffer bank is not used concurrently.
+The 2026-07-30 scheduler change removes the explicit serialization in
+`voice_major_system`. A render request for block N+1 may now occupy the free mix
+bank while block N drains into the effects chain. Renderer completion timing is
+captured when completion first becomes valid, even if output ownership is still
+backpressured by block N.
 
-The next throughput change should evaluate:
+The next throughput experiment must evaluate:
 
 ```text
 renderer block N+1
@@ -399,21 +444,16 @@ repeatable multi-seed implementation margin target.
 
 ## Immediate Next Change
 
-A5 block ownership overlap is the next implementation target. The current
-timed-DDR3 plus RTL-effects result leaves only 105 clocks below a full 16-frame
-deadline, and the serialization point is explicit in `voice_major_system`.
-Unlike command transport, asset descriptors, per-voice sends, or wider voice
-precision, this change does not require a new external contract.
+A5 block ownership overlap is implemented in RTL and its focused scheduler test.
+The immediate task is to measure it in the timed-DDR3 plus RTL-effects workload;
+the pre-change result left only 105 clocks below a full 16-frame deadline.
 
 The first implementation should remain narrowly scoped:
 
-- allow the renderer to acquire the free mix-buffer bank for block N+1 while
-  the output path drains block N into the effects chain;
-- track render-owned and output-owned buffer IDs independently;
 - retain completed blocks and effect input data under backpressure;
 - release each buffer only after its final frame is accepted exactly once;
-- define reset behavior for a rendering block and a draining block;
-- preserve command visibility at the next admitted render-block boundary.
+- preserve command visibility at the next admitted render-block boundary;
+- quantify whether overlap restores useful full-block timing margin.
 
 Focused tests must cover consecutive blocks, effects backpressure, output FIFO
 pressure, reset in each ownership state, exact frame ordering, and absence of
@@ -427,10 +467,10 @@ serialization.
 
 ### P0: Block Overlap And Board-Equivalent Validation
 
-- [ ] Allow rendering into the free mix-buffer bank while effects drain the
+- [x] Allow rendering into the free mix-buffer bank while effects drain the
   published bank.
-- [ ] Prove independent bank ownership, backpressure, release, reset, and frame
-  ordering with focused self-checking tests.
+- [x] Prove consecutive request overlap, completion backpressure, release, reset,
+  and frame ordering with focused self-checking tests.
 - [ ] Re-run the 512-voice timed-DDR3 plus RTL-effects workload and require a
   meaningful end-to-end margin below the full-block deadline.
 - [ ] Build a long render top containing the Smart Artix line reader, arbiter,

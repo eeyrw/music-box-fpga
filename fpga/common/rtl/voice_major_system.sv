@@ -47,17 +47,7 @@ module voice_major_system #(
 );
   import synth_pkg::*;
 
-  typedef enum logic [2:0] {
-    OUTPUT_IDLE,
-    OUTPUT_WAIT_BLOCK,
-    OUTPUT_READ_REQUEST,
-    OUTPUT_READ_RESPONSE,
-    OUTPUT_RELEASE
-  } output_state_t;
-
   localparam int OUTPUT_LEVEL_WIDTH = $clog2(OUTPUT_FIFO_DEPTH + 1);
-  localparam int BLOCK_DEADLINE_CYCLES =
-      (SYS_CLK_HZ * MAX_BLOCK_FRAMES) / SAMPLE_RATE_HZ;
 
   reg_bus_req_t spi_bus_req;
   reg_bus_rsp_t spi_bus_rsp;
@@ -104,13 +94,8 @@ module voice_major_system #(
   global_audio_config_t audio_config;
   logic [1:0] effect_clear;
 
-  output_state_t output_state_q;
-  logic [TIMELINE_FRAME_WIDTH-1:0] next_frame_q;
-  logic [BLOCK_BUFFER_ID_WIDTH-1:0] output_buffer_q;
-  logic [BLOCK_FRAME_COUNT_WIDTH-1:0] output_frame_count_q;
-  logic [BLOCK_FRAME_INDEX_WIDTH-1:0] output_index_q;
-  logic [31:0] render_cycle_count_q;
   logic output_fifo_room;
+  logic scheduler_sample_valid;
   logic core_sample_valid;
   logic core_sample_ready;
   pcm_t core_sample_l;
@@ -144,20 +129,6 @@ module voice_major_system #(
 
   assign output_fifo_room = output_fifo_level <=
       OUTPUT_LEVEL_WIDTH'(TARGET_LEVEL - MAX_BLOCK_FRAMES);
-  assign block_req_valid = (output_state_q == OUTPUT_IDLE) && output_fifo_room;
-  assign block_req.start_frame = next_frame_q;
-  assign block_req.frame_count = BLOCK_FRAME_COUNT_WIDTH'(MAX_BLOCK_FRAMES);
-  assign block_complete_ready = output_state_q == OUTPUT_WAIT_BLOCK;
-  assign block_read_req_valid = output_state_q == OUTPUT_READ_REQUEST;
-  assign block_read_req.buffer_id = output_buffer_q;
-  assign block_read_req.frame_index = output_index_q;
-  assign block_read_rsp_ready = (output_state_q == OUTPUT_READ_RESPONSE) &&
-                                effects_input_ready;
-  assign block_release_valid = output_state_q == OUTPUT_RELEASE;
-  assign block_release_buffer_id = output_buffer_q;
-  assign render_inflight = (output_state_q == OUTPUT_WAIT_BLOCK) ||
-                           renderer_busy || effects_busy;
-
   // One elastic response register decouples the board reader from the ordered
   // window interface. External backpressure prevents response overwrite.
   assign ext_req_valid = line_req_valid;
@@ -265,13 +236,42 @@ module voice_major_system #(
     .sample_window_diagnostics
   );
 
+  voice_major_output_scheduler #(
+    .SYS_CLK_HZ(SYS_CLK_HZ),
+    .SAMPLE_RATE_HZ(SAMPLE_RATE_HZ)
+  ) output_scheduler (
+    .clk,
+    .rst(core_reset),
+    .output_fifo_room,
+    .block_req_valid,
+    .block_req_ready,
+    .block_req,
+    .renderer_busy,
+    .block_complete_valid,
+    .block_complete_ready,
+    .block_complete,
+    .block_read_req_valid,
+    .block_read_req_ready,
+    .block_read_req,
+    .block_read_rsp_valid,
+    .block_read_rsp_ready,
+    .block_release_valid,
+    .block_release_ready,
+    .block_release_buffer_id,
+    .sample_valid(scheduler_sample_valid),
+    .sample_ready(effects_input_ready),
+    .effects_busy,
+    .render_inflight,
+    .render_deadline_miss_pulse,
+    .render_latency_cycles
+  );
+
   global_audio_effects_chain effects (
     .clk,
     .rst(core_reset),
     .effect_clear_i(effect_clear),
     .config_i(audio_config),
-    .in_valid((output_state_q == OUTPUT_READ_RESPONSE) &&
-              block_read_rsp_valid),
+    .in_valid(scheduler_sample_valid),
     .in_ready(effects_input_ready),
     .in_l(block_read_rsp.sample.l),
     .in_r(block_read_rsp.sample.r),
@@ -309,65 +309,6 @@ module voice_major_system #(
     .i2s_lrclk,
     .i2s_sdata
   );
-
-  always_ff @(posedge clk) begin
-    if (core_reset) begin
-      output_state_q <= OUTPUT_IDLE;
-      next_frame_q <= '0;
-      output_buffer_q <= '0;
-      output_frame_count_q <= '0;
-      output_index_q <= '0;
-      render_cycle_count_q <= '0;
-      render_deadline_miss_pulse <= 1'b0;
-      render_latency_cycles <= '0;
-    end else begin
-      render_deadline_miss_pulse <= 1'b0;
-      if (output_state_q == OUTPUT_WAIT_BLOCK &&
-          render_cycle_count_q != 32'hffff_ffff)
-        render_cycle_count_q <= render_cycle_count_q + 1'b1;
-
-      unique case (output_state_q)
-        OUTPUT_IDLE: begin
-          if (block_req_valid && block_req_ready) begin
-            next_frame_q <= next_frame_q + MAX_BLOCK_FRAMES;
-            render_cycle_count_q <= '0;
-            output_state_q <= OUTPUT_WAIT_BLOCK;
-          end
-        end
-        OUTPUT_WAIT_BLOCK: begin
-          if (block_complete_valid && block_complete_ready) begin
-            output_buffer_q <= block_complete.buffer_id;
-            output_frame_count_q <= block_complete.frame_count;
-            output_index_q <= '0;
-            render_latency_cycles <= render_cycle_count_q[15:0];
-            if (render_cycle_count_q > BLOCK_DEADLINE_CYCLES)
-              render_deadline_miss_pulse <= 1'b1;
-            output_state_q <= OUTPUT_READ_REQUEST;
-          end
-        end
-        OUTPUT_READ_REQUEST: begin
-          if (block_read_req_valid && block_read_req_ready)
-            output_state_q <= OUTPUT_READ_RESPONSE;
-        end
-        OUTPUT_READ_RESPONSE: begin
-          if (block_read_rsp_valid && block_read_rsp_ready) begin
-            if (BLOCK_FRAME_COUNT_WIDTH'(output_index_q) + 1'b1 >=
-                output_frame_count_q) begin
-              output_state_q <= OUTPUT_RELEASE;
-            end else begin
-              output_index_q <= output_index_q + 1'b1;
-              output_state_q <= OUTPUT_READ_REQUEST;
-            end
-          end
-        end
-        OUTPUT_RELEASE: begin
-          if (block_release_valid && block_release_ready)
-            output_state_q <= OUTPUT_IDLE;
-        end
-        default: output_state_q <= OUTPUT_IDLE;
-      endcase
-    end
-  end
 
   always_ff @(posedge clk) begin
     if (core_reset) begin

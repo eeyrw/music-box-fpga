@@ -140,10 +140,10 @@ module block_mix_buffer (
       if (contribution_valid && contribution_ready) begin
         accum_l[fill_bank][contribution_frame_index] <=
             accum_l[fill_bank][contribution_frame_index] +
-            32'($signed(contribution.l));
+            MIX_WIDTH'($signed(contribution.l));
         accum_r[fill_bank][contribution_frame_index] <=
             accum_r[fill_bank][contribution_frame_index] +
-            32'($signed(contribution.r));
+            MIX_WIDTH'($signed(contribution.r));
       end
 
       if (block_finish_valid && block_finish_ready) begin

@@ -256,17 +256,10 @@ class RtlDriver : public render::CommandWordSink {
     max_deadline_utilization_ppm_ =
         std::max(max_deadline_utilization_ppm_, utilization_ppm);
 #if RENDER_RTL_EFFECTS_ENABLE
-    wait_valid(dut_.block_complete_valid, "effects block completion");
-    const uint64_t end_to_end_cycles = cycles_ - start_cycle;
-    total_end_to_end_cycles_ += end_to_end_cycles;
-    max_end_to_end_cycles_ = std::max(max_end_to_end_cycles_, end_to_end_cycles);
-    const uint64_t end_to_end_utilization_ppm =
-        end_to_end_cycles * uint64_t(sample_rate_) * 1000000u /
-        (uint64_t(frame_count) * 100000000u);
-    max_end_to_end_utilization_ppm_ = std::max(
-        max_end_to_end_utilization_ppm_, end_to_end_utilization_ppm);
-    if (end_to_end_cycles > deadline_cycles) ++end_to_end_deadline_misses_;
-#endif
+    std::vector<std::pair<int16_t, int16_t>> samples;
+    samples.swap(effect_samples_);
+#else
+    wait_valid(dut_.block_complete_valid, "block completion");
     const uint8_t buffer = dut_.block_complete_buffer;
     if (dut_.block_complete_start_frame != start_frame ||
         dut_.block_complete_frame_count != frame_count) {
@@ -277,9 +270,6 @@ class RtlDriver : public render::CommandWordSink {
     dut_.block_complete_ready = 0;
 
     std::vector<std::pair<int16_t, int16_t>> samples;
-#if RENDER_RTL_EFFECTS_ENABLE
-    samples.swap(effect_samples_);
-#else
     samples.reserve(frame_count);
     for (uint32_t index = 0; index < frame_count; ++index) {
       dut_.block_read_buffer = buffer;
@@ -330,20 +320,67 @@ class RtlDriver : public render::CommandWordSink {
   uint64_t cycles() const { return cycles_; }
   uint64_t render_blocks() const { return render_blocks_; }
   uint64_t render_frames() const { return render_frames_; }
-  uint64_t total_render_cycles() const { return total_render_cycles_; }
-  uint64_t max_render_cycles() const { return max_render_cycles_; }
-  uint64_t max_deadline_utilization_ppm() const {
-    return max_deadline_utilization_ppm_;
+  uint64_t total_render_cycles() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_total_renderer_cycles;
+#else
+    return total_render_cycles_;
+#endif
   }
-  uint64_t deadline_misses() const { return deadline_misses_; }
-  uint64_t total_end_to_end_cycles() const { return total_end_to_end_cycles_; }
-  uint64_t max_end_to_end_cycles() const { return max_end_to_end_cycles_; }
+  uint64_t max_render_cycles() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_max_renderer_cycles;
+#else
+    return max_render_cycles_;
+#endif
+  }
+  uint64_t max_deadline_utilization_ppm() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_max_renderer_utilization_ppm;
+#else
+    return max_deadline_utilization_ppm_;
+#endif
+  }
+  uint64_t deadline_misses() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_renderer_deadline_misses;
+#else
+    return deadline_misses_;
+#endif
+  }
+  uint64_t total_end_to_end_cycles() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_total_release_cycles;
+#else
+    return total_end_to_end_cycles_;
+#endif
+  }
+  uint64_t max_end_to_end_cycles() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_max_release_cycles;
+#else
+    return max_end_to_end_cycles_;
+#endif
+  }
   uint64_t max_end_to_end_utilization_ppm() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_max_release_utilization_ppm;
+#else
     return max_end_to_end_utilization_ppm_;
+#endif
   }
   uint64_t end_to_end_deadline_misses() const {
+#if RENDER_RTL_EFFECTS_ENABLE
+    return dut_.overlap_release_deadline_misses;
+#else
     return end_to_end_deadline_misses_;
+#endif
   }
+#if RENDER_RTL_EFFECTS_ENABLE
+  uint64_t max_initiation_cycles() const {
+    return dut_.overlap_max_initiation_cycles;
+  }
+#endif
   uint32_t configured_max_block_frames() const {
     return dut_.configured_max_block_frames;
   }
@@ -432,6 +469,7 @@ class RtlDriver : public render::CommandWordSink {
 #if RENDER_RTL_EFFECTS_ENABLE
     dut_.effect_flush_valid = 0;
     dut_.effect_output_ready = 1;
+    dut_.block_complete_ready = 1;
 #else
     dut_.block_read_req_valid = 0;
     dut_.block_read_rsp_ready = 0;
@@ -737,6 +775,8 @@ int main(int argc, char** argv) {
 #if RENDER_RTL_EFFECTS_ENABLE
           << ",\n  \"rtl_effects_max_processing_cycles\": "
           << driver.effects_max_processing_cycles()
+          << ",\n  \"rtl_max_block_initiation_cycles\": "
+          << driver.max_initiation_cycles()
           << ",\n  \"rtl_effects_input_frame_count\": "
           << driver.effects_input_frame_count()
           << ",\n  \"rtl_effects_output_frame_count\": "
@@ -793,6 +833,8 @@ int main(int argc, char** argv) {
 #if RENDER_RTL_EFFECTS_ENABLE
               << " effects_max_processing_cycles="
               << driver.effects_max_processing_cycles()
+              << " max_block_initiation_cycles="
+              << driver.max_initiation_cycles()
               << " effects_input_frames="
               << driver.effects_input_frame_count()
               << " effects_output_frames="

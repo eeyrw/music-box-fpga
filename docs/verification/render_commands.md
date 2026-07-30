@@ -260,7 +260,13 @@ make render-rtl-ddr3 \
 `RTL_EFFECTS=1` selects a separate Verilated top and object directory, so
 switching the option does not reuse an incompatible executable. The C++ code
 still parses MIDI/SF2 and produces the effect register values, but the rendered
-samples and effect timing come from `global_audio_effects_chain` RTL. Spatial
+samples and effect timing come from `global_audio_effects_chain` RTL. The
+effects harness shares the production `voice_major_block_output_manager`:
+C++ advances to the next MIDI/control boundary after renderer completion, while
+RTL independently drains and releases the prior mix bank. C++ does not manage
+bank IDs or an overlap queue. The report's renderer and release cycles start at
+the accepted RTL request handshake; `rtl_max_block_initiation_cycles` also
+includes command-submission gaps before that handshake. Spatial
 effects default to `off`; choose an `EFFECTS_PRESET` such as `hall`, or set the
 individual chorus/reverb overrides. `COMPRESSOR_ENABLE` remains enabled by
 default. The harness feeds 48 zero frames after the requested interval to drain

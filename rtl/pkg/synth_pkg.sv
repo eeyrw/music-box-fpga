@@ -62,7 +62,8 @@ package synth_pkg;
   // the produced audio stream.
   typedef logic signed [PCM_WIDTH-1:0] pcm_t;
   typedef logic signed [MIX_WIDTH-1:0] mix_t;
-  typedef logic signed [31:0] accum_t;
+  // 512 full-scale signed PCM contributions require exactly 25 bits.
+  typedef logic signed [MIX_WIDTH-1:0] accum_t;
   typedef logic signed [FILTER_SAMPLE_WIDTH-1:0] filter_sample_t;
 
   typedef struct packed {

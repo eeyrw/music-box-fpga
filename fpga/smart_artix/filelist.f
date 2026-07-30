@@ -9,6 +9,8 @@
 ../common/rtl/sd_native_block_reader.sv
 ../common/rtl/sd_native_pin_phy.sv
 ../common/rtl/wavetable_i2s_output.sv
+../common/rtl/voice_major_block_output_manager.sv
+../common/rtl/voice_major_output_scheduler.sv
 ../common/rtl/voice_major_system.sv
 
 # Board-specific RTL.

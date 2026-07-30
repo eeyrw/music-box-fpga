@@ -86,6 +86,8 @@ FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/sd_native_block_reader.sv \
 	fpga/common/rtl/sd_native_pin_phy.sv \
 	fpga/common/rtl/wavetable_i2s_output.sv \
+	fpga/common/rtl/voice_major_block_output_manager.sv \
+	fpga/common/rtl/voice_major_output_scheduler.sv \
 	fpga/common/rtl/voice_major_system.sv
 
 SPI_SIM_SOURCES := \
@@ -120,6 +122,9 @@ GLOBAL_AUDIO_EFFECTS_SIM_SOURCES := \
 
 BLOCK_MIX_BUFFER_SIM_SOURCES := \
 	sim/tb/tb_block_mix_buffer.sv
+
+OUTPUT_SCHEDULER_SIM_SOURCES := \
+	sim/tb/tb_voice_major_output_scheduler.sv
 
 BLOCK_INTERLEAVED_DSP_SIM_SOURCES := \
 	sim/tb/tb_block_interleaved_voice_dsp.sv
@@ -273,6 +278,7 @@ test-render-effects-harness: test-ddr3-model
 		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
 		sim/models/ordered_line_ddr3_bridge_model.sv \
 		sim/models/voice_major_render_harness.sv \
+		fpga/common/rtl/voice_major_block_output_manager.sv \
 		sim/models/voice_major_render_effects_harness.sv \
 		sim/tb/tb_voice_major_render_effects_harness.sv \
 		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
@@ -504,6 +510,14 @@ test-rtl-core:
 		--Mdir $(BUILD_DIR)/block_mix_buffer_obj_dir --top-module tb_block_mix_buffer \
 		$(RTL_SOURCES) $(BLOCK_MIX_BUFFER_SIM_SOURCES)
 	$(BUILD_DIR)/block_mix_buffer_obj_dir/Vtb_block_mix_buffer
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/output_scheduler_obj_dir \
+		--top-module tb_voice_major_output_scheduler \
+		rtl/pkg/synth_pkg.sv \
+		fpga/common/rtl/voice_major_block_output_manager.sv \
+		fpga/common/rtl/voice_major_output_scheduler.sv \
+		$(OUTPUT_SCHEDULER_SIM_SOURCES)
+	$(BUILD_DIR)/output_scheduler_obj_dir/Vtb_voice_major_output_scheduler
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
@@ -651,6 +665,7 @@ render-rtl-ddr3:
 		sim/models/ddr3_timing_model.sv \
 		sim/models/ordered_line_ddr3_bridge_model.sv \
 		sim/models/voice_major_render_harness.sv \
+		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),fpga/common/rtl/voice_major_block_output_manager.sv,) \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),sim/models/voice_major_render_effects_harness.sv,) \
 		$(abspath sim/harness/apps/render_rtl_ddr3_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \

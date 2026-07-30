@@ -116,7 +116,13 @@ the renderer's production mix buffer through the synthesizable
 remain C++ harness policy; PCM processing and timing are RTL. The JSON separates
 renderer completion from the end-to-end point where the mix buffer has been
 accepted by the effects chain and released, and reports the latter deadline
-misses independently. The final 48-frame compressor lookahead drain is a stream
+misses independently. The harness and `voice_major_system` share
+`voice_major_block_output_manager`, so render ownership, completion
+backpressure, drain, and release are RTL behavior. C++ does not wait for release
+or track bank ownership; it only presents the next MIDI/control-aligned request
+after renderer completion. `rtl_max_block_initiation_cycles` measures accepted
+request spacing and therefore includes any command burst before the next
+request is presented. The final 48-frame compressor lookahead drain is a stream
 flush, not part of an individual render-block deadline.
 
 The `render-reference` Make target enables transparent peak protection by

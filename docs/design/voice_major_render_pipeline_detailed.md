@@ -162,7 +162,8 @@ result handoff/check                                                      [A] [B
 block complete                                                                            [handshake]
 mix read/effects                                                                                 [0..15]
 bank release                                                                                           [release]
-next block req                                                                                           [accept]
+next block req                                                                              [accept]
+next mix bank                                                                                [clear][render ...]
 ```
 
 完整顺序分为以下阶段：
@@ -585,7 +586,7 @@ envelope active 的 AND。state store 再用 voice ID 和 generation 验证该�
 
 ## 12. Mix Buffer：双 bank 是所有权解耦
 
-`block_mix_buffer` 有两个 bank，每个 bank 保存最多 16 个 stereo signed-32 accumulator。
+`block_mix_buffer` 有两个 bank，每个 bank 保存最多 16 个 stereo signed-25 accumulator。
 状态为：
 
 ```text
@@ -599,53 +600,52 @@ consumer；consumer 获取所有权后逐帧读取，最后显式 release。
 
 两个 bank 的作用是让 consumer 持有上一 block 时，renderer 可以选择另一个 free bank。
 当前实现一次仍只允许一个 bank 处于 CLEARING/FILLING，因此它不是两个 render block 的
-并行累加器。accumulator 当前实现为小型寄存器阵列，post-route 层级占用约 1,041 LUT 和
-1,671 FF；用 BRAM group reducer 替换它仍是候选优化，不是当前实现。
+并行累加器；重叠的是 block N 的读出和 block N+1 的 render。accumulator 仍是小型寄存器
+阵列；用 BRAM group reducer 替换它仍是候选优化，不是当前实现。
 
-这是 generic core 提供的 ownership 能力，不代表 production wrapper 已经利用该重叠。
-外部 consumer 若在上一 bank 为 `OWNED` 时提交下一 block，core 可以在另一个 free bank
-填充；但当前 `voice_major_system` 要等上一 bank release 后才回到 `OUTPUT_IDLE` 并提交
-下一 block。
+production wrapper 已通过独立的 `voice_major_output_scheduler` 使用这个 ownership 能力。
+block N publish 并交给 output owner 后，只要 FIFO 仍有一个 block 的空间，scheduler 就可
+把 block N+1 提交到另一个 free bank，无需等待 block N 的逐帧读出和 release。
 
 对 512 路 PCM16，signed 25-bit published mix 精确覆盖理论和，不需要在 mix bank 内提前
 饱和。后级 effects/compressor/master 最后才执行 PCM16 输出饱和。
 
 ## 13. Board 系统中的 Block 生命周期
 
-`voice_major_system` 在 output FIFO 有至少一个 block 空间时请求固定 16-frame block：
+`voice_major_system` 在 output FIFO 有至少一个 block 空间时请求固定 16-frame block。
+render request 跟踪与 output drain 是两个并行状态：
 
 ```text
-OUTPUT_IDLE
-  -> request block
-  -> OUTPUT_WAIT_BLOCK：等待 renderer publish
-  -> OUTPUT_READ_REQUEST / OUTPUT_READ_RESPONSE：逐帧读 0..15
-  -> 每个 response 必须先被 global effects chain 接受
-  -> OUTPUT_RELEASE：释放 mix bank
-  -> OUTPUT_IDLE：此时才允许 request 下一 block
+render: request N -------------------------- publish N
+                                                   \
+output:                                             own N -> read 0..15 -> release N
+render:                                                   request N+1 -> render N+1 ...
 ```
 
 effects input backpressure 会停住 mix read response，完整传播回 block owner；bank 不会在
 最后一个 frame 被 effects 接受前释放。output FIFO 与 I2S 继续以 sample rate 消费，render
 和播放通过 FIFO lead 解耦。
 
-当前 wrapper 因此没有让“下一 block render”与“上一 block mix read”重叠。effects 在接收
-最后一帧后仍可能有内部 token 或 compressor look-ahead 输出在途；bank release 只表示
-effects 已取得全部输入，不表示 effects 输出已全部进入 FIFO。因此下一 block render 可以
-与上一 block 的 effects 尾部重叠，但不能与其 mix-bank 读出阶段重叠。
+若 block N+1 在 N 尚未 release 时完成，第二个 bank 保持 `BANK_PUBLISHED`，completion payload
+在 ready/valid 背压下不变。scheduler 在第一次看到 completion 时冻结该次 render latency，
+等 N release 后才接受 N+1 的 ownership 并开始读出。effects 在接收最后一帧后仍可能有
+内部 token 或 compressor look-ahead 输出在途；bank release 只表示 effects 已取得全部输入，
+不表示 effects 输出已全部进入 FIFO。
 
 这也定义了两个不同的周期指标：
 
 ```text
 render latency:
-  block request accepted -> block_complete accepted
+  block request accepted -> block_complete first becomes valid
 
 production block initiation interval:
   current block request accepted -> next block request accepted
-  = render latency + mix read/effects-input acceptance + release/control overhead
+  normally equals render latency plus the request handoff, while a free bank exists
 ```
 
-`render_latency_cycles` 只测第一个区间。评估 output FIFO 是否会 underrun 时，还必须看第二个
-区间或 harness 的 render-to-effects-release latency；只用 renderer publish 时间会高估余量。
+第二个 block publish 可能早于第一 bank release，此时下一次 initiation 仍会被两个已占用的
+bank 限制。评估 output FIFO 是否会 underrun 时，必须同时看 renderer latency、completion
+等待时间和 output lead；只用 renderer publish 时间仍会高估余量。
 
 Smart Artix 上 control、renderer、effects 和 audio 都使用 MIG UI clock。DDR calibration
 失败时完整系统没有可用 sample memory，因此系统选择共同 reset/clock 依赖，而不是为 control
@@ -669,7 +669,8 @@ Smart Artix 上 control、renderer、effects 和 audio 都使用 MIG UI clock。
 
 ## 15. 当前性能与资源证据
 
-最终 34-bit descriptor、16-frame、512-voice 配置的 2026-07-30 Smart Artix 结果：
+最终 34-bit descriptor、16-frame、512-voice 配置在 block-overlap 改动前的 2026-07-30
+Smart Artix post-route 参考结果：
 
 | 指标 | post-route |
 | --- | ---: |
@@ -684,15 +685,46 @@ Smart Artix 上 control、renderer、effects 和 audio 都使用 MIG UI clock。
 与前一版 descriptor 实现相比，整机减少 1,268 LUT、1,349 FF 和 4 BRAM tile，DSP 不变；
 最差 setup path 已从 descriptor storage 转移到 compressor。
 
+加入 block overlap 并把 accumulator 从 RTL signed 32-bit 明确缩到 signed 25-bit 后，fresh
+post-synthesis 为 25,923 LUT、25,567 FF、46 BRAM tile、39 DSP、WNS +0.400 ns。相同策略的
+改动前 post-synthesis 是 25,938 LUT、25,562 FF、WNS +0.400 ns，即 `-15 LUT / +5 FF`。
+mix-buffer 层级仍为 1,063 LUT / 1,671 FF，说明 Vivado 原先已依据 25-bit observable output
+裁掉 accumulator 的无用高位；显式缩位修正了 RTL 数值合同，但没有额外兑现 448 FF。
+post-route 数据需等下一次 implementation 才能更新。
+
 1 秒、48 kHz、512 peak voices、timed DDR3、关闭 effects 的 dry run 完成 48,000 frames，
 `max_render_cycles=31,876`，zero renderer deadline miss。它距离 16-frame 的 33,333-clock
 理论 deadline 已不宽裕，因此当前优化优先级仍应看完整 render latency，而不是单独追求
 某一级的名义 II。
 
 打开 production RTL effects 的一秒压力中，最大 renderer latency 为 31,905 clocks，最大
-request-to-effects-release latency 为 33,228 clocks。后者更接近当前 `voice_major_system`
-能够开始下一 block 的时刻，只剩 105 clocks 的 full-block 理论余量。这正是为什么后续优化
-不能只报告 DSP issue rate 或 `block_complete` 时间。
+request-to-effects-release latency 为 33,228 clocks。该结果来自 overlap 改动前的串行
+harness，当时下一 block 确实要等 release，因此不能继续用它描述当前
+`voice_major_system` 的稳态 initiation interval。
+
+改动后的定向 RTL 压力使用 512 个循环 voice、timed DDR3、固定 16-frame block，并同时
+打开 chorus、reverb 和 compressor。四个连续 block 的最大 renderer latency 为 27,999
+clocks，最大 initiation interval 为 28,000 clocks，最大 request-to-effects-release latency
+为 29,307 clocks；第二个 block 比第一个 block release 早 1,307 clocks 启动。也就是说，
+双 bank 没有缩短单个 block 的计算时间，而是把上一 block 的 effects drain 隐藏在下一
+block 的 render 后面。容量判断现在必须分开报告 renderer latency、block initiation
+interval 和 request-to-release latency，不能再用其中一个替代另外两个。该定向测试用于
+证明 ownership/overlap。
+
+2026-07-31 又把 production scheduler 的 render/drain ownership 状态机抽成
+`voice_major_block_output_manager`，由 `voice_major_output_scheduler` 和 timed-DDR effects
+harness 共同实例化。production 端仍由 RTL 自动产生固定 16-frame 时间线；真实 MIDI
+harness 则只让 C++ 提供带 8/16-frame 边界的 request 和 command stimulus。C++ 在 renderer
+complete 后即可准备下一边界，不等待 release，也不保存 bank 或 pending-completion 队列。
+
+共享 manager 后，用 SGM v2.01、`polyphony_stress_512.mid`、hall chorus/reverb 和 compressor
+重跑一秒：完成 48,000 frames、达到 512 peak voices。RTL 从 request handshake 起测得最大
+renderer latency 30,061 clocks、零 renderer miss；最大 request-to-release 31,385 clocks；
+最大 accepted-request interval 35,805 clocks。最后一项还包括 MIDI/control command burst
+使下一 request 尚未 presented 的时间，不能当成 engine compute latency。输入仍为 2,961
+个 16-frame block 和 78 个 8-frame boundary block，两个 release miss 都来自短块。DDR
+read/row miss 为 3,865,900 / 1,412,058，effects 单帧最大 87 clocks。完整 core cycles 从
+串行 harness 的 89,085,874 降至 85,117,393，减少 3,968,481 clocks（4.455%）。
 
 ## 16. 已知限制与下一步候选
 
@@ -703,7 +735,7 @@ request-to-effects-release latency 为 33,228 clocks。后者更接近当前 `vo
 - phase、memory 和 DSP issue 只看一个 modulo 候选，可能产生可避免 bubble；
 - sample window client 一次只处理一个 descriptor transaction；
 - response gather 每拍只写一个 endpoint；
-- mix accumulator 仍是 LUT/FF 阵列；
+- mix accumulator 已缩到精确 signed 25-bit，但仍是 LUT/FF 阵列；
 - 单次 placement 的内部时序已闭合，但外部 SPI/I2S delay 仍未完整约束。
 
 候选改进必须针对测得的瓶颈：
