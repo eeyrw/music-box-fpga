@@ -381,21 +381,21 @@ class RtlDriver : public render::CommandWordSink {
   uint64_t ddr_activates() const { return dut_.ddr_activates; }
   uint64_t ddr_precharges() const { return dut_.ddr_precharges; }
   uint64_t ddr_refreshes() const { return dut_.ddr_refreshes; }
-  uint64_t cache_requests() const { return dut_.cache_requests; }
-  uint64_t cache_hits() const { return dut_.cache_hits; }
-  uint64_t cache_mshr_merges() const { return dut_.cache_mshr_merges; }
-  uint64_t cache_misses() const { return dut_.cache_misses; }
-  uint64_t cache_evictions() const { return dut_.cache_evictions; }
-  uint64_t cache_miss_stall_cycles() const {
-    return dut_.cache_miss_stall_cycles;
+  uint64_t window_client_requests() const {
+    return dut_.window_client_requests;
+  }
+  uint64_t window_hits() const { return dut_.window_hits; }
+  uint64_t window_memory_reads() const { return dut_.window_memory_reads; }
+  uint64_t window_evictions() const { return dut_.window_evictions; }
+  uint64_t window_stall_cycles() const {
+    return dut_.window_stall_cycles;
   }
   uint64_t window_refills() const { return dut_.window_refills; }
   uint64_t window_fallback_reads() const {
     return dut_.window_fallback_reads;
   }
-  uint32_t configured_cache_sets() const { return dut_.configured_cache_sets; }
-  uint32_t configured_cache_bytes() const {
-    return dut_.configured_cache_bytes;
+  uint32_t configured_window_bytes() const {
+    return dut_.configured_window_bytes;
   }
   uint32_t configured_window_words() const {
     return dut_.configured_window_words;
@@ -671,6 +671,23 @@ int main(int argc, char** argv) {
     if (driver.ddr_accepted() != driver.ddr_returned()) {
       throw std::runtime_error("DDR request/response accounting mismatch");
     }
+    if (!render::interrupt_requested()) {
+      if (driver.window_client_requests() < driver.window_hits() ||
+          driver.window_client_requests() - driver.window_hits() !=
+              driver.window_refills() + driver.window_fallback_reads()) {
+        throw std::runtime_error("sample-window client accounting mismatch");
+      }
+      const uint64_t refill_lines =
+          driver.configured_window_words() / 8u;
+      if (driver.window_memory_reads() !=
+          refill_lines * driver.window_refills() +
+              driver.window_fallback_reads()) {
+        throw std::runtime_error("sample-window memory accounting mismatch");
+      }
+      if (driver.window_memory_reads() != driver.ddr_accepted()) {
+        throw std::runtime_error("sample-window/DDR accounting mismatch");
+      }
+    }
 
     auto elapsed_ms = [](Clock::time_point start, Clock::time_point end) {
       return std::chrono::duration<double, std::milli>(end - start).count();
@@ -726,6 +743,15 @@ int main(int argc, char** argv) {
           << driver.effects_output_frame_count()
 #endif
           << ",\n  \"rtl_window_words\": " << driver.configured_window_words()
+          << ",\n  \"rtl_window_bytes\": " << driver.configured_window_bytes()
+          << ",\n  \"rtl_window_client_requests\": "
+          << driver.window_client_requests()
+          << ",\n  \"rtl_window_hits\": " << driver.window_hits()
+          << ",\n  \"rtl_window_memory_reads\": "
+          << driver.window_memory_reads()
+          << ",\n  \"rtl_window_evictions\": " << driver.window_evictions()
+          << ",\n  \"rtl_window_stall_cycles\": "
+          << driver.window_stall_cycles()
           << ",\n  \"rtl_window_refills\": " << driver.window_refills()
           << ",\n  \"rtl_window_fallback_reads\": "
           << driver.window_fallback_reads()
@@ -782,16 +808,14 @@ int main(int argc, char** argv) {
               << driver.first_output_frame_latency_cycles()
               << " first_output_frame_latency_ns="
               << driver.first_output_frame_latency_cycles() * 10u
-              << " cache_sets=" << driver.configured_cache_sets()
-              << " cache_bytes=" << driver.configured_cache_bytes()
               << " window_words=" << driver.configured_window_words()
-              << " cache_requests=" << driver.cache_requests()
-              << " cache_hits=" << driver.cache_hits()
-              << " cache_mshr_merges=" << driver.cache_mshr_merges()
-              << " cache_misses=" << driver.cache_misses()
-              << " cache_evictions=" << driver.cache_evictions()
-              << " cache_miss_stall_cycles="
-              << driver.cache_miss_stall_cycles()
+              << " window_bytes=" << driver.configured_window_bytes()
+              << " window_client_requests="
+              << driver.window_client_requests()
+              << " window_hits=" << driver.window_hits()
+              << " window_memory_reads=" << driver.window_memory_reads()
+              << " window_evictions=" << driver.window_evictions()
+              << " window_stall_cycles=" << driver.window_stall_cycles()
               << " window_refills=" << driver.window_refills()
               << " window_fallback_reads="
               << driver.window_fallback_reads()

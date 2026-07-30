@@ -275,7 +275,10 @@ jq '{render_target, output_samples, region_count:(.regions | length),
      rtl_core_cycles, rtl_render_blocks, rtl_render_frames,
      rtl_max_render_cycles, rtl_max_end_to_end_cycles,
      rtl_end_to_end_deadline_misses,
-     rtl_window_words, rtl_window_refills, ddr_reads,
+     rtl_window_words, rtl_window_bytes,
+     rtl_window_client_requests, rtl_window_hits,
+     rtl_window_memory_reads, rtl_window_refills,
+     rtl_window_fallback_reads, ddr_reads,
      timing_render_ms}' \
   build/song_rtl_ddr3/rtl_ddr3_render_config.json
 ```
@@ -284,6 +287,22 @@ This target uses the shared `render_session` input preparation and
 `render_report` schema, then appends RTL, sample-window, DDR3, deadline, and
 render-timing statistics. Superseded direct-core, cached-memory, and board-loader
 renderer sources are retained under `sim/legacy` without current Make targets.
+
+The window counters have distinct units. `rtl_window_client_requests` counts
+accepted renderer requests and `rtl_window_hits` counts requests served by the
+per-voice 32-word window. A refill miss contributes one
+`rtl_window_refills` but four `rtl_window_memory_reads`; a fallback miss
+contributes one `rtl_window_fallback_reads` and one memory read. Consequently:
+
+```text
+window_client_requests - window_hits = window_refills + window_fallback_reads
+window_memory_reads = 4 * window_refills + window_fallback_reads
+```
+
+`ddr_reads` must equal `rtl_window_memory_reads` after a completed render.
+`rtl_window_stall_cycles` counts cycles for which a client request waits while
+the serialized window transaction is busy; it is not a pure DDR latency
+counter.
 
 The timing fields have distinct boundaries:
 

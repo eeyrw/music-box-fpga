@@ -44,16 +44,14 @@ module voice_major_render_harness (
   output logic [63:0]                              ddr_activates,
   output logic [63:0]                              ddr_precharges,
   output logic [63:0]                              ddr_refreshes,
-  output logic [63:0]                              cache_requests,
-  output logic [63:0]                              cache_hits,
-  output logic [63:0]                              cache_mshr_merges,
-  output logic [63:0]                              cache_misses,
-  output logic [63:0]                              cache_evictions,
-  output logic [63:0]                              cache_miss_stall_cycles,
+  output logic [63:0]                              window_client_requests,
+  output logic [63:0]                              window_hits,
+  output logic [63:0]                              window_memory_reads,
+  output logic [63:0]                              window_evictions,
+  output logic [63:0]                              window_stall_cycles,
   output logic [63:0]                              window_refills,
   output logic [63:0]                              window_fallback_reads,
-  output logic [31:0]                              configured_cache_sets,
-  output logic [31:0]                              configured_cache_bytes,
+  output logic [31:0]                              configured_window_bytes,
   output logic [31:0]                              configured_window_words,
   output logic [31:0]                              configured_max_block_frames,
   output logic [15:0]                              active_voice_count,
@@ -126,18 +124,17 @@ module voice_major_render_harness (
     block_read_sample_l = block_read_rsp.sample.l;
     block_read_sample_r = block_read_rsp.sample.r;
     line_rsp.words = ddr_rsp_data;
-    cache_requests = 64'(sample_window_diagnostics.client_request_count);
-    cache_hits = 64'(sample_window_diagnostics.window_hit_count);
-    cache_mshr_merges = '0;
-    cache_misses = 64'(sample_window_diagnostics.memory_read_count);
-    cache_evictions = 64'(sample_window_diagnostics.eviction_count);
-    cache_miss_stall_cycles =
+    window_client_requests =
+        64'(sample_window_diagnostics.client_request_count);
+    window_hits = 64'(sample_window_diagnostics.window_hit_count);
+    window_memory_reads = 64'(sample_window_diagnostics.memory_read_count);
+    window_evictions = 64'(sample_window_diagnostics.eviction_count);
+    window_stall_cycles =
         64'(sample_window_diagnostics.stall_cycle_count);
     window_refills = 64'(sample_window_diagnostics.window_refill_count);
     window_fallback_reads =
         64'(sample_window_diagnostics.fallback_read_count);
-    configured_cache_sets = '0;
-    configured_cache_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
+    configured_window_bytes = 32'(NUM_VOICES * 32 * (PCM_WIDTH / 8));
     configured_window_words = 32'd32;
     configured_max_block_frames = 32'(MAX_BLOCK_FRAMES);
     active_voice_count = '0;

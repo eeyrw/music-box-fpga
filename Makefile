@@ -645,6 +645,7 @@ render-rtl-ddr3:
 	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
 		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
 		--top-module $(RENDER_RTL_TOP) \
+		-MAKEFLAGS "OPT_FAST=$(RENDER_OPT_FAST) OPT_SLOW=$(RENDER_OPT_FAST) OPT_GLOBAL=$(RENDER_OPT_GLOBAL)" \
 		-CFLAGS "$(HARNESS_CXXFLAGS)" \
 		$(RTL_SOURCES) \
 		sim/models/ddr3_timing_model.sv \

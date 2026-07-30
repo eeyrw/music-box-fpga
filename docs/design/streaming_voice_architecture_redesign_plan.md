@@ -43,6 +43,23 @@ true-dual-port BRAM mix。ordered line descriptor 已完成，下一步不再回
 active voices、`max_render_cycles=26,847`、zero deadline miss、58,804 DDR reads 和 18,752
 row misses。该单配置复测与下方既有 16-frame 数据一致；本次没有重跑 8/16 A/B。
 
+同一最终 RTL 的 1 秒 dry 对比关闭 reference compressor/chorus/reverb，并使用不加载
+effects chain 的 RTL top。RTL 完成 48,000 frames、3,039 blocks，达到 512 peak active
+voices；`max_render_cycles=31,876`、最大 deadline utilization 96.954%、zero deadline
+miss。与 C++ reference 的 96,000 个 PCM16 channel samples 中只有 5 个不同：左右声道
+完全相同比例分别为 99.995833% 和 99.993750%，相关系数分别为 0.999999996746 和
+0.999999975892。5 个差异都位于 16-frame block 的 frame 15，后续若追求整段 bit exact，
+应优先审计 block-end 的 command/runtime-state 边界，而不是把差异归因于随机 DDR 数据错误。
+
+该次 RTL 访存为 6,280,984 个 window client requests、4,231,467 hits、604,918 refills、
+1,444,599 fallback reads 和 3,864,271 memory/DDR line reads。报告字段按实际口径命名为
+`rtl_window_*`；每次 32-word refill 展开为四条 8-word line，因此满足：
+
+```text
+client_requests - hits = refills + fallback_reads
+memory_reads = 4 * refills + fallback_reads = ddr_reads
+```
+
 2026-07-29 使用同一 descriptor RTL 完成 8/16 A/B。定向 512-voice SV 压力中，8-frame
 零等待理论值为 15,544 clocks，timed DDR3 为 15,552 clocks；16-frame 两者均为
 28,000 clocks。零等待数字仅表示片内/内存零等待理论吞吐，不能代替 DDR3 验收。使用

@@ -294,9 +294,10 @@ integer calculations.
 
 ## Diagnostics
 
-Render JSON records input provenance, voice count, render cycles, memory reads,
-active/audible/stereo/filtered voice counts, queue high-water marks, cache
-hits/misses, stalls, and saturation counts. `render-reference` also reports
+Render JSON records input provenance, voice count, render cycles, window client
+requests/hits/refills/fallbacks/memory reads/stalls, DDR reads and row behavior,
+active/audible/stereo/filtered voice counts, queue high-water marks, and
+saturation counts. `render-reference` also reports
 steady-clock milliseconds for SF2 loading, event parsing, region preparation,
 the sample-render loop, and the total interval from SF2 loading through the last
 rendered sample. The same timing breakdown is printed to stdout so render modes
