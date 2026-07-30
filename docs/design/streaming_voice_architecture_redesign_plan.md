@@ -79,6 +79,37 @@ SF2/MIDI 证据，不能用于 16-frame `<30,000` 验收。harness 现从 SV 导
 generic `render-rtl-ddr3` 仍接 simulation bridge/timing model，不实例化 Smart Artix reader；
 板级队列由定向 SV test 覆盖。因此以上结果也不能替代 post-route signoff。
 
+RTL DDR3 render 现可通过 `RTL_EFFECTS=1` 选择
+`voice_major_render_effects_harness`，将 published mix buffer 自动读入生产级
+`global_audio_effects_chain`。默认关闭该选项以保留纯 renderer 分析；打开后 WAV 来自 RTL
+chorus/reverb/compressor/master-volume 通路，而 C++ 只负责 MIDI/SF2 策略和效果寄存器配置，
+不作为 DSP 输出或周期验证参考。`rtl_max_render_cycles` 仍以 renderer publish 为终点；
+`rtl_max_end_to_end_cycles` 以 mix buffer 全部送入 effects 并 release 为终点，对应下一 render
+block 可启动的真实串联预算。逐 frame effects 运算可与下一块 renderer 重叠，session 结束时
+额外送入的 48-frame compressor lookahead flush 不计入某一 block deadline。
+
+2026-07-30 使用当前确定性 MIDI 生成器重建 `polyphony_stress_512.mid`，并用 SGM v2.01
+SF2、`EFFECTS_PRESET=hall` 完成 1 秒 RTL DDR3 + RTL effects 压力：
+
+| metric | result |
+| --- | ---: |
+| output / peak active voices | 48,000 frames / 512 |
+| maximum renderer cycles | 31,905 |
+| renderer deadline misses | 0 |
+| maximum render-to-effects-release cycles | 33,228 |
+| end-to-end deadline misses | 4 |
+| effects maximum processing cycles/frame | 87 |
+| effects input / output frames | 48,048 / 48,000 |
+| DDR reads / row misses | 3,864,271 / 1,405,786 |
+
+4 次 end-to-end miss 都发生在 harness 为 MIDI/control 边界切出的 8-frame block；当前板级
+scheduler 固定请求 16 frames，但满 block 的 33,333-clock 周期也只剩 105 clocks。更重要
+的是该次 DDR 相位下 renderer 自身达到 31,905，未满足本计划的 `<30,000 clocks` 压力
+门槛。因此不能把旧的 29,164-clock renderer 结果直接外推为“串联效果器后预算足够”。
+当前 `voice_major_system` 与 simulation top 都串行执行 render、mix-buffer drain 和 release，
+尚未利用两个 mix bank 重叠下一块 render；后续吞吐优化应先解除这个调度限制，再重跑同一
+输入和 timed DDR3 验收。
+
 ## 2. 已知基线
 
 ### 2.1 配置和截止时间

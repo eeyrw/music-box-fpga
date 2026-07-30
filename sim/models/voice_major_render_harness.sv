@@ -57,6 +57,8 @@ module voice_major_render_harness (
   output logic [31:0]                              configured_window_words,
   output logic [31:0]                              configured_max_block_frames,
   output logic [15:0]                              active_voice_count,
+  output synth_pkg::global_audio_config_t           audio_config,
+  output logic [1:0]                               effect_clear,
 
   output logic                                     debug_plan_valid,
   output logic [synth_pkg::VOICE_ID_WIDTH-1:0]     debug_plan_voice,
@@ -80,9 +82,6 @@ module voice_major_render_harness (
   logic line_rsp_ready;
   ordered_line_rsp_t line_rsp;
   logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr_rsp_data;
-  global_audio_config_t audio_config;
-  logic [1:0] effect_clear;
-
   // Simulation-only trace of the unfiltered sample-address stream. Registering
   // it here makes each planner event visible for one complete core cycle.
   always_ff @(posedge core_clk) begin

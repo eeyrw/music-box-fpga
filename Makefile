@@ -8,6 +8,8 @@ MAX_BLOCK_FRAMES ?= 16
 # Keep Verilator builds parallel. Its thread-pool failure is intermittent; retry
 # the failed make command instead of permanently falling back to -j 1.
 VERILATOR_JOBS ?= -j 0
+RTL_EFFECTS ?= 0
+RTL_EFFECTS_ENABLED := $(if $(filter 1 true yes,$(RTL_EFFECTS)),1,0)
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
 	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
@@ -27,7 +29,8 @@ HARNESS_INCLUDE_FLAGS := \
 	-I$(abspath sim/harness/render) \
 	-I$(abspath sim/harness/control)
 CXX_STD_FLAGS := -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
-HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
+HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) \
+	-DRENDER_RTL_EFFECTS_ENABLE=$(RTL_EFFECTS_ENABLED) $(HARNESS_INCLUDE_FLAGS)
 
 # Defaults for the C++ SoundFont reference-render flow.
 SF2 ?= assets/soundfonts/MT6276.sf2
@@ -52,7 +55,8 @@ EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
 RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
-RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3_obj_dir
+RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),_effects,)_obj_dir
+RENDER_RTL_TOP = $(if $(filter 1,$(RTL_EFFECTS_ENABLED)),voice_major_render_effects_harness,voice_major_render_harness)
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
 WTSF_CRC ?=
@@ -184,7 +188,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-summary clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-summary clean
 
 all: test
 
@@ -230,7 +234,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model
+test: test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -252,6 +256,19 @@ test-ddr3-model:
 		sim/models/ddr3_timing_model.sv sim/tb/tb_ddr3_timing_model.sv \
 		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
 	$(BUILD_DIR)/ddr3_timing_model_obj_dir/Vtb_ddr3_timing_model \
+		+DDR3_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
+
+test-render-effects-harness: test-ddr3-model
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/render_effects_harness_obj_dir \
+		--top-module tb_voice_major_render_effects_harness \
+		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
+		sim/models/ordered_line_ddr3_bridge_model.sv \
+		sim/models/voice_major_render_harness.sv \
+		sim/models/voice_major_render_effects_harness.sv \
+		sim/tb/tb_voice_major_render_effects_harness.sv \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/render_effects_harness_obj_dir/Vtb_voice_major_render_effects_harness \
 		+DDR3_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
 
 test-voice-major-512:
@@ -610,22 +627,28 @@ render-reference:
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
 render-rtl-ddr3:
-	# Build the RTL renderer with 200 MHz MIG input, DDR3-800 timing, and C++ SF2/MIDI policy.
+	# Set RTL_EFFECTS=1 to include the RTL chorus/reverb/compressor path in end-to-end timing.
 	mkdir -p $(RENDER_RTL_OUT_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
 		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
-		--top-module voice_major_render_harness \
+		--top-module $(RENDER_RTL_TOP) \
 		-CFLAGS "$(HARNESS_CXXFLAGS)" \
 		$(RTL_SOURCES) \
 		sim/models/ddr3_timing_model.sv \
 		sim/models/ordered_line_ddr3_bridge_model.sv \
 		sim/models/voice_major_render_harness.sv \
+		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),sim/models/voice_major_render_effects_harness.sv,) \
 		$(abspath sim/harness/apps/render_rtl_ddr3_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
+		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)), \
+			$(abspath sim/harness/render/stereo_chorus_model.cpp) \
+			$(abspath sim/harness/render/fdn_reverb_model.cpp) \
+			$(abspath sim/harness/render/effect_return_mixer_model.cpp) \
+			$(abspath sim/harness/render/global_effects_model.cpp),) \
 		$(HARNESS_WAV_SRC) \
 		$(HARNESS_INTERRUPT_SRC) \
 		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
-	$(RENDER_RTL_OBJ_DIR)/Vvoice_major_render_harness \
+	$(RENDER_RTL_OBJ_DIR)/V$(RENDER_RTL_TOP) \
 		--sf2 "$(SF2)" \
 		$(if $(INSTRUMENT),--instrument "$(INSTRUMENT)",) \
 		$(if $(MIDI),--midi "$(MIDI)",) \
@@ -633,6 +656,17 @@ render-rtl-ddr3:
 		--control-tick-ms $(CONTROL_TICK_MS) \
 		$(if $(filter 1 true yes,$(SAMPLE_ACCURATE_CONTROL)),--sample-accurate-control,) \
 		$(if $(filter 1 true yes,$(DETAILED_DIAGNOSTICS)),--detailed-diagnostics,) \
+		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)), \
+			$(if $(filter 1 true yes,$(COMPRESSOR_ENABLE)),--compressor-enable,) \
+			--compressor-threshold-cb $(COMPRESSOR_THRESHOLD_CB) \
+			--compressor-ratio $(COMPRESSOR_RATIO) \
+			--compressor-attack-ms $(COMPRESSOR_ATTACK_MS) \
+			--compressor-release-ms $(COMPRESSOR_RELEASE_MS) \
+			--master-volume $(MASTER_VOLUME) \
+			--effects-preset $(EFFECTS_PRESET) \
+			--chorus-enable $(CHORUS_ENABLE) \
+			--reverb-enable $(REVERB_ENABLE) \
+			--effects-tail-seconds $(EFFECTS_TAIL_SECONDS),) \
 		--out-dir $(RENDER_RTL_OUT_DIR) \
 		+DDR3_IMAGE=$(abspath $(SF2))
 

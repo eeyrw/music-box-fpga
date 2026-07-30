@@ -244,11 +244,37 @@ make render-rtl-ddr3 \
   RENDER_RTL_OUT_DIR=build/song_rtl_ddr3
 ```
 
+By default this target stops at the renderer mix-buffer output. To instantiate
+the production RTL chorus, reverb, compressor, and master-volume chain, drain
+each completed mix buffer through it, and write the processed PCM stream, use:
+
+```bash
+make render-rtl-ddr3 \
+  RTL_EFFECTS=1 EFFECTS_PRESET=hall \
+  SF2='/path/to/soundfont.sf2' \
+  MIDI='/path/to/song.mid' \
+  SECONDS=10 \
+  RENDER_RTL_OUT_DIR=build/song_rtl_ddr3_effects
+```
+
+`RTL_EFFECTS=1` selects a separate Verilated top and object directory, so
+switching the option does not reuse an incompatible executable. The C++ code
+still parses MIDI/SF2 and produces the effect register values, but the rendered
+samples and effect timing come from `global_audio_effects_chain` RTL. Spatial
+effects default to `off`; choose an `EFFECTS_PRESET` such as `hall`, or set the
+individual chorus/reverb overrides. `COMPRESSOR_ENABLE` remains enabled by
+default. The harness feeds 48 zero frames after the requested interval to drain
+the compressor lookahead; `EFFECTS_TAIL_SECONDS` adds an optional spatial-effect
+tail beyond the requested output length.
+
 Inspect the integrated report with:
 
 ```bash
 jq '{render_target, output_samples, region_count:(.regions | length),
+     rtl_effects_loaded,
      rtl_core_cycles, rtl_render_blocks, rtl_render_frames,
+     rtl_max_render_cycles, rtl_max_end_to_end_cycles,
+     rtl_end_to_end_deadline_misses,
      rtl_window_words, rtl_window_refills, ddr_reads,
      timing_render_ms}' \
   build/song_rtl_ddr3/rtl_ddr3_render_config.json
@@ -258,6 +284,21 @@ This target uses the shared `render_session` input preparation and
 `render_report` schema, then appends RTL, sample-window, DDR3, deadline, and
 render-timing statistics. Superseded direct-core, cached-memory, and board-loader
 renderer sources are retained under `sim/legacy` without current Make targets.
+
+The timing fields have distinct boundaries:
+
+- `rtl_max_render_cycles` measures block request through renderer publication.
+- With effects loaded, `rtl_max_end_to_end_cycles` additionally includes reading
+  the published mix buffer into the effect input and releasing that buffer. This
+  is the scheduling deadline for starting the next render block.
+- Effect processing after input acceptance can overlap the next block. The report
+  records its worst per-frame cost as `rtl_effects_max_processing_cycles`; the
+  session-end lookahead/tail drain is not charged to an individual block.
+
+The non-DDR `tb_voice_major_throughput` result is a zero-wait theoretical RTL
+datapath number. Only this target's timed DDR3 statistics are evidence for the
+real-pressure deadline; loading the SF2 file also exercises the actual sample
+image used by the MIDI/SF2 run.
 
 ### 512-Voice DDR3 Stress
 

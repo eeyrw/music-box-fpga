@@ -84,6 +84,7 @@ diagnostic extraction, and output-directory conventions.
 ```bash
 make render-reference SECONDS=1
 make render-rtl-ddr3 SECONDS=1
+make render-rtl-ddr3 SECONDS=1 RTL_EFFECTS=1 EFFECTS_PRESET=hall
 ```
 
 Common overrides include:
@@ -108,6 +109,15 @@ uses the 32-word sample window and timed DDR3 model, and writes
 `rtl_ddr3_render_config.json`. The report includes shared input/session data,
 region diagnostics, RTL cycle counts, window/refill statistics, DDR timing, and
 render timing.
+
+`RTL_EFFECTS=1` selects `voice_major_render_effects_harness`, which drains
+the renderer's production mix buffer through the synthesizable
+`global_audio_effects_chain`. MIDI/SF2 parsing and effect-preset register values
+remain C++ harness policy; PCM processing and timing are RTL. The JSON separates
+renderer completion from the end-to-end point where the mix buffer has been
+accepted by the effects chain and released, and reports the latter deadline
+misses independently. The final 48-frame compressor lookahead drain is a stream
+flush, not part of an individual render-block deadline.
 
 The `render-reference` Make target enables transparent peak protection by
 default: -2 dBFS, 4:1, immediate attack, and a 5000 ms full-range release. Set

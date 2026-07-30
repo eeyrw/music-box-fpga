@@ -1,7 +1,18 @@
+#ifndef RENDER_RTL_EFFECTS_ENABLE
+#define RENDER_RTL_EFFECTS_ENABLE 0
+#endif
+
+#if RENDER_RTL_EFFECTS_ENABLE
+#include "Vvoice_major_render_effects_harness.h"
+using RenderDut = Vvoice_major_render_effects_harness;
+#else
 #include "Vvoice_major_render_harness.h"
+using RenderDut = Vvoice_major_render_harness;
+#endif
 #include "verilated.h"
 
 #include "command_control.h"
+#include "global_effects_model.h"
 #include "render_interrupt.h"
 #include "render_support.h"
 #include "wav_writer.h"
@@ -9,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iomanip>
@@ -212,8 +224,21 @@ class RtlDriver : public render::CommandWordSink {
     dut_.block_frame_count = uint8_t(frame_count);
     const uint16_t block_active_voices = active_voice_count();
     const uint64_t start_cycle = cycles_;
+#if RENDER_RTL_EFFECTS_ENABLE
+    if (!first_output_frame_seen_ && !first_effect_block_seen_ &&
+        block_active_voices != 0) {
+      first_effect_block_seen_ = true;
+      first_effect_block_start_cycle_ = start_cycle;
+      first_output_frame_index_ = start_frame;
+      first_output_active_voices_ = block_active_voices;
+    }
+#endif
     pulse_until_ready(dut_.block_req_valid, dut_.block_req_ready, "block request");
+#if RENDER_RTL_EFFECTS_ENABLE
+    wait_valid(dut_.renderer_complete_valid, "renderer completion");
+#else
     wait_valid(dut_.block_complete_valid, "block completion");
+#endif
     const uint64_t render_cycles = cycles_ - start_cycle;
     ++render_blocks_;
     ++block_frame_count_histogram_[frame_count];
@@ -230,6 +255,18 @@ class RtlDriver : public render::CommandWordSink {
         (uint64_t(frame_count) * 100000000u);
     max_deadline_utilization_ppm_ =
         std::max(max_deadline_utilization_ppm_, utilization_ppm);
+#if RENDER_RTL_EFFECTS_ENABLE
+    wait_valid(dut_.block_complete_valid, "effects block completion");
+    const uint64_t end_to_end_cycles = cycles_ - start_cycle;
+    total_end_to_end_cycles_ += end_to_end_cycles;
+    max_end_to_end_cycles_ = std::max(max_end_to_end_cycles_, end_to_end_cycles);
+    const uint64_t end_to_end_utilization_ppm =
+        end_to_end_cycles * uint64_t(sample_rate_) * 1000000u /
+        (uint64_t(frame_count) * 100000000u);
+    max_end_to_end_utilization_ppm_ = std::max(
+        max_end_to_end_utilization_ppm_, end_to_end_utilization_ppm);
+    if (end_to_end_cycles > deadline_cycles) ++end_to_end_deadline_misses_;
+#endif
     const uint8_t buffer = dut_.block_complete_buffer;
     if (dut_.block_complete_start_frame != start_frame ||
         dut_.block_complete_frame_count != frame_count) {
@@ -240,6 +277,9 @@ class RtlDriver : public render::CommandWordSink {
     dut_.block_complete_ready = 0;
 
     std::vector<std::pair<int16_t, int16_t>> samples;
+#if RENDER_RTL_EFFECTS_ENABLE
+    samples.swap(effect_samples_);
+#else
     samples.reserve(frame_count);
     for (uint32_t index = 0; index < frame_count; ++index) {
       dut_.block_read_buffer = buffer;
@@ -264,8 +304,28 @@ class RtlDriver : public render::CommandWordSink {
     dut_.block_release_buffer = buffer;
     pulse_until_ready(dut_.block_release_valid, dut_.block_release_ready,
                       "block release");
+#endif
     return samples;
   }
+
+#if RENDER_RTL_EFFECTS_ENABLE
+  std::vector<std::pair<int16_t, int16_t>> finish_effects(
+      uint32_t silent_frames, uint64_t expected_output_frames) {
+    for (uint32_t frame = 0; frame < silent_frames; ++frame) {
+      pulse_until_ready(dut_.effect_flush_valid, dut_.effect_flush_ready,
+                        "effect flush frame");
+    }
+    uint64_t waited = 0;
+    while (effect_output_frames_ < expected_output_frames) {
+      step();
+      if (++waited > 1000000)
+        throw std::runtime_error("effect output drain timeout");
+    }
+    std::vector<std::pair<int16_t, int16_t>> samples;
+    samples.swap(effect_samples_);
+    return samples;
+  }
+#endif
 
   uint64_t cycles() const { return cycles_; }
   uint64_t render_blocks() const { return render_blocks_; }
@@ -276,6 +336,14 @@ class RtlDriver : public render::CommandWordSink {
     return max_deadline_utilization_ppm_;
   }
   uint64_t deadline_misses() const { return deadline_misses_; }
+  uint64_t total_end_to_end_cycles() const { return total_end_to_end_cycles_; }
+  uint64_t max_end_to_end_cycles() const { return max_end_to_end_cycles_; }
+  uint64_t max_end_to_end_utilization_ppm() const {
+    return max_end_to_end_utilization_ppm_;
+  }
+  uint64_t end_to_end_deadline_misses() const {
+    return end_to_end_deadline_misses_;
+  }
   uint32_t configured_max_block_frames() const {
     return dut_.configured_max_block_frames;
   }
@@ -336,6 +404,17 @@ class RtlDriver : public render::CommandWordSink {
     return dut_.stale_generation_count;
   }
   uint16_t active_voice_count() const { return dut_.active_voice_count; }
+#if RENDER_RTL_EFFECTS_ENABLE
+  uint16_t effects_max_processing_cycles() const {
+    return dut_.effects_max_processing_cycles;
+  }
+  uint32_t effects_input_frame_count() const {
+    return dut_.effects_input_frame_count;
+  }
+  uint32_t effects_output_frame_count() const {
+    return dut_.effects_output_frame_count;
+  }
+#endif
 
   void print_window_prefetch_analysis(std::ostream& out) {
     window_analyzer_.finish();
@@ -350,9 +429,14 @@ class RtlDriver : public render::CommandWordSink {
     dut_.cmd_stream_valid = 0;
     dut_.block_req_valid = 0;
     dut_.block_complete_ready = 0;
+#if RENDER_RTL_EFFECTS_ENABLE
+    dut_.effect_flush_valid = 0;
+    dut_.effect_output_ready = 1;
+#else
     dut_.block_read_req_valid = 0;
     dut_.block_read_rsp_ready = 0;
     dut_.block_release_valid = 0;
+#endif
   }
 
   void step() {
@@ -361,7 +445,22 @@ class RtlDriver : public render::CommandWordSink {
       dut_.ddr_clk = 0;
       dut_.eval();
       context_.timeInc(1);
-      if (ddr_cycle == 2) dut_.core_clk = 1;
+      if (ddr_cycle == 2) {
+#if RENDER_RTL_EFFECTS_ENABLE
+        if (dut_.effect_output_valid && dut_.effect_output_ready) {
+          effect_samples_.emplace_back(int16_t(dut_.effect_output_l),
+                                       int16_t(dut_.effect_output_r));
+          ++effect_output_frames_;
+          if (!first_output_frame_seen_ && first_effect_block_seen_) {
+            first_output_frame_seen_ = true;
+            first_output_frame_core_cycle_ = cycles_;
+            first_output_frame_latency_cycles_ =
+                cycles_ - first_effect_block_start_cycle_;
+          }
+        }
+#endif
+        dut_.core_clk = 1;
+      }
       dut_.ddr_clk = 1;
       dut_.eval();
       if (ddr_cycle == 2 && dut_.debug_plan_valid) {
@@ -404,7 +503,7 @@ class RtlDriver : public render::CommandWordSink {
   }
 
   VerilatedContext& context_;
-  Vvoice_major_render_harness dut_;
+  RenderDut dut_;
   int sample_rate_;
   uint64_t cycles_ = 0;
   uint64_t render_blocks_ = 0;
@@ -413,6 +512,10 @@ class RtlDriver : public render::CommandWordSink {
   uint64_t max_render_cycles_ = 0;
   uint64_t max_deadline_utilization_ppm_ = 0;
   uint64_t deadline_misses_ = 0;
+  uint64_t total_end_to_end_cycles_ = 0;
+  uint64_t max_end_to_end_cycles_ = 0;
+  uint64_t max_end_to_end_utilization_ppm_ = 0;
+  uint64_t end_to_end_deadline_misses_ = 0;
   uint32_t max_requested_block_frames_ = 0;
   std::map<uint32_t, uint64_t> block_frame_count_histogram_;
   bool first_output_frame_seen_ = false;
@@ -421,6 +524,12 @@ class RtlDriver : public render::CommandWordSink {
   uint32_t first_output_frame_index_ = 0;
   uint16_t first_output_active_voices_ = 0;
   WindowPrefetchAnalyzer window_analyzer_;
+#if RENDER_RTL_EFFECTS_ENABLE
+  std::vector<std::pair<int16_t, int16_t>> effect_samples_;
+  uint64_t effect_output_frames_ = 0;
+  bool first_effect_block_seen_ = false;
+  uint64_t first_effect_block_start_cycle_ = 0;
+#endif
 };
 
 uint32_t next_boundary(uint32_t frame, uint32_t end_frame,
@@ -466,6 +575,53 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(args.out_dir);
     RtlDriver driver(context, args.sample_rate);
     render::CommandVoiceControl sink(driver);
+#if RENDER_RTL_EFFECTS_ENABLE
+    if (args.compressor_threshold_cb < 0.0 ||
+        args.compressor_threshold_cb > 1000.0 ||
+        args.compressor_ratio < 1.0 || args.compressor_attack_ms < 0.0 ||
+        args.compressor_release_ms < 0.0 || args.master_volume < 0.0 ||
+        args.master_volume > 1.0 || args.effects_tail_seconds < 0.0) {
+      throw std::runtime_error("invalid RTL effect-chain argument");
+    }
+    render::GlobalEffectsPreset effects_preset =
+        render::make_global_effects_preset(args.effects_preset,
+                                           args.sample_rate);
+    render::apply_global_effect_enable_overrides(
+        effects_preset, args.chorus_enable, args.reverb_enable);
+    render::CommandAudioControl audio_control(driver);
+    auto cb_q12_20 = [](double cb) {
+      return uint32_t(std::llround(cb * double(uint32_t{1} << 20)));
+    };
+    auto step_for_ms = [&](double milliseconds) {
+      if (milliseconds == 0.0) return uint32_t{0};
+      const uint64_t frames = std::max<uint64_t>(
+          1, uint64_t(std::llround(
+                 milliseconds * args.sample_rate / 1000.0)));
+      const uint64_t distance = uint64_t{1000} << 20;
+      return uint32_t((distance + frames - 1) / frames);
+    };
+    render::CompressorCommandConfig compressor_config;
+    compressor_config.enable = args.compressor_enable;
+    compressor_config.threshold_cb_q12_20 =
+        cb_q12_20(args.compressor_threshold_cb);
+    compressor_config.ratio_slope_q0_16 = uint16_t(std::clamp<int64_t>(
+        std::llround((1.0 - 1.0 / args.compressor_ratio) * 65536.0),
+        0, 65535));
+    compressor_config.attack_step_cb_q12_20 =
+        step_for_ms(args.compressor_attack_ms);
+    compressor_config.release_step_cb_q12_20 =
+        step_for_ms(args.compressor_release_ms);
+    audio_control.configure_compressor(compressor_config);
+    audio_control.set_master_volume(
+        int(std::llround(args.master_volume * 32767.0)));
+    audio_control.configure_chorus(effects_preset.chorus);
+    audio_control.configure_reverb(effects_preset.reverb);
+    const bool spatial_effects_enabled =
+        effects_preset.chorus.enable || effects_preset.reverb.enable;
+    const uint32_t effect_tail_frames = spatial_effects_enabled ?
+        uint32_t(std::llround(args.effects_tail_seconds * args.sample_rate)) :
+        0u;
+#endif
     render::RenderDiagnostics diagnostics;
     diagnostics.detailed_enabled = args.detailed_diagnostics;
     render::McuModel mcu(sink, regions, &diagnostics);
@@ -494,6 +650,19 @@ int main(int argc, char** argv) {
       }
       frame = boundary;
     }
+#if RENDER_RTL_EFFECTS_ENABLE
+    if (!render::interrupt_requested()) {
+      constexpr uint32_t kCompressorLookaheadFrames = 48;
+      auto tail_samples = driver.finish_effects(
+          kCompressorLookaheadFrames + effect_tail_frames,
+          uint64_t(end_frame) + effect_tail_frames);
+      for (const auto& sample : tail_samples) {
+        wav.write_stereo(sample.first, sample.second);
+        nonzero_words += sample.first != 0;
+        nonzero_words += sample.second != 0;
+      }
+    }
+#endif
     const auto render_end = Clock::now();
 
     if (!render::interrupt_requested() && nonzero_words == 0) {
@@ -508,7 +677,13 @@ int main(int argc, char** argv) {
     };
     std::ostringstream stats;
     stats << "  \"render_target\": \"render-rtl-ddr3\""
-          << ",\n  \"algorithm\": \"rtl_voice_major_window_ddr3\""
+          << ",\n  \"algorithm\": \"rtl_voice_major_window_ddr3"
+#if RENDER_RTL_EFFECTS_ENABLE
+          << "_global_audio_effects"
+#endif
+          << "\""
+          << ",\n  \"rtl_effects_loaded\": "
+          << (RENDER_RTL_EFFECTS_ENABLE ? "true" : "false")
           << ",\n" << render::render_input_json_fields(
                  args, inputs.control_tick_samples)
           << ",\n" << render::diagnostics_json_fields(diagnostics)
@@ -534,6 +709,22 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_max_deadline_utilization_ppm\": "
           << driver.max_deadline_utilization_ppm()
           << ",\n  \"rtl_deadline_misses\": " << driver.deadline_misses()
+          << ",\n  \"rtl_total_end_to_end_cycles\": "
+          << driver.total_end_to_end_cycles()
+          << ",\n  \"rtl_max_end_to_end_cycles\": "
+          << driver.max_end_to_end_cycles()
+          << ",\n  \"rtl_max_end_to_end_utilization_ppm\": "
+          << driver.max_end_to_end_utilization_ppm()
+          << ",\n  \"rtl_end_to_end_deadline_misses\": "
+          << driver.end_to_end_deadline_misses()
+#if RENDER_RTL_EFFECTS_ENABLE
+          << ",\n  \"rtl_effects_max_processing_cycles\": "
+          << driver.effects_max_processing_cycles()
+          << ",\n  \"rtl_effects_input_frame_count\": "
+          << driver.effects_input_frame_count()
+          << ",\n  \"rtl_effects_output_frame_count\": "
+          << driver.effects_output_frame_count()
+#endif
           << ",\n  \"rtl_window_words\": " << driver.configured_window_words()
           << ",\n  \"rtl_window_refills\": " << driver.window_refills()
           << ",\n  \"rtl_window_fallback_reads\": "
@@ -564,6 +755,23 @@ int main(int argc, char** argv) {
               << " max_deadline_utilization_ppm="
               << driver.max_deadline_utilization_ppm()
               << " deadline_misses=" << driver.deadline_misses()
+              << " effects_loaded=" << RENDER_RTL_EFFECTS_ENABLE
+              << " total_end_to_end_cycles="
+              << driver.total_end_to_end_cycles()
+              << " max_end_to_end_cycles="
+              << driver.max_end_to_end_cycles()
+              << " max_end_to_end_utilization_ppm="
+              << driver.max_end_to_end_utilization_ppm()
+              << " end_to_end_deadline_misses="
+              << driver.end_to_end_deadline_misses()
+#if RENDER_RTL_EFFECTS_ENABLE
+              << " effects_max_processing_cycles="
+              << driver.effects_max_processing_cycles()
+              << " effects_input_frames="
+              << driver.effects_input_frame_count()
+              << " effects_output_frames="
+              << driver.effects_output_frame_count()
+#endif
               << " first_output_frame_index="
               << driver.first_output_frame_index()
               << " first_output_active_voices="
