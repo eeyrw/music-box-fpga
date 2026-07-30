@@ -119,7 +119,7 @@ scheduler 固定请求 16 frames，但满 block 的 33,333-clock 周期也只剩
 ```text
 NUM_VOICES=512
 BLOCK_WORK_ENTRIES=8
-MAX_BLOCK_FRAMES=8
+MAX_BLOCK_FRAMES=16
 SYS_CLK=100 MHz
 SAMPLE_RATE=48 kHz
 ```
@@ -131,11 +131,11 @@ SAMPLE_RATE=48 kHz
 2,083.33 / 512 = 4.069 clocks/voice-sample
 ```
 
-八 frame block 当前有：
+十六 frame block 当前有：
 
 ```text
-deadline = 8 * 2,083.33 = 16,666.7 clocks
-work     = 512 * 8 = 4,096 voice-samples
+deadline = 16 * 2,083.33 = 33,333.3 clocks
+work     = 512 * 16 = 8,192 voice-samples
 ```
 
 因此 `II=4` 只是没有控制、DDR、fill/drain 和路由余量的理论临界点。任何方案都必须用
@@ -324,14 +324,15 @@ single-context phase/envelope/endpoint microengine
 
 ### 6.1 不把 8 当作合同
 
-`MAX_BLOCK_FRAMES=8` 是当前优化选择，不是外部音频格式。下一版必须在 Phase 1 用相同
-SF2/MIDI trace 比较 8、16 和 32；4 只作为短块/事件边界测试。
+`MAX_BLOCK_FRAMES` 不是外部音频格式。8/16 A/B 已用相同 SF2/MIDI trace 完成，当前默认
+选择 16；RTL 仍支持 1..16-frame 请求，4 和 8 继续用于短块/事件边界回归。32 未进入当前
+实现，因为 unity pitch 已超过 32-word window，且工作集和 deadline 风险都明显增加。
 
 | 最大帧数 | block 时间 | 512-voice samples | unity-pitch endpoint span | 主要影响 |
 | ---: | ---: | ---: | ---: | --- |
 | 4 | 83.3 us | 2,048 | 5 words | 固定开销高 |
-| 8 | 166.7 us | 4,096 | 9 words | 当前已验证基线 |
-| 16 | 333.3 us | 8,192 | 17 words | 推荐候选；整除 48-frame FIFO lead |
+| 8 | 166.7 us | 4,096 | 9 words | 已验证资源优化候选；实时余量不足 |
+| 16 | 333.3 us | 8,192 | 17 words | 当前默认；整除 48-frame FIFO lead |
 | 32 | 666.7 us | 16,384 | 33 words | unity 已超过 32-word window，scratch 翻四倍 |
 
 当前 SGM region 的初始 `phase_inc` 分布为：中位数 `198/256=0.773`，p90
