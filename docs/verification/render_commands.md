@@ -26,6 +26,33 @@ make render-reference \
   RENDER_REFERENCE_OUT_DIR=build/song_reference
 ```
 
+## Fast Functional RTL Render
+
+Use the direct-memory target for the shortest edit/render/listen loop. It runs
+the production command plane, voice state, sample window, envelope, filter,
+mixing, and block renderer, but replaces external-memory timing with a
+single-clock simulation-only line reader:
+
+```bash
+make render-rtl-direct \
+  SF2='/path/to/soundfont.sf2' \
+  MIDI='/path/to/song.mid' \
+  SECONDS=10 \
+  RENDER_RTL_DIRECT_OUT_DIR=build/song_rtl_direct
+```
+
+The target keeps the normal 512-voice, 16-frame renderer configuration. Its
+speedup comes only from removing the simulated DDR clock and timing state; it
+does not reduce polyphony or enlarge control blocks. The output is `out.wav`
+plus `rtl_direct_render_config.json`. Use this path to compare functional RTL
+audio quickly, then use `make render-rtl-ddr3` for memory timing and deadline
+validation. The direct-memory result is not expected to be cycle- or bit-exact
+with the timed DDR3 model at latency-sensitive boundaries.
+
+As with the other RTL render targets, the optional FPGA chorus, reverb, and
+compressor path is excluded by default for speed. Add `RTL_EFFECTS=1` when that
+output chain is part of the behavior under test.
+
 Render only a time window. Events before the window are used to reconstruct
 controller state, but notes that started before the window are not reconstructed:
 

@@ -148,6 +148,24 @@ std::unique_ptr<Image> load_image(const fs::path& path) {
 
 }  // namespace
 
+std::uint16_t read_image_word(const Image& image,
+                              std::uint64_t word_address) {
+  const auto& segments = image.segments;
+  const auto segment_it = std::upper_bound(
+      segments.begin(), segments.end(), word_address,
+      [](std::uint64_t address, const Segment& segment) {
+        return address < segment.base_word;
+      });
+  if (segment_it == segments.begin()) return 0;
+  const Segment& segment = *std::prev(segment_it);
+  if (word_address >= segment.end_word()) return 0;
+
+  const std::size_t byte_offset =
+      static_cast<std::size_t>((word_address - segment.base_word) * 2);
+  return static_cast<std::uint16_t>(segment.bytes[byte_offset]) |
+         (static_cast<std::uint16_t>(segment.bytes[byte_offset + 1]) << 8);
+}
+
 extern "C" int ddr3_bin_open(const char* path) {
   try {
     if (path == nullptr || path[0] == '\0') {
@@ -170,20 +188,27 @@ extern "C" std::uint16_t ddr3_bin_read_word(int handle,
   const auto image_it = images.find(handle);
   if (image_it == images.end()) return 0;
 
-  const auto& segments = image_it->second->segments;
-  const auto segment_it = std::upper_bound(
-      segments.begin(), segments.end(), word_address,
-      [](std::uint64_t address, const Segment& segment) {
-        return address < segment.base_word;
-      });
-  if (segment_it == segments.begin()) return 0;
-  const Segment& segment = *std::prev(segment_it);
-  if (word_address >= segment.end_word()) return 0;
+  return read_image_word(*image_it->second, word_address);
+}
 
-  const std::size_t byte_offset =
-      static_cast<std::size_t>((word_address - segment.base_word) * 2);
-  return static_cast<std::uint16_t>(segment.bytes[byte_offset]) |
-         (static_cast<std::uint16_t>(segment.bytes[byte_offset + 1]) << 8);
+extern "C" void ddr3_bin_read_line8(int handle,
+                                      std::uint64_t word_address,
+                                      std::uint32_t* words_1_0,
+                                      std::uint32_t* words_3_2,
+                                      std::uint32_t* words_5_4,
+                                      std::uint32_t* words_7_6) {
+  std::lock_guard<std::mutex> lock(image_mutex);
+  const auto image_it = images.find(handle);
+  const Image* image = image_it == images.end() ? nullptr : image_it->second.get();
+  auto pair = [&](std::uint64_t offset) {
+    if (image == nullptr) return std::uint32_t{0};
+    return std::uint32_t(read_image_word(*image, word_address + offset)) |
+           (std::uint32_t(read_image_word(*image, word_address + offset + 1)) << 16);
+  };
+  *words_1_0 = pair(0);
+  *words_3_2 = pair(2);
+  *words_5_4 = pair(4);
+  *words_7_6 = pair(6);
 }
 
 extern "C" std::uint64_t ddr3_bin_word_count(int handle) {

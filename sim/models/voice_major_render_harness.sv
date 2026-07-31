@@ -186,7 +186,28 @@ module voice_major_render_harness (
   logic unused_audio_control;
   assign unused_audio_control = (|audio_config) | (|effect_clear);
 
-`ifdef SYNTH_SIM_QSPI
+`ifdef SYNTH_SIM_DIRECT_MEMORY
+  direct_line_memory_model #(
+    .ADDR_WIDTH(ADDR_WIDTH),
+    .LINE_WORDS(BLOCK_LINE_WORDS)
+  ) memory (
+    .clk(core_clk),
+    .rst,
+    .req_valid(line_req_valid),
+    .req_ready(line_req_ready),
+    .req_addr(line_req.aligned_line_addr),
+    .rsp_valid(line_rsp_valid),
+    .rsp_ready(line_rsp_ready),
+    .rsp_data(ddr_rsp_data),
+    .stat_accepted(ddr_accepted),
+    .stat_returned(ddr_returned)
+  );
+  assign ddr_row_hits = '0;
+  assign ddr_row_misses = '0;
+  assign ddr_activates = '0;
+  assign ddr_precharges = '0;
+  assign ddr_refreshes = '0;
+`elsif SYNTH_SIM_QSPI
   qspi_nor_timing_model #(
     .ADDR_WIDTH(ADDR_WIDTH),
     .LINE_WORDS(BLOCK_LINE_WORDS),

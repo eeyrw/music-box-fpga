@@ -67,6 +67,7 @@ source update, not a harmless check.
 | Entry point | Purpose |
 | --- | --- |
 | `make render-reference` | Pure C++ integer reference using the production command words and host policy. |
+| `make render-rtl-direct` | Fast functional Verilator render using the production voice/block configuration and simulation-only direct line memory. |
 | `make render-rtl-ddr3` | Verilated production renderer with timed DDR3 and WAV/JSON output. |
 | `tools/analyze_render_artifacts.py` | Finds PCM transients and correlates them with MIDI/control timing. |
 | `tools/analyze_sf2_access_span.py` | Models SF2/MIDI phase steps, loop wraps, and address locality; see [`../verification/sf2_access_span_analysis.md`](../verification/sf2_access_span_analysis.md). |

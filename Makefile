@@ -16,6 +16,7 @@ VERILATOR_JOBS ?= -j 0
 RTL_EFFECTS ?= 0
 RTL_EFFECTS_ENABLED := $(if $(filter 1 true yes,$(RTL_EFFECTS)),1,0)
 RENDER_MEMORY ?= ddr3
+RENDER_DIRECT_ENABLED := $(if $(filter direct,$(RENDER_MEMORY)),1,0)
 RENDER_QSPI_ENABLED := $(if $(filter qspi,$(RENDER_MEMORY)),1,0)
 RENDER_PARALLEL_NOR_ENABLED := $(if $(filter parallel-nor,$(RENDER_MEMORY)),1,0)
 MAKE_JOBS ?= -j
@@ -23,6 +24,7 @@ RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
 	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 	-DSYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
 	-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
+	$(if $(filter 1,$(RENDER_DIRECT_ENABLED)),-DSYNTH_SIM_DIRECT_MEMORY,) \
 	$(if $(filter 1,$(RENDER_QSPI_ENABLED)),-DSYNTH_SIM_QSPI,) \
 	$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),-DSYNTH_SIM_PARALLEL_NOR,)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
@@ -44,6 +46,7 @@ HARNESS_INCLUDE_FLAGS := \
 CXX_STD_FLAGS := -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) \
 	-DRENDER_RTL_EFFECTS_ENABLE=$(RTL_EFFECTS_ENABLED) \
+	-DRENDER_MEMORY_DIRECT=$(RENDER_DIRECT_ENABLED) \
 	-DRENDER_MEMORY_QSPI=$(RENDER_QSPI_ENABLED) \
 	-DRENDER_MEMORY_PARALLEL_NOR=$(RENDER_PARALLEL_NOR_ENABLED) \
 	$(HARNESS_INCLUDE_FLAGS)
@@ -72,6 +75,7 @@ EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
 RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
+RENDER_RTL_DIRECT_OUT_DIR ?= $(BUILD_DIR)/render_rtl_direct
 RENDER_RTL_QSPI_OUT_DIR ?= $(BUILD_DIR)/render_rtl_qspi
 RENDER_RTL_PARALLEL_NOR_OUT_DIR ?= $(BUILD_DIR)/render_rtl_parallel_nor
 POLYPHONY_STRESS_MIDI ?= $(BUILD_DIR)/polyphony_stress_512.mid
@@ -80,7 +84,7 @@ SF2_ACCESS_MARKDOWN ?= $(BUILD_DIR)/polyphony_stress_sf2_access_span.md
 SF2_ACCESS_LINE_WORDS ?= 8,16,32,64
 SF2_ACCESS_LOOKAHEAD_MS ?= 1,2,5,10
 SF2_ACCESS_JOBS ?= 0
-RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_$(RENDER_MEMORY)$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),_effects,)_obj_dir
+RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_$(RENDER_MEMORY)$(if $(filter direct,$(RENDER_MEMORY)),_v$(NUM_VOICES)_b$(MAX_BLOCK_FRAMES),)$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),_effects,)_obj_dir
 RENDER_RTL_TOP = $(if $(filter 1,$(RTL_EFFECTS_ENABLED)),voice_major_render_effects_harness,voice_major_render_harness)
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
 WTSF_SF2_START_LBA ?= 1
@@ -218,7 +222,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -269,7 +273,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
+test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -292,6 +296,16 @@ test-ddr3-model:
 		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
 	$(BUILD_DIR)/ddr3_timing_model_obj_dir/Vtb_ddr3_timing_model \
 		+DDR3_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
+
+test-direct-memory-model: test-ddr3-model
+	$(VERILATOR) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/direct_line_memory_model_obj_dir \
+		--top-module tb_direct_line_memory_model \
+		sim/models/direct_line_memory_model.sv \
+		sim/tb/tb_direct_line_memory_model.sv \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/direct_line_memory_model_obj_dir/Vtb_direct_line_memory_model \
+		+DIRECT_MEMORY_IMAGE=$(abspath $(BUILD_DIR)/ddr3_test_image)
 
 test-qspi-nor-model: test-ddr3-model
 	mkdir -p $(BUILD_DIR)/qspi_nor_test_image
@@ -689,6 +703,7 @@ render-rtl-ddr3:
 		-MAKEFLAGS "OPT_FAST=$(RENDER_OPT_FAST) OPT_SLOW=$(RENDER_OPT_FAST) OPT_GLOBAL=$(RENDER_OPT_GLOBAL)" \
 		-CFLAGS "$(HARNESS_CXXFLAGS)" \
 		$(RTL_SOURCES) \
+		sim/models/direct_line_memory_model.sv \
 		sim/models/ddr3_timing_model.sv \
 		sim/models/ordered_line_ddr3_bridge_model.sv \
 		sim/models/qspi_nor_timing_model.sv \
@@ -726,7 +741,11 @@ render-rtl-ddr3:
 			--reverb-enable $(REVERB_ENABLE) \
 			--effects-tail-seconds $(EFFECTS_TAIL_SECONDS),) \
 		--out-dir $(RENDER_RTL_OUT_DIR) \
-		$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2))))
+		$(if $(filter 1,$(RENDER_DIRECT_ENABLED)),+DIRECT_MEMORY_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2)))))
+
+render-rtl-direct:
+	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=direct \
+		RENDER_RTL_OUT_DIR=$(RENDER_RTL_DIRECT_OUT_DIR)
 
 render-rtl-qspi:
 	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=qspi \

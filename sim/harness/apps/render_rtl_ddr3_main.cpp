@@ -10,6 +10,10 @@
 #define RENDER_MEMORY_PARALLEL_NOR 0
 #endif
 
+#ifndef RENDER_MEMORY_DIRECT
+#define RENDER_MEMORY_DIRECT 0
+#endif
+
 #if RENDER_RTL_EFFECTS_ENABLE
 #include "Vvoice_major_render_effects_harness.h"
 using RenderDut = Vvoice_major_render_effects_harness;
@@ -42,7 +46,11 @@ using RenderDut = Vvoice_major_render_harness;
 
 namespace {
 
-#if RENDER_MEMORY_PARALLEL_NOR
+#if RENDER_MEMORY_DIRECT
+constexpr const char* kMemoryName = "direct";
+constexpr const char* kMemoryDisplayName = "direct memory";
+constexpr const char* kSummaryFilename = "/rtl_direct_render_config.json";
+#elif RENDER_MEMORY_PARALLEL_NOR
 constexpr const char* kMemoryName = "parallel-nor";
 constexpr const char* kMemoryDisplayName = "parallel NOR";
 constexpr const char* kSummaryFilename = "/rtl_parallel_nor_render_config.json";
@@ -476,8 +484,12 @@ class RtlDriver : public render::CommandWordSink {
 #endif
 
   void print_window_prefetch_analysis(std::ostream& out) {
+#if RENDER_MEMORY_DIRECT
+    out << "WINDOW_PREFETCH_TRACE disabled_for_direct_memory\n";
+#else
     window_analyzer_.finish();
     window_analyzer_.print(out);
+#endif
   }
 
  private:
@@ -500,6 +512,30 @@ class RtlDriver : public render::CommandWordSink {
   }
 
   void step() {
+#if RENDER_MEMORY_DIRECT
+    dut_.core_clk = 0;
+    dut_.ddr_clk = 0;
+    dut_.eval();
+    context_.timeInc(1);
+#if RENDER_RTL_EFFECTS_ENABLE
+    if (dut_.effect_output_valid && dut_.effect_output_ready) {
+      effect_samples_.emplace_back(int16_t(dut_.effect_output_l),
+                                   int16_t(dut_.effect_output_r));
+      ++effect_output_frames_;
+      if (!first_output_frame_seen_ && first_effect_block_seen_) {
+        first_output_frame_seen_ = true;
+        first_output_frame_core_cycle_ = cycles_;
+        first_output_frame_latency_cycles_ =
+            cycles_ - first_effect_block_start_cycle_;
+      }
+    }
+#endif
+    dut_.core_clk = 1;
+    dut_.eval();
+    context_.timeInc(1);
+    dut_.core_clk = 0;
+    dut_.eval();
+#else
     dut_.core_clk = 0;
     for (int ddr_cycle = 0; ddr_cycle < 4; ++ddr_cycle) {
       dut_.ddr_clk = 0;
@@ -535,6 +571,7 @@ class RtlDriver : public render::CommandWordSink {
     dut_.ddr_clk = 0;
     dut_.core_clk = 0;
     dut_.eval();
+#endif
     ++cycles_;
   }
 
@@ -820,7 +857,9 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_stale_parameter_updates\": "
           << driver.stale_parameter_updates()
           << ",\n  \"rtl_peak_active_voices\": " << peak_active_voices
-#if RENDER_MEMORY_PARALLEL_NOR
+#if RENDER_MEMORY_DIRECT
+          << ",\n  \"direct_memory_lines\": " << driver.ddr_accepted()
+#elif RENDER_MEMORY_PARALLEL_NOR
           << ",\n  \"parallel_nor_lines\": " << driver.ddr_accepted()
           << ",\n  \"parallel_nor_page_lines\": " << driver.ddr_row_hits()
           << ",\n  \"parallel_nor_random_lines\": " << driver.ddr_row_misses()
@@ -918,7 +957,9 @@ int main(int argc, char** argv) {
               << driver.stale_parameter_updates()
               << " peak_active_voices=" << peak_active_voices
               << " active_voices_at_end=" << driver.active_voice_count()
-#if RENDER_MEMORY_PARALLEL_NOR
+#if RENDER_MEMORY_DIRECT
+              << " direct_memory_lines=" << driver.ddr_accepted()
+#elif RENDER_MEMORY_PARALLEL_NOR
               << " parallel_nor_lines=" << driver.ddr_accepted()
               << " page_lines=" << driver.ddr_row_hits()
               << " random_lines=" << driver.ddr_row_misses()
