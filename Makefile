@@ -17,12 +17,14 @@ RTL_EFFECTS ?= 0
 RTL_EFFECTS_ENABLED := $(if $(filter 1 true yes,$(RTL_EFFECTS)),1,0)
 RENDER_MEMORY ?= ddr3
 RENDER_QSPI_ENABLED := $(if $(filter qspi,$(RENDER_MEMORY)),1,0)
+RENDER_PARALLEL_NOR_ENABLED := $(if $(filter parallel-nor,$(RENDER_MEMORY)),1,0)
 MAKE_JOBS ?= -j
 RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
 	-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 	-DSYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
 	-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) \
-	$(if $(filter 1,$(RENDER_QSPI_ENABLED)),-DSYNTH_SIM_QSPI,)
+	$(if $(filter 1,$(RENDER_QSPI_ENABLED)),-DSYNTH_SIM_QSPI,) \
+	$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),-DSYNTH_SIM_PARALLEL_NOR,)
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
 VIVADO_BUILD_DIR := $(BUILD_DIR)/fpga/smart_artix/vivado
 VIVADO_SCRIPT_DIR := $(abspath fpga/smart_artix/vivado/scripts)
@@ -42,7 +44,9 @@ HARNESS_INCLUDE_FLAGS := \
 CXX_STD_FLAGS := -std=c++17 -Wall -Wextra -Werror $(CXX_DEFINES) $(HARNESS_INCLUDE_FLAGS)
 HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) \
 	-DRENDER_RTL_EFFECTS_ENABLE=$(RTL_EFFECTS_ENABLED) \
-	-DRENDER_MEMORY_QSPI=$(RENDER_QSPI_ENABLED) $(HARNESS_INCLUDE_FLAGS)
+	-DRENDER_MEMORY_QSPI=$(RENDER_QSPI_ENABLED) \
+	-DRENDER_MEMORY_PARALLEL_NOR=$(RENDER_PARALLEL_NOR_ENABLED) \
+	$(HARNESS_INCLUDE_FLAGS)
 
 # Defaults for the C++ SoundFont reference-render flow.
 SF2 ?= assets/soundfonts/MT6276.sf2
@@ -68,6 +72,7 @@ MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
 RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
 RENDER_RTL_QSPI_OUT_DIR ?= $(BUILD_DIR)/render_rtl_qspi
+RENDER_RTL_PARALLEL_NOR_OUT_DIR ?= $(BUILD_DIR)/render_rtl_parallel_nor
 POLYPHONY_STRESS_MIDI ?= $(BUILD_DIR)/polyphony_stress_512.mid
 SF2_ACCESS_JSON ?= $(BUILD_DIR)/polyphony_stress_sf2_access_span.json
 SF2_ACCESS_MARKDOWN ?= $(BUILD_DIR)/polyphony_stress_sf2_access_span.md
@@ -212,7 +217,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 render-rtl-qspi vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -263,7 +268,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-render-effects-harness
+test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -300,6 +305,20 @@ test-qspi-nor-model: test-ddr3-model
 		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
 	$(BUILD_DIR)/qspi_nor_timing_model_obj_dir/Vtb_qspi_nor_timing_model \
 		+QSPI_IMAGE=$(abspath $(BUILD_DIR)/qspi_nor_test_image)
+
+test-parallel-nor-model: test-ddr3-model
+	mkdir -p $(BUILD_DIR)/parallel_nor_test_image
+	cp $(BUILD_DIR)/ddr3_test_image/00000000.bin $(BUILD_DIR)/parallel_nor_test_image/00000000.bin
+	cp $(BUILD_DIR)/ddr3_test_image/00000008.bin $(BUILD_DIR)/parallel_nor_test_image/00000008.bin
+	cp $(BUILD_DIR)/ddr3_test_image/00000010.bin $(BUILD_DIR)/parallel_nor_test_image/00000010.bin
+	$(VERILATOR) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/parallel_nor_timing_model_obj_dir \
+		--top-module tb_parallel_nor_timing_model \
+		sim/models/parallel_nor_timing_model.sv \
+		sim/tb/tb_parallel_nor_timing_model.sv \
+		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
+	$(BUILD_DIR)/parallel_nor_timing_model_obj_dir/Vtb_parallel_nor_timing_model \
+		+PARALLEL_NOR_IMAGE=$(abspath $(BUILD_DIR)/parallel_nor_test_image)
 
 test-render-effects-harness: test-ddr3-model
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
@@ -664,6 +683,7 @@ render-rtl-ddr3:
 		sim/models/ddr3_timing_model.sv \
 		sim/models/ordered_line_ddr3_bridge_model.sv \
 		sim/models/qspi_nor_timing_model.sv \
+		sim/models/parallel_nor_timing_model.sv \
 		sim/models/voice_major_render_harness.sv \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),fpga/common/rtl/voice_major_block_output_manager.sv,) \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),sim/models/voice_major_render_effects_harness.sv,) \
@@ -697,11 +717,15 @@ render-rtl-ddr3:
 			--reverb-enable $(REVERB_ENABLE) \
 			--effects-tail-seconds $(EFFECTS_TAIL_SECONDS),) \
 		--out-dir $(RENDER_RTL_OUT_DIR) \
-		$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2)))
+		$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2))))
 
 render-rtl-qspi:
 	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=qspi \
 		RENDER_RTL_OUT_DIR=$(RENDER_RTL_QSPI_OUT_DIR)
+
+render-rtl-parallel-nor:
+	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=parallel-nor \
+		RENDER_RTL_OUT_DIR=$(RENDER_RTL_PARALLEL_NOR_OUT_DIR)
 
 vivado-project:
 	mkdir -p $(VIVADO_BUILD_DIR)/logs

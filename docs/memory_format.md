@@ -158,7 +158,7 @@ adjacent queued lines. A 32-word window refill is four adjacent 8-word memory
 requests and therefore uses one QSPI transaction followed by three continuous
 lines. A later out-of-window endpoint uses one 8-word fallback request rather
 than another unconditional 32-word refill. See
-[`verification/qspi_nor_feasibility.md`](verification/qspi_nor_feasibility.md)
+[`verification/nor_flash_feasibility.md`](verification/nor_flash_feasibility.md)
 for the datasheet basis, exact cycle geometry, report fields, and board limits.
 
 ## Verification

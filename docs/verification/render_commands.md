@@ -337,7 +337,20 @@ Its JSON replaces DDR row fields with QSPI sequential/random line counts,
 transaction overhead, data clocks, and bus utilization. The model assumptions
 include four continuous 8-word lines per 32-word refill and one-line fallback
 reads for later out-of-window endpoints. Capacity and board caveats are in
-[`qspi_nor_feasibility.md`](qspi_nor_feasibility.md).
+[`nor_flash_feasibility.md`](nor_flash_feasibility.md).
+
+The x16 asynchronous parallel NOR experiment also uses the identical renderer
+and workload:
+
+```bash
+make render-rtl-parallel-nor SF2='/path/to/input.sf2' \
+  MIDI='/path/to/input.mid' SECONDS=1 CONTROL_TICK_MS=1
+```
+
+Its `rtl_parallel_nor_render_config.json` report separates same-page lines from
+random accesses and records random/page active clocks. Model assumptions and
+the one-second SGM result are in
+[`nor_flash_feasibility.md`](nor_flash_feasibility.md).
 
 ### 512-Voice DDR3 Stress
 

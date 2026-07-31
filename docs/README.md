@@ -71,8 +71,8 @@ matching contract whenever its RTL or host implementation changes.
   C++ and RTL render commands.
 - [`verification/sf2_access_span_analysis.md`](verification/sf2_access_span_analysis.md):
   SF2/MIDI phase-step, loop-wrap, and sample-line locality analysis.
-- [`verification/qspi_nor_feasibility.md`](verification/qspi_nor_feasibility.md):
-  datasheet-based QSPI NOR timing model, render flow, and board/capacity limits.
+- [`verification/nor_flash_feasibility.md`](verification/nor_flash_feasibility.md):
+  QSPI and x16 parallel NOR models, one-second SGM comparison, and board limits.
 - [`verification/global_sample_cache_evaluation.md`](verification/global_sample_cache_evaluation.md):
   one-second SGM A/B results for the per-voice window and experimental global
   line cache on DDR3 and QSPI timing models.

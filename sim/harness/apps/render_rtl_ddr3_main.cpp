@@ -6,6 +6,10 @@
 #define RENDER_MEMORY_QSPI 0
 #endif
 
+#ifndef RENDER_MEMORY_PARALLEL_NOR
+#define RENDER_MEMORY_PARALLEL_NOR 0
+#endif
+
 #if RENDER_RTL_EFFECTS_ENABLE
 #include "Vvoice_major_render_effects_harness.h"
 using RenderDut = Vvoice_major_render_effects_harness;
@@ -37,6 +41,20 @@ using RenderDut = Vvoice_major_render_harness;
 #include <vector>
 
 namespace {
+
+#if RENDER_MEMORY_PARALLEL_NOR
+constexpr const char* kMemoryName = "parallel-nor";
+constexpr const char* kMemoryDisplayName = "parallel NOR";
+constexpr const char* kSummaryFilename = "/rtl_parallel_nor_render_config.json";
+#elif RENDER_MEMORY_QSPI
+constexpr const char* kMemoryName = "qspi";
+constexpr const char* kMemoryDisplayName = "QSPI";
+constexpr const char* kSummaryFilename = "/rtl_qspi_render_config.json";
+#else
+constexpr const char* kMemoryName = "ddr3";
+constexpr const char* kMemoryDisplayName = "DDR3";
+constexpr const char* kSummaryFilename = "/rtl_ddr3_render_config.json";
+#endif
 
 int32_t signed24(uint32_t value) {
   value &= 0x00ffffffu;
@@ -735,10 +753,8 @@ int main(int argc, char** argv) {
       return std::chrono::duration<double, std::milli>(end - start).count();
     };
     std::ostringstream stats;
-    stats << "  \"render_target\": \"render-rtl-"
-          << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3") << "\""
-          << ",\n  \"algorithm\": \"rtl_voice_major_window_"
-          << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3")
+    stats << "  \"render_target\": \"render-rtl-" << kMemoryName << "\""
+          << ",\n  \"algorithm\": \"rtl_voice_major_window_" << kMemoryName
 #if RENDER_RTL_EFFECTS_ENABLE
           << "_global_audio_effects"
 #endif
@@ -804,7 +820,22 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_stale_parameter_updates\": "
           << driver.stale_parameter_updates()
           << ",\n  \"rtl_peak_active_voices\": " << peak_active_voices
-#if RENDER_MEMORY_QSPI
+#if RENDER_MEMORY_PARALLEL_NOR
+          << ",\n  \"parallel_nor_lines\": " << driver.ddr_accepted()
+          << ",\n  \"parallel_nor_page_lines\": " << driver.ddr_row_hits()
+          << ",\n  \"parallel_nor_random_lines\": " << driver.ddr_row_misses()
+          << ",\n  \"parallel_nor_transactions\": " << driver.ddr_activates()
+          << ",\n  \"parallel_nor_random_access_cycles\": "
+          << driver.ddr_precharges()
+          << ",\n  \"parallel_nor_page_access_cycles\": "
+          << driver.ddr_refreshes()
+          << ",\n  \"parallel_nor_bus_active_cycles\": "
+          << driver.ddr_precharges() + driver.ddr_refreshes()
+          << ",\n  \"parallel_nor_bus_utilization_ppm\": "
+          << (driver.cycles() == 0 ? 0 :
+              (driver.ddr_precharges() + driver.ddr_refreshes()) * 1000000u /
+                  driver.cycles())
+#elif RENDER_MEMORY_QSPI
           << ",\n  \"qspi_lines\": " << driver.ddr_accepted()
           << ",\n  \"qspi_sequential_lines\": " << driver.ddr_row_hits()
           << ",\n  \"qspi_random_lines\": " << driver.ddr_row_misses()
@@ -826,15 +857,12 @@ int main(int argc, char** argv) {
           << ",\n  \"ddr_refreshes\": " << driver.ddr_refreshes()
 #endif
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
-    render::write_summary(args.out_dir +
-                              (RENDER_MEMORY_QSPI ?
-                                   "/rtl_qspi_render_config.json" :
-                                   "/rtl_ddr3_render_config.json"),
+    render::write_summary(args.out_dir + kSummaryFilename,
                           regions, args.sample_rate, int(frame),
                           int(inputs.events.size()), stats.str());
 
     driver.print_window_prefetch_analysis(std::cout);
-    std::cout << "PASS: RTL " << (RENDER_MEMORY_QSPI ? "QSPI" : "DDR3")
+    std::cout << "PASS: RTL " << kMemoryDisplayName
               << " render frames=" << frame
               << " regions=" << regions.size()
               << " nonzero_words=" << nonzero_words
@@ -890,7 +918,18 @@ int main(int argc, char** argv) {
               << driver.stale_parameter_updates()
               << " peak_active_voices=" << peak_active_voices
               << " active_voices_at_end=" << driver.active_voice_count()
-#if RENDER_MEMORY_QSPI
+#if RENDER_MEMORY_PARALLEL_NOR
+              << " parallel_nor_lines=" << driver.ddr_accepted()
+              << " page_lines=" << driver.ddr_row_hits()
+              << " random_lines=" << driver.ddr_row_misses()
+              << " transactions=" << driver.ddr_activates()
+              << " random_access_cycles=" << driver.ddr_precharges()
+              << " page_access_cycles=" << driver.ddr_refreshes()
+              << " bus_utilization_ppm="
+              << (driver.cycles() == 0 ? 0 :
+                  (driver.ddr_precharges() + driver.ddr_refreshes()) *
+                      1000000u / driver.cycles())
+#elif RENDER_MEMORY_QSPI
               << " qspi_lines=" << driver.ddr_accepted()
               << " sequential_lines=" << driver.ddr_row_hits()
               << " random_lines=" << driver.ddr_row_misses()
@@ -912,7 +951,7 @@ int main(int argc, char** argv) {
               << " wav=" << wav_path << "\n";
     return render::interrupt_requested() ? 130 : 0;
   } catch (const std::exception& error) {
-    std::cerr << "render-rtl-" << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3")
+    std::cerr << "render-rtl-" << kMemoryName
               << " failed: " << error.what() << "\n";
     return 1;
   }

@@ -39,6 +39,7 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | `tb_voice_sample_window` | 32-word per-voice hits, ordered 8-word refills, fallback reads, and backpressure. |
 | `tb_ddr3_timing_model` | Row hit/miss, activate/precharge, refresh, and request/response accounting. |
 | `tb_qspi_nor_timing_model` | Quad command/address/dummy/data cycles, continuous adjacent lines, random transactions, and response backpressure. |
+| `tb_parallel_nor_timing_model` | x16 random/page access cycles, page boundaries, idle restart, accounting, and response backpressure. |
 | `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |
 
 `sim/harness/render/lookahead_compressor_model` is the bit-exact C++ model of
@@ -86,6 +87,7 @@ diagnostic extraction, and output-directory conventions.
 make render-reference SECONDS=1
 make render-rtl-ddr3 SECONDS=1
 make render-rtl-qspi SECONDS=1
+make render-rtl-parallel-nor SECONDS=1
 make render-rtl-ddr3 SECONDS=1 RTL_EFFECTS=1 EFFECTS_PRESET=hall
 ```
 
@@ -116,7 +118,13 @@ render timing.
 output, and deadline accounting while replacing the DDR3 backend with the
 datasheet-based 100 MHz QSPI NOR transaction model. It writes
 `rtl_qspi_render_config.json`; see
-[`qspi_nor_feasibility.md`](qspi_nor_feasibility.md) for interpretation.
+[`nor_flash_feasibility.md`](nor_flash_feasibility.md) for interpretation.
+
+`render-rtl-parallel-nor` replaces only the memory timing backend with a
+parameterized x16 asynchronous NOR page-read model. It writes
+`rtl_parallel_nor_render_config.json`; see
+[`nor_flash_feasibility.md`](nor_flash_feasibility.md) for device,
+capacity, pin-count, and measured deadline limits.
 
 `RTL_EFFECTS=1` selects `voice_major_render_effects_harness`, which drains
 the renderer's production mix buffer through the synthesizable

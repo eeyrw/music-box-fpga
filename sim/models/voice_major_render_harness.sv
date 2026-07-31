@@ -219,6 +219,35 @@ module voice_major_render_harness (
     .stat_overhead_cycles(ddr_precharges),
     .stat_data_cycles(ddr_refreshes)
   );
+`elsif SYNTH_SIM_PARALLEL_NOR
+  parallel_nor_timing_model #(
+    .ADDR_WIDTH(ADDR_WIDTH),
+    .LINE_WORDS(BLOCK_LINE_WORDS),
+    .REQUEST_QUEUE_DEPTH(16),
+    .INIT_CYCLES(8),
+    .PAGE_WORDS(16),
+    .CLOCK_PERIOD_NS(10),
+    .RANDOM_ACCESS_NS(100),
+    .PAGE_ACCESS_NS(15),
+    .DEVICE_WORDS(64'd64 * 1024 * 1024),
+    .DEVICE_COUNT(3)
+  ) memory (
+    .clk(core_clk),
+    .rst,
+    .req_valid(line_req_valid),
+    .req_ready(line_req_ready),
+    .req_addr(line_req.aligned_line_addr),
+    .rsp_valid(line_rsp_valid),
+    .rsp_ready(line_rsp_ready),
+    .rsp_data(ddr_rsp_data),
+    .stat_accepted(ddr_accepted),
+    .stat_returned(ddr_returned),
+    .stat_page_lines(ddr_row_hits),
+    .stat_random_lines(ddr_row_misses),
+    .stat_transactions(ddr_activates),
+    .stat_random_access_cycles(ddr_precharges),
+    .stat_page_access_cycles(ddr_refreshes)
+  );
 `else
   ordered_line_ddr3_bridge_model #(
     .ADDR_WIDTH(ADDR_WIDTH),
