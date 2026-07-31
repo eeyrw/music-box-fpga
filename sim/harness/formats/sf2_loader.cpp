@@ -3,11 +3,15 @@
 #include "byte_reader.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <list>
+#include <map>
 #include <stdexcept>
+#include <type_traits>
 
 namespace render {
 namespace {
@@ -110,9 +114,42 @@ struct ArticulationZone {
   std::vector<Sf2Modulator> modulators;
 };
 
-struct ChunkRef {
-  std::vector<uint8_t> data;
-  size_t payload_offset = 0;
+}  // namespace
+
+struct CompiledCandidate {
+  Zone generators;
+  std::map<uint16_t, std::vector<Sf2Modulator>> modulators_by_destination;
+  int instrument = 0;
+  int velocity_low = 0;
+  int velocity_high = 127;
+};
+
+struct CompiledTarget {
+  std::vector<CompiledCandidate> candidates;
+  std::array<std::vector<size_t>, 128> candidates_by_key;
+};
+
+struct Sf2CompiledData {
+  std::map<std::pair<int, int>, int> preset_by_bank_program;
+  std::map<std::string, int> instrument_exact;
+  std::map<std::string, int> instrument_folded;
+  std::vector<CompiledTarget> presets;
+  std::vector<CompiledTarget> instruments;
+};
+
+namespace {
+
+std::shared_ptr<const Sf2CompiledData> compile_sf2_data(const Sf2Data& sf2);
+
+struct ByteRange {
+  size_t offset = 0;
+  size_t size = 0;
+};
+
+using ChunkTable = std::map<std::string, ByteRange>;
+
+struct RiffIndex {
+  std::map<std::string, ChunkTable> lists;
 };
 
 std::vector<int16_t> file_words_from_bytes(const std::vector<uint8_t>& data) {
@@ -126,105 +163,92 @@ std::vector<int16_t> file_words_from_bytes(const std::vector<uint8_t>& data) {
   return words;
 }
 
-// Locate one top-level LIST chunk inside the RIFF/sfbk container. SoundFont2
-// keeps sample PCM under LIST sdta and preset/instrument metadata under LIST
-// pdta; the harness loads only those two sections.
-std::vector<uint8_t> find_list_chunk(const std::vector<uint8_t>& data, const char wanted[4]) {
-  if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0 ||
-      std::memcmp(data.data() + 8, "sfbk", 4) != 0) {
-    throw std::runtime_error("not a SoundFont2 RIFF/sfbk file");
-  }
-
-  size_t pos = 12;
-  while (pos + 8 <= data.size()) {
-    uint32_t size = read_u32le(data, pos + 4);
-    size_t payload = pos + 8;
-    if (payload + size > data.size()) throw std::runtime_error("truncated RIFF chunk");
-    if (std::memcmp(data.data() + pos, "LIST", 4) == 0 && size >= 4 &&
-        std::memcmp(data.data() + payload, wanted, 4) == 0) {
-      return slice(data, payload + 4, size - 4);
-    }
-    pos = payload + size + (size & 1u);
-  }
-  throw std::runtime_error(std::string("missing LIST ") + std::string(wanted, 4));
+uint16_t range_u16le(const std::vector<uint8_t>& data, const ByteRange& range, size_t offset) {
+  if (offset > range.size || range.size - offset < 2) throw std::runtime_error("truncated u16le");
+  return read_u16le(data, range.offset + offset);
 }
 
-bool find_list_chunk_optional(const std::vector<uint8_t>& data, const char wanted[4],
-                              std::vector<uint8_t>& out) {
-  if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0 ||
-      std::memcmp(data.data() + 8, "sfbk", 4) != 0) {
-    throw std::runtime_error("not a SoundFont2 RIFF/sfbk file");
-  }
-  size_t pos = 12;
-  while (pos + 8 <= data.size()) {
-    uint32_t size = read_u32le(data, pos + 4);
-    size_t payload = pos + 8;
-    if (payload + size > data.size()) throw std::runtime_error("truncated RIFF chunk");
-    if (std::memcmp(data.data() + pos, "LIST", 4) == 0 && size >= 4 &&
-        std::memcmp(data.data() + payload, wanted, 4) == 0) {
-      out = slice(data, payload + 4, size - 4);
-      return true;
-    }
-    pos = payload + size + (size & 1u);
-  }
-  return false;
+uint32_t range_u32le(const std::vector<uint8_t>& data, const ByteRange& range, size_t offset) {
+  if (offset > range.size || range.size - offset < 4) throw std::runtime_error("truncated u32le");
+  return read_u32le(data, range.offset + offset);
 }
 
-std::map<std::string, std::vector<uint8_t>> list_chunks(const std::vector<uint8_t>& payload) {
-  // Return child chunks by four-character ID. RIFF chunks are padded to an even
-  // byte count, so pos advances by size plus the low padding bit.
-  std::map<std::string, std::vector<uint8_t>> chunks;
-  size_t pos = 0;
-  while (pos + 8 <= payload.size()) {
-    std::string id(reinterpret_cast<const char*>(payload.data() + pos), 4);
-    uint32_t size = read_u32le(payload, pos + 4);
-    size_t start = pos + 8;
-    chunks[id] = slice(payload, start, size);
-    pos = start + size + (size & 1u);
+std::string range_name(const std::vector<uint8_t>& data, const ByteRange& range,
+                       size_t offset, size_t size) {
+  if (offset > range.size || size > range.size - offset) throw std::runtime_error("truncated SF2 name");
+  std::string name;
+  for (size_t i = 0; i < size && data[range.offset + offset + i] != 0; ++i) {
+    name.push_back(char(data[range.offset + offset + i]));
+  }
+  while (!name.empty() && name.back() == ' ') name.pop_back();
+  return name;
+}
+
+ChunkTable scan_list_children(const std::vector<uint8_t>& data, size_t begin, size_t end) {
+  ChunkTable chunks;
+  size_t pos = begin;
+  while (pos < end) {
+    if (end - pos < 8) throw std::runtime_error("truncated LIST child header");
+    std::string id(reinterpret_cast<const char*>(data.data() + pos), 4);
+    uint32_t child_size = read_u32le(data, pos + 4);
+    size_t payload = pos + 8;
+    if (child_size > end - payload) throw std::runtime_error("truncated LIST child chunk");
+    if (!chunks.emplace(id, ByteRange{payload, child_size}).second) {
+      throw std::runtime_error("duplicate SF2 chunk " + id);
+    }
+    size_t padded_size = size_t(child_size) + (child_size & 1u);
+    if (padded_size > end - payload) throw std::runtime_error("truncated LIST child padding");
+    pos = payload + padded_size;
   }
   return chunks;
 }
 
-std::map<std::string, ChunkRef> list_chunk_refs(const std::vector<uint8_t>& data, const char wanted[4]) {
+RiffIndex scan_riff(const std::vector<uint8_t>& data) {
   if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0 ||
       std::memcmp(data.data() + 8, "sfbk", 4) != 0) {
     throw std::runtime_error("not a SoundFont2 RIFF/sfbk file");
   }
-
+  uint32_t riff_size = read_u32le(data, 4);
+  if (riff_size < 4 || size_t(riff_size) > data.size() - 8) {
+    throw std::runtime_error("truncated SF2 RIFF container");
+  }
+  const size_t end = 8 + size_t(riff_size);
+  RiffIndex index;
   size_t pos = 12;
-  while (pos + 8 <= data.size()) {
+  while (pos < end) {
+    if (end - pos < 8) throw std::runtime_error("truncated RIFF chunk header");
     uint32_t size = read_u32le(data, pos + 4);
     size_t payload = pos + 8;
-    if (payload + size > data.size()) throw std::runtime_error("truncated RIFF chunk");
-    if (std::memcmp(data.data() + pos, "LIST", 4) == 0 && size >= 4 &&
-        std::memcmp(data.data() + payload, wanted, 4) == 0) {
-      std::map<std::string, ChunkRef> chunks;
-      size_t child = payload + 4;
-      size_t end = payload + size;
-      while (child + 8 <= end) {
-        std::string id(reinterpret_cast<const char*>(data.data() + child), 4);
-        uint32_t child_size = read_u32le(data, child + 4);
-        size_t child_payload = child + 8;
-        if (child_payload + child_size > end) throw std::runtime_error("truncated LIST child chunk");
-        chunks[id] = {slice(data, child_payload, child_size), child_payload};
-        child = child_payload + child_size + (child_size & 1u);
+    if (size > end - payload) throw std::runtime_error("truncated RIFF chunk");
+    if (std::memcmp(data.data() + pos, "LIST", 4) == 0) {
+      if (size < 4) throw std::runtime_error("SF2 LIST chunk is too short");
+      std::string type(reinterpret_cast<const char*>(data.data() + payload), 4);
+      ChunkTable children = scan_list_children(data, payload + 4, payload + size);
+      if (!index.lists.emplace(type, std::move(children)).second) {
+        throw std::runtime_error("duplicate SF2 LIST " + type);
       }
-      return chunks;
     }
-    pos = payload + size + (size & 1u);
+    size_t padded_size = size_t(size) + (size & 1u);
+    if (padded_size > end - payload) throw std::runtime_error("truncated RIFF chunk padding");
+    pos = payload + padded_size;
   }
-  throw std::runtime_error(std::string("missing LIST ") + std::string(wanted, 4));
+  return index;
 }
 
-const std::vector<uint8_t>& require_chunk(const std::map<std::string, std::vector<uint8_t>>& chunks,
-                                          const char* id, size_t record_size,
-                                          size_t min_records) {
+const ChunkTable& require_list(const RiffIndex& index, const char* type) {
+  auto it = index.lists.find(type);
+  if (it == index.lists.end()) throw std::runtime_error(std::string("missing LIST ") + type);
+  return it->second;
+}
+
+const ByteRange& require_chunk(const ChunkTable& chunks, const char* id,
+                               size_t record_size, size_t min_records) {
   auto it = chunks.find(id);
   if (it == chunks.end()) throw std::runtime_error(std::string("missing SF2 chunk ") + id);
-  if (record_size != 0 && (it->second.size() % record_size) != 0) {
+  if (record_size != 0 && (it->second.size % record_size) != 0) {
     throw std::runtime_error(std::string("SF2 chunk ") + id + " has invalid record size");
   }
-  if (record_size != 0 && it->second.size() / record_size < min_records) {
+  if (record_size != 0 && it->second.size / record_size < min_records) {
     throw std::runtime_error(std::string("SF2 chunk ") + id + " has too few records");
   }
   return it->second;
@@ -242,84 +266,92 @@ int sanitize_sample_type(int sample_type) {
   return sample_type & 0x7fff;
 }
 
-std::string text_chunk(const std::map<std::string, std::vector<uint8_t>>& chunks, const char* id) {
+std::string text_chunk(const std::vector<uint8_t>& data, const ChunkTable& chunks, const char* id) {
   auto it = chunks.find(id);
   if (it == chunks.end()) return {};
-  std::string s(reinterpret_cast<const char*>(it->second.data()), it->second.size());
+  const ByteRange& range = it->second;
+  std::string s(reinterpret_cast<const char*>(data.data() + range.offset), range.size);
   while (!s.empty() && s.back() == '\0') s.pop_back();
   return s;
 }
 
-std::string version_chunk(const std::map<std::string, std::vector<uint8_t>>& chunks, const char* id) {
+std::string version_chunk(const std::vector<uint8_t>& data, const ChunkTable& chunks, const char* id) {
   auto it = chunks.find(id);
   if (it == chunks.end()) return {};
-  if (it->second.size() < 4) throw std::runtime_error(std::string("SF2 INFO ") + id + " is too short");
-  return std::to_string(read_u16le(it->second, 0)) + "." + std::to_string(read_u16le(it->second, 2));
+  if (it->second.size < 4) throw std::runtime_error(std::string("SF2 INFO ") + id + " is too short");
+  return std::to_string(range_u16le(data, it->second, 0)) + "." +
+         std::to_string(range_u16le(data, it->second, 2));
 }
 
-std::vector<Preset> parse_presets(const std::vector<uint8_t>& c) {
+std::vector<Preset> parse_presets(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<Preset> out;
-  for (size_t i = 0; i + 38 <= c.size(); i += 38) {
-    out.push_back({clean_name(c, i, 20), read_u16le(c, i + 20),
-                   read_u16le(c, i + 22), read_u16le(c, i + 24)});
+  out.reserve(c.size / 38);
+  for (size_t i = 0; i < c.size; i += 38) {
+    out.push_back({range_name(data, c, i, 20), range_u16le(data, c, i + 20),
+                   range_u16le(data, c, i + 22), range_u16le(data, c, i + 24)});
   }
   return out;
 }
 
-std::vector<Instrument> parse_instruments(const std::vector<uint8_t>& c) {
+std::vector<Instrument> parse_instruments(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<Instrument> out;
-  for (size_t i = 0; i + 22 <= c.size(); i += 22) {
-    out.push_back({clean_name(c, i, 20), read_u16le(c, i + 20)});
+  out.reserve(c.size / 22);
+  for (size_t i = 0; i < c.size; i += 22) {
+    out.push_back({range_name(data, c, i, 20), range_u16le(data, c, i + 20)});
   }
   return out;
 }
 
-std::vector<Bag> parse_bags(const std::vector<uint8_t>& c) {
+std::vector<Bag> parse_bags(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<Bag> out;
-  for (size_t i = 0; i + 4 <= c.size(); i += 4) {
-    out.push_back({read_u16le(c, i), read_u16le(c, i + 2)});
+  out.reserve(c.size / 4);
+  for (size_t i = 0; i < c.size; i += 4) {
+    out.push_back({range_u16le(data, c, i), range_u16le(data, c, i + 2)});
   }
   return out;
 }
 
-std::vector<Generator> parse_generators(const std::vector<uint8_t>& c) {
+std::vector<Generator> parse_generators(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<Generator> out;
-  for (size_t i = 0; i + 4 <= c.size(); i += 4) {
-    out.push_back({read_u16le(c, i), read_u16le(c, i + 2)});
+  out.reserve(c.size / 4);
+  for (size_t i = 0; i < c.size; i += 4) {
+    out.push_back({range_u16le(data, c, i), range_u16le(data, c, i + 2)});
   }
   return out;
 }
 
-std::vector<Sf2Modulator> parse_modulators(const std::vector<uint8_t>& c) {
+std::vector<Sf2Modulator> parse_modulators(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<Sf2Modulator> out;
-  for (size_t i = 0; i + 10 <= c.size(); i += 10) {
-    out.push_back({read_u16le(c, i), read_u16le(c, i + 2),
-                   int(int16_t(read_u16le(c, i + 4))), read_u16le(c, i + 6),
-                   read_u16le(c, i + 8)});
+  out.reserve(c.size / 10);
+  for (size_t i = 0; i < c.size; i += 10) {
+    out.push_back({range_u16le(data, c, i), range_u16le(data, c, i + 2),
+                   int(int16_t(range_u16le(data, c, i + 4))), range_u16le(data, c, i + 6),
+                   range_u16le(data, c, i + 8)});
   }
   return out;
 }
 
-std::vector<SampleHeader> parse_samples(const std::vector<uint8_t>& c) {
+std::vector<SampleHeader> parse_samples(const std::vector<uint8_t>& data, const ByteRange& c) {
   std::vector<SampleHeader> out;
-  for (size_t i = 0; i + 46 <= c.size(); i += 46) {
+  out.reserve(c.size / 46);
+  for (size_t i = 0; i < c.size; i += 46) {
     SampleHeader s;
-    s.name = clean_name(c, i, 20);
-    s.start = read_u32le(c, i + 20);
-    s.end = read_u32le(c, i + 24);
-    s.start_loop = read_u32le(c, i + 28);
-    s.end_loop = read_u32le(c, i + 32);
-    s.sample_rate = read_u32le(c, i + 36);
-    s.original_pitch = c[i + 40];
-    s.pitch_correction = int8_t(c[i + 41]);
-    s.sample_link = read_u16le(c, i + 42);
-    s.sample_type = read_u16le(c, i + 44);
+    s.name = range_name(data, c, i, 20);
+    s.start = range_u32le(data, c, i + 20);
+    s.end = range_u32le(data, c, i + 24);
+    s.start_loop = range_u32le(data, c, i + 28);
+    s.end_loop = range_u32le(data, c, i + 32);
+    s.sample_rate = range_u32le(data, c, i + 36);
+    s.original_pitch = data[c.offset + i + 40];
+    s.pitch_correction = int8_t(data[c.offset + i + 41]);
+    s.sample_link = range_u16le(data, c, i + 42);
+    s.sample_type = range_u16le(data, c, i + 44);
     out.push_back(s);
   }
   return out;
 }
 
-void validate_index_tables(const Sf2Data& sf2) {
+void validate_parsed_tables(Sf2Data& sf2) {
   auto check_monotonic = [](const char* label, const auto& records, auto member) {
     for (size_t i = 1; i < records.size(); ++i) {
       if (records[i].*member < records[i - 1].*member) {
@@ -391,16 +423,28 @@ void validate_index_tables(const Sf2Data& sf2) {
   }
 
   for (int i = 0; i < usable_samples; ++i) {
-    const auto& s = sf2.samples[i];
+    auto& s = sf2.samples[i];
     if (s.end < s.start) throw std::runtime_error("SF2 sample header has invalid sample bounds");
+    if (s.end > sf2.smpl_word_count) {
+      throw std::runtime_error("SF2 sample header exceeds the smpl payload");
+    }
     if (s.sample_rate == 0) throw std::runtime_error("SF2 sample header has zero sample rate");
     int t = sanitize_sample_type(s.sample_type);
     if (t != SAMPLE_MONO && t != SAMPLE_LEFT && t != SAMPLE_RIGHT && t != SAMPLE_LINKED) {
       throw std::runtime_error("SF2 sample header has illegal sample type");
     }
     if ((t == SAMPLE_LEFT || t == SAMPLE_RIGHT || t == SAMPLE_LINKED) &&
-        (s.sample_link < 0 || s.sample_link >= usable_samples)) {
-      throw std::runtime_error("SF2 linked sample points outside usable sample headers");
+        s.sample_link >= usable_samples) {
+      // Instrument zones define the actual voices. Keep a malformed link from
+      // affecting region construction by normalizing it to this sample.
+      s.sample_link = i;
+    }
+    if (s.start_loop < s.start || s.start_loop > s.end ||
+        s.end_loop < s.start_loop || s.end_loop > s.end) {
+      // Malformed loop metadata is common in unused samples. Normalize it to
+      // the complete sample window; sampleModes still decides whether it loops.
+      s.start_loop = s.start;
+      s.end_loop = s.end;
     }
   }
 }
@@ -625,15 +669,6 @@ std::pair<int, int> vel_range(const Zone& zone) {
   return {it->second & 0xff, (it->second >> 8) & 0xff};
 }
 
-bool zone_matches(const Zone& zone, int key, int velocity) {
-  auto kr = key_range(zone);
-  auto vr = vel_range(zone);
-  if (kr.first > kr.second || vr.first > vr.second || kr.second > 127 || vr.second > 127) {
-    throw std::runtime_error("SF2 zone has invalid keyRange or velRange");
-  }
-  return kr.first <= key && key <= kr.second && vr.first <= velocity && velocity <= vr.second;
-}
-
 std::vector<ArticulationZone> instrument_zones(const Sf2Data& sf2, int inst_index) {
   int start = sf2.instruments.at(inst_index).bag_index;
   int end = sf2.instruments.at(inst_index + 1).bag_index;
@@ -703,29 +738,24 @@ std::vector<ArticulationZone> preset_zones(const Sf2Data& sf2, int preset_index)
   return zones;
 }
 
-std::vector<ArticulationZone> matching_zones_for_velocity(const std::vector<ArticulationZone>& zones,
-                                                          int key, int velocity) {
-  std::vector<ArticulationZone> out;
-  for (const auto& z : zones) if (zone_matches(z.generators, key, velocity)) out.push_back(z);
-  return out;
-}
-
 int select_preset(const Sf2Data& sf2, int program, int bank) {
   // SF2 phdr has a terminal sentinel record, so usable excludes the final entry.
   // Try the exact bank/program first, fall back to bank 0 for files without the
   // requested bank, then General MIDI program 0 as a last musical default.
   int usable = std::max(0, int(sf2.presets.size()) - 1);
-  for (int i = 0; i < usable; ++i) {
-    if (sf2.presets[i].preset == program && sf2.presets[i].bank == bank) return i;
-  }
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
+  auto find = [&](int wanted_bank, int wanted_program) {
+    auto it = compiled->preset_by_bank_program.find({wanted_bank, wanted_program});
+    return it == compiled->preset_by_bank_program.end() ? -1 : it->second;
+  };
+  int selected = find(bank, program);
+  if (selected >= 0) return selected;
   if (bank != 0) {
-    for (int i = 0; i < usable; ++i) {
-      if (sf2.presets[i].preset == program && sf2.presets[i].bank == 0) return i;
-    }
+    selected = find(0, program);
+    if (selected >= 0) return selected;
   }
-  for (int i = 0; i < usable; ++i) {
-    if (sf2.presets[i].preset == 0 && sf2.presets[i].bank == 0) return i;
-  }
+  selected = find(0, 0);
+  if (selected >= 0) return selected;
   if (usable > 0) return 0;
   throw std::runtime_error("soundfont has no presets");
 }
@@ -1018,6 +1048,80 @@ std::vector<Sf2Modulator> combine_preset_and_instrument_modulators(
   return modulators_from_map(mods);
 }
 
+std::string case_fold(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return char(std::tolower(c)); });
+  return value;
+}
+
+void add_compiled_candidate(CompiledTarget& target, ArticulationZone articulation,
+                            int instrument, std::pair<int, int> keys,
+                            std::pair<int, int> velocities) {
+  if (keys.first > keys.second || velocities.first > velocities.second) return;
+  articulation.generators[GEN_KEY_RANGE] = keys.first | (keys.second << 8);
+  articulation.generators[GEN_VEL_RANGE] = velocities.first | (velocities.second << 8);
+  CompiledCandidate candidate;
+  candidate.instrument = instrument;
+  candidate.velocity_low = velocities.first;
+  candidate.velocity_high = velocities.second;
+  for (const auto& mod : articulation.modulators) {
+    candidate.modulators_by_destination[mod.dest].push_back(mod);
+  }
+  candidate.generators = std::move(articulation.generators);
+  size_t index = target.candidates.size();
+  target.candidates.push_back(std::move(candidate));
+  for (int key = keys.first; key <= keys.second; ++key) {
+    target.candidates_by_key[size_t(key)].push_back(index);
+  }
+}
+
+std::shared_ptr<const Sf2CompiledData> compile_sf2_data(const Sf2Data& sf2) {
+  auto compiled = std::make_shared<Sf2CompiledData>();
+  int usable_instruments = std::max(0, int(sf2.instruments.size()) - 1);
+  int usable_presets = std::max(0, int(sf2.presets.size()) - 1);
+  compiled->instruments.resize(size_t(usable_instruments));
+  compiled->presets.resize(size_t(usable_presets));
+
+  std::vector<std::vector<ArticulationZone>> expanded_instruments{
+      static_cast<size_t>(usable_instruments)};
+  for (int instrument = 0; instrument < usable_instruments; ++instrument) {
+    compiled->instrument_exact.emplace(sf2.instruments[instrument].name, instrument);
+    compiled->instrument_folded.emplace(case_fold(sf2.instruments[instrument].name), instrument);
+    expanded_instruments[size_t(instrument)] = instrument_zones(sf2, instrument);
+    for (const auto& zone : expanded_instruments[size_t(instrument)]) {
+      add_compiled_candidate(compiled->instruments[size_t(instrument)], zone, instrument,
+                             key_range(zone.generators), vel_range(zone.generators));
+    }
+  }
+
+  for (int preset = 0; preset < usable_presets; ++preset) {
+    const auto& header = sf2.presets[preset];
+    compiled->preset_by_bank_program.emplace(std::make_pair(header.bank, header.preset), preset);
+    for (const auto& preset_zone : preset_zones(sf2, preset)) {
+      int instrument = preset_zone.generators.at(GEN_INSTRUMENT);
+      const auto preset_keys = key_range(preset_zone.generators);
+      const auto preset_velocities = vel_range(preset_zone.generators);
+      for (const auto& instrument_zone : expanded_instruments.at(size_t(instrument))) {
+        const auto instrument_keys = key_range(instrument_zone.generators);
+        const auto instrument_velocities = vel_range(instrument_zone.generators);
+        std::pair<int, int> keys = {std::max(preset_keys.first, instrument_keys.first),
+                                    std::min(preset_keys.second, instrument_keys.second)};
+        std::pair<int, int> velocities = {
+            std::max(preset_velocities.first, instrument_velocities.first),
+            std::min(preset_velocities.second, instrument_velocities.second)};
+        ArticulationZone combined = {
+            combine_preset_and_instrument_zones(preset_zone.generators,
+                                                instrument_zone.generators),
+            combine_preset_and_instrument_modulators(preset_zone.modulators,
+                                                     instrument_zone.modulators)};
+        add_compiled_candidate(compiled->presets[size_t(preset)], std::move(combined),
+                               instrument, keys, velocities);
+      }
+    }
+  }
+  return compiled;
+}
+
 int loop_mode_from_zone(const Zone& zone) {
   // SF2 sampleModes 1 means continuous loop and 3 means loop until note release.
   // Those map directly to the small loop-mode field implemented by the RTL.
@@ -1025,24 +1129,6 @@ int loop_mode_from_zone(const Zone& zone) {
   if (sample_modes == 1) return 1;
   if (sample_modes == 3) return 2;
   return 0;
-}
-
-std::pair<int, int> linked_pair(const Sf2Data& sf2, int selected) {
-  // The RTL owns one mono sample lane per voice. Preserve each SF2 sample zone
-  // as an independent voice and use its pan-derived gain_l/gain_r for stereo.
-  // sampleLink remains metadata; it no longer merges two samples into one
-  // renderer region.
-  const auto& s = sf2.samples.at(selected);
-  if (s.sample_type & SAMPLE_ROM_FLAG) throw std::runtime_error("selected SF2 sample references ROM data");
-  return {selected, -1};
-}
-
-const ArticulationZone* find_zone_for_sample(const std::vector<ArticulationZone>& zones, int sample_id) {
-  for (const auto& zone : zones) {
-    auto it = zone.generators.find(GEN_SAMPLE_ID);
-    if (it != zone.generators.end() && it->second == sample_id) return &zone;
-  }
-  return nullptr;
 }
 
 struct SampleWindow {
@@ -1053,7 +1139,7 @@ struct SampleWindow {
 };
 
 SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone& zone) {
-  uint32_t pool = uint32_t(std::min<size_t>(sf2.smpl.size(), std::numeric_limits<uint32_t>::max()));
+  uint32_t pool = sf2.smpl_word_count;
   uint32_t header_start = std::min<uint32_t>(h.start, pool);
   uint32_t header_end = std::min<uint32_t>(h.end, pool);
   if (header_end < header_start) header_end = header_start;
@@ -1075,65 +1161,32 @@ uint32_t relative_sample_pos(uint32_t value, uint32_t base) {
   return value > base ? value - base : 0;
 }
 
-void fill_region_addresses_for_sample_pair(const Sf2Data& sf2, int left_sample_id, int right_sample_id,
-                                           const Zone& left_zone, const Zone& right_zone,
-                                           const std::string& stereo_source, Region& region) {
-  // The external wave memory is a word-addressed image of the complete SF2 file.
-  // SampleHeader positions are word indexes into smpl, so add the smpl payload's
-  // file word offset and keep loop points relative to the selected playback window.
-  const auto& left = sf2.samples.at(left_sample_id);
-  const auto& right = sf2.samples.at(right_sample_id);
-  if ((left.sample_type & SAMPLE_ROM_FLAG) || (right.sample_type & SAMPLE_ROM_FLAG)) {
+void fill_region_addresses(const Sf2Data& sf2, int sample_id, const Zone& zone,
+                           Region& region) {
+  // Every playable zone stays mono. Linked stereo is represented by two
+  // adjacent zones and therefore two independently constructed Regions.
+  const auto& sample = sf2.samples.at(sample_id);
+  if (sample.sample_type & SAMPLE_ROM_FLAG) {
     throw std::runtime_error("selected SF2 sample references ROM data");
   }
-  SampleWindow left_window = sample_window(sf2, left, left_zone);
-  SampleWindow right_window = sample_window(sf2, right, right_zone);
-  uint32_t frames_l = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
-  uint32_t frames_r = std::min<uint32_t>(right_window.end - right_window.start, kPhaseFrameMask);
-  region.stereo = true;
-  region.stereo_source = stereo_source;
-  region.sample_left = left.name;
-  region.sample_right = right.name;
-  region.base_addr = sf2.smpl_word_offset + left_window.start;
-  region.base_addr_r = sf2.smpl_word_offset + right_window.start;
-  region.length = frames_l;
-  region.length_r = frames_r;
-  region.loop_start = std::min<uint32_t>(relative_sample_pos(left_window.start_loop, left_window.start),
-                                         frames_l ? frames_l - 1 : 0);
-  region.loop_start_r = std::min<uint32_t>(relative_sample_pos(right_window.start_loop, right_window.start),
-                                           frames_r ? frames_r - 1 : 0);
-  region.loop_end = std::max<uint32_t>(region.loop_start + 1,
-                                       std::min<uint32_t>(relative_sample_pos(left_window.end_loop, left_window.start),
-                                                          frames_l));
-  region.loop_end_r = std::max<uint32_t>(region.loop_start_r + 1,
-                                         std::min<uint32_t>(relative_sample_pos(right_window.end_loop, right_window.start),
-                                                            frames_r));
-}
-
-void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& left_zone,
-                           const Zone& right_zone, Region& region) {
-  auto pair = linked_pair(sf2, selected_sample);
-  const auto& left = sf2.samples.at(pair.first);
-  SampleWindow left_window = sample_window(sf2, left, left_zone);
-  region.sample_left = left.name;
-  region.base_addr = sf2.smpl_word_offset + left_window.start;
-
-  if (pair.second >= 0 && sanitize_sample_type(sf2.samples.at(pair.second).sample_type) != SAMPLE_MONO) {
-    fill_region_addresses_for_sample_pair(sf2, pair.first, pair.second, left_zone, right_zone, "linked_sample", region);
-    return;
+  if (sanitize_sample_type(sample.sample_type) == SAMPLE_LINKED) {
+    throw std::runtime_error("SoundFont linkedSample type is unsupported");
   }
-
-  uint32_t frames = std::min<uint32_t>(left_window.end - left_window.start, kPhaseFrameMask);
+  SampleWindow window = sample_window(sf2, sample, zone);
+  region.sample_left = sample.name;
+  region.sample_right = sample.name;
+  region.base_addr = sf2.smpl_word_offset + window.start;
+  region.base_addr_r = region.base_addr;
+  uint32_t frames = std::min<uint32_t>(window.end - window.start, kPhaseFrameMask);
   region.stereo = false;
   region.stereo_source = "mono";
-  region.sample_right = left.name;
-  region.base_addr_r = region.base_addr;
   region.length = frames;
   region.length_r = frames;
-  region.loop_start = std::min<uint32_t>(relative_sample_pos(left_window.start_loop, left_window.start), frames ? frames - 1 : 0);
+  region.loop_start = std::min<uint32_t>(relative_sample_pos(window.start_loop, window.start),
+                                         frames ? frames - 1 : 0);
   region.loop_start_r = region.loop_start;
   region.loop_end = std::max<uint32_t>(region.loop_start + 1,
-                                       std::min<uint32_t>(relative_sample_pos(left_window.end_loop, left_window.start),
+                                       std::min<uint32_t>(relative_sample_pos(window.end_loop, window.start),
                                                           frames));
   region.loop_end_r = region.loop_end;
   if (region.loop_start >= region.loop_end || region.loop_end > frames) {
@@ -1144,168 +1197,161 @@ void fill_region_addresses(const Sf2Data& sf2, int selected_sample, const Zone& 
   }
 }
 
-int zone_sample_id(const ArticulationZone& zone) {
-  return zone.generators.at(GEN_SAMPLE_ID);
+Region region_from_zone(const Sf2Data& sf2, const Zone& zone,
+                        int key, int sample_rate, int tick_samples,
+                        int program, int bank, const std::string& preset_name,
+                        const std::string& instrument_name,
+                        const std::map<uint16_t, std::vector<Sf2Modulator>>& grouped_modulators) {
+  int sample_id = zone.at(GEN_SAMPLE_ID);
+  Region region;
+  region.key = key;
+  region.output_sample_rate = sample_rate;
+  region.program = program;
+  region.bank = bank;
+  region.preset = preset_name;
+  region.instrument = instrument_name;
+  fill_region_addresses(sf2, sample_id, zone, region);
+  region.phase_inc = phase_inc_for_key(key, zone, sf2.samples.at(sample_id), sample_rate);
+  gain_config(zone, region);
+  region.loop_mode = loop_mode_from_zone(zone);
+  region.effective_velocity = zone.count(GEN_VELOCITY)
+                                  ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY))))
+                                  : -1;
+  region.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS)
+                               ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS))))
+                               : 0;
+  volume_envelope(zone, key, tick_samples, sample_rate, region);
+  modulation_generators(zone, key, tick_samples, sample_rate, region);
+  pitch_modulation_generators(zone, region);
+  filter_coefficients(zone, sample_rate, region);
+  region.modulators_by_destination = grouped_modulators;
+  return region;
 }
 
-int zone_pan(const ArticulationZone& zone) {
-  return signed_amount(zone.generators.count(GEN_PAN) ? zone.generators.at(GEN_PAN) : 0);
-}
-
-bool same_range_generators(const Zone& a, const Zone& b) {
-  return key_range(a) == key_range(b) && vel_range(a) == vel_range(b);
-}
-
-bool compatible_unlinked_stereo_pair(const Sf2Data& sf2, const ArticulationZone& left_zone,
-                                     const ArticulationZone& right_zone) {
-  int left_id = zone_sample_id(left_zone);
-  int right_id = zone_sample_id(right_zone);
-  if (left_id == right_id) return false;
-  const auto& left = sf2.samples.at(left_id);
-  const auto& right = sf2.samples.at(right_id);
-  if ((left.sample_type & SAMPLE_ROM_FLAG) || (right.sample_type & SAMPLE_ROM_FLAG)) {
-    throw std::runtime_error("selected SF2 sample references ROM data");
+std::vector<Region> regions_from_compiled_target(
+    const Sf2Data& sf2, const CompiledTarget& target, int key, int velocity,
+    int sample_rate, int tick_samples, int program, int bank,
+    const std::string& preset_name) {
+  key = std::max(0, std::min(127, key));
+  velocity = std::max(0, std::min(127, velocity));
+  const auto& candidates = target.candidates_by_key[size_t(key)];
+  std::vector<Region> regions;
+  regions.reserve(candidates.size());
+  for (size_t index : candidates) {
+    const auto& candidate = target.candidates.at(index);
+    if (velocity < candidate.velocity_low || velocity > candidate.velocity_high) continue;
+    regions.push_back(region_from_zone(
+        sf2, candidate.generators, key, sample_rate, tick_samples,
+        program, bank, preset_name,
+        sf2.instruments.at(candidate.instrument).name,
+        candidate.modulators_by_destination));
   }
-  if (left.sample_rate != right.sample_rate || left.original_pitch != right.original_pitch ||
-      left.pitch_correction != right.pitch_correction) {
-    return false;
-  }
-  if (!same_range_generators(left_zone.generators, right_zone.generators)) return false;
-
-  SampleWindow left_window = sample_window(sf2, left, left_zone.generators);
-  SampleWindow right_window = sample_window(sf2, right, right_zone.generators);
-  uint32_t frames_l = left_window.end - left_window.start;
-  uint32_t frames_r = right_window.end - right_window.start;
-  constexpr bool kMergeStereoSamples = false;
-  return kMergeStereoSamples && frames_l != 0 && frames_r != 0;
-}
-
-int unlinked_stereo_partner_index(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,
-                                  size_t selected) {
-  int selected_pan = zone_pan(zones.at(selected));
-  if (selected_pan > -450) return -1;
-  for (size_t i = selected + 1; i < zones.size(); ++i) {
-    if (zone_pan(zones.at(i)) < 450) continue;
-    if (compatible_unlinked_stereo_pair(sf2, zones.at(selected), zones.at(i))) return int(i);
-  }
-  return -1;
-}
-
-bool selected_unlinked_right_with_matching_left(const Sf2Data& sf2, const std::vector<ArticulationZone>& zones,
-                                                size_t selected) {
-  int selected_pan = zone_pan(zones.at(selected));
-  if (selected_pan < 450) return false;
-  for (size_t i = 0; i < selected; ++i) {
-    if (zone_pan(zones.at(i)) > -450) continue;
-    if (compatible_unlinked_stereo_pair(sf2, zones.at(i), zones.at(selected))) return true;
-  }
-  return false;
-}
-
-bool selected_right_with_matching_left_zone(const Sf2Data& sf2, int sample_id,
-                                            const std::vector<ArticulationZone>& zones) {
-  int sample_type = sanitize_sample_type(sf2.samples.at(sample_id).sample_type);
-  if (sample_type != SAMPLE_RIGHT) return false;
-  auto pair = linked_pair(sf2, sample_id);
-  return pair.second >= 0 && pair.first != sample_id && find_zone_for_sample(zones, pair.first) != nullptr;
-}
-
-void linked_stereo_zone_selection(const Sf2Data& sf2, int sample_id,
-                                  const ArticulationZone& selected_zone,
-                                  const std::vector<ArticulationZone>& zones,
-                                  const ArticulationZone*& left_zone,
-                                  const ArticulationZone*& right_zone,
-                                  const ArticulationZone*& pitch_zone,
-                                  int& pitch_sample_id) {
-  auto pair = linked_pair(sf2, sample_id);
-  left_zone = &selected_zone;
-  right_zone = &selected_zone;
-  pitch_zone = &selected_zone;
-  pitch_sample_id = pair.first;
-  if (pair.second < 0) return;
-
-  const ArticulationZone* matching_left = find_zone_for_sample(zones, pair.first);
-  const ArticulationZone* matching_right = find_zone_for_sample(zones, pair.second);
-  if (matching_left) left_zone = matching_left;
-  if (matching_right) {
-    right_zone = matching_right;
-    pitch_zone = matching_right;
-  }
-  pitch_sample_id = pair.second;
-}
-
-bool pitch_destination(uint16_t dest) {
-  return dest == 0 || dest == GEN_MOD_LFO_TO_PITCH || dest == GEN_VIB_LFO_TO_PITCH ||
-         dest == GEN_MOD_ENV_TO_PITCH;
-}
-
-std::vector<Sf2Modulator> stereo_runtime_modulators(const ArticulationZone& selected,
-                                                    const ArticulationZone& pitch_zone) {
-  auto mods = modulator_map(selected.modulators);
-  for (auto it = mods.begin(); it != mods.end();) {
-    if (pitch_destination(it->second.dest)) it = mods.erase(it);
-    else ++it;
-  }
-  for (const auto& mod : pitch_zone.modulators) {
-    if (pitch_destination(mod.dest)) mods[mod_key(mod)] = mod;
-  }
-  return modulators_from_map(mods);
-}
-
-void neutralize_stereo_region_pan(const Zone& left_zone, const Zone& right_zone, Region& region) {
-  // A stereo region already routes the left sample to the left channel and the
-  // right sample to the right channel with no cross-mixing, so the stereo image
-  // comes from that routing rather than from a pan generator. Applying the
-  // per-zone pan (commonly -500 / +500) would attenuate one channel to silence,
-  // so center the pan. Per the SF2 spec the remaining non-pitch generators still
-  // apply as normal, so honor each side's own initialAttenuation independently.
-  region.pan = 0;
-  region.base_gain_l = zone_attenuation_gain(left_zone);
-  region.base_gain_r = zone_attenuation_gain(right_zone);
-  region.gain_l = region.base_gain_l;
-  region.gain_r = region.base_gain_r;
+  return regions;
 }
 
 }  // namespace
 
 Sf2Data load_sf2(const std::string& path) {
-  // Load the raw SF2 tables into simple vectors. The loader keeps the original
-  // bag/generator indexes because zone expansion needs sentinel records and
-  // adjacent bag ranges exactly as encoded in pdta.
+  // Byte ranges remain non-owning views into data. After parsing, only the
+  // word-addressed file image and compact metadata survive this function.
   auto data = read_file(path);
-  auto sdta_refs = list_chunk_refs(data, "sdta");
-  std::vector<uint8_t> info_payload;
-  std::map<std::string, std::vector<uint8_t>> info;
-  if (find_list_chunk_optional(data, "INFO", info_payload)) info = list_chunks(info_payload);
-  auto sdta = list_chunks(find_list_chunk(data, "sdta"));
-  auto pdta = list_chunks(find_list_chunk(data, "pdta"));
+  RiffIndex index = scan_riff(data);
+  const ChunkTable empty_info;
+  auto info_it = index.lists.find("INFO");
+  const ChunkTable& info = info_it == index.lists.end() ? empty_info : info_it->second;
+  const ChunkTable& sdta = require_list(index, "sdta");
+  const ChunkTable& pdta = require_list(index, "pdta");
   Sf2Data sf2;
-  sf2.file_words = file_words_from_bytes(data);
-  auto smpl_ref = sdta_refs.find("smpl");
-  if (smpl_ref == sdta_refs.end()) throw std::runtime_error("missing SF2 chunk smpl");
-  if ((smpl_ref->second.payload_offset & 1u) != 0) throw std::runtime_error("SF2 smpl payload is not word aligned");
-  sf2.smpl_word_offset = uint32_t(smpl_ref->second.payload_offset / 2);
-  sf2.ifil = version_chunk(info, "ifil");
-  sf2.isng = text_chunk(info, "isng");
-  sf2.inam = text_chunk(info, "INAM");
+  const ByteRange& smpl = require_chunk(sdta, "smpl", 2, 0);
+  if ((smpl.offset & 1u) != 0) throw std::runtime_error("SF2 smpl payload is not word aligned");
+  if (smpl.offset / 2 > std::numeric_limits<uint32_t>::max() ||
+      smpl.size / 2 > std::numeric_limits<uint32_t>::max()) {
+    throw std::runtime_error("SF2 smpl payload exceeds word-addressable limits");
+  }
+  sf2.smpl_word_offset = uint32_t(smpl.offset / 2);
+  sf2.smpl_word_count = uint32_t(smpl.size / 2);
+  sf2.ifil = version_chunk(data, info, "ifil");
+  sf2.isng = text_chunk(data, info, "isng");
+  sf2.inam = text_chunk(data, info, "INAM");
   if (sf2.ifil.empty()) throw std::runtime_error("SF2 INFO is missing required ifil version");
   if (sf2.isng.empty()) throw std::runtime_error("SF2 INFO is missing required isng target engine");
   if (sf2.inam.empty()) throw std::runtime_error("SF2 INFO is missing required INAM name");
-  const auto& smpl = require_chunk(sdta, "smpl", 2, 0);
-  for (size_t i = 0; i + 2 <= smpl.size(); i += 2) {
-    sf2.smpl.push_back(int16_t(read_u16le(smpl, i)));
-  }
-  sf2.presets = parse_presets(require_chunk(pdta, "phdr", 38, 2));
-  sf2.preset_bags = parse_bags(require_chunk(pdta, "pbag", 4, 1));
-  sf2.preset_modulators = parse_modulators(require_chunk(pdta, "pmod", 10, 1));
-  sf2.preset_generators = parse_generators(require_chunk(pdta, "pgen", 4, 1));
-  sf2.instruments = parse_instruments(require_chunk(pdta, "inst", 22, 2));
-  sf2.instrument_bags = parse_bags(require_chunk(pdta, "ibag", 4, 1));
-  sf2.instrument_modulators = parse_modulators(require_chunk(pdta, "imod", 10, 1));
-  sf2.instrument_generators = parse_generators(require_chunk(pdta, "igen", 4, 1));
-  sf2.samples = parse_samples(require_chunk(pdta, "shdr", 46, 2));
-  validate_index_tables(sf2);
+  sf2.presets = parse_presets(data, require_chunk(pdta, "phdr", 38, 2));
+  sf2.preset_bags = parse_bags(data, require_chunk(pdta, "pbag", 4, 1));
+  sf2.preset_modulators = parse_modulators(data, require_chunk(pdta, "pmod", 10, 1));
+  sf2.preset_generators = parse_generators(data, require_chunk(pdta, "pgen", 4, 1));
+  sf2.instruments = parse_instruments(data, require_chunk(pdta, "inst", 22, 2));
+  sf2.instrument_bags = parse_bags(data, require_chunk(pdta, "ibag", 4, 1));
+  sf2.instrument_modulators = parse_modulators(data, require_chunk(pdta, "imod", 10, 1));
+  sf2.instrument_generators = parse_generators(data, require_chunk(pdta, "igen", 4, 1));
+  sf2.samples = parse_samples(data, require_chunk(pdta, "shdr", 46, 2));
+  validate_parsed_tables(sf2);
+  sf2.compiled = compile_sf2_data(sf2);
+  sf2.file_words = file_words_from_bytes(data);
   return sf2;
+}
+
+Sf2LoaderStats sf2_loader_stats(const Sf2Data& sf2) {
+  Sf2LoaderStats stats;
+  stats.preset_count = sf2.presets.size();
+  stats.instrument_count = sf2.instruments.size();
+  stats.preset_bag_count = sf2.preset_bags.size();
+  stats.instrument_bag_count = sf2.instrument_bags.size();
+  stats.preset_generator_count = sf2.preset_generators.size();
+  stats.instrument_generator_count = sf2.instrument_generators.size();
+  stats.preset_modulator_count = sf2.preset_modulators.size();
+  stats.instrument_modulator_count = sf2.instrument_modulators.size();
+  stats.sample_count = sf2.samples.size();
+  stats.retained_bytes = sizeof(Sf2Data) + sf2.file_words.capacity() * sizeof(int16_t) +
+                         sf2.presets.capacity() * sizeof(Preset) +
+                         sf2.instruments.capacity() * sizeof(Instrument) +
+                         sf2.preset_bags.capacity() * sizeof(Bag) +
+                         sf2.instrument_bags.capacity() * sizeof(Bag) +
+                         sf2.preset_generators.capacity() * sizeof(Generator) +
+                         sf2.instrument_generators.capacity() * sizeof(Generator) +
+                         sf2.preset_modulators.capacity() * sizeof(Sf2Modulator) +
+                         sf2.instrument_modulators.capacity() * sizeof(Sf2Modulator) +
+                         sf2.samples.capacity() * sizeof(SampleHeader);
+  stats.retained_bytes += sf2.ifil.capacity() + sf2.isng.capacity() + sf2.inam.capacity();
+  for (const auto& preset : sf2.presets) stats.retained_bytes += preset.name.capacity();
+  for (const auto& instrument : sf2.instruments) stats.retained_bytes += instrument.name.capacity();
+  for (const auto& sample : sf2.samples) stats.retained_bytes += sample.name.capacity();
+  if (sf2.compiled) {
+    const auto& compiled = *sf2.compiled;
+    size_t bytes = sizeof(Sf2CompiledData);
+    bytes += compiled.preset_by_bank_program.size() *
+             sizeof(decltype(compiled.preset_by_bank_program)::value_type);
+    auto add_string_index = [&](const auto& index) {
+      bytes += index.size() * sizeof(typename std::decay_t<decltype(index)>::value_type);
+      for (const auto& entry : index) bytes += entry.first.capacity();
+    };
+    add_string_index(compiled.instrument_exact);
+    add_string_index(compiled.instrument_folded);
+    auto add_targets = [&](const std::vector<CompiledTarget>& targets,
+                           size_t& candidate_count) {
+      bytes += targets.capacity() * sizeof(CompiledTarget);
+      for (const auto& target : targets) {
+        candidate_count += target.candidates.size();
+        bytes += target.candidates.capacity() * sizeof(CompiledCandidate);
+        for (const auto& candidate : target.candidates) {
+          bytes += candidate.generators.size() * sizeof(Zone::value_type);
+          bytes += candidate.modulators_by_destination.size() *
+                   sizeof(decltype(candidate.modulators_by_destination)::value_type);
+          for (const auto& group : candidate.modulators_by_destination) {
+            bytes += group.second.capacity() * sizeof(Sf2Modulator);
+          }
+        }
+        for (const auto& by_key : target.candidates_by_key) {
+          bytes += by_key.capacity() * sizeof(size_t);
+        }
+      }
+    };
+    add_targets(compiled.presets, stats.compiled_preset_candidate_count);
+    add_targets(compiled.instruments, stats.compiled_instrument_candidate_count);
+    stats.compiled_retained_bytes = bytes;
+    stats.retained_bytes += bytes;
+  }
+  return stats;
 }
 
 int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
@@ -1317,159 +1363,145 @@ int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
   char* end = nullptr;
   long idx = std::strtol(instrument.c_str(), &end, 0);
   if (end && *end == 0 && idx >= 0 && idx < usable) return int(idx);
-  std::string needle = instrument;
-  std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
+  auto exact = compiled->instrument_exact.find(instrument);
+  if (exact != compiled->instrument_exact.end()) return exact->second;
+  std::string needle = case_fold(instrument);
+  auto folded = compiled->instrument_folded.find(needle);
+  if (folded != compiled->instrument_folded.end()) return folded->second;
   for (int i = 0; i < usable; ++i) {
-    std::string name = sf2.instruments[i].name;
-    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    std::string name = case_fold(sf2.instruments[i].name);
     if (name == needle || name.find(needle) != std::string::npos) return i;
   }
   throw std::runtime_error("instrument not found: " + instrument);
 }
 
 Region make_region_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                               int velocity, int sample_rate, int tick_samples,
-                               std::vector<int16_t>& memory) {
-  return make_regions_for_preset(sf2, program, bank, key, velocity, sample_rate, tick_samples, memory).front();
+                               int velocity, int sample_rate, int tick_samples) {
+  return make_regions_for_preset(sf2, program, bank, key, velocity,
+                                 sample_rate, tick_samples).front();
 }
 
 std::vector<Region> make_regions_for_preset(const Sf2Data& sf2, int program, int bank, int key,
-                                              int velocity, int sample_rate, int tick_samples,
-                                              std::vector<int16_t>& memory) {
-  (void)memory;
-  // Full MIDI mode starts at the channel program/bank, selects a preset zone,
-  // follows that zone to an instrument, then merges preset and instrument
-  // generators. Instrument generators override preset defaults for the final
-  // playable sample region.
+                                              int velocity, int sample_rate, int tick_samples) {
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
   int preset_idx = select_preset(sf2, program, bank);
-  std::vector<Region> regions;
-  for (const ArticulationZone& pzone : matching_zones_for_velocity(preset_zones(sf2, preset_idx), key, velocity)) {
-    int inst_idx = pzone.generators.at(GEN_INSTRUMENT);
-    std::vector<ArticulationZone> matching_izones =
-        matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
-    std::vector<ArticulationZone> combined_zones;
-    combined_zones.reserve(matching_izones.size());
-    for (const ArticulationZone& peer : matching_izones) {
-      combined_zones.push_back({
-          combine_preset_and_instrument_zones(pzone.generators, peer.generators),
-          combine_preset_and_instrument_modulators(pzone.modulators, peer.modulators)});
-    }
-    for (size_t zone_index = 0; zone_index < combined_zones.size(); ++zone_index) {
-      const ArticulationZone& articulation = combined_zones.at(zone_index);
-      const Zone& zone = articulation.generators;
-      int sample_id = zone.at(GEN_SAMPLE_ID);
-      if (selected_right_with_matching_left_zone(sf2, sample_id, combined_zones)) continue;
-      if (selected_unlinked_right_with_matching_left(sf2, combined_zones, zone_index)) continue;
-      const ArticulationZone* left_zone = &articulation;
-      const ArticulationZone* right_zone = &articulation;
-      const ArticulationZone* pitch_zone = &articulation;
-      int pitch_sample_id = sample_id;
-      linked_stereo_zone_selection(sf2, sample_id, articulation, combined_zones, left_zone, right_zone,
-                                   pitch_zone, pitch_sample_id);
-      int unlinked_right_index = -1;
-      if (linked_pair(sf2, sample_id).second < 0) {
-        unlinked_right_index = unlinked_stereo_partner_index(sf2, combined_zones, zone_index);
-        if (unlinked_right_index >= 0) {
-          right_zone = &combined_zones.at(size_t(unlinked_right_index));
-          pitch_zone = right_zone;
-          pitch_sample_id = zone_sample_id(*right_zone);
-        }
-      }
-      Region r;
-      r.key = key;
-      r.output_sample_rate = sample_rate;
-      r.program = program;
-      r.bank = bank;
-      r.preset = sf2.presets.at(preset_idx).name;
-      r.instrument = sf2.instruments.at(inst_idx).name;
-      if (unlinked_right_index >= 0) {
-        fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
-                                              left_zone->generators, right_zone->generators,
-                                              "hard_pan_unlinked", r);
-      } else {
-        fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
-      }
-      r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
-      gain_config(zone, r);
-      if (r.stereo) neutralize_stereo_region_pan(left_zone->generators, right_zone->generators, r);
-      r.loop_mode = loop_mode_from_zone(zone);
-      r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
-      r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
-      volume_envelope(zone, key, tick_samples, sample_rate, r);
-      modulation_generators(zone, key, tick_samples, sample_rate, r);
-      pitch_modulation_generators(pitch_zone->generators, r);
-      filter_coefficients(zone, sample_rate, r);
-      r.modulators = stereo_runtime_modulators(articulation, *pitch_zone);
-      regions.push_back(r);
-    }
-  }
+  std::vector<Region> regions = regions_from_compiled_target(
+      sf2, compiled->presets.at(size_t(preset_idx)), key, velocity,
+      sample_rate, tick_samples, program, bank, sf2.presets.at(preset_idx).name);
   if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");
   return regions;
 }
 
 Region make_region_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                   int velocity, int sample_rate, int tick_samples,
-                                   std::vector<int16_t>& memory) {
-  return make_regions_for_instrument(sf2, inst_idx, key, velocity, sample_rate, tick_samples, memory).front();
+                                   int velocity, int sample_rate, int tick_samples) {
+  return make_regions_for_instrument(sf2, inst_idx, key, velocity,
+                                     sample_rate, tick_samples).front();
 }
 
 std::vector<Region> make_regions_for_instrument(const Sf2Data& sf2, int inst_idx, int key,
-                                                  int velocity, int sample_rate, int tick_samples,
-                                                  std::vector<int16_t>& memory) {
-  (void)memory;
-  // Forced-instrument mode skips preset lookup. This is useful for bring-up a
-  // specific SF2 instrument because MIDI program and bank messages cannot change
-  // the selected sample set.
-  std::vector<Region> regions;
-  std::vector<ArticulationZone> matching = matching_zones_for_velocity(instrument_zones(sf2, inst_idx), key, velocity);
-  for (size_t zone_index = 0; zone_index < matching.size(); ++zone_index) {
-    const ArticulationZone& articulation = matching.at(zone_index);
-    const Zone& zone = articulation.generators;
-    int sample_id = zone.at(GEN_SAMPLE_ID);
-    if (selected_right_with_matching_left_zone(sf2, sample_id, matching)) continue;
-    if (selected_unlinked_right_with_matching_left(sf2, matching, zone_index)) continue;
-    const ArticulationZone* left_zone = &articulation;
-    const ArticulationZone* right_zone = &articulation;
-    const ArticulationZone* pitch_zone = &articulation;
-    int pitch_sample_id = sample_id;
-    linked_stereo_zone_selection(sf2, sample_id, articulation, matching, left_zone, right_zone,
-                                 pitch_zone, pitch_sample_id);
-    int unlinked_right_index = -1;
-    if (linked_pair(sf2, sample_id).second < 0) {
-      unlinked_right_index = unlinked_stereo_partner_index(sf2, matching, zone_index);
-      if (unlinked_right_index >= 0) {
-        right_zone = &matching.at(size_t(unlinked_right_index));
-        pitch_zone = right_zone;
-        pitch_sample_id = zone_sample_id(*right_zone);
-      }
-    }
-    Region r;
-    r.key = key;
-    r.output_sample_rate = sample_rate;
-    r.instrument = sf2.instruments.at(inst_idx).name;
-    r.preset = r.instrument;
-    if (unlinked_right_index >= 0) {
-      fill_region_addresses_for_sample_pair(sf2, sample_id, pitch_sample_id,
-                                            left_zone->generators, right_zone->generators,
-                                            "hard_pan_unlinked", r);
-    } else {
-      fill_region_addresses(sf2, sample_id, left_zone->generators, right_zone->generators, r);
-    }
-    r.phase_inc = phase_inc_for_key(key, pitch_zone->generators, sf2.samples.at(pitch_sample_id), sample_rate);
-    gain_config(zone, r);
-    if (r.stereo) neutralize_stereo_region_pan(left_zone->generators, right_zone->generators, r);
-    r.loop_mode = loop_mode_from_zone(zone);
-    r.effective_velocity = zone.count(GEN_VELOCITY) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
-    r.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS) ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
-    volume_envelope(zone, key, tick_samples, sample_rate, r);
-    modulation_generators(zone, key, tick_samples, sample_rate, r);
-    pitch_modulation_generators(pitch_zone->generators, r);
-    filter_coefficients(zone, sample_rate, r);
-    r.modulators = stereo_runtime_modulators(articulation, *pitch_zone);
-    regions.push_back(r);
-  }
+                                                  int velocity, int sample_rate, int tick_samples) {
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
+  const std::string& instrument_name = sf2.instruments.at(inst_idx).name;
+  std::vector<Region> regions = regions_from_compiled_target(
+      sf2, compiled->instruments.at(size_t(inst_idx)), key, velocity,
+      sample_rate, tick_samples, 0, 0, instrument_name);
   if (regions.empty()) throw std::runtime_error("no SF2 zone matches key/velocity");
   return regions;
 }
+
+struct Sf2RegionCache::Impl {
+  using Key = std::array<int, 7>;
+  struct Entry {
+    std::shared_ptr<const std::vector<Region>> regions;
+    std::list<Key>::iterator lru;
+  };
+
+  const Sf2Data& sf2;
+  int sample_rate;
+  int tick_samples;
+  size_t max_entries;
+  std::map<Key, Entry> entries;
+  std::list<Key> lru;
+
+  Impl(const Sf2Data& source, int rate, int ticks, size_t capacity)
+      : sf2(source), sample_rate(rate), tick_samples(ticks),
+        max_entries(std::max<size_t>(1, capacity)) {
+    if (sample_rate <= 0 || tick_samples <= 0) {
+      throw std::runtime_error("SF2 Region cache output configuration must be positive");
+    }
+  }
+
+  template <typename Builder>
+  std::shared_ptr<const std::vector<Region>> lookup(const Key& key, Builder builder) {
+    auto found = entries.find(key);
+    if (found != entries.end()) {
+      lru.splice(lru.begin(), lru, found->second.lru);
+      return found->second.regions;
+    }
+    auto regions = std::make_shared<const std::vector<Region>>(builder());
+    if (entries.size() == max_entries) {
+      entries.erase(lru.back());
+      lru.pop_back();
+    }
+    lru.push_front(key);
+    entries.emplace(key, Entry{regions, lru.begin()});
+    return regions;
+  }
+};
+
+Sf2RegionCache::Sf2RegionCache(const Sf2Data& sf2, int sample_rate,
+                               int tick_samples, size_t capacity)
+    : impl_(std::make_unique<Impl>(sf2, sample_rate, tick_samples, capacity)) {}
+
+Sf2RegionCache::~Sf2RegionCache() = default;
+
+std::shared_ptr<const std::vector<Region>> Sf2RegionCache::regions_for_preset(
+    int program, int bank, int key, int velocity) {
+  Impl::Key cache_key = {0, program, bank, key, velocity,
+                         impl_->sample_rate, impl_->tick_samples};
+  return impl_->lookup(cache_key, [&] {
+    const auto compiled = impl_->sf2.compiled ? impl_->sf2.compiled
+                                              : compile_sf2_data(impl_->sf2);
+    int preset = select_preset(impl_->sf2, program, bank);
+    return regions_from_compiled_target(
+        impl_->sf2, compiled->presets.at(size_t(preset)), key, velocity,
+        impl_->sample_rate, impl_->tick_samples, program, bank,
+        impl_->sf2.presets.at(size_t(preset)).name);
+  });
+}
+
+std::shared_ptr<const std::vector<Region>> Sf2RegionCache::regions_for_instrument(
+    int instrument, int key, int velocity) {
+  Impl::Key cache_key = {1, instrument, 0, key, velocity,
+                         impl_->sample_rate, impl_->tick_samples};
+  return impl_->lookup(cache_key, [&] {
+    const auto compiled = impl_->sf2.compiled ? impl_->sf2.compiled
+                                              : compile_sf2_data(impl_->sf2);
+    return regions_from_compiled_target(
+        impl_->sf2, compiled->instruments.at(size_t(instrument)), key, velocity,
+        impl_->sample_rate, impl_->tick_samples, 0, 0,
+        impl_->sf2.instruments.at(size_t(instrument)).name);
+  });
+}
+
+void Sf2RegionCache::set_output_config(int sample_rate, int tick_samples) {
+  if (sample_rate <= 0 || tick_samples <= 0) {
+    throw std::runtime_error("SF2 Region cache output configuration must be positive");
+  }
+  if (sample_rate == impl_->sample_rate && tick_samples == impl_->tick_samples) return;
+  impl_->sample_rate = sample_rate;
+  impl_->tick_samples = tick_samples;
+  clear();
+}
+
+void Sf2RegionCache::clear() {
+  impl_->entries.clear();
+  impl_->lru.clear();
+}
+
+size_t Sf2RegionCache::size() const { return impl_->entries.size(); }
+
+size_t Sf2RegionCache::capacity() const { return impl_->max_entries; }
 
 }  // namespace render

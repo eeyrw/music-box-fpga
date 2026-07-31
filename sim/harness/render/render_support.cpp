@@ -235,6 +235,7 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 
   std::map<std::array<int, 4>, std::vector<int>> region_by_key;
   int forced_inst = args.instrument.empty() ? -1 : select_instrument(sf2, args.instrument);
+  Sf2RegionCache compiled_regions(sf2, args.sample_rate, control_tick_samples);
   std::vector<NoteEvent> expanded_events;
   int playable_note_ons = 0;
 
@@ -250,19 +251,22 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
     std::array<int, 4> region_key = {forced_inst >= 0 ? forced_inst : program, bank, key, velocity};
     auto it = region_by_key.find(region_key);
     if (it == region_by_key.end()) {
-      std::vector<Region> made;
+      std::shared_ptr<const std::vector<Region>> made;
       try {
         made = forced_inst >= 0
-          ? make_regions_for_instrument(sf2, forced_inst, key, velocity, args.sample_rate, control_tick_samples, wave_memory)
-          : make_regions_for_preset(sf2, program, bank, key, velocity, args.sample_rate, control_tick_samples, wave_memory);
+          ? compiled_regions.regions_for_instrument(forced_inst, key, velocity)
+          : compiled_regions.regions_for_preset(program, bank, key, velocity);
       } catch (const std::runtime_error& ex) {
         if (!is_no_matching_zone_error(ex)) throw;
       }
       std::vector<int> indices;
-      for (auto& r : made) {
-        r.control_tick_samples = control_tick_samples;
-        indices.push_back(int(regions.size()));
-        regions.push_back(r);
+      if (made) {
+        for (const auto& made_region : *made) {
+          Region r = made_region;
+          r.control_tick_samples = control_tick_samples;
+          indices.push_back(int(regions.size()));
+          regions.push_back(std::move(r));
+        }
       }
       region_by_key[region_key] = indices;
       it = region_by_key.find(region_key);
@@ -978,9 +982,16 @@ double McuModel::modulator_sum(const Region& region, const VoiceState& voice,
     return shape_unipolar(x, type);
   };
 
-  const auto& mods = region.modulators.empty() ? fallback_default_modulators() : region.modulators;
+  const std::vector<Sf2Modulator>* mods = nullptr;
+  if (!region.modulators_by_destination.empty()) {
+    auto found = region.modulators_by_destination.find(dest);
+    if (found == region.modulators_by_destination.end()) return 0.0;
+    mods = &found->second;
+  } else {
+    mods = &fallback_default_modulators();
+  }
   double sum = 0.0;
-  for (const auto& mod : mods) {
+  for (const auto& mod : *mods) {
     if (mod.dest != dest) continue;
     if (!include_note_sources && (is_note_on_source(mod.src) || is_note_on_source(mod.amount_src))) continue;
     if (!include_realtime_sources && (is_realtime_source(mod.src) || is_realtime_source(mod.amount_src))) continue;

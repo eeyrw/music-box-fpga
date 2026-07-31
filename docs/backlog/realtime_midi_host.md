@@ -41,19 +41,19 @@ The current real-time-relevant baseline is:
 
 ## Priority 1: SF2 Loading Memory
 
-- [ ] Replace owning RIFF child-chunk vectors with checked non-owning byte
+- [x] Replace owning RIFF child-chunk vectors with checked non-owning byte
   ranges expressed as an offset and size into one source image.
-- [ ] Scan the top-level RIFF and child chunk tables once rather than separately
+- [x] Scan the top-level RIFF and child chunk tables once rather than separately
   locating `INFO`, `sdta`, `pdta`, and the `smpl` offset.
-- [ ] Remove the complete `Sf2Data::smpl` copy. Retain `smpl_word_offset` and a
+- [x] Remove the complete `Sf2Data::smpl` copy. Retain `smpl_word_offset` and a
   checked `smpl_word_count`; sample PCM already exists in `file_words`.
-- [ ] Reserve exact record counts before parsing preset, bag, generator,
+- [x] Reserve exact record counts before parsing preset, bag, generator,
   modulator, instrument, and sample-header vectors.
-- [ ] Keep only the complete word-addressed file image required by the FPGA and
+- [x] Keep only the complete word-addressed file image required by the FPGA and
   the compact parsed metadata after loading finishes.
-- [ ] Add a repeatable loader benchmark that reports file size, load time, peak
+- [x] Add a repeatable loader benchmark that reports file size, load time, peak
   RSS, retained bytes, and metadata record counts.
-- [ ] Keep the synthetic loader fixture as the required functional regression;
+- [x] Keep the synthetic loader fixture as the required functional regression;
   make the external SGM benchmark optional and path-configurable.
 
 First acceptance target:
@@ -62,22 +62,28 @@ First acceptance target:
 - retained memory is the approximately 310 MiB file image plus metadata;
 - all current exact region and generator tests remain unchanged.
 
+The completed loader plus Priority 3 compiler measured 2.032 seconds load time,
+687,271,936 bytes peak RSS, and 339,445,748 estimated retained bytes for the
+324,800,670-byte SGM file with the optimized benchmark build on 2026-08-01.
+The compiled lookup accounts for approximately 14,159,110 retained bytes and
+contains 15,714 preset candidates plus 3,326 instrument candidates.
+
 A later streaming reader or read-only file mapping may reduce peak RSS closer
 to the retained image size. It is not required for the first loader rewrite.
 
 ## Priority 2: SF2 Region Preparation
 
-- [ ] Remove linked- and unlinked-stereo merge branches that are unreachable
+- [x] Remove linked- and unlinked-stereo merge branches that are unreachable
   under the current one-mono-region-per-voice contract.
-- [ ] Preserve linked stereo as two adjacent mono regions and therefore two
+- [x] Preserve linked stereo as two adjacent mono regions and therefore two
   voice starts.
-- [ ] Consolidate the duplicated preset and forced-instrument region builders
+- [x] Consolidate the duplicated preset and forced-instrument region builders
   behind one checked region-construction helper.
-- [ ] Remove the unused mutable wave-memory parameter from region construction
+- [x] Remove the unused mutable wave-memory parameter from region construction
   APIs. Keep final address validation at the render/session boundary.
-- [ ] Separate binary table parsing, zone expansion, and numeric Region
+- [x] Separate binary table parsing, zone expansion, and numeric Region
   conversion so each layer can be tested independently.
-- [ ] Reject or explicitly normalize malformed sample bounds, loop bounds,
+- [x] Reject or explicitly normalize malformed sample bounds, loop bounds,
   terminal records, and duplicate chunks; add focused fixtures for each rule.
 
 ## Priority 3: Compiled SoundFont Lookup
@@ -85,24 +91,30 @@ to the retained image size. It is not required for the first loader rewrite.
 No real-time Note On path should scan the SF2 file or rebuild global/local zone
 inheritance.
 
-- [ ] Build a `(bank, program)` preset lookup during soundfont loading.
-- [ ] Build exact and case-folded instrument indexes during loading.
-- [ ] Expand preset and instrument global zones once.
-- [ ] Resolve generator precedence and modulator replacement/addition once per
+- [x] Build a `(bank, program)` preset lookup during soundfont loading.
+- [x] Build exact and case-folded instrument indexes during loading.
+- [x] Expand preset and instrument global zones once.
+- [x] Resolve generator precedence and modulator replacement/addition once per
   playable zone combination.
-- [ ] Index candidate zones by MIDI key so Note On only evaluates the remaining
+- [x] Index candidate zones by MIDI key so Note On only evaluates the remaining
   velocity ranges.
-- [ ] Group compiled modulators by destination instead of repeatedly scanning
+- [x] Group compiled modulators by destination instead of repeatedly scanning
   every modulator for gain, pan, pitch, and filter calculations.
-- [ ] Add a persistent bounded Region cache suitable for both offline rendering
+- [x] Add a persistent bounded Region cache suitable for both offline rendering
   and a long-running host process.
-- [ ] Include output sample rate and control policy in cache identity wherever
+- [x] Include output sample rate and control policy in cache identity wherever
   they affect converted values.
-- [ ] Define cache invalidation when a soundfont or output configuration changes.
+- [x] Define cache invalidation when a soundfont or output configuration changes.
 
 The real-time lookup must have bounded work, no file access, and no unbounded
 container growth. Full precomputation of every velocity is not required if a
 bounded on-demand cache meets the latency target.
+
+The compiled representation is owned by one immutable `Sf2Data` instance, so
+replacing a soundfont means replacing that object and its cache together. The
+bounded LRU cache stores both playable and empty lookup results, defaults to
+4096 entries, and clears whenever output sample rate or control-tick length
+changes. Its immutable shared results remain valid for callers after eviction.
 
 ## Priority 4: Bounded MCU Control Work
 

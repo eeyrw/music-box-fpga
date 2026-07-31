@@ -74,6 +74,8 @@ source update, not a harmless check.
 | `tools/compare_reference_fluidsynth.py` | Builds a dry FluidSynth comparison and audio statistics report. |
 | `tools/sf2_extract.py` | Lists or extracts one SF2 instrument/sample for focused work. |
 | `tools/sf2_filter_report.py` | Audits SoundFont filter-generator use and can emit probe MIDI. |
+| `make benchmark-sf2-loader SF2_BENCHMARK=path/to/file.sf2` | Reports SF2 file size, load time, peak RSS, retained and compiled-table bytes, metadata counts, and compiled candidate counts. |
+| `tools/render_report_schema_test.py` | Validates normalized render-report catalogs and every cross-catalog reference. |
 | `tools/make_filter_probe_assets.py` | Generates a tiny filtered SF2/MIDI regression fixture under `build/`. |
 | `make polyphony-stress-midi` | Builds the deterministic high-polyphony stress MIDI generator and writes its fixture under `build/`. |
 

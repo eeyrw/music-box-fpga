@@ -130,6 +130,21 @@ so note releases and the spatial tail are both retained. The summary JSON
 records the selected preset, tail length, effect validity, configuration-clamp
 state, and saturation counters.
 
+Render reports use schema version 2. Each entry in `regions` contains only
+note-specific numeric state and integer references into `catalogs`. Preset,
+instrument, sample-window, volume-envelope, generator/modulation, and modulator
+data are interned once. `modulation_profiles` references a `modulator_set`, and
+sample windows reference `samples`; consumers must resolve these indexes rather
+than expect the former inline arrays. There is intentionally no compatibility
+copy of the version-1 fields. `tools/render_report_schema_test.py report.json`
+checks the schema and all reference bounds.
+
+For the 907-region, one-second SGM polyphony-stress render measured on
+2026-08-01, normalization reduced the report from 5,654,958 bytes to 456,576
+bytes (91.9%). That report contained only 17 distinct modulator sets, 59
+modulation profiles, and 106 volume envelopes, which is why catalog interning
+is substantially smaller than repeating those structures in every region.
+
 `CHORUS_ENABLE` and `REVERB_ENABLE` accept `auto`, `on`, or `off`. The default
 `auto` follows the selected preset. An explicit `off` disables that processor;
 for example, `EFFECTS_PRESET=studio CHORUS_ENABLE=off` renders only the short

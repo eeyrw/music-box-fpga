@@ -437,35 +437,36 @@ int main() {
       }
     }
     regions[0].preset = "Melodic \"Preset\"";
-    regions[0].sample_right = "PianoC\\R";
-    regions[0].modulators.push_back({0x00db, 16, 300, 0, 0});
-    regions[0].modulators.push_back({0x00dd, 15, 800, 0, 0});
-    regions[0].modulators.push_back({0x0102, 8, -1100, 0x0d02, 0});
+    regions[0].sample_left = "PianoC\\L";
+    regions[0].modulators_by_destination[16].push_back({0x00db, 16, 300, 0, 0});
+    regions[0].modulators_by_destination[15].push_back({0x00dd, 15, 800, 0, 0});
+    regions[0].modulators_by_destination[8].push_back({0x0102, 8, -1100, 0x0d02, 0});
     render::write_summary("build/render_support_summary_test.json", regions, 48000, 16, int(events.size()), "");
     std::ifstream summary("build/render_support_summary_test.json");
     std::string summary_text((std::istreambuf_iterator<char>(summary)), std::istreambuf_iterator<char>());
-    if (summary_text.find("\"preset\": \"Melodic \\\"Preset\\\"\"") == std::string::npos ||
-        summary_text.find("\"right\": {\"sample\": \"PianoC\\\\R\"") == std::string::npos) {
+    if (summary_text.find("\"presets\": [\"Melodic \\\"Preset\\\"\"") == std::string::npos ||
+        summary_text.find("\"samples\": [\"PianoC\\\\L\"") == std::string::npos) {
       throw std::runtime_error("summary JSON did not escape nested sample metadata");
     }
-    if (summary_text.find("\"sf2_loader\": {\"mono_regions\": 2") == std::string::npos ||
-        summary_text.find("\"stereo_source\": \"mono\"") == std::string::npos ||
+    if (summary_text.find("\"report_schema_version\": 2") == std::string::npos ||
+        summary_text.find("\"sf2_loader\": {\"region_count\": 2") == std::string::npos ||
+        summary_text.find("\"sample_windows\": [") == std::string::npos ||
         summary_text.find("\"gain\": {\"pan\":") == std::string::npos ||
-        summary_text.find("\"volume_envelope\": {\"delay_samples\":") == std::string::npos ||
+        summary_text.find("\"volume_envelopes\": [") == std::string::npos ||
         summary_text.find("\"filter\": {\"enable\":") == std::string::npos ||
         summary_text.find("\"loop_mode\":") == std::string::npos ||
-        summary_text.find("\"modulation\": {\"generators\":") == std::string::npos ||
-        summary_text.find("\"modulators\": [") == std::string::npos ||
+        summary_text.find("\"modulation_profiles\": [") == std::string::npos ||
+        summary_text.find("\"modulator_sets\": [") == std::string::npos ||
         summary_text.find("\"name\": \"cc7Volume\"") == std::string::npos ||
         summary_text.find("\"direction\": \"negative\"") == std::string::npos ||
         summary_text.find("\"polarity\": \"unipolar\"") == std::string::npos ||
-        summary_text.find("\"dest\": {\"raw\": 48, \"name\": \"initialAttenuation\"}") == std::string::npos ||
+        summary_text.find("{\"raw\": 48, \"name\": \"initialAttenuation\"}") == std::string::npos ||
         summary_text.find("\"name\": \"cc91ReverbSend\"") == std::string::npos ||
-        summary_text.find("\"dest\": {\"raw\": 16, \"name\": \"reverbEffectsSend\"}") == std::string::npos ||
+        summary_text.find("{\"raw\": 16, \"name\": \"reverbEffectsSend\"}") == std::string::npos ||
         summary_text.find("\"name\": \"cc93ChorusSend\"") == std::string::npos ||
-        summary_text.find("\"dest\": {\"raw\": 15, \"name\": \"chorusEffectsSend\"}") == std::string::npos ||
+        summary_text.find("{\"raw\": 15, \"name\": \"chorusEffectsSend\"}") == std::string::npos ||
         summary_text.find("\"hex\": \"0x0d02\", \"name\": \"noteOnVelocity\"") == std::string::npos) {
-      throw std::runtime_error("summary JSON did not include loader stats and grouped controls");
+      throw std::runtime_error("summary JSON did not include normalized report catalogs");
     }
     std::vector<int16_t> hot_memory{32767, 32767, 32767, 32767};
     render::RenderDiagnostics hot_diag;
@@ -923,7 +924,7 @@ int main() {
     custom_mod_region.gain_l = 0x4000;
     custom_mod_region.gain_r = 0x4000;
     custom_mod_region.vib_lfo_step = 0x4000;
-    custom_mod_region.modulators.push_back({0x0081, 6, 200, 0, 0});
+    custom_mod_region.modulators_by_destination[6].push_back({0x0081, 6, 200, 0, 0});
     std::vector<render::Region> custom_mod_regions{custom_mod_region};
     RecordingSink custom_mod_sink;
     render::McuModel custom_mod_mcu(custom_mod_sink, custom_mod_regions);
@@ -1060,7 +1061,7 @@ int main() {
     poly_pressure_region.loop_end = 4;
     poly_pressure_region.phase_inc = render::kPhaseFracScale;
     poly_pressure_region.vib_lfo_step = 0x4000;
-    poly_pressure_region.modulators.push_back({0x000a, 6, 200, 0, 0});
+    poly_pressure_region.modulators_by_destination[6].push_back({0x000a, 6, 200, 0, 0});
     std::vector<render::Region> poly_pressure_regions{poly_pressure_region};
     RecordingSink poly_pressure_sink;
     render::McuModel poly_pressure_mcu(poly_pressure_sink, poly_pressure_regions);

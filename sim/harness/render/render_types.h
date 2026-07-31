@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -154,7 +155,7 @@ struct Region {
   int mod_env_attack_step = kQ15Full;
   int mod_env_decay_step = kQ15Full;
   int mod_env_release_step = kQ15Full;
-  std::vector<Sf2Modulator> modulators;
+  std::map<uint16_t, std::vector<Sf2Modulator>> modulators_by_destination;
 };
 
 struct FilterConfig {

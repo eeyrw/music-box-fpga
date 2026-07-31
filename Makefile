@@ -50,6 +50,7 @@ HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) \
 
 # Defaults for the C++ SoundFont reference-render flow.
 SF2 ?= assets/soundfonts/MT6276.sf2
+SF2_BENCHMARK ?= $(SF2)
 INSTRUMENT ?=
 KEY ?= 60
 START_SECONDS ?= 0
@@ -217,7 +218,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -465,6 +466,7 @@ test-cpp-unit: host-smart-artix-bringup
 		sim/harness/render/render_support_test.cpp \
 		-o $(BUILD_DIR)/render_support_test
 	$(BUILD_DIR)/render_support_test
+	python3 tools/render_report_schema_test.py $(BUILD_DIR)/render_support_summary_test.json
 	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/ch347_transport.cpp host/ch347_transport_test.cpp \
 		-o $(BUILD_DIR)/ch347_transport_test -ldl
@@ -475,6 +477,13 @@ test-cpp-unit: host-smart-artix-bringup
 	python3 tools/analyze_sf2_access_span_test.py
 	python3 tools/midi_events_test.py
 	python3 tools/vivado_report_summary_test.py
+
+benchmark-sf2-loader:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/formats/sf2_loader.cpp sim/harness/apps/sf2_loader_benchmark_main.cpp \
+		-o $(BUILD_DIR)/sf2_loader_benchmark
+	$(BUILD_DIR)/sf2_loader_benchmark "$(SF2_BENCHMARK)"
 
 polyphony-stress-midi:
 	mkdir -p $(BUILD_DIR) $(dir $(POLYPHONY_STRESS_MIDI))

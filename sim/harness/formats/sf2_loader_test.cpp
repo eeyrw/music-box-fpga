@@ -127,7 +127,7 @@ render::Sf2Data make_envelope_range_sf2(int delay_tc, int attack_tc,
       {39, hold_key_scale}, {40, decay_key_scale}, {53, 0}};
   sf2.instrument_bags[1].gen_index = int(sf2.instrument_generators.size());
   sf2.samples = {{"Sample", 0, 64, 0, 64, 200000, 60, 0, 0, 1}};
-  sf2.smpl.resize(64);
+  sf2.smpl_word_count = 64;
   sf2.file_words.resize(64);
   return sf2;
 }
@@ -144,12 +144,11 @@ int expected_ticks(int timecents, int sample_rate, int tick_samples) {
 void test_envelope_timecent_ranges() {
   constexpr int kSampleRate = 200000;
   constexpr int kTickSamples = 1000;
-  std::vector<int16_t> memory;
 
   render::Sf2Data at_limits = make_envelope_range_sf2(5000, 8000, 4900, 2,
                                                        7900, 2, 8000);
   render::Region limit = render::make_region_for_instrument(
-      at_limits, 0, 10, 100, kSampleRate, kTickSamples, memory);
+      at_limits, 0, 10, 100, kSampleRate, kTickSamples);
   expect_equal(int(limit.volume_envelope.delay_samples),
                int(expected_samples(5000, kSampleRate)), "5000 timecent delay");
   expect_equal(int(limit.volume_envelope.hold_samples),
@@ -183,7 +182,7 @@ void test_envelope_timecent_ranges() {
   render::Sf2Data above_limits = make_envelope_range_sf2(5001, 8001, 4901, 2,
                                                           7901, 2, 8001);
   render::Region clamped = render::make_region_for_instrument(
-      above_limits, 0, 10, 100, kSampleRate, kTickSamples, memory);
+      above_limits, 0, 10, 100, kSampleRate, kTickSamples);
   expect_equal(int(clamped.volume_envelope.delay_samples),
                int(limit.volume_envelope.delay_samples), "5001 timecent delay clamp");
   expect_equal(int(clamped.volume_envelope.hold_samples),
@@ -210,7 +209,7 @@ void test_envelope_timecent_ranges() {
   render::Sf2Data immediate = make_envelope_range_sf2(-32768, -32768, -32768, 0,
                                                        -32768, 0, -32768);
   render::Region zero = render::make_region_for_instrument(
-      immediate, 0, 60, 100, kSampleRate, kTickSamples, memory);
+      immediate, 0, 60, 100, kSampleRate, kTickSamples);
   expect_equal(int(zero.volume_envelope.delay_samples), 0, "immediate delay");
   expect_equal(int(zero.volume_envelope.attack_samples), 0, "immediate attack");
   expect_equal(int(zero.volume_envelope.hold_samples), 0, "immediate hold");
@@ -570,6 +569,80 @@ void expect_load_fails_without_pmod(const std::string& good_path) {
   throw std::runtime_error("missing pmod chunk was not rejected");
 }
 
+size_t find_chunk_payload(const std::vector<uint8_t>& data, const char id[4]) {
+  for (size_t i = 0; i + 8 <= data.size(); ++i) {
+    if (data[i] == uint8_t(id[0]) && data[i + 1] == uint8_t(id[1]) &&
+        data[i + 2] == uint8_t(id[2]) && data[i + 3] == uint8_t(id[3])) {
+      return i + 8;
+    }
+  }
+  throw std::runtime_error(std::string("test fixture did not contain ") + std::string(id, 4));
+}
+
+void put_u16(std::vector<uint8_t>& data, size_t offset, uint16_t value) {
+  data.at(offset) = uint8_t(value);
+  data.at(offset + 1) = uint8_t(value >> 8);
+}
+
+void put_u32(std::vector<uint8_t>& data, size_t offset, uint32_t value) {
+  data.at(offset) = uint8_t(value);
+  data.at(offset + 1) = uint8_t(value >> 8);
+  data.at(offset + 2) = uint8_t(value >> 16);
+  data.at(offset + 3) = uint8_t(value >> 24);
+}
+
+std::vector<uint8_t> read_fixture(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw std::runtime_error("failed to reopen " + path);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+std::string write_fixture(const std::string& name, const std::vector<uint8_t>& data) {
+  std::string path = "build/sf2_loader_" + name + ".sf2";
+  std::ofstream out(path, std::ios::binary);
+  if (!out) throw std::runtime_error("failed to create " + path);
+  out.write(reinterpret_cast<const char*>(data.data()), data.size());
+  return path;
+}
+
+void expect_load_fails(const std::string& path, const char* label) {
+  try {
+    (void)render::load_sf2(path);
+  } catch (const std::runtime_error&) {
+    return;
+  }
+  throw std::runtime_error(std::string(label) + " was not rejected");
+}
+
+void test_malformed_loader_rules(const std::string& good_path) {
+  std::vector<uint8_t> duplicate = read_fixture(good_path);
+  size_t pmod_payload = find_chunk_payload(duplicate, "pmod");
+  duplicate.at(pmod_payload - 8) = 'p';
+  duplicate.at(pmod_payload - 7) = 'g';
+  duplicate.at(pmod_payload - 6) = 'e';
+  duplicate.at(pmod_payload - 5) = 'n';
+  expect_load_fails(write_fixture("duplicate_chunk", duplicate), "duplicate pdta chunk");
+
+  std::vector<uint8_t> bounds = read_fixture(good_path);
+  size_t shdr = find_chunk_payload(bounds, "shdr");
+  put_u32(bounds, shdr + 24, 0xffffffffu);
+  expect_load_fails(write_fixture("bad_sample_bounds", bounds), "out-of-pool sample bounds");
+
+  std::vector<uint8_t> terminal = read_fixture(good_path);
+  size_t phdr = find_chunk_payload(terminal, "phdr");
+  put_u16(terminal, phdr + 38 + 24, 0);
+  expect_load_fails(write_fixture("bad_terminal", terminal), "bad terminal bag index");
+
+  std::vector<uint8_t> loop = read_fixture(good_path);
+  shdr = find_chunk_payload(loop, "shdr");
+  put_u32(loop, shdr + 28, 0xffffffffu);
+  render::Sf2Data normalized = render::load_sf2(write_fixture("bad_loop", loop));
+  expect_equal(int(normalized.samples.at(0).start_loop), int(normalized.samples.at(0).start),
+               "malformed loop start normalized to sample start");
+  expect_equal(int(normalized.samples.at(0).end_loop), int(normalized.samples.at(0).end),
+               "malformed loop end normalized to sample end");
+}
+
 }  // namespace
 
 int main() {
@@ -577,12 +650,42 @@ int main() {
     test_envelope_timecent_ranges();
     std::string path = write_test_sf2();
     expect_load_fails_without_pmod(path);
+    test_malformed_loader_rules(path);
     render::Sf2Data sf2 = render::load_sf2(path);
     if (sf2.ifil != "2.4" || sf2.isng != "EMU8000" || sf2.inam != "Unit Test SF2") {
       throw std::runtime_error("INFO metadata was not parsed correctly");
     }
-    std::vector<int16_t> memory = sf2.file_words;
-    render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
+    expect_equal(render::select_instrument(sf2, "Inst"), 0,
+                 "compiled exact instrument lookup");
+    expect_equal(render::select_instrument(sf2, "cLaMpInSt"), 1,
+                 "compiled case-folded instrument lookup");
+    render::Sf2RegionCache cache(sf2, 48000, 480, 2);
+    auto cached_a = cache.regions_for_instrument(0, 60, 100);
+    auto cached_a_again = cache.regions_for_instrument(0, 60, 100);
+    if (cached_a != cached_a_again || cache.size() != 1) {
+      throw std::runtime_error("Region cache did not reuse an identical lookup");
+    }
+    auto cached_b = cache.regions_for_instrument(0, 61, 100);
+    cache.regions_for_instrument(0, 60, 100);  // Make A most recently used.
+    auto cached_c = cache.regions_for_instrument(1, 60, 100);
+    if (cache.size() != cache.capacity() || cached_a->empty() || cached_b->empty() ||
+        cached_c->empty()) {
+      throw std::runtime_error("bounded Region cache did not retain valid entries");
+    }
+    auto cached_b_rebuilt = cache.regions_for_instrument(0, 61, 100);
+    if (cached_b == cached_b_rebuilt) {
+      throw std::runtime_error("Region cache did not evict the least-recently-used entry");
+    }
+    cache.set_output_config(44100, 441);
+    if (cache.size() != 0) {
+      throw std::runtime_error("Region cache output configuration change did not invalidate entries");
+    }
+    auto reconfigured = cache.regions_for_instrument(0, 60, 100);
+    if (reconfigured->at(0).output_sample_rate != 44100 ||
+        reconfigured->at(0).phase_inc == cached_a->at(0).phase_inc) {
+      throw std::runtime_error("Region cache did not rebuild output-dependent values");
+    }
+    render::Region preset = render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480);
     int expected_phase = int(std::round(std::pow(2.0, 5.0 / 1200.0) * render::kPhaseFracScale));
     int expected_gain = int(std::round(0x4000 * std::pow(10.0, -40.0 / 200.0)));
     int expected_center_gain = expected_mono_pan_gain(expected_gain, 0, true);
@@ -591,7 +694,7 @@ int main() {
     expect_equal(preset.gain_r, expected_center_gain, "EMU-scaled preset attenuation right gain");
     sf2.isng = "Non-EMU engine";
     render::Region non_emu_preset =
-        render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480, memory);
+        render::make_region_for_preset(sf2, 0, 0, 60, 100, 48000, 480);
     expect_equal(non_emu_preset.gain_l, expected_center_gain, "file attenuation does not depend on isng");
     expect_equal(non_emu_preset.gain_r, expected_center_gain, "right file attenuation does not depend on isng");
     expect_equal(int(preset.length), 58, "sample address offsets length");
@@ -605,8 +708,9 @@ int main() {
     expect_equal(preset.attack_ticks, 100, "preset attackVolEnv adds to default");
     expect_equal(preset.mod_env_sustain_level, int(std::round(render::kQ15Full * 0.4)),
                  "modulation envelope sustain percent");
-    expect_equal(sf2.smpl.at(2), -660, "sm24 ignored by 16-bit renderer");
-    expect_equal(int(memory.size()), int(sf2.file_words.size()), "region build does not repack wave memory");
+    expect_equal(sf2.file_words.at(sf2.smpl_word_offset + 2), -660,
+                 "sm24 ignored by 16-bit renderer");
+    expect_equal(int(sf2.smpl_word_count), 110, "loader retains checked smpl word count");
     if (!preset.filter_enable || preset.filter_b0 <= 0 || preset.filter_b1 <= 0 || preset.filter_b2 <= 0) {
       throw std::runtime_error("SF2 filter generators did not produce enabled biquad feed-forward coefficients");
     }
@@ -622,22 +726,21 @@ int main() {
       throw std::runtime_error("modulation envelope attack generator was not converted to a finite step");
     }
 
-    render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480, memory);
+    render::Region inst = render::make_region_for_instrument(sf2, 0, 60, 100, 48000, 480);
     expect_equal(int(inst.volume_envelope.attack_samples), 47,
                  "default 0.9766 ms volume attack remains sample-accurate");
     expect_equal(inst.gain_l, expected_mono_pan_gain(0x4000, -250, true),
                  "instrument equal-power pan left gain");
     expect_equal(inst.gain_r, expected_mono_pan_gain(0x4000, -250, false),
                  "instrument equal-power pan right gain");
-    render::Region clamped = render::make_region_for_instrument(sf2, 1, 60, 100, 48000, 480, memory);
+    render::Region clamped = render::make_region_for_instrument(sf2, 1, 60, 100, 48000, 480);
     expect_equal(clamped.gain_l, expected_mono_pan_gain(0x4000, 0, true),
                  "negative initial attenuation clamps left gain");
     expect_equal(clamped.gain_r, expected_mono_pan_gain(0x4000, 0, false),
                  "negative initial attenuation clamps right gain");
 
     render::Sf2Data stereo_sf2 = render::load_sf2(write_stereo_sf2());
-    std::vector<int16_t> stereo_memory = stereo_sf2.file_words;
-    auto stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480, stereo_memory);
+    auto stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480);
     expect_equal(int(stereo_regions.size()), 2, "linked samples remain two mono regions");
     const auto& stereo_left = stereo_regions.at(0);
     const auto& stereo_right = stereo_regions.at(1);
@@ -656,7 +759,8 @@ int main() {
     expect_equal(stereo_right.mod_lfo_to_pitch, 777, "right mono pitch generator");
     bool saw_cc1 = false;
     bool saw_cc10 = false;
-    for (const auto& mod : stereo_right.modulators) {
+    for (const auto& group : stereo_right.modulators_by_destination) {
+      for (const auto& mod : group.second) {
       if (mod.src == 0x0081 && mod.dest == 6) {
         expect_equal(mod.amount, 75, "pmod CC1 adds to default vibrato modulator");
         saw_cc1 = true;
@@ -666,12 +770,13 @@ int main() {
         saw_cc10 = true;
       }
     }
+    }
     if (!saw_cc1) throw std::runtime_error("pmod CC1 vibrato modulator was not preserved");
     if (!saw_cc10) throw std::runtime_error("default CC10 pan modulator was not preserved");
 
     stereo_sf2.samples[0].sample_link = 2;
     stereo_sf2.samples[1].sample_link = 0;
-    stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480, stereo_memory);
+    stereo_regions = render::make_regions_for_preset(stereo_sf2, 0, 0, 60, 100, 48000, 480);
     expect_equal(int(stereo_regions.size()), 2, "invalid linked stereo pair keeps both mono zones");
     for (const auto& region : stereo_regions) {
       if (region.stereo) throw std::runtime_error("invalid linked stereo pair was still marked stereo");
@@ -681,9 +786,7 @@ int main() {
     }
 
     render::Sf2Data unlinked_sf2 = render::load_sf2(write_unlinked_hard_pan_stereo_sf2());
-    std::vector<int16_t> unlinked_memory = unlinked_sf2.file_words;
-    auto unlinked_regions = render::make_regions_for_preset(unlinked_sf2, 0, 0, 60, 100, 48000, 480,
-                                                            unlinked_memory);
+    auto unlinked_regions = render::make_regions_for_preset(unlinked_sf2, 0, 0, 60, 100, 48000, 480);
     expect_equal(int(unlinked_regions.size()), 2, "hard-panned zones remain two mono regions");
     const auto& unlinked_left = unlinked_regions.at(0);
     const auto& unlinked_right = unlinked_regions.at(1);
@@ -694,15 +797,12 @@ int main() {
     expect_equal(unlinked_left.gain_r, 0, "left mono pan mutes right contribution");
     expect_equal(unlinked_right.gain_l, 0, "right mono pan mutes left contribution");
 
-    auto unlinked_inst_regions = render::make_regions_for_instrument(unlinked_sf2, 0, 60, 100, 48000, 480,
-                                                                     unlinked_memory);
+    auto unlinked_inst_regions = render::make_regions_for_instrument(unlinked_sf2, 0, 60, 100, 48000, 480);
     expect_equal(int(unlinked_inst_regions.size()), 2,
                  "forced instrument keeps both hard-panned mono regions");
 
     render::Sf2Data hp_linked_sf2 = render::load_sf2(write_hard_panned_linked_stereo_sf2());
-    std::vector<int16_t> hp_linked_memory = hp_linked_sf2.file_words;
-    auto hp_linked_regions = render::make_regions_for_preset(hp_linked_sf2, 0, 0, 60, 100, 48000, 480,
-                                                             hp_linked_memory);
+    auto hp_linked_regions = render::make_regions_for_preset(hp_linked_sf2, 0, 0, 60, 100, 48000, 480);
     expect_equal(int(hp_linked_regions.size()), 2,
                  "hard-panned linked samples remain two mono regions");
     const auto& hp_left = hp_linked_regions.at(0);
@@ -717,7 +817,7 @@ int main() {
     expect_equal(hp_right.base_gain, expected_right_base,
                  "right mono region keeps its attenuation");
 
-    std::cout << "PASS: SF2 loader applies generator precedence and pan rules\n";
+    std::cout << "PASS: SF2 loader parsing, validation, region conversion, and pan rules\n";
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "sf2_loader_test failed: " << e.what() << "\n";

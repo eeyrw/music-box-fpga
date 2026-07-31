@@ -1,8 +1,12 @@
 #include "render_support.h"
 
+#include <array>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 
 namespace render {
 namespace {
@@ -108,7 +112,7 @@ const char* modulator_transform_name(uint16_t transform) {
   return "unknown";
 }
 
-void write_modulator_source_json(std::ostream& out, uint16_t source) {
+void write_modulator_source_descriptor(std::ostream& out, uint16_t source) {
   out << "{\"raw\": " << source
       << ", \"hex\": " << json_string_impl(hex16(source))
       << ", \"name\": " << json_string_impl(modulator_source_name(source))
@@ -119,42 +123,132 @@ void write_modulator_source_json(std::ostream& out, uint16_t source) {
       << ", \"type\": " << ((source >> 10) & 0x3fu) << "}";
 }
 
-void write_modulation_json(std::ostream& out, const Region& r) {
-  out << "{\"generators\": {"
-      << "\"mod_lfo\": {\"delay_ticks\": " << r.mod_lfo_delay_ticks
-      << ", \"step\": " << r.mod_lfo_step
-      << ", \"to_pitch\": " << r.mod_lfo_to_pitch
-      << ", \"to_filter_fc\": " << r.mod_lfo_to_filter_fc
-      << ", \"to_volume\": " << r.mod_lfo_to_volume
-      << "}, \"vib_lfo\": {\"delay_ticks\": " << r.vib_lfo_delay_ticks
-      << ", \"step\": " << r.vib_lfo_step
-      << ", \"to_pitch\": " << r.vib_lfo_to_pitch
-      << "}, \"mod_env\": {\"delay_ticks\": " << r.mod_env_delay_ticks
-      << ", \"hold_ticks\": " << r.mod_env_hold_ticks
-      << ", \"sustain_level\": " << r.mod_env_sustain_level
-      << ", \"attack_ticks\": " << r.mod_env_attack_ticks
-      << ", \"decay_ticks\": " << r.mod_env_decay_ticks
-      << ", \"release_ticks\": " << r.mod_env_release_ticks
-      << ", \"attack_sub_tick\": " << (r.mod_env_attack_sub_tick ? "true" : "false")
-      << ", \"attack_step\": " << r.mod_env_attack_step
-      << ", \"decay_step\": " << r.mod_env_decay_step
-      << ", \"release_step\": " << r.mod_env_release_step
-      << ", \"to_pitch\": " << r.mod_env_to_pitch
-      << ", \"to_filter_fc\": " << r.mod_env_to_filter_fc
-      << "}}, \"modulators\": [";
-  for (size_t i = 0; i < r.modulators.size(); ++i) {
-    const auto& mod = r.modulators[i];
-    out << "{\"src\": ";
-    write_modulator_source_json(out, mod.src);
-    out << ", \"dest\": {\"raw\": " << mod.dest
-        << ", \"name\": " << json_string_impl(generator_name(mod.dest))
-        << "}, \"amount\": " << mod.amount << ", \"amount_src\": ";
-    write_modulator_source_json(out, mod.amount_src);
-    out << ", \"transform\": {\"raw\": " << mod.transform
-        << ", \"name\": " << json_string_impl(modulator_transform_name(mod.transform)) << "}}";
-    if (i + 1 < r.modulators.size()) out << ", ";
+using EnvelopeKey = std::array<int64_t, 11>;
+using GeneratorKey = std::array<int64_t, 20>;
+using ModulatorKey = std::array<int64_t, 5>;
+using ModulatorSetKey = std::vector<ModulatorKey>;
+using ModulationKey = std::pair<GeneratorKey, size_t>;
+using SampleWindowKey = std::array<uint64_t, 5>;
+
+template <typename T>
+size_t intern(const T& value, std::map<T, size_t>& ids, std::vector<T>& values) {
+  auto found = ids.find(value);
+  if (found != ids.end()) return found->second;
+  size_t id = values.size();
+  ids.emplace(value, id);
+  values.push_back(value);
+  return id;
+}
+
+EnvelopeKey envelope_key(const Region& r) {
+  return {r.volume_envelope.delay_samples, r.volume_envelope.attack_samples,
+          r.volume_envelope.hold_samples, r.volume_envelope.decay_samples,
+          r.volume_envelope.sustain_cb_q12_20, r.volume_envelope.release_samples,
+          r.delay_ticks, r.attack_ticks, r.hold_ticks, r.decay_ticks,
+          r.release_ticks};
+}
+
+GeneratorKey generator_key(const Region& r) {
+  return {r.mod_lfo_delay_ticks, r.mod_lfo_step, r.mod_lfo_to_pitch,
+          r.mod_lfo_to_filter_fc, r.mod_lfo_to_volume,
+          r.vib_lfo_delay_ticks, r.vib_lfo_step, r.vib_lfo_to_pitch,
+          r.mod_env_delay_ticks, r.mod_env_hold_ticks, r.mod_env_sustain_level,
+          r.mod_env_attack_ticks, r.mod_env_decay_ticks, r.mod_env_release_ticks,
+          r.mod_env_attack_sub_tick ? 1 : 0, r.mod_env_attack_step,
+          r.mod_env_decay_step, r.mod_env_release_step, r.mod_env_to_pitch,
+          r.mod_env_to_filter_fc};
+}
+
+ModulatorSetKey modulator_set_key(const Region& r) {
+  ModulatorSetKey key;
+  for (const auto& group : r.modulators_by_destination) {
+    for (const auto& mod : group.second) {
+      key.push_back({mod.src, mod.dest, mod.amount, mod.amount_src, mod.transform});
+    }
   }
-  out << "]}";
+  return key;
+}
+
+void write_envelope(std::ostream& out, const EnvelopeKey& e) {
+  out << "{\"delay_samples\": " << e[0] << ", \"attack_samples\": " << e[1]
+      << ", \"hold_samples\": " << e[2] << ", \"decay_samples\": " << e[3]
+      << ", \"sustain_cb_q12_20\": " << e[4] << ", \"release_samples\": " << e[5]
+      << ", \"policy_delay_ticks\": " << e[6] << ", \"policy_attack_ticks\": " << e[7]
+      << ", \"policy_hold_ticks\": " << e[8] << ", \"policy_decay_ticks\": " << e[9]
+      << ", \"policy_release_ticks\": " << e[10] << "}";
+}
+
+void write_generators(std::ostream& out, const GeneratorKey& g) {
+  out << "{\"mod_lfo\": {\"delay_ticks\": " << g[0] << ", \"step\": " << g[1]
+      << ", \"to_pitch\": " << g[2] << ", \"to_filter_fc\": " << g[3]
+      << ", \"to_volume\": " << g[4]
+      << "}, \"vib_lfo\": {\"delay_ticks\": " << g[5] << ", \"step\": " << g[6]
+      << ", \"to_pitch\": " << g[7]
+      << "}, \"mod_env\": {\"delay_ticks\": " << g[8]
+      << ", \"hold_ticks\": " << g[9] << ", \"sustain_level\": " << g[10]
+      << ", \"attack_ticks\": " << g[11] << ", \"decay_ticks\": " << g[12]
+      << ", \"release_ticks\": " << g[13]
+      << ", \"attack_sub_tick\": " << (g[14] ? "true" : "false")
+      << ", \"attack_step\": " << g[15] << ", \"decay_step\": " << g[16]
+      << ", \"release_step\": " << g[17] << ", \"to_pitch\": " << g[18]
+      << ", \"to_filter_fc\": " << g[19] << "}}";
+}
+
+struct RegionRefs {
+  size_t preset = 0;
+  size_t instrument = 0;
+  size_t sample_window = 0;
+  size_t envelope = 0;
+  size_t modulation = 0;
+};
+
+struct ReportCatalog {
+  std::vector<std::string> presets;
+  std::vector<std::string> instruments;
+  std::vector<std::string> samples;
+  std::vector<SampleWindowKey> sample_windows;
+  std::vector<EnvelopeKey> envelopes;
+  std::vector<ModulatorSetKey> modulator_sets;
+  std::vector<ModulationKey> modulations;
+  std::vector<RegionRefs> region_refs;
+  std::set<uint16_t> sources;
+  std::set<uint16_t> destinations;
+  std::set<uint16_t> transforms;
+};
+
+ReportCatalog build_catalog(const std::vector<Region>& regions) {
+  ReportCatalog catalog;
+  std::map<std::string, size_t> preset_ids;
+  std::map<std::string, size_t> instrument_ids;
+  std::map<std::string, size_t> sample_ids;
+  std::map<SampleWindowKey, size_t> window_ids;
+  std::map<EnvelopeKey, size_t> envelope_ids;
+  std::map<ModulatorSetKey, size_t> modulator_set_ids;
+  std::map<ModulationKey, size_t> modulation_ids;
+  catalog.region_refs.reserve(regions.size());
+  for (const auto& r : regions) {
+    RegionRefs refs;
+    refs.preset = intern(r.preset, preset_ids, catalog.presets);
+    refs.instrument = intern(r.instrument, instrument_ids, catalog.instruments);
+    size_t sample = intern(r.sample_left, sample_ids, catalog.samples);
+    SampleWindowKey window = {sample, r.base_addr, r.length, r.loop_start, r.loop_end};
+    refs.sample_window = intern(window, window_ids, catalog.sample_windows);
+    refs.envelope = intern(envelope_key(r), envelope_ids, catalog.envelopes);
+    ModulatorSetKey modulator_set = modulator_set_key(r);
+    size_t modulator_set_id = intern(modulator_set, modulator_set_ids, catalog.modulator_sets);
+    refs.modulation = intern(ModulationKey{generator_key(r), modulator_set_id},
+                             modulation_ids, catalog.modulations);
+    for (const auto& group : r.modulators_by_destination) {
+      for (const auto& mod : group.second) {
+        catalog.sources.insert(mod.src);
+        catalog.sources.insert(mod.amount_src);
+        catalog.destinations.insert(mod.dest);
+        catalog.transforms.insert(mod.transform);
+      }
+    }
+    catalog.region_refs.push_back(refs);
+  }
+  return catalog;
 }
 
 }  // namespace
@@ -166,58 +260,103 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
                    const std::string& extra_fields) {
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
-  int mono_regions = 0;
-  int linked_stereo_regions = 0;
-  int hard_pan_stereo_regions = 0;
-  for (const auto& r : regions) {
-    if (r.stereo_source == "linked_sample") ++linked_stereo_regions;
-    else if (r.stereo_source == "hard_pan_unlinked") ++hard_pan_stereo_regions;
-    else ++mono_regions;
-  }
-  f << "{\n  \"output_sample_rate\": " << sample_rate
+  ReportCatalog catalog = build_catalog(regions);
+  f << "{\n  \"report_schema_version\": 2"
+    << ",\n  \"output_sample_rate\": " << sample_rate
     << ",\n  \"output_samples\": " << samples
     << ",\n  \"event_count\": " << events;
   if (!extra_fields.empty()) f << ",\n" << extra_fields;
-  f << ",\n  \"sf2_loader\": {\"mono_regions\": " << mono_regions
-    << ", \"linked_stereo_regions\": " << linked_stereo_regions
-    << ", \"hard_pan_stereo_regions\": " << hard_pan_stereo_regions << "}"
-    << ",\n  \"regions\": [\n";
+  f << ",\n  \"sf2_loader\": {\"region_count\": " << regions.size() << "}"
+    << ",\n  \"catalogs\": {\n"
+    << "    \"presets\": [";
+  for (size_t i = 0; i < catalog.presets.size(); ++i) {
+    if (i != 0) f << ", ";
+    f << json_string(catalog.presets[i]);
+  }
+  f << "],\n    \"instruments\": [";
+  for (size_t i = 0; i < catalog.instruments.size(); ++i) {
+    if (i != 0) f << ", ";
+    f << json_string(catalog.instruments[i]);
+  }
+  f << "],\n    \"samples\": [";
+  for (size_t i = 0; i < catalog.samples.size(); ++i) {
+    if (i != 0) f << ", ";
+    f << json_string(catalog.samples[i]);
+  }
+  f << "],\n    \"sample_windows\": [\n";
+  for (size_t i = 0; i < catalog.sample_windows.size(); ++i) {
+    const auto& w = catalog.sample_windows[i];
+    f << "      {\"sample\": " << w[0] << ", \"base_addr\": " << w[1]
+      << ", \"length\": " << w[2] << ", \"loop_start\": " << w[3]
+      << ", \"loop_end\": " << w[4] << "}"
+      << (i + 1 < catalog.sample_windows.size() ? "," : "") << "\n";
+  }
+  f << "    ],\n    \"volume_envelopes\": [\n";
+  for (size_t i = 0; i < catalog.envelopes.size(); ++i) {
+    f << "      ";
+    write_envelope(f, catalog.envelopes[i]);
+    f << (i + 1 < catalog.envelopes.size() ? "," : "") << "\n";
+  }
+  f << "    ],\n    \"modulator_sources\": [";
+  size_t item = 0;
+  for (uint16_t source : catalog.sources) {
+    if (item++ != 0) f << ", ";
+    write_modulator_source_descriptor(f, source);
+  }
+  f << "],\n    \"generator_destinations\": [";
+  item = 0;
+  for (uint16_t destination : catalog.destinations) {
+    if (item++ != 0) f << ", ";
+    f << "{\"raw\": " << destination << ", \"name\": "
+      << json_string(generator_name(destination)) << "}";
+  }
+  f << "],\n    \"modulator_transforms\": [";
+  item = 0;
+  for (uint16_t transform : catalog.transforms) {
+    if (item++ != 0) f << ", ";
+    f << "{\"raw\": " << transform << ", \"name\": "
+      << json_string(modulator_transform_name(transform)) << "}";
+  }
+  f << "],\n    \"modulator_sets\": [\n";
+  for (size_t i = 0; i < catalog.modulator_sets.size(); ++i) {
+    f << "      [";
+    const auto& set = catalog.modulator_sets[i];
+    for (size_t j = 0; j < set.size(); ++j) {
+      const auto& mod = set[j];
+      if (j != 0) f << ", ";
+      f << "{\"src\": " << mod[0] << ", \"dest\": " << mod[1]
+        << ", \"amount\": " << mod[2] << ", \"amount_src\": " << mod[3]
+        << ", \"transform\": " << mod[4] << "}";
+    }
+    f << "]" << (i + 1 < catalog.modulator_sets.size() ? "," : "") << "\n";
+  }
+  f << "    ],\n    \"modulation_profiles\": [\n";
+  for (size_t i = 0; i < catalog.modulations.size(); ++i) {
+    f << "      {\"generators\": ";
+    write_generators(f, catalog.modulations[i].first);
+    f << ", \"modulator_set\": " << catalog.modulations[i].second << "}"
+      << (i + 1 < catalog.modulations.size() ? "," : "") << "\n";
+  }
+  f << "    ]\n  },\n  \"regions\": [\n";
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& r = regions[i];
+    const auto& refs = catalog.region_refs[i];
     f << "    {\"key\": " << r.key
       << ", \"program\": " << r.program << ", \"bank\": " << r.bank
-      << ", \"preset\": " << json_string(r.preset)
-      << ", \"instrument\": " << json_string(r.instrument)
-      << ", \"stereo\": " << (r.stereo ? "true" : "false")
-      << ", \"stereo_source\": " << json_string(r.stereo_source)
-      << ", \"left\": {\"sample\": " << json_string(r.sample_left)
-      << ", \"base_addr\": " << r.base_addr << ", \"length\": " << r.length
-      << ", \"loop_start\": " << r.loop_start << ", \"loop_end\": " << r.loop_end
-      << "}, \"right\": {\"sample\": " << json_string(r.sample_right)
-      << ", \"base_addr\": " << r.base_addr_r << ", \"length\": " << r.length_r
-      << ", \"loop_start\": " << r.loop_start_r << ", \"loop_end\": " << r.loop_end_r
-      << "}, \"pitch\": {\"phase_inc\": " << r.phase_inc
-      << "}, \"gain\": {\"pan\": " << r.pan << ", \"base_gain\": " << r.base_gain
+      << ", \"preset\": " << refs.preset
+      << ", \"instrument\": " << refs.instrument
+      << ", \"sample_window\": " << refs.sample_window
+      << ", \"phase_inc\": " << r.phase_inc
+      << ", \"gain\": {\"pan\": " << r.pan << ", \"base_gain\": " << r.base_gain
       << ", \"base_gain_l\": " << r.base_gain_l << ", \"base_gain_r\": " << r.base_gain_r
       << ", \"left\": " << r.gain_l << ", \"right\": " << r.gain_r
-      << "}, \"volume_envelope\": {\"delay_samples\": " << r.volume_envelope.delay_samples
-      << ", \"attack_samples\": " << r.volume_envelope.attack_samples
-      << ", \"hold_samples\": " << r.volume_envelope.hold_samples
-      << ", \"decay_samples\": " << r.volume_envelope.decay_samples
-      << ", \"sustain_cb_q12_20\": " << r.volume_envelope.sustain_cb_q12_20
-      << ", \"release_samples\": " << r.volume_envelope.release_samples
-      << ", \"policy_delay_ticks\": " << r.delay_ticks
-      << ", \"policy_attack_ticks\": " << r.attack_ticks
-      << ", \"policy_hold_ticks\": " << r.hold_ticks
-      << ", \"policy_decay_ticks\": " << r.decay_ticks
-      << ", \"policy_release_ticks\": " << r.release_ticks
-      << "}, \"filter\": {\"enable\": " << (r.filter_enable ? "true" : "false")
+      << "}, \"volume_envelope\": " << refs.envelope
+      << ", \"filter\": {\"enable\": " << (r.filter_enable ? "true" : "false")
       << ", \"b0\": " << r.filter_b0 << ", \"b1\": " << r.filter_b1
       << ", \"b2\": " << r.filter_b2 << ", \"a1\": " << r.filter_a1
       << ", \"a2\": " << r.filter_a2 << "}, \"loop_mode\": " << r.loop_mode
-      << ", \"modulation\": ";
-    write_modulation_json(f, r);
-    f << "}" << (i + 1 < regions.size() ? "," : "") << "\n";
+      << ", \"modulation\": " << refs.modulation
+      << "}" << (i + 1 < regions.size() ? "," : "") << "\n";
   }
   f << "  ]\n}\n";
 }
