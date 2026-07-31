@@ -142,3 +142,133 @@ python3 tools/analyze_sf2_access_span.py \
 Follow this with the timed `make render-rtl-ddr3` stress command in
 [`render_commands.md`](render_commands.md) when cache, DDR, allocator, runtime
 pitch, or deadline behavior matters.
+
+## MT6276 And SGM Comparison
+
+The following 2026-07-31 study used the same deterministic 10-second
+`build/polyphony_stress_512.mid` workload, 48 kHz output rate, line sizes of
+8/16/32/64 words, and lookahead windows of 1/2/5/10 ms. The SGM baseline was
+the existing report for `SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2`; MT6276 was
+analyzed with:
+
+```bash
+python3 tools/analyze_sf2_access_span.py \
+  --sf2 assets/soundfonts/MT6276.sf2 \
+  --midi build/polyphony_stress_512.mid \
+  --json-out build/polyphony_stress_mt6276_sf2_access_span.json \
+  --md-out build/polyphony_stress_mt6276_sf2_access_span.md
+```
+
+Generated reports remain under `build/` and are not source-controlled.
+
+### Mapping And Working Set
+
+| Metric | SGM | MT6276 | MT6276 change |
+| --- | ---: | ---: | ---: |
+| SF2 file bytes | 324,800,670 | 1,525,780 | 99.53% smaller |
+| Note On events | 3,512 | 3,512 | same workload |
+| Sample streams | 5,228 | 3,611 | -30.93% |
+| Unique samples | 929 | 56 | -93.97% |
+| Maximum active streams/frame | 478 | 350 | -26.78% |
+| Unmapped note regions | 159 | 0 | all MT6276 notes mapped |
+| Looping streams | 4,284 | 3,524 | -17.74% |
+| Unique loop regions | 779 | 52 | -93.32% |
+| Maximum loop span, words | 226,342 | 62,076 | -72.57% |
+
+MT6276 maps nearly every Note On to one mono stream. SGM produces more streams
+despite its unmapped regions because its preset mapping contains substantially
+more stereo and layered regions. MT6276 therefore presents a much smaller and
+more repetitive absolute sample working set; it is not a substitute for SGM
+when testing broad sample coverage or layered/stereo pressure.
+
+At the 32-word analysis granularity, the traffic comparison was:
+
+| Metric | SGM | MT6276 | MT6276 change |
+| --- | ---: | ---: | ---: |
+| Endpoint reads/s | 32,186,819.6 | 24,035,170.2 | -25.33% |
+| Stream line fills/s | 198,000.3 | 28,535.2 | -85.59% |
+| Physical unique lines/s | 94,662.5 | 1,273.9 | -98.65% |
+| New stream lines/frame P99 / max | 15 / 488 | 4 / 342 | lower |
+| New physical lines/frame P99 / max | 7 / 158 | 1 / 30 | lower |
+
+The same trend holds at 8, 16, and 64 words: MT6276 stream-line fills are about
+85.4% to 85.7% lower, while physical first touches are about 98.65% lower. These
+figures describe static locality, not actual RTL cache misses.
+
+### Phase-Step Tradeoff
+
+MT6276 has the smaller working set but the more aggressive source-address
+advance:
+
+| Source frames/output frame | SGM | MT6276 |
+| --- | ---: | ---: |
+| Average | 0.8164 | 1.2403 |
+| P50 | 0.7734 | 0.5156 |
+| P95 | 1.9297 | 5.1953 |
+| P99 | 3.4688 | 8.4648 |
+| Maximum | 13.0977 | 14.6992 |
+| Streams at or above 4 | 0.38% | 7.95% |
+| Streams at or above 8 | 0.06% | 1.14% |
+
+The fraction at or above four source samples per output frame is 20.8 times
+the SGM fraction. MT6276's largest steps come from broadly transposed samples
+such as `appls60`, `sybs36`, `gunshot60`, and `flute60`. Consequently, MT6276
+is useful for large-phase-step and short-loop tests even though it is easier on
+total working-set capacity.
+
+### Effect On The Production 32-Word Window
+
+The production renderer processes at most 16 output frames per work item and
+uses linear-interpolation endpoints `sample[n]` and `sample[n+1]`. For a static
+phase step `D`, the approximate inclusive source span of a full work item is:
+
+```text
+15 * D + 2 words
+```
+
+This is a sizing heuristic, not an exact hit test: integer phase truncation,
+loop wrapping, inactive frame masks, and the first request's offset within its
+aligned 8-word line change the exact span. It nevertheless explains the
+geometry:
+
+| Phase step `D` | Approximate 16-frame span | 32-word implication |
+| ---: | ---: | --- |
+| 0.5 | 10 words | comfortably resident |
+| 1.0 | 17 words | normally resident |
+| 2.0 | 32 words | alignment-sensitive boundary |
+| 5.2 | 80 words | requires out-of-window lines |
+| 8.46 | 129 words | crosses several lines/windows |
+
+Thus a larger phase step normally reduces window hits. SGM's P95 step is near
+the range a 32-word window can cover for a complete 16-frame work item, whereas
+MT6276's P95 cannot fit.
+
+`voice_sample_window` limits the cost of this case. The first descriptor of a
+work item may refill the persistent window with four adjacent 8-word reads. A
+later descriptor outside that window performs one 8-word fallback read without
+replacing the persistent window. This prevents an interpolation endpoint just
+past the boundary from evicting the useful window, but sustained large steps
+still increase fallback traffic.
+
+Do not infer the production window hit rate from `physical_unique_lines` or
+from a `LINE_WORDS=32` analyzer run:
+
+- the production storage is private per voice, so different voices cannot hit
+  one another's windows even when they reference the same absolute sample;
+- the analyzer counts first touches and does not model persistent-window
+  replacement, four-line refills, or one-line fallback transactions;
+- the real external transfer unit remains eight words, while 32 words is the
+  per-voice capacity.
+
+Compare timed RTL counters before changing the window geometry:
+
+```text
+window_client_requests - window_hits = window_refills + fallback_reads
+window_memory_reads = 4 * window_refills + fallback_reads
+```
+
+In particular, `fallback_reads / client_requests` isolates the workload effect
+of endpoints escaping the resident window. A 64-word window may cover more of
+the MT6276 high-step tail, but it doubles per-voice sample storage. Any such
+change requires a timed DDR3 A/B comparison and fresh post-route BRAM and timing
+results; the static analysis alone is insufficient.
