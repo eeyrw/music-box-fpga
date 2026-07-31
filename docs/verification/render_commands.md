@@ -326,6 +326,19 @@ datapath number. Only this target's timed DDR3 statistics are evidence for the
 real-pressure deadline; loading the SF2 file also exercises the actual sample
 image used by the MIDI/SF2 run.
 
+The equivalent QSPI NOR experiment uses the same workload:
+
+```bash
+make render-rtl-qspi SF2='/path/to/input.sf2' \
+  MIDI='/path/to/input.mid' SECONDS=3 CONTROL_TICK_MS=1
+```
+
+Its JSON replaces DDR row fields with QSPI sequential/random line counts,
+transaction overhead, data clocks, and bus utilization. The model assumptions
+include four continuous 8-word lines per 32-word refill and one-line fallback
+reads for later out-of-window endpoints. Capacity and board caveats are in
+[`qspi_nor_feasibility.md`](qspi_nor_feasibility.md).
+
 ### 512-Voice DDR3 Stress
 
 Use [`sf2_access_span_analysis.md`](sf2_access_span_analysis.md) to inspect the

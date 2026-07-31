@@ -2,6 +2,10 @@
 #define RENDER_RTL_EFFECTS_ENABLE 0
 #endif
 
+#ifndef RENDER_MEMORY_QSPI
+#define RENDER_MEMORY_QSPI 0
+#endif
+
 #if RENDER_RTL_EFFECTS_ENABLE
 #include "Vvoice_major_render_effects_harness.h"
 using RenderDut = Vvoice_major_render_effects_harness;
@@ -707,7 +711,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("RTL render produced all-zero PCM");
     }
     if (driver.ddr_accepted() != driver.ddr_returned()) {
-      throw std::runtime_error("DDR request/response accounting mismatch");
+      throw std::runtime_error("memory request/response accounting mismatch");
     }
     if (!render::interrupt_requested()) {
       if (driver.window_client_requests() < driver.window_hits() ||
@@ -723,7 +727,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("sample-window memory accounting mismatch");
       }
       if (driver.window_memory_reads() != driver.ddr_accepted()) {
-        throw std::runtime_error("sample-window/DDR accounting mismatch");
+        throw std::runtime_error("sample-window/memory accounting mismatch");
       }
     }
 
@@ -731,8 +735,10 @@ int main(int argc, char** argv) {
       return std::chrono::duration<double, std::milli>(end - start).count();
     };
     std::ostringstream stats;
-    stats << "  \"render_target\": \"render-rtl-ddr3\""
-          << ",\n  \"algorithm\": \"rtl_voice_major_window_ddr3"
+    stats << "  \"render_target\": \"render-rtl-"
+          << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3") << "\""
+          << ",\n  \"algorithm\": \"rtl_voice_major_window_"
+          << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3")
 #if RENDER_RTL_EFFECTS_ENABLE
           << "_global_audio_effects"
 #endif
@@ -798,19 +804,38 @@ int main(int argc, char** argv) {
           << ",\n  \"rtl_stale_parameter_updates\": "
           << driver.stale_parameter_updates()
           << ",\n  \"rtl_peak_active_voices\": " << peak_active_voices
+#if RENDER_MEMORY_QSPI
+          << ",\n  \"qspi_lines\": " << driver.ddr_accepted()
+          << ",\n  \"qspi_sequential_lines\": " << driver.ddr_row_hits()
+          << ",\n  \"qspi_random_lines\": " << driver.ddr_row_misses()
+          << ",\n  \"qspi_transactions\": " << driver.ddr_activates()
+          << ",\n  \"qspi_overhead_cycles\": " << driver.ddr_precharges()
+          << ",\n  \"qspi_data_cycles\": " << driver.ddr_refreshes()
+          << ",\n  \"qspi_bus_active_cycles\": "
+          << driver.ddr_precharges() + driver.ddr_refreshes()
+          << ",\n  \"qspi_bus_utilization_ppm\": "
+          << (driver.cycles() == 0 ? 0 :
+              (driver.ddr_precharges() + driver.ddr_refreshes()) * 1000000u /
+                  driver.cycles())
+#else
           << ",\n  \"ddr_reads\": " << driver.ddr_accepted()
           << ",\n  \"ddr_row_hits\": " << driver.ddr_row_hits()
           << ",\n  \"ddr_row_misses\": " << driver.ddr_row_misses()
           << ",\n  \"ddr_activates\": " << driver.ddr_activates()
           << ",\n  \"ddr_precharges\": " << driver.ddr_precharges()
           << ",\n  \"ddr_refreshes\": " << driver.ddr_refreshes()
+#endif
           << ",\n  \"wav_path\": " << render::json_string(wav_path);
-    render::write_summary(args.out_dir + "/rtl_ddr3_render_config.json",
+    render::write_summary(args.out_dir +
+                              (RENDER_MEMORY_QSPI ?
+                                   "/rtl_qspi_render_config.json" :
+                                   "/rtl_ddr3_render_config.json"),
                           regions, args.sample_rate, int(frame),
                           int(inputs.events.size()), stats.str());
 
     driver.print_window_prefetch_analysis(std::cout);
-    std::cout << "PASS: RTL DDR3 render frames=" << frame
+    std::cout << "PASS: RTL " << (RENDER_MEMORY_QSPI ? "QSPI" : "DDR3")
+              << " render frames=" << frame
               << " regions=" << regions.size()
               << " nonzero_words=" << nonzero_words
               << " core_cycles=" << driver.cycles()
@@ -865,16 +890,30 @@ int main(int argc, char** argv) {
               << driver.stale_parameter_updates()
               << " peak_active_voices=" << peak_active_voices
               << " active_voices_at_end=" << driver.active_voice_count()
+#if RENDER_MEMORY_QSPI
+              << " qspi_lines=" << driver.ddr_accepted()
+              << " sequential_lines=" << driver.ddr_row_hits()
+              << " random_lines=" << driver.ddr_row_misses()
+              << " transactions=" << driver.ddr_activates()
+              << " overhead_cycles=" << driver.ddr_precharges()
+              << " data_cycles=" << driver.ddr_refreshes()
+              << " bus_utilization_ppm="
+              << (driver.cycles() == 0 ? 0 :
+                  (driver.ddr_precharges() + driver.ddr_refreshes()) *
+                      1000000u / driver.cycles())
+#else
               << " ddr_reads=" << driver.ddr_accepted()
               << " row_hits=" << driver.ddr_row_hits()
               << " row_misses=" << driver.ddr_row_misses()
               << " activates=" << driver.ddr_activates()
               << " precharges=" << driver.ddr_precharges()
               << " refreshes=" << driver.ddr_refreshes()
+#endif
               << " wav=" << wav_path << "\n";
     return render::interrupt_requested() ? 130 : 0;
   } catch (const std::exception& error) {
-    std::cerr << "render-rtl-ddr3 failed: " << error.what() << "\n";
+    std::cerr << "render-rtl-" << (RENDER_MEMORY_QSPI ? "qspi" : "ddr3")
+              << " failed: " << error.what() << "\n";
     return 1;
   }
 }

@@ -1,6 +1,8 @@
 module voice_major_render_harness (
   input  logic                                     core_clk,
+  /* verilator lint_off UNUSEDSIGNAL */
   input  logic                                     ddr_clk,
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic                                     rst,
 
   input  logic                                     cmd_stream_valid,
@@ -184,6 +186,40 @@ module voice_major_render_harness (
   logic unused_audio_control;
   assign unused_audio_control = (|audio_config) | (|effect_clear);
 
+`ifdef SYNTH_SIM_QSPI
+  qspi_nor_timing_model #(
+    .ADDR_WIDTH(ADDR_WIDTH),
+    .LINE_WORDS(BLOCK_LINE_WORDS),
+    .REQUEST_QUEUE_DEPTH(16),
+    .INIT_CYCLES(8),
+    .COMMAND_BITS(8),
+    .COMMAND_LANES(1),
+    .ADDRESS_BITS(32),
+    .ADDRESS_LANES(4),
+    .MODE_BITS(8),
+    .MODE_LANES(4),
+    .DUMMY_CYCLES(8),
+    .DATA_LANES(4),
+    .CS_HIGH_CYCLES(1),
+    .CONTINUOUS_READ(1'b1)
+  ) memory (
+    .clk(core_clk),
+    .rst,
+    .req_valid(line_req_valid),
+    .req_ready(line_req_ready),
+    .req_addr(line_req.aligned_line_addr),
+    .rsp_valid(line_rsp_valid),
+    .rsp_ready(line_rsp_ready),
+    .rsp_data(ddr_rsp_data),
+    .stat_accepted(ddr_accepted),
+    .stat_returned(ddr_returned),
+    .stat_sequential_lines(ddr_row_hits),
+    .stat_random_lines(ddr_row_misses),
+    .stat_transactions(ddr_activates),
+    .stat_overhead_cycles(ddr_precharges),
+    .stat_data_cycles(ddr_refreshes)
+  );
+`else
   ordered_line_ddr3_bridge_model #(
     .ADDR_WIDTH(ADDR_WIDTH),
     .LINE_WORDS(BLOCK_LINE_WORDS),
@@ -221,4 +257,5 @@ module voice_major_render_harness (
     .stat_precharges(ddr_precharges),
     .stat_refreshes(ddr_refreshes)
   );
+`endif
 endmodule

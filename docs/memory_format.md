@@ -130,6 +130,27 @@ model MIG calibration, board pins, electrical timing, or CDC.
 compact command words as hardware, writes `out.wav`, and emits
 `rtl_ddr3_render_config.json` through the shared main-branch report/session code.
 
+## Behavioral QSPI NOR Simulation
+
+The alternative simulation path is:
+
+```text
+voice_sample_window
+  -> qspi_nor_timing_model
+  -> ddr3_bin_store DPI backing image
+```
+
+The reused backing-store name is historical; it only maps word addresses to
+the sparse binary image and contains no DDR timing. `render-rtl-qspi` selects
+this path at build time. The default 100 MHz profile models 4-byte Quad-I/O
+reads with explicit command/address/mode/dummy clocks and retains CS low for
+adjacent queued lines. A 32-word window refill is four adjacent 8-word memory
+requests and therefore uses one QSPI transaction followed by three continuous
+lines. A later out-of-window endpoint uses one 8-word fallback request rather
+than another unconditional 32-word refill. See
+[`verification/qspi_nor_feasibility.md`](verification/qspi_nor_feasibility.md)
+for the datasheet basis, exact cycle geometry, report fields, and board limits.
+
 ## Verification
 
 Focused tests are:
@@ -138,9 +159,11 @@ Focused tests are:
 | --- | --- |
 | `tb_voice_sample_window` | same-window hits, refill order, voice isolation, boundary fallback, and backpressure |
 | `tb_ddr3_timing_model` | row/refresh timing and exact request/response counts |
+| `tb_qspi_nor_timing_model` | command/data cycle accounting, continuous reads, random access, ordering, and backpressure |
 | `tb_voice_major_throughput` | active-lane traversal and block deadline; the default memory path is an always-ready, next-cycle-response theoretical model |
 | `measure-voice-major-throughput-512` | full 10-bit voice IDs and capacity timing |
 | `render-rtl-ddr3` | real SF2/MIDI control, DDR image, PCM output, and JSON diagnostics |
+| `render-rtl-qspi` | the same real workload through the timed 100 MHz QSPI NOR profile |
 | `tb_smart_artix_ddr3_line_reader` | queued, ordered line-to-MIG conversion and response backpressure |
 | `tb_smart_artix_ddr3_rw_arbiter` | multiple outstanding render reads, loader/register ownership, and response routing |
 

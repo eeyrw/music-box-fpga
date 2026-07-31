@@ -38,6 +38,7 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | `tb_voice_major_throughput` | 256/512 voice IDs, block deadline, and DSP issue under always-ready, next-cycle-response memory. The reported render time is a zero-wait theoretical datapath result and does not satisfy the real-pressure `<30,000`-clock acceptance gate. |
 | `tb_voice_sample_window` | 32-word per-voice hits, ordered 8-word refills, fallback reads, and backpressure. |
 | `tb_ddr3_timing_model` | Row hit/miss, activate/precharge, refresh, and request/response accounting. |
+| `tb_qspi_nor_timing_model` | Quad command/address/dummy/data cycles, continuous adjacent lines, random transactions, and response backpressure. |
 | `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |
 
 `sim/harness/render/lookahead_compressor_model` is the bit-exact C++ model of
@@ -84,6 +85,7 @@ diagnostic extraction, and output-directory conventions.
 ```bash
 make render-reference SECONDS=1
 make render-rtl-ddr3 SECONDS=1
+make render-rtl-qspi SECONDS=1
 make render-rtl-ddr3 SECONDS=1 RTL_EFFECTS=1 EFFECTS_PRESET=hall
 ```
 
@@ -109,6 +111,12 @@ uses the 32-word sample window and timed DDR3 model, and writes
 `rtl_ddr3_render_config.json`. The report includes shared input/session data,
 region diagnostics, RTL cycle counts, window/refill statistics, DDR timing, and
 render timing.
+
+`render-rtl-qspi` uses the same RTL, commands, sample window, SF2 image, WAV
+output, and deadline accounting while replacing the DDR3 backend with the
+datasheet-based 100 MHz QSPI NOR transaction model. It writes
+`rtl_qspi_render_config.json`; see
+[`qspi_nor_feasibility.md`](qspi_nor_feasibility.md) for interpretation.
 
 `RTL_EFFECTS=1` selects `voice_major_render_effects_harness`, which drains
 the renderer's production mix buffer through the synthesizable
