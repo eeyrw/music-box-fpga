@@ -7,7 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x000b0000u;
+constexpr uint32_t kVersionValue = 0x000d0000u;
 
 constexpr uint16_t kVersion = 0x9000u;
 constexpr uint16_t kSystemStatus = 0x9010u;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -21,6 +22,16 @@ struct Ch347Options {
 
 class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink {
  public:
+  using RegisterRequest = std::array<uint8_t, 12>;
+  using RegisterFetch = std::array<uint8_t, 16>;
+
+  struct RegisterMailboxResponse {
+    uint8_t status;
+    uint8_t operation;
+    uint16_t address;
+    uint32_t data;
+  };
+
   explicit Ch347RegisterTransport(const Ch347Options& options);
   ~Ch347RegisterTransport() override;
 
@@ -29,13 +40,20 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
 
   void write_register(uint16_t address, uint32_t data) override;
   uint32_t read_register(uint16_t address) override;
-  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override;
-  std::vector<uint32_t> read_registers(uint16_t start_address, size_t count);
   void write_command_words(const std::vector<uint32_t>& words) override;
 
   int configured_clock_hz() const { return configured_clock_hz_; }
   static int selected_clock_hz(int requested_hz);
   static void validate_command_transaction(const std::vector<uint32_t>& words);
+  static uint16_t command_transaction_crc16(const std::vector<uint32_t>& words);
+  static std::vector<uint8_t> encode_command_transaction(
+      const std::vector<uint32_t>& words);
+  static uint32_t register_frame_crc32(uint8_t byte0, uint8_t byte1,
+                                       uint16_t address, uint32_t data);
+  static RegisterRequest encode_register_request(
+      bool write, uint16_t address, uint32_t data);
+  static RegisterMailboxResponse decode_register_response(
+      const RegisterFetch& transfer);
 
  private:
   using SpiConfig = mSpiCfgS;
@@ -53,8 +71,10 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   template <typename T>
   T resolve_optional(const char* name);
 
-  void write_spi(const uint8_t* data, size_t size);
-  void transfer_spi(uint8_t* data, size_t size);
+  void send_transaction(const uint8_t* data, size_t size);
+  void exchange_transaction(uint8_t* data, size_t size);
+  RegisterMailboxResponse transact_register(
+      bool write, uint16_t address, uint32_t data);
   void close() noexcept;
 
   Ch347Options options_;

@@ -14,7 +14,7 @@ external contracts live in:
   the implemented chorus/FDN fields, preset values, and modeling limits.
 - `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
   sizing analysis.
-- `spi_register_timing.md`: SPI register read/write and burst timing analysis.
+- `spi_register_timing.md`: SPI register mailbox timing and throughput analysis.
 - `spi_transport_backlog.md`: compatible transaction-atomicity fixes, physical
   timing work, and optional packetized DMA transport.
 - `../verification/simulation_design.md`: tests and render flows.

@@ -223,8 +223,9 @@ build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
 
 Then use the selected CH347 library and conservative SPI speed. Start around
 `1 MHz` until the board-level SPI timing contract is measured. The common SPI
-register bridge samples SCLK into the FPGA system clock and cannot backpressure a
-fast master, so do not treat burst register frames as gapless high-speed streams.
+register bridge samples SCLK into the FPGA system clock. Register execution is
+split from the SPI request and reported by a later fetch, so a stalled internal
+register target no longer requires the SPI master to pause in one transaction.
 After the `1 MHz` request smoke test passes, try requests of `2 MHz` and
 `5 MHz`; the current CH347 mapping selects actual rates of `937.5 kHz`,
 `1.875 MHz`, and `3.75 MHz` respectively. A `10 MHz` request selects

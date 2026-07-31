@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000b0000`. Version 11 simplifies diagnostics while retaining the version-10 command encoding. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000d0000`. Version 13 replaces direct/burst SPI register frames with the CRC32-protected request/fetch mailbox; the version-12 command transaction remains unchanged. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
@@ -104,6 +104,13 @@ reset, not on `core_reset`.
 Version 11 removed `CMD_ERROR_STATUS` and `CMD_ACTION_STATUS` because they were
 exact aliases of `CMD_FIFO_STATUS[31:30]` and `[17:16]`.
 
+Version 12 retains those register semantics and changes the external SPI
+command-transaction envelope as documented under Command Ingress.
+
+Version 13 also retains the register meanings, but replaces the external SPI
+direct/burst register frames with the single-register request/fetch mailbox
+documented in [`design/spi_register_timing.md`](design/spi_register_timing.md).
+
 ### Compressor Diagnostics
 
 `COMPRESSOR_STATUS` fields are:
@@ -164,9 +171,13 @@ excludes the reset-time metadata initialization sweep.
 
 ## Command Ingress
 
-Production voice and global control uses SPI opcode `0xa5` followed by
-consecutive big-endian 32-bit words. `CMD_FIFO_STATUS` is the diagnostic
-observation of that path.
+Production voice and global control uses an aligned SPI transaction header
+`{8'ha5, word_count[7:0], payload_crc16[15:0]}` followed by `word_count`
+big-endian 32-bit words. Legal transactions contain 1 through 63 words and may
+contain multiple complete commands. CRC-16/CCITT-FALSE covers the count byte
+and payload bytes; FPGA builds may disable CRC comparison without changing the
+wire layout. `CMD_FIFO_STATUS` is the diagnostic observation of the downstream
+command path.
 
 `CMD_FIFO_DATA` is retained only for controlled debug injection into the same
 FIFO and parser. It is not a production command-submit interface: individual

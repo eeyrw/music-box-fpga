@@ -5,7 +5,7 @@
 package synth_register_pkg;
   localparam int REG_BUS_ADDR_WIDTH = 16;
   localparam int REG_BUS_DATA_WIDTH = 32;
-  localparam logic [31:0] REG_VERSION_VALUE = 32'h000b0000;
+  localparam logic [31:0] REG_VERSION_VALUE = 32'h000d0000;
 
   localparam logic [15:0] REG_VERSION = 16'h9000;
   localparam logic [15:0] REG_SYSTEM_STATUS = 16'h9010;

@@ -1,271 +1,110 @@
-# SPI Register Timing And Throughput
+# SPI Register Mailbox Timing And Throughput
 
-This document analyzes normal and burst register transactions through
-`spi_register_bridge`. It is a companion to
-[`spi_command_stream_throughput.md`](spi_command_stream_throughput.md), which
-covers only opcode-`0xa5` command writes.
+This document covers the split-phase single-register protocol implemented by
+`spi_register_bridge`. Opcode `0xa5` command traffic is documented separately
+in [`spi_command_stream_throughput.md`](spi_command_stream_throughput.md).
 
-Register writes and reads do not have the same limit. Writes are primarily
-limited by asynchronous SCLK/MOSI capture. Reads also depend on synchronized
-SCLK falling-edge detection, MISO update latency, register-bus response time,
-and the master's next sampling edge. Gapless burst reads are the most
-restrictive current transaction type.
+No physical SCLK rate has been qualified. The bridge oversamples synchronized
+SPI mode-0 pins in the 100 MHz system-clock domain. Bring-up therefore remains
+at the 937.5 kHz CH347 default before testing 1.875, 3.75, and 7.5 MHz.
 
-The frequencies below are RTL timing estimates and candidate measurement
-points, not a board-level guarantee. The Smart Artix XDC does not yet constrain
-SPI input/output delays, and no physical SPI timing report or cable measurement
-is available.
+## Wire Protocol
 
-The status was refreshed against the current Smart Artix clocking, CH347 host,
-board I/O backlog, and SPI RTL on 2026-07-30. No physical SCLK rate has been
-qualified yet.
+The removed direct register opcodes `0x00`, `0x40`, `0x80`, and `0xc0` are
+invalid. Register access uses one request CS followed by one or more fetch CS
+transactions. All multi-byte fields are most-significant byte first.
 
-## Current Clock And Protocol
-
-The Smart Artix system runs `spi_register_bridge` in the `100 MHz` MIG UI clock
-domain:
+Every request is 12 bytes:
 
 ```text
-Tsys = 10 ns
-SPI mode = 0
-MOSI sampled from synchronized SCLK rising edges
-MISO advanced after synchronized SCLK falling edges
+byte 0       0x5a
+byte 1       operation: 0x00 read, 0x01 write
+bytes 2..3   16-bit byte address
+bytes 4..7   32-bit write data; ignored for reads
+bytes 8..11  CRC32 of bytes 0..7
 ```
 
-The external `spi_sclk`, `spi_cs_n`, and `spi_mosi` inputs pass through two-bit
-synchronizing shift registers. Edge detection and the protocol state machine
-run on `clk`, not on `spi_sclk`. The RTL does not yet attach the planned
-`ASYNC_REG` attributes, and the board XDC does not yet contain the scoped input
-exceptions or physical MISO maximum delay from the I/O backlog.
+The complete request is checked only when CS rises. A truncated request, extra
+clocks, unsupported operation, CRC mismatch, or request while the register bus
+is busy cannot start a new bus access. `CHECK_REGISTER_CRC` may disable request
+CRC comparison without changing the wire layout.
 
-The register frames are:
+Every fetch is 16 bytes. MOSI sends four header bytes followed by twelve zero
+bytes:
 
 ```text
-single read:   0x00, address[15:8], address[7:0], 4 data bytes
-burst read:    0x40, address[15:8], address[7:0], N * 4 data bytes
-single write:  0x80, address[15:8], address[7:0], 4 data bytes
-burst write:   0xc0, address[15:8], address[7:0], N * 4 data bytes
+MOSI bytes 0..3   0x5b, 0x00, 0x00, 0x00
+MOSI bytes 4..15  zero padding used to clock the response
 ```
 
-All fields are transmitted most-significant byte first. Burst transactions
-increment the register address by four after each 32-bit word.
+MISO is undefined during the fetch header. Its following twelve bytes are:
 
-`Ch347RegisterTransport` requests mode 0 and 1 MHz by default. Its discrete
-clock table selects the highest supported rate not greater than the request:
+```text
+byte 0       status
+byte 1       echoed operation
+bytes 2..3   echoed address
+bytes 4..7   read data, or zero for write/error responses
+bytes 8..11  CRC32 of response bytes 0..7
+```
 
-| Requested | Actual selected rate |
+Status values are `0x00 OK`, `0x01 BUS_ERROR`, `0x02 BUSY`, and `0x03 EMPTY`.
+CRC32 is CRC-32/ISO-HDLC: reflected polynomial `0xedb88320`, initial value
+`0xffffffff`, and final XOR `0xffffffff`.
+
+## Execution And Retry
+
+An accepted request asserts the internal register bus `valid` and holds its
+operation, address, and write data until `ready`. SPI traffic therefore cannot
+overrun a variable-latency register target. A fetch made before completion
+returns a valid CRC-protected `BUSY` response.
+
+The completed `OK` or `BUS_ERROR` response remains stored and may be fetched
+again. This lets software retry a fetch whose returned CRC was corrupt without
+executing a write twice. A new structurally complete request made while idle
+clears the prior response; a rejected CRC then yields `EMPTY` rather than a
+stale matching response.
+
+`Ch347RegisterTransport` permits at most 1000 fetch attempts for one API call,
+including `BUSY` responses and response-CRC retries. It verifies response CRC,
+operation, address, and status before returning. Register writes are
+acknowledged operations rather than posted SPI writes.
+
+There is one outstanding register request and no register burst. The inherited
+C++ `RegisterIo::write_registers` helper issues one complete mailbox operation
+for each address; multiple reads are likewise issued individually. DDR debug
+remains unchanged at the register-map level: software fills its buffer
+registers, writes `DDR_ACCESS_CONTROL`, polls status, and later reads the
+buffered data registers.
+
+## Wire Cost
+
+A completed register operation normally uses a 12-byte request and a 16-byte
+fetch, or 224 SPI bits across two CS assertions. At selected SCLK `F` the ideal
+wire-only upper bound is `F / 224` operations per second, excluding USB call
+latency and CS gaps.
+
+| Actual SCLK | Wire-only operations/s |
 | ---: | ---: |
-| 1 MHz | 937.5 kHz |
-| 2 MHz | 1.875 MHz |
-| 5 MHz | 3.75 MHz |
-| 7.5 MHz | 7.5 MHz |
-| 10 MHz | 7.5 MHz |
-| 15 MHz | 15 MHz |
+| 937.5 kHz | 4,185 |
+| 1.875 MHz | 8,371 |
+| 3.75 MHz | 16,741 |
+| 7.5 MHz | 33,482 |
 
-Requests below the minimum `468.75 kHz` step are rejected because no supported
-rate can satisfy the not-greater-than rule. SPI modes other than mode 0 are also
-rejected before the adapter is opened.
+This overhead is intentional: register traffic is sparse, while integrity,
+explicit completion, retained responses, and arbitrary `bus_ready` latency are
+part of the contract.
 
-Hardware reports must record the actual rate, not only the CLI request.
+## Physical Timing
 
-## Current Register-Bus Response
+Mailbox execution removes register response latency from the active request
+transaction. MISO timing is required only during fetch, when the complete
+response is already available or the bridge returns `BUSY`. The synchronized
+falling-edge-to-MISO path must still satisfy the next external rising-edge
+sample, so the existing CDC and board-I/O work remains:
 
-The current generic, common-status, and Smart Artix platform register windows
-all return `ready` combinationally from `valid`. A register access therefore
-completes without an arbitrary downstream stall once the SPI bridge asserts
-`bus_valid`.
+- add and preserve synchronizer attributes;
+- constrain the physical MISO path;
+- measure SCLK duty cycle and SPI pin timing;
+- qualify actual CH347 clock steps on hardware.
 
-This is an important assumption. The SPI protocol has no ready or wait signal
-to the master. If a future register target can hold `bus_ready` low, gapless
-burst traffic can overrun the bridge unless the target is snapshotted, buffered,
-or the SPI transaction defines explicit dummy clocks.
-
-An MCU DMA cannot react to an in-transaction BUSY indication. Keep the current
-immediate register contract and represent long work through posted START plus
-later status polling. A queued request/response transport is needed only if a
-future external contract requires blocking targets or split-phase returned
-payloads; options are tracked in
-[`spi_transport_backlog.md`](spi_transport_backlog.md).
-
-The DDR debug aperture remains a register protocol, not a blocking DDR read.
-Writing its control register starts one 128-bit MIG operation; software polls a
-status register later. MIG latency therefore does not directly extend the SPI
-register response.
-
-## Write Timing
-
-### Single Write
-
-The bridge captures 32 data bits on synchronized rising edges. On the final bit
-it asserts `bus_valid`, `bus_write`, and the complete `bus_wdata`, then enters
-`STATE_WRITE_WAIT`. With the current immediate-ready targets, the write is
-acknowledged on the following system clock.
-
-CS must remain low long enough after the final data edge for that handshake to
-complete. Normal mode-0 masters deassert CS after the final falling edge. At the
-recommended frequencies, the independently synchronized CS path leaves ample
-system-clock margin, but this must still be checked on the physical master.
-
-### Burst Write
-
-At every 32-bit boundary, burst write briefly enters `STATE_WRITE_WAIT`. With an
-immediate-ready register target, it returns to `STATE_WRITE_DATA` one system
-clock later and increments the address by four.
-
-The next word's first rising edge occurs one complete SCLK period after the
-previous word's last rising edge. At `15 MHz`, that interval is `66.7 ns`, or
-about 6.67 system clocks, so the one-clock bus handshake does not require an
-SCLK gap. The limiting factor remains reliable asynchronous sampling of each
-SCLK high and low interval, not the word-boundary register write.
-
-For a 50% duty-cycle SCLK:
-
-| SCLK | System clocks per half period | Write assessment |
-| ---: | ---: | --- |
-| 7.5 MHz | 6.67 | Large margin |
-| 10 MHz | 5.00 | Large margin |
-| 15 MHz | 3.33 | Nominal samples remain; physically unqualified |
-| 30 MHz | 1.67 | Too little asynchronous sampling margin for a safe contract |
-| 60 MHz | 0.83 | SCLK levels can be missed |
-
-The table is an oversampling estimate, not a released write rating. The current
-hardware plan starts at the 937.5 kHz default, then measures 1.875 MHz and
-3.75 MHz. Actual 7.5 MHz is an upper stress point for the present bridge.
-Although 15 MHz has enough nominal system-clock samples for writes, it must not
-be promoted before the CDC attributes, physical constraints, duty-cycle
-measurements, and register-read behavior are qualified.
-
-## Single-Read Timing
-
-A read request is launched after the final address rising edge. With an
-immediate-ready target, the bridge needs approximately:
-
-```text
-external address edge synchronization  up to about 2 Tsys
-register response and MISO load         about 1 Tsys
-```
-
-The master does not sample the first data bit until one full SCLK period after
-the final address bit, so this initial turnaround is not normally the limiting
-part of a single read at 10 or 15 MHz.
-
-During the data field, the master samples MISO on rising edges. The bridge sees
-the preceding falling edge through its synchronizer and then changes MISO. The
-low half period must cover up to approximately two `100 MHz` clocks plus FPGA
-clock-to-output, board delay, and master setup time:
-
-```text
-low half period > about 20 ns + physical timing margin
-```
-
-The pure RTL boundary is therefore near `25 MHz`, but that leaves no phase or
-I/O margin. The current CH347 path has no exact 10 MHz step: a 10 MHz request
-selects 7.5 MHz. Treat actual 7.5 MHz as an upper single-read stress point until
-board timing is measured; begin qualification at the lower discrete rates.
-
-## Burst-Read Word Boundary
-
-Gapless burst read has an additional delay after every 32-bit word:
-
-1. The master samples bit 0 on a rising edge.
-2. The following falling edge is synchronized into the system domain.
-3. `STATE_READ_DATA` recognizes the completed word and enters
-   `STATE_READ_WAIT`.
-4. `STATE_READ_WAIT` asserts `bus_valid`.
-5. On the next system clock, immediate `bus_ready` is observed and the new
-   word's most-significant bit is loaded onto MISO.
-
-From the external falling edge to valid next-word MISO, the worst asynchronous
-phase estimate is approximately four system clocks, or `40 ns`, before adding
-pad, PCB, cable, and master setup time. The next word's first bit is sampled
-only one low half period after that falling edge:
-
-```text
-SCLK = 10 MHz: low half period = 50.0 ns, about 10 ns RTL margin
-SCLK = 15 MHz: low half period = 33.3 ns, below the worst-case estimate
-```
-
-Consequently 15 MHz must not be considered safe for current gapless burst
-reads. The analytical 10 MHz point has limited physical margin, and the CH347
-selects 7.5 MHz for a 10 MHz request. Actual 7.5 MHz is therefore the highest
-planned stress point, not a released default.
-
-An inter-word pause of at least one or two SCLK half periods could raise the
-safe burst-read SCLK, but the current CH347 `read_registers` transaction emits a
-gapless byte stream and the SPI protocol does not specify such a pause.
-
-## Wire Throughput
-
-A single register transaction carries 32 payload bits in a 56-bit frame:
-
-```text
-payload efficiency = 32 / 56 = 57.14%
-transactions_per_second = SCLK / 56
-```
-
-| SCLK | Single transactions/s | 32-bit payload rate |
-| ---: | ---: | ---: |
-| 1 MHz | 17,857 | 71.4 kB/s |
-| 5 MHz | 89,286 | 357.1 kB/s |
-| 7.5 MHz | 133,929 | 535.7 kB/s |
-| 10 MHz | 178,571 | 714.3 kB/s |
-| 15 MHz | 267,857 | 1.071 MB/s |
-
-These are wire limits and exclude USB call latency and CS gaps. Repeated single
-transactions can be much slower in practice because every operation is a
-separate CH347/USB request.
-
-The current host buffer allows at most 63 register words per burst:
-
-```text
-3 header bytes + 63 * 4 payload bytes = 255 bytes
-payload efficiency = 252 / 255 = 98.82%
-```
-
-| SCLK | Maximum-burst payload rate |
-| ---: | ---: |
-| 1 MHz | 0.124 MB/s |
-| 5 MHz | 0.618 MB/s |
-| 7.5 MHz | 0.926 MB/s |
-| 10 MHz | 1.235 MB/s |
-| 15 MHz | 1.853 MB/s |
-
-Both tables are wire-throughput calculations. They do not authorize a physical
-rate. Current qualification stops at the lower discrete CH347 steps described
-below; 15 MHz remains an unqualified write-only analysis point.
-
-## Current Operating And Qualification Points
-
-| Transaction | Initial actual rate | Next measured steps | Current position |
-| --- | ---: | ---: | --- |
-| Single register write | 937.5 kHz | 1.875, 3.75, then 7.5 MHz | Input oversampling; no physical qualification yet |
-| Burst register write | 937.5 kHz | 1.875, 3.75, then 7.5 MHz | Immediate-ready target required |
-| Single register read | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | MISO update is more restrictive than writes |
-| Gapless burst register read | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | Most restrictive word-boundary path |
-| Opcode-`0xa5` command stream | 937.5 kHz | 1.875, 3.75, then 7.5 MHz stress | See command workload analysis |
-
-Use one conservative profile for bring-up because the current CLI configures
-one device rate. Separate faster write and slower read profiles may be adopted
-only after physical measurement. A 15 MHz write-only mode remains a possible
-future qualification point, not the current recommendation.
-
-## Hardware Qualification
-
-Register timing must be tested independently for each transaction class:
-
-1. Verify single writes and readback with the 1 MHz request, recording the
-   actual 937.5 kHz selection.
-2. Sweep single and 63-word burst writes at actual 1.875, 3.75, and 7.5 MHz.
-3. Sweep single reads at the same actual rates with patterns including
-   `0x00000000`, `0xffffffff`, `0xaaaaaaaa`, `0x55555555`, and walking bits.
-4. Sweep burst-read lengths from 1 through 63 words at each actual rate and
-   treat 7.5 MHz as an upper stress point.
-5. Repeat tests with different CS-to-first-clock delays, transaction gaps, and
-   cable/header configurations.
-6. Measure actual SCLK duty cycle and MISO validity relative to the master's
-   rising sampling edge.
-7. Check `spi_error`, returned addresses/data, common event flags, and audio
-   underrun/drop/deadline status during rendering and sparse DDR debug access.
-
-Before declaring a release frequency, add or document the corresponding SPI
-input/output timing constraints and CDC treatment in the board integration.
+No analytical number in this document is a released board rating.

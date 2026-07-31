@@ -6,19 +6,20 @@ protocol. Throughput and register timing remain in
 [`spi_command_stream_throughput.md`](spi_command_stream_throughput.md) and
 [`spi_register_timing.md`](spi_register_timing.md).
 
-The status was refreshed against `spi_register_bridge`, the version-10 command
-plane, and `Ch347RegisterTransport` on 2026-07-30.
+The status was refreshed against `spi_register_bridge`, the command plane, and
+`Ch347RegisterTransport` on 2026-07-31.
 
 ## Implemented Baseline
 
 - `spi_register_bridge` runs entirely in the 100 MHz MIG UI clock domain.
 - SCLK, CS, and MOSI pass through two-register vectors and are edge-detected in
   that domain; SCLK is not an FPGA clock.
-- Mode-0-style register opcodes are `0x00`, `0x40`, `0x80`, and `0xc0`.
-- Opcode `0xa5` publishes consecutive big-endian command words directly into
-  the shared 1024-word FIFO.
-- The parser waits for a complete version-10 command before executing it, but
-  words already accepted by the FIFO are not grouped by SPI transaction.
+- Register access uses the single-outstanding `0x5a` request and `0x5b` fetch
+  mailbox. The former direct and burst opcodes are rejected.
+- Opcode `0xa5` begins an aligned four-byte header containing an 8-bit word
+  count and CRC16, followed by 1 through 63 big-endian command words.
+- The bridge stages and validates the complete CS-delimited transaction before
+  beginning a held ready/valid commit into the shared 1024-word FIFO.
 - `spi_error` is an output indication. It is cleared at the start of the next
   CS-low transaction and is not a packet ACK or a software-readable history.
 - The CH347 host requests 1 MHz by default, sends one complete command per CS,
@@ -28,23 +29,25 @@ plane, and `Ch347RegisterTransport` on 2026-07-30.
 - `CMD_FIFO_DATA` is retained for controlled debug injection only. Production
   software does not submit commands through register writes, so it is outside
   the reliable SPI command-transaction contract.
-- Current register targets acknowledge immediately. DDR debug uses START plus
-  later status polling; MIG latency is never held inside one SPI transaction.
+- Register requests hold the internal ready/valid bus until completion. Their
+  CRC32-protected response is retained for later fetch, so register latency is
+  not coupled to the active SPI request transaction.
 
 ## Open Correctness Defects
 
 ### SPI-001: A Command Transaction Can Be Partially Published
 
-Status: open bug.
+Status: fixed; sticky transport counters remain open.
 
-`STATE_STREAM_DATA` checks `cmd_ready` only at each 32-bit boundary. If the FIFO
-becomes unavailable during one CS-low transaction, earlier words remain in the
-FIFO while the rejected word is dropped. A parser waiting on an incomplete
-command may then consume words from a later transaction as its payload.
+The bridge now receives the declared transaction into a 63-word staging array.
+After validation, `cmd_valid` remains asserted with the current staged word
+until `cmd_ready` accepts it. FIFO backpressure therefore delays the commit
+instead of dropping an interior word, and another command transaction arriving
+while the staged commit is pending is rejected in full.
 
-The current one-command-per-CS host reduces the affected scope but does not
-remove the bug. A near-full FIFO can still accept the header and reject a later
-payload word.
+The receiver also checks that the staged words form one or more complete
+self-delimiting commands before any word is published. A malformed final
+command can no longer consume words from a later CS transaction.
 
 Required invariant:
 
@@ -55,11 +58,11 @@ Required invariant:
 
 ### SPI-002: Partial Final Word Is Silently Discarded
 
-Status: open bug.
+Status: fixed; sticky transport counters remain open.
 
-If CS is deasserted partway through a command word, the bridge resets its bit
-counter without recording a framing error. Earlier complete words from the same
-transaction remain committed.
+CS deassertion in the three-byte header tail or partway through a payload word
+now rejects the complete staged transaction and asserts `spi_error`. Declared
+and received word counts must match exactly.
 
 Required invariant:
 
@@ -70,55 +73,54 @@ Required invariant:
 
 ### SPI-003: Register Targets Must Remain Immediate
 
-Status: current design constraint, not a defect in the implemented register
-map.
+Status: fixed by the register mailbox.
 
-The SPI wire protocol has no ready/wait indication. `STATE_WRITE_WAIT` and
-`STATE_READ_WAIT` are safe only because the generic, common-status, and Smart
-Artix platform register windows acknowledge immediately. A future target that
-holds `bus_ready` low can cause the bridge to ignore gapless SCLK edges.
+The complete 12-byte register request is validated before `bus_valid` is
+asserted. The bridge then holds the single bus request until `bus_ready` and
+stores either `OK` or `BUS_ERROR`. A separate 16-byte fetch returns that result,
+or a CRC-protected `BUSY` response while execution is still pending. There is no
+gapless register burst and no SPI edge can overrun a stalled register target.
 
-The DDR debug aperture already follows the correct model: a register write
-starts a MIG operation and software polls status in later SPI transactions.
-Keep every variable-latency operation split-phase instead of placing a blocking
-target behind the direct bridge.
+The completed response remains available for repeated fetches and is replaced
+only by a later request. The host checks CRC32, echoed operation/address, and
+status before treating either a read or write as complete.
 
 ## Near-Term Compatible Hardening
 
-The first correction does not need a new CRC/sequence packet protocol. It can
-preserve the existing wire format:
+The implemented compatible-sized transport uses an aligned header:
 
 ```text
-CS low -> 0xa5 -> word0 -> ... -> wordN -> CS high
+CS low -> 0xa5 -> word_count -> CRC16 -> word0 -> ... -> wordN-1 -> CS high
 ```
 
-Recommended implementation:
+Implemented behavior:
 
-1. receive a bounded complete CS-delimited command transaction into staging
-   storage instead of publishing each word immediately;
-2. detect partial words and overlength transactions while receiving;
-3. after CS rises, validate legal word framing and reserve enough command-FIFO
-   capacity for the entire staged transaction;
-4. commit every staged word in order, or discard all of them;
-5. expose sticky accepted, rejected, framing, and capacity counters through the
-   register map;
-6. block a new staged transaction only through a documented inter-transaction
-   readiness rule, never by dropping words after CS falls.
+1. receive 1 through 63 words into staging storage;
+2. detect partial header/payload words, count mismatch, overlength, malformed
+   command boundaries, and CRC mismatch;
+3. make CRC comparison configurable with `CHECK_COMMAND_CRC` while retaining
+   the CRC16 field in every wire header;
+4. commit every accepted staged word through held ready/valid, or discard the
+   staged transaction;
+5. reject a new command transaction in full while a prior commit is pending.
 
 Open design choices:
 
-- [ ] Select a maximum staged transaction size. The current CH347 limit permits
-  63 words, while the largest production command is 17 words.
-- [ ] Decide whether the compatible bridge accepts exactly one command per CS
-  or permits multiple complete commands in one staged transaction.
-- [ ] Define how the receiver proves/reserves FIFO capacity before commit.
+- [x] Stage at most 63 words, matching the 256-byte CH347 transfer after the
+  four-byte header.
+- [x] Permit multiple complete commands in one staged transaction.
+- [x] Hold each staged commit word until downstream acceptance; temporary FIFO
+  capacity loss stalls rather than rejects an already validated transaction.
+- [ ] Expose sticky accepted, rejected, framing, CRC, and busy counters through
+  the register map. `spi_error` remains only a per-transaction indication.
 - [ ] Decide whether a READY GPIO is needed or whether sparse host traffic plus
   software-readable counters is sufficient.
 - [ ] Define an out-of-band recovery operation that clears both FIFO and parser
   state; an in-band `STREAM_FLUSH` cannot recover a missing-payload desync.
 
-This path fixes SPI-001 and SPI-002 for the current CH347 workflow. It does not
-provide CRC, lost-ACK recovery, or exactly-once retry.
+This path fixes SPI-001 and SPI-002 for the current CH347 workflow. CRC detects
+corruption when enabled, but the protocol still does not provide an ACK,
+lost-ACK recovery, or exactly-once retry.
 
 ## Optional Packetized DMA Transport
 

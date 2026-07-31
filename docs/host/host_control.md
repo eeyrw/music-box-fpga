@@ -37,17 +37,24 @@ does not submit command words through the debug-only `CMD_FIFO_DATA` register.
 
 `Ch347RegisterTransport` implements both boundaries:
 
-- normal register read/write frames for status, DDR diagnostics, and board
-  control;
-- opcode `0xa5` followed by consecutive big-endian command words for voice
-  control.
+- single-register mailbox requests and retained responses for status, DDR
+  diagnostics, and board control;
+- an aligned four-byte command-transaction header `{0xa5, word_count, CRC16}`
+  followed by consecutive big-endian command words for voice control.
 
 The CH347 command API accepts one or more complete commands in a CS assertion,
 up to the adapter buffer's 63-word transfer limit. It rejects empty vectors,
 incomplete final commands, and headers above the command parser's 16-word
 payload limit before opening a transfer. Current command producers still send
-one command per CS. This host-side framing guard does not fix the FPGA bridge's
-near-full-FIFO atomicity defect.
+one command per CS. The host computes CRC-16/CCITT-FALSE over the word-count
+byte and all big-endian payload bytes. The FPGA wire layout always includes the
+CRC field; its `CHECK_COMMAND_CRC` build parameter may disable comparison.
+
+Each register API call first writes a fixed 12-byte request, then issues fixed
+16-byte fetch transactions until the FPGA returns a completed response. Both
+frames carry CRC32. The inherited `RegisterIo::write_registers` convenience
+method performs independent single-register mailbox operations, and callers
+read multiple addresses individually; there is no SPI register burst opcode.
 
 The register and command-stream timing limits are intentionally separate, but
 neither has a released physical rating yet. The current host requests `1 MHz`

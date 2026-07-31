@@ -1,13 +1,14 @@
 # SPI Command-Stream Throughput
 
 This document sizes Smart Artix SPI opcode `0xa5` traffic for interface version
-11, which retains the version-10 command encoding. Register timing and
+12, which retains the version-10 command encoding behind a new aligned
+length/CRC16 transaction header. Register timing and
 transport correctness are documented separately in
 [`spi_register_timing.md`](spi_register_timing.md) and
 [`spi_transport_backlog.md`](spi_transport_backlog.md).
 
 The status and workload assumptions were refreshed against the production RTL
-and CH347 host implementation on 2026-07-30.
+and CH347 host implementation on 2026-07-31.
 
 ## Current Configuration
 
@@ -29,9 +30,10 @@ visible at a block boundary and do not carry target-frame timestamps.
 ## Implemented Data Path
 
 ```text
-SPI mode 0, CS low, opcode 0xa5
-  -> consecutive big-endian 32-bit words
-  -> per-word ready check in spi_register_bridge
+SPI mode 0, CS low, aligned {0xa5, word_count, CRC16} header
+  -> bounded staging of consecutive big-endian 32-bit words
+  -> length, command-boundary, and optional CRC validation after CS rises
+  -> held ready/valid commit in spi_register_bridge
   -> shared 1024-word command FIFO
   -> version-10 parser and generation validation
   -> active mono voice state or global effects configuration
@@ -42,11 +44,11 @@ SPI mode 0, CS low, opcode 0xa5
 is not used to submit production commands. Simulation and hardware use the same
 command parser; there is no typed state-install bypass.
 
-The bridge cannot backpressure SPI after CS is asserted. It tests `cmd_ready`
-only when a complete word arrives. If the FIFO becomes unavailable, it drops
-that word, asserts the `spi_error` output for the transaction, and leaves any
-earlier words committed. This is not packet atomic and is tracked as SPI-001 in
-`spi_transport_backlog.md`.
+The bridge cannot backpressure SPI after CS is asserted, so it receives the
+complete declared transaction into a 63-word staging array. A valid transaction
+is committed only after CS rises; downstream `cmd_ready` backpressure holds the
+current staged word instead of dropping it. A new command transaction that
+arrives before the prior staged commit drains is rejected as a whole.
 
 `CMD_FIFO_STATUS[15:2]` exposes FIFO occupancy, so software can calculate:
 
@@ -55,14 +57,10 @@ free_words = 1024 - CMD_FIFO_STATUS[15:2]
 ```
 
 The current `Ch347RegisterTransport::write_command_words` does not perform this
-read. It sends the supplied command immediately and relies on the normal sparse
-workload and FIFO capacity. In the current board topology, production traffic
-has one SPI producer and does not use `CMD_FIFO_DATA`; after a level read, only
-the parser can change occupancy before the next command transaction, and it can
-only free space. Reserving the complete transaction size in host software can
-therefore prevent FIFO-capacity loss under that single-producer contract. It
-still cannot make a transaction atomic against partial CS termination, sampled
-bit/edge errors, reset, or a host that violates the producer contract.
+read. It sends the supplied command immediately; bridge staging decouples SPI
+reception from temporary command-FIFO backpressure. Capacity preflight remains
+useful for avoiding a busy rejection when a prior staged transaction has not
+finished committing, but it is no longer the transaction-atomicity mechanism.
 
 ## Current Host Framing
 
@@ -70,7 +68,7 @@ The CH347 transport has a 256-byte local transfer limit, so its byte buffer
 could hold at most 63 command words:
 
 ```text
-1 opcode byte + 63 * 4 data bytes = 253 bytes
+4 header bytes + 63 * 4 data bytes = 256 bytes
 ```
 
 The host API accepts one or more complete commands up to that 63-word limit. It
@@ -83,27 +81,32 @@ sends each queued command separately. Linked stereo consequently uses two
 separate mono command transactions unless a future sink explicitly coalesces
 them.
 
+The aligned header is `{8'ha5, word_count[7:0], payload_crc16[15:0]}`.
+CRC-16/CCITT-FALSE covers the count byte followed by all payload bytes in
+big-endian order. The wire field is always present; FPGA parameter
+`CHECK_COMMAND_CRC` may disable comparison.
+
 ## Command Sizes
 
 Sizes include the header:
 
-| Operation | Words | Wire bits with one `0xa5` byte |
+| Operation | Words | Wire bits with the four-byte transport header |
 | --- | ---: | ---: |
-| `VOICE_START_MONO`, no loop/filter/envelope | 6 | 200 |
-| `VOICE_START_MONO`, loop only | 8 | 264 |
-| `VOICE_START_MONO`, envelope only | 12 | 392 |
-| `VOICE_START_MONO`, loop/filter/envelope | 17 | 552 |
-| `VOICE_ENV_UPDATE` | 8 | 264 |
-| `VOICE_RELEASE` | 3 | 104 |
-| `VOICE_STOP` | 2 | 72 |
-| `VOICE_GAIN` | 3 | 104 |
-| `VOICE_FILTER` | 5 | 168 |
-| `VOICE_PITCH` | 3 | 104 |
-| compressor config | 5 | 168 |
-| master volume | 2 | 72 |
-| chorus config | 7 | 232 |
-| reverb config | 10 | 328 |
-| effect clear | 2 | 72 |
+| `VOICE_START_MONO`, no loop/filter/envelope | 6 | 224 |
+| `VOICE_START_MONO`, loop only | 8 | 288 |
+| `VOICE_START_MONO`, envelope only | 12 | 416 |
+| `VOICE_START_MONO`, loop/filter/envelope | 17 | 576 |
+| `VOICE_ENV_UPDATE` | 8 | 288 |
+| `VOICE_RELEASE` | 3 | 128 |
+| `VOICE_STOP` | 2 | 96 |
+| `VOICE_GAIN` | 3 | 128 |
+| `VOICE_FILTER` | 5 | 192 |
+| `VOICE_PITCH` | 3 | 128 |
+| compressor config | 5 | 192 |
+| master volume | 2 | 96 |
+| chorus config | 7 | 256 |
+| reverb config | 10 | 352 |
+| effect clear | 2 | 96 |
 
 Linked SoundFont stereo consumes two voices and two `VOICE_START_MONO`
 commands. There is no stereo command or dual-stream hardware voice.
@@ -114,23 +117,23 @@ For `N` active voices, update rate `F`, and one `W`-word command per update, the
 current one-command-per-CS wire rate is:
 
 ```text
-wire_bits_per_second = N * F * (8 + W * 32)
+wire_bits_per_second = N * F * (32 + W * 32)
 ```
 
-The following table includes the `0xa5` byte on every command transaction:
+The following table includes the four-byte header on every command transaction:
 
 | Per-voice update rate | Gain, 3 words | Pitch, 3 words | Filter, 5 words | All three groups |
 | ---: | ---: | ---: | ---: | ---: |
-| 50 Hz | 2.662 Mbps | 2.662 Mbps | 4.301 Mbps | 9.626 Mbps |
-| 100 Hz | 5.325 Mbps | 5.325 Mbps | 8.602 Mbps | 19.251 Mbps |
-| 200 Hz | 10.650 Mbps | 10.650 Mbps | 17.203 Mbps | 38.502 Mbps |
+| 50 Hz | 3.277 Mbps | 3.277 Mbps | 4.915 Mbps | 11.469 Mbps |
+| 100 Hz | 6.554 Mbps | 6.554 Mbps | 9.830 Mbps | 22.938 Mbps |
+| 200 Hz | 13.107 Mbps | 13.107 Mbps | 19.661 Mbps | 45.875 Mbps |
 
 Updating every parameter group on every voice is a synthetic stress case, not
 normal MIDI traffic. Gain, pitch, and filter are independent commands, and the
 C++ policy suppresses unchanged groups. Envelope advancement runs in RTL and
 does not require per-frame SPI updates.
 
-The 512-voice, 50 Hz all-groups row already requires 9.626 Mbps before USB call
+The 512-voice, 50 Hz all-groups row already requires 11.469 Mbps before USB call
 gaps or CS idle time. It cannot fit a 7.5 MHz link. A 15 MHz link has enough raw
 bits but is not a qualified rating for the current 100 MHz oversampling bridge.
 Therefore this table identifies workloads that require either lower update

@@ -1,7 +1,9 @@
 # Mono Voice-Major Control And Render Contract
 
 This document defines the version-10 command encoding retained by interface
-version 11 (`0x000b0000`). The old
+version 13 (`0x000d0000`). Version 12 added the aligned SPI length/CRC16
+transaction envelope; version 13 replaces only the register wire protocol with
+a split-phase mailbox. The old
 DEFINE_MONO/DEFINE_STEREO plus prepared/active START protocol is not part of
 this interface.
 
@@ -185,12 +187,24 @@ priority and the register write returns an error.
 
 ## SPI Transport
 
-With chip select low, opcode `0xa5` is followed by consecutive big-endian
-32-bit command words:
+With chip select low, the command transaction begins with one aligned 32-bit
+transport header followed by the declared number of big-endian command words:
 
 ```text
-CS low -> 0xa5 -> word0 -> word1 -> ... -> wordN -> CS high
+CS low -> 0xa5 -> word_count -> CRC16 -> word0 -> ... -> wordN-1 -> CS high
 ```
+
+The header is `{8'ha5, word_count[7:0], payload_crc16[15:0]}`. Legal
+transactions contain 1 through 63 words and may contain multiple complete
+commands. CRC-16/CCITT-FALSE covers the word-count byte followed by every
+payload word in big-endian byte order. `spi_register_bridge` parameter
+`CHECK_COMMAND_CRC` controls whether the received CRC is compared; disabling
+the check does not change the four-byte wire header.
+
+The bridge stages the complete CS-delimited transaction, checks its declared
+length and command-record boundaries, and publishes it only after CS rises on a
+legal word boundary. Downstream backpressure pauses the staged commit without
+dropping words.
 
 `CMD_FIFO_STATUS[15:2]` exposes capacity for software preflight, but the current
 CH347 transport sends each complete command without reading it first. Register

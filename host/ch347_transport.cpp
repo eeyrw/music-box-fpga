@@ -20,6 +20,21 @@ constexpr ClockChoice kClockChoices[] = {
 
 constexpr size_t kMaxCommandPayloadWords = 16;
 constexpr size_t kMaxCommandTransactionWords = 63;
+constexpr uint8_t kMailboxRequestOpcode = 0x5a;
+constexpr uint8_t kMailboxFetchOpcode = 0x5b;
+constexpr uint8_t kRegisterRead = 0x00;
+constexpr uint8_t kRegisterWrite = 0x01;
+constexpr uint8_t kResponseOk = 0x00;
+constexpr uint8_t kResponseBusError = 0x01;
+constexpr uint8_t kResponseBusy = 0x02;
+constexpr uint8_t kResponseEmpty = 0x03;
+constexpr int kMailboxFetchLimit = 1000;
+
+class RegisterResponseCrcError : public std::runtime_error {
+ public:
+  RegisterResponseCrcError()
+      : std::runtime_error("CH347 mailbox response CRC mismatch") {}
+};
 
 ClockChoice clock_choice_for_hz(int requested_hz) {
   if (requested_hz <= 0) {
@@ -87,87 +102,16 @@ void Ch347RegisterTransport::close() noexcept {
 }
 
 void Ch347RegisterTransport::write_register(uint16_t address, uint32_t data) {
-  std::array<uint8_t, 7> frame = {
-      0x80,
-      uint8_t(address >> 8),
-      uint8_t(address),
-      uint8_t(data >> 24),
-      uint8_t(data >> 16),
-      uint8_t(data >> 8),
-      uint8_t(data),
-  };
-  write_spi(frame.data(), frame.size());
+  (void)transact_register(true, address, data);
 }
 
 uint32_t Ch347RegisterTransport::read_register(uint16_t address) {
-  std::array<uint8_t, 7> frame = {
-      0x00,
-      uint8_t(address >> 8),
-      uint8_t(address),
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-  };
-  transfer_spi(frame.data(), frame.size());
-  return (uint32_t(frame[3]) << 24) | (uint32_t(frame[4]) << 16) |
-         (uint32_t(frame[5]) << 8) | uint32_t(frame[6]);
-}
-
-void Ch347RegisterTransport::write_registers(uint16_t start_address, const std::vector<uint32_t>& data) {
-  if (data.empty()) return;
-  const size_t frame_size = 3 + data.size() * 4;
-  if (frame_size > 256) throw std::runtime_error("CH347 SPI burst write is too large");
-
-  std::array<uint8_t, 256> frame{};
-  frame[0] = 0xc0;
-  frame[1] = uint8_t(start_address >> 8);
-  frame[2] = uint8_t(start_address);
-  for (size_t i = 0; i < data.size(); ++i) {
-    const uint32_t word = data[i];
-    const size_t offset = 3 + i * 4;
-    frame[offset + 0] = uint8_t(word >> 24);
-    frame[offset + 1] = uint8_t(word >> 16);
-    frame[offset + 2] = uint8_t(word >> 8);
-    frame[offset + 3] = uint8_t(word);
-  }
-  write_spi(frame.data(), frame_size);
+  return transact_register(false, address, 0).data;
 }
 
 void Ch347RegisterTransport::write_command_words(const std::vector<uint32_t>& words) {
-  validate_command_transaction(words);
-  std::vector<uint8_t> bytes;
-  bytes.reserve(1 + words.size() * 4);
-  bytes.push_back(0xa5);
-  for (uint32_t word : words) {
-    bytes.push_back(uint8_t(word >> 24));
-    bytes.push_back(uint8_t(word >> 16));
-    bytes.push_back(uint8_t(word >> 8));
-    bytes.push_back(uint8_t(word));
-  }
-  write_spi(bytes.data(), bytes.size());
-}
-
-std::vector<uint32_t> Ch347RegisterTransport::read_registers(uint16_t start_address, size_t count) {
-  if (count == 0) return {};
-  const size_t frame_size = 3 + count * 4;
-  if (frame_size > 256) throw std::runtime_error("CH347 SPI burst read is too large");
-
-  std::array<uint8_t, 256> frame{};
-  frame[0] = 0x40;
-  frame[1] = uint8_t(start_address >> 8);
-  frame[2] = uint8_t(start_address);
-  transfer_spi(frame.data(), frame_size);
-
-  std::vector<uint32_t> data(count);
-  for (size_t i = 0; i < count; ++i) {
-    const size_t offset = 3 + i * 4;
-    data[i] = (uint32_t(frame[offset + 0]) << 24) |
-              (uint32_t(frame[offset + 1]) << 16) |
-              (uint32_t(frame[offset + 2]) << 8) |
-              uint32_t(frame[offset + 3]);
-  }
-  return data;
+  const std::vector<uint8_t> bytes = encode_command_transaction(words);
+  send_transaction(bytes.data(), bytes.size());
 }
 
 int Ch347RegisterTransport::selected_clock_hz(int requested_hz) {
@@ -200,6 +144,143 @@ void Ch347RegisterTransport::validate_command_transaction(
   }
 }
 
+uint16_t Ch347RegisterTransport::command_transaction_crc16(
+    const std::vector<uint32_t>& words) {
+  validate_command_transaction(words);
+
+  auto update = [](uint16_t crc, uint8_t byte) {
+    crc ^= uint16_t(byte) << 8;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x8000u) != 0
+                ? uint16_t((uint16_t(crc << 1)) ^ 0x1021u)
+                : uint16_t(crc << 1);
+    }
+    return crc;
+  };
+
+  uint16_t crc = update(0xffffu, uint8_t(words.size()));
+  for (uint32_t word : words) {
+    crc = update(crc, uint8_t(word >> 24));
+    crc = update(crc, uint8_t(word >> 16));
+    crc = update(crc, uint8_t(word >> 8));
+    crc = update(crc, uint8_t(word));
+  }
+  return crc;
+}
+
+std::vector<uint8_t> Ch347RegisterTransport::encode_command_transaction(
+    const std::vector<uint32_t>& words) {
+  const uint16_t crc = command_transaction_crc16(words);
+  std::vector<uint8_t> bytes;
+  bytes.reserve(4 + words.size() * 4);
+  bytes.push_back(0xa5);
+  bytes.push_back(uint8_t(words.size()));
+  bytes.push_back(uint8_t(crc >> 8));
+  bytes.push_back(uint8_t(crc));
+  for (uint32_t word : words) {
+    bytes.push_back(uint8_t(word >> 24));
+    bytes.push_back(uint8_t(word >> 16));
+    bytes.push_back(uint8_t(word >> 8));
+    bytes.push_back(uint8_t(word));
+  }
+  return bytes;
+}
+
+uint32_t Ch347RegisterTransport::register_frame_crc32(
+    uint8_t byte0, uint8_t byte1, uint16_t address, uint32_t data) {
+  auto update = [](uint32_t crc, uint8_t byte) {
+    crc ^= byte;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1u) != 0 ? (crc >> 1) ^ 0xedb88320u : crc >> 1;
+    }
+    return crc;
+  };
+
+  uint32_t crc = update(0xffff'ffffu, byte0);
+  crc = update(crc, byte1);
+  crc = update(crc, uint8_t(address >> 8));
+  crc = update(crc, uint8_t(address));
+  crc = update(crc, uint8_t(data >> 24));
+  crc = update(crc, uint8_t(data >> 16));
+  crc = update(crc, uint8_t(data >> 8));
+  crc = update(crc, uint8_t(data));
+  return crc ^ 0xffff'ffffu;
+}
+
+Ch347RegisterTransport::RegisterRequest
+Ch347RegisterTransport::encode_register_request(
+    bool write, uint16_t address, uint32_t data) {
+  const uint8_t operation = write ? kRegisterWrite : kRegisterRead;
+  const uint32_t crc = register_frame_crc32(
+      kMailboxRequestOpcode, operation, address, data);
+  return {
+      kMailboxRequestOpcode, operation,
+      uint8_t(address >> 8), uint8_t(address),
+      uint8_t(data >> 24), uint8_t(data >> 16),
+      uint8_t(data >> 8), uint8_t(data),
+      uint8_t(crc >> 24), uint8_t(crc >> 16),
+      uint8_t(crc >> 8), uint8_t(crc),
+  };
+}
+
+Ch347RegisterTransport::RegisterMailboxResponse
+Ch347RegisterTransport::decode_register_response(
+    const RegisterFetch& transfer) {
+  RegisterMailboxResponse response = {
+      transfer[4], transfer[5],
+      uint16_t((uint16_t(transfer[6]) << 8) | transfer[7]),
+      (uint32_t(transfer[8]) << 24) | (uint32_t(transfer[9]) << 16) |
+          (uint32_t(transfer[10]) << 8) | uint32_t(transfer[11]),
+  };
+  const uint32_t received_crc =
+      (uint32_t(transfer[12]) << 24) | (uint32_t(transfer[13]) << 16) |
+      (uint32_t(transfer[14]) << 8) | uint32_t(transfer[15]);
+  const uint32_t expected_crc = register_frame_crc32(
+      response.status, response.operation, response.address, response.data);
+  if (received_crc != expected_crc) {
+    throw RegisterResponseCrcError();
+  }
+  return response;
+}
+
+Ch347RegisterTransport::RegisterMailboxResponse
+Ch347RegisterTransport::transact_register(
+    bool write, uint16_t address, uint32_t data) {
+  const RegisterRequest request =
+      encode_register_request(write, address, data);
+  send_transaction(request.data(), request.size());
+
+  const uint8_t expected_operation = write ? kRegisterWrite : kRegisterRead;
+  for (int attempt = 0; attempt < kMailboxFetchLimit; ++attempt) {
+    RegisterFetch fetch{};
+    fetch[0] = kMailboxFetchOpcode;
+    exchange_transaction(fetch.data(), fetch.size());
+    RegisterMailboxResponse response{};
+    try {
+      response = decode_register_response(fetch);
+    } catch (const RegisterResponseCrcError&) {
+      continue;
+    }
+    if (response.status == kResponseBusy) continue;
+    if (response.status == kResponseEmpty) {
+      throw std::runtime_error("CH347 mailbox request was rejected");
+    }
+    if (response.operation != expected_operation || response.address != address) {
+      throw std::runtime_error("CH347 mailbox response does not match request");
+    }
+    if (response.status == kResponseBusError) {
+      std::ostringstream msg;
+      msg << "CH347 register bus error at address 0x" << std::hex << address;
+      throw std::runtime_error(msg.str());
+    }
+    if (response.status != kResponseOk) {
+      throw std::runtime_error("CH347 mailbox returned an unknown status");
+    }
+    return response;
+  }
+  throw std::runtime_error("CH347 mailbox register request timed out");
+}
+
 std::string Ch347RegisterTransport::dl_error() {
   const char* error = dlerror();
   return error ? std::string(error) : std::string("unknown dynamic-loader error");
@@ -223,7 +304,8 @@ T Ch347RegisterTransport::resolve_optional(const char* name) {
   return reinterpret_cast<T>(symbol);
 }
 
-void Ch347RegisterTransport::write_spi(const uint8_t* data, size_t size) {
+void Ch347RegisterTransport::send_transaction(
+    const uint8_t* data, size_t size) {
   if (size == 0) return;
   std::array<uint8_t, 256> local_buffer{};
   if (size > local_buffer.size()) throw std::runtime_error("CH347 SPI transfer is too large");
@@ -238,7 +320,8 @@ void Ch347RegisterTransport::write_spi(const uint8_t* data, size_t size) {
   }
 }
 
-void Ch347RegisterTransport::transfer_spi(uint8_t* data, size_t size) {
+void Ch347RegisterTransport::exchange_transaction(
+    uint8_t* data, size_t size) {
   if (size == 0) return;
   if (size > 256) throw std::runtime_error("CH347 SPI transfer is too large");
   if (!spi_write_read_) throw std::runtime_error("CH347SPI_WriteRead is not available in the loaded CH347 library");

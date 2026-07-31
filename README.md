@@ -309,17 +309,18 @@ The core bus is a single-beat 32-bit register interface with `valid`, `write`,
 status, command FIFO ingress, and the read-only coherent voice snapshot. Voice
 definition, START, gain/phase/filter updates, release, and stop use a separate
 32-bit transactional command stream. `fpga/common/rtl/spi_register_bridge.sv`
-provides register transactions plus dedicated command opcode `0xa5`.
+provides split-phase, CRC-protected register mailbox transactions plus dedicated
+command opcode `0xa5`. Direct and burst register opcodes are not supported.
 
 See [the register map](docs/register_map.md) and
 [command-stream contract](docs/design/control_command_stream_plan.md).
 
 ## Roadmap
 
-1. Fix the SPI transaction-atomicity bugs: a command DMA must commit all words
-   or none, partial final words must report framing errors, and variable-latency
-   register accesses must use a DMA-safe queued request/response protocol. See
-   [the SPI transport backlog](docs/design/spi_transport_backlog.md).
+1. Complete SPI transport hardening: command transactions now stage and commit
+   all words or none, while register requests execute through a retained-response
+   mailbox; sticky transport counters and out-of-band command recovery remain.
+   See [the SPI transport backlog](docs/design/spi_transport_backlog.md).
 2. Broaden multi-voice backpressure and memory-latency verification.
 3. Replace the C++ DDR/SD storage models with concrete board-memory controller
    and pin-level long-run checks.
