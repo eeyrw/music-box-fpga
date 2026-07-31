@@ -47,6 +47,10 @@ external ordered line = 8 PCM words = 16 bytes = 128 bits
 per-voice window       = 32 PCM words = four ordered lines
 ```
 
+The eight-word value is the response-beat width inherited from the Smart Artix
+128-bit MIG application port. It is not a QSPI transaction limit. A QSPI read
+transaction may stream any number of adjacent beats while CS remains low.
+
 On the first miss for a render work item, `voice_sample_window` refills the
 32-word window by issuing four adjacent ordered-line requests before waiting for
 all responses. The QSPI model recognizes the queued adjacent addresses, pays the
@@ -56,6 +60,13 @@ three lines as continuous data. A complete 32-word refill therefore costs:
 ```text
 27 overhead clocks + 4 * 32 data clocks = 155 QSPI clocks
 ```
+
+The current ordered request type has no explicit burst length; the timing model
+detects adjacency in its request queue. A synthesizable QSPI reader should
+instead accept a base address plus beat count and stream 128-bit responses with
+an explicit final-beat indication. That prevents an upstream request bubble from
+accidentally terminating continuous read without widening the data path to 512
+bits.
 
 Later endpoints in the same work item that fall outside that window use one
 8-word fallback read without replacing the persistent window. Each non-adjacent

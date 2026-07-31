@@ -79,9 +79,19 @@ The window contract is:
 - an endpoint outside the resident window can use the documented ordered
   fallback read while preserving response order.
 
-The 8-word object is a DDR transaction width. It is not the removed one-line or
-two-line cache architecture. `LINE_WORDS=8` at the external boundary and the
-32-word window capacity are separate concepts.
+The 8-word object is a transfer-beat width, not a cache-policy line size. The
+Smart Artix MIG is configured for a 16-bit DDR3 device with BL8 and exposes one
+128-bit `app_rd_data` beat per read command, which is exactly eight 16-bit PCM
+words. The renderer inherited that geometry through `BLOCK_LINE_WORDS=8`.
+Neither interpolation nor the eight-lane DSP requires this width.
+
+QSPI has no inherent eight-word boundary; its adapter uses the same 128-bit
+response beat so the generic renderer interface stays unchanged. Cache-line
+capacity and burst length are separate concepts: the persistent window is 32
+words while each backend response remains eight words.
+If the ordered interface is extended, burst intent should be represented as a
+base address plus beat count with streamed 128-bit responses, rather than by
+widening the data bus to 512 bits.
 
 ## Smart Artix DDR3 Path
 

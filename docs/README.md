@@ -73,6 +73,9 @@ matching contract whenever its RTL or host implementation changes.
   SF2/MIDI phase-step, loop-wrap, and sample-line locality analysis.
 - [`verification/qspi_nor_feasibility.md`](verification/qspi_nor_feasibility.md):
   datasheet-based QSPI NOR timing model, render flow, and board/capacity limits.
+- [`verification/global_sample_cache_evaluation.md`](verification/global_sample_cache_evaluation.md):
+  one-second SGM A/B results for the per-voice window and experimental global
+  line cache on DDR3 and QSPI timing models.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
   source lists, RAM inference, timing case studies, and closure criteria.
 - [`verification/vivado_strategy_and_report_analysis.md`](verification/vivado_strategy_and_report_analysis.md):
