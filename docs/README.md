@@ -69,6 +69,8 @@ matching contract whenever its RTL or host implementation changes.
   ownership and simulation architecture.
 - [`verification/render_commands.md`](verification/render_commands.md): reusable
   C++ and RTL render commands.
+- [`verification/sf2_access_span_analysis.md`](verification/sf2_access_span_analysis.md):
+  SF2/MIDI phase-step, loop-wrap, and sample-line locality analysis.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
   source lists, RAM inference, timing case studies, and closure criteria.
 - [`verification/vivado_strategy_and_report_analysis.md`](verification/vivado_strategy_and_report_analysis.md):

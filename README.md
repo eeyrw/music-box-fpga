@@ -33,6 +33,7 @@ physical board qualification remain open.
 - [Tooling architecture](docs/development/tooling.md)
 - [Required RTL change workflow](docs/development/rtl_change_workflow.md)
 - [Verification and render flows](docs/verification/simulation_design.md)
+- [SF2 phase and address-span analysis](docs/verification/sf2_access_span_analysis.md)
 - [Smart Artix target](fpga/smart_artix/README.md)
 
 Read [AGENTS.md](AGENTS.md) before changing RTL, interfaces, or numeric
@@ -44,7 +45,7 @@ Requirements for the normal simulation flow are GNU Make, Verilator 5 or newer,
 and a C++17 compiler.
 
 ```bash
-make check-register-map
+make check-generated
 make check-docs
 make lint
 make test

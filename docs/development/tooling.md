@@ -56,8 +56,11 @@ the results as if they were the same build.
 | `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope, dynamics, and DSP lookup tables | `make generate-dsp-lut` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
 
-Use `make check-register-map` in normal verification. Generation is an
-intentional source update, not a harmless check.
+Use `make check-generated` in normal verification. The exact
+`generate-register-map`, `generate-dsp-lut`, `check-register-map`, and
+`check-dsp-lut` targets operate only on the named output; `generate-generated`
+and `check-generated` are the aggregate targets. Generation is an intentional
+source update, not a harmless check.
 
 ## Render And Analysis Tools
 
@@ -66,13 +69,13 @@ intentional source update, not a harmless check.
 | `make render-reference` | Pure C++ integer reference using the production command words and host policy. |
 | `make render-rtl-ddr3` | Verilated production renderer with timed DDR3 and WAV/JSON output. |
 | `tools/analyze_render_artifacts.py` | Finds PCM transients and correlates them with MIDI/control timing. |
-| `tools/analyze_sf2_access_span.py` | Models SF2/MIDI address locality for line/window/DDR planning. |
+| `tools/analyze_sf2_access_span.py` | Models SF2/MIDI phase steps, loop wraps, and address locality; see [`../verification/sf2_access_span_analysis.md`](../verification/sf2_access_span_analysis.md). |
+| `make analyze-polyphony-stress` | Generates the deterministic stress MIDI and writes its complete SF2 access JSON/Markdown reports. |
 | `tools/compare_reference_fluidsynth.py` | Builds a dry FluidSynth comparison and audio statistics report. |
 | `tools/sf2_extract.py` | Lists or extracts one SF2 instrument/sample for focused work. |
 | `tools/sf2_filter_report.py` | Audits SoundFont filter-generator use and can emit probe MIDI. |
 | `tools/make_filter_probe_assets.py` | Generates a tiny filtered SF2/MIDI regression fixture under `build/`. |
-| `tools/pcm_to_wav.py` | Wraps raw signed stereo PCM in a WAV container. |
-| `tools/generate_polyphony_stress_midi.cpp` | Generates deterministic high-polyphony stress MIDI when built manually. |
+| `make polyphony-stress-midi` | Builds the deterministic high-polyphony stress MIDI generator and writes its fixture under `build/`. |
 
 See [`../verification/render_commands.md`](../verification/render_commands.md)
 for reproducible command lines and output-directory conventions. The C++ source

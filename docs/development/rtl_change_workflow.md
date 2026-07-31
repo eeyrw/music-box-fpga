@@ -50,7 +50,7 @@ expected value merely to match the changed RTL.
 Run from the repository root, in this order:
 
 ```bash
-make check-register-map
+make check-generated
 make check-docs
 # Run the focused target(s) selected above.
 make lint
@@ -58,8 +58,9 @@ make test
 git diff --check
 ```
 
-Use `make generate-register-map` only after intentionally changing a generated
-source. Re-run the check target afterward. Generated output under `build/` is
+Use the matching exact generation target only after intentionally changing a
+generated source, or `make generate-generated` when both sources changed.
+Re-run `make check-generated` afterward. Generated output under `build/` is
 never committed.
 
 For renderer, memory, or scheduling changes, also run a representative timed

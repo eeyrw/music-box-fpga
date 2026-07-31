@@ -9,14 +9,18 @@ stays in a line, and how many new lines a prefetch window must cover.
 """
 
 import argparse
+from array import array
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import math
+import os
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 import statistics
 import struct
 import sys
+import time
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -46,6 +50,7 @@ from sf2_extract import (  # noqa: E402
     signed_amount,
     vel_range,
 )
+from midi_events import MidiEvent, parse_midi_events as parse_shared_midi_events  # noqa: E402
 
 
 PHASE_FRAC_BITS = 8
@@ -62,21 +67,6 @@ GEN_STARTLOOP_ADDRS_COARSE_OFFSET = 45
 GEN_KEYNUM = 46
 GEN_ENDLOOP_ADDRS_COARSE_OFFSET = 50
 GEN_SCALE_TUNING = 56
-
-
-@dataclass
-class MidiEvent:
-    time_seconds: float
-    order: int
-    event_type: str
-    channel: int
-    note: int = 0
-    velocity: int = 0
-    program: int = 0
-    bank: int = 0
-    controller: int = 0
-    value: int = 0
-    pitch_bend: int = 0
 
 
 @dataclass
@@ -106,204 +96,9 @@ class SampleStream:
     original_pitch: int
 
 
-def read_u16be(data, pos):
-    return (data[pos] << 8) | data[pos + 1]
-
-
-def read_u32be(data, pos):
-    return (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]
-
-
-def read_varlen(data, pos, end):
-    value = 0
-    for _ in range(4):
-        if pos >= end:
-            raise ValueError("truncated MIDI varlen")
-        byte = data[pos]
-        pos += 1
-        value = (value << 7) | (byte & 0x7F)
-        if (byte & 0x80) == 0:
-            return value, pos
-    raise ValueError("MIDI varlen exceeds four bytes")
-
-
 def parse_midi_events(path):
-    data = Path(path).read_bytes()
-    if len(data) < 14 or data[:4] != b"MThd":
-        raise ValueError("not a standard MIDI file")
-    header_len = read_u32be(data, 4)
-    if header_len < 6 or 8 + header_len > len(data):
-        raise ValueError("truncated MIDI header")
-    midi_format = read_u16be(data, 8)
-    track_count = read_u16be(data, 10)
-    division = read_u16be(data, 12)
-    if midi_format > 2:
-        raise ValueError("unsupported MIDI file format")
-    if midi_format == 2:
-        raise ValueError("format 2 MIDI is not supported")
-    if division & 0x8000:
-        raise ValueError("SMPTE MIDI timing is not supported")
-    if division == 0:
-        raise ValueError("MIDI PPQ division must be nonzero")
-
-    pos = 8 + header_len
-    raw_events = []
-    tempos = [(0, 500000, 0)]
-    order = 1
-    for _track in range(track_count):
-        if pos + 8 > len(data) or data[pos:pos + 4] != b"MTrk":
-            raise ValueError("missing MTrk chunk")
-        size = read_u32be(data, pos + 4)
-        pos += 8
-        end = pos + size
-        if end > len(data):
-            raise ValueError("truncated MIDI track")
-        tick = 0
-        running_status = None
-        while pos < end:
-            delta, pos = read_varlen(data, pos, end)
-            tick += delta
-            if pos >= end:
-                break
-            status = data[pos]
-            if status & 0x80:
-                pos += 1
-                if 0x80 <= status <= 0xEF:
-                    running_status = status
-                else:
-                    running_status = None
-            elif running_status is not None:
-                status = running_status
-            else:
-                raise ValueError("MIDI running status without previous status")
-
-            if status == 0xFF:
-                if pos >= end:
-                    raise ValueError("truncated MIDI meta event")
-                meta = data[pos]
-                pos += 1
-                length, pos = read_varlen(data, pos, end)
-                if pos + length > end:
-                    raise ValueError("truncated MIDI meta payload")
-                if meta == 0x51 and length == 3:
-                    tempo = (data[pos] << 16) | (data[pos + 1] << 8) | data[pos + 2]
-                    tempos.append((tick, tempo, order))
-                order += 1
-                pos += length
-                continue
-
-            if status in (0xF0, 0xF7):
-                length, pos = read_varlen(data, pos, end)
-                pos += length
-                order += 1
-                continue
-
-            kind = status & 0xF0
-            channel = status & 0x0F
-            if kind in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
-                if pos + 2 > end:
-                    raise ValueError("truncated MIDI channel event")
-                a = data[pos] & 0x7F
-                b = data[pos + 1] & 0x7F
-                pos += 2
-            elif kind in (0xC0, 0xD0):
-                if pos + 1 > end:
-                    raise ValueError("truncated MIDI channel event")
-                a = data[pos] & 0x7F
-                b = 0
-                pos += 1
-            else:
-                raise ValueError(f"unsupported MIDI status 0x{status:02x}")
-            raw_events.append((tick, order, kind, channel, a, b))
-            order += 1
-        pos = end
-
-    tempos.sort(key=lambda item: (item[0], item[2]))
-    raw_events.sort(key=lambda item: (item[0], item[1]))
-    program = [0] * 16
-    bank_msb = [0] * 16
-    bank_lsb = [0] * 16
-    tick_events = []
-    for tick, event_order, kind, channel, a, b in raw_events:
-        bank = (bank_msb[channel] << 7) | bank_lsb[channel]
-        if kind in (0x80, 0x90):
-            on = kind == 0x90 and b != 0
-            tick_events.append({
-                "tick": tick,
-                "order": event_order,
-                "event_type": "note_on" if on else "note_off",
-                "channel": channel,
-                "note": a,
-                "velocity": b,
-                "program": program[channel],
-                "bank": bank,
-            })
-        elif kind == 0xB0:
-            if a == 0:
-                bank_msb[channel] = b
-            elif a == 32:
-                bank_lsb[channel] = b
-            tick_events.append({
-                "tick": tick,
-                "order": event_order,
-                "event_type": "control",
-                "channel": channel,
-                "controller": a,
-                "value": b,
-                "program": program[channel],
-                "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-            })
-        elif kind == 0xC0:
-            program[channel] = a
-        elif kind == 0xE0:
-            tick_events.append({
-                "tick": tick,
-                "order": event_order,
-                "event_type": "pitch_bend",
-                "channel": channel,
-                "pitch_bend": ((b << 7) | a) - 8192,
-                "program": program[channel],
-                "bank": bank,
-            })
-        elif kind == 0xD0:
-            tick_events.append({
-                "tick": tick,
-                "order": event_order,
-                "event_type": "channel_pressure",
-                "channel": channel,
-                "value": a,
-                "program": program[channel],
-                "bank": bank,
-            })
-        elif kind == 0xA0:
-            tick_events.append({
-                "tick": tick,
-                "order": event_order,
-                "event_type": "key_pressure",
-                "channel": channel,
-                "note": a,
-                "value": b,
-                "program": program[channel],
-                "bank": bank,
-            })
-
-    tempo_index = 0
-    last_tick = 0
-    last_seconds = 0.0
-    tempo = tempos[0][1]
-    out = []
-    for event in sorted(tick_events, key=lambda item: (item["tick"], item["order"])):
-        tick = event["tick"]
-        while tempo_index + 1 < len(tempos) and tempos[tempo_index + 1][0] <= tick:
-            next_tick, next_tempo, _ = tempos[tempo_index + 1]
-            last_seconds += (next_tick - last_tick) * tempo / division / 1000000.0
-            last_tick = next_tick
-            tempo = next_tempo
-            tempo_index += 1
-        seconds = last_seconds + (tick - last_tick) * tempo / division / 1000000.0
-        out.append(MidiEvent(time_seconds=seconds, **{k: v for k, v in event.items()
-                                                     if k not in ("tick", "order")}, order=event["order"]))
-    return out
+    return [event for event in parse_shared_midi_events(path)
+            if event.event_type != "program"]
 
 
 def load_sf2_tables(path):
@@ -517,6 +312,98 @@ def summarize_values(values):
     }
 
 
+def summarize_midi_events(events):
+    event_counts = Counter(event.event_type for event in events)
+    controls = [event for event in events if event.event_type == "control"]
+    pitch_bends = [event for event in events if event.event_type == "pitch_bend"]
+    sustain = [event for event in controls if event.controller == 64]
+    rpn_data = [event for event in controls if event.controller in (6, 38, 100, 101)]
+    return {
+        "event_counts": dict(sorted(event_counts.items())),
+        "pitch_bend_events": len(pitch_bends),
+        "pitch_bend_channels": sorted({event.channel for event in pitch_bends}),
+        "sustain_events": len(sustain),
+        "sustain_on_events": sum(event.value >= 64 for event in sustain),
+        "rpn_control_events": len(rpn_data),
+    }
+
+
+def stream_identity(stream):
+    return {
+        "stream_id": stream.stream_id,
+        "sample_id": stream.sample_id,
+        "sample": stream.sample_name,
+        "instrument": stream.instrument,
+        "preset": stream.preset,
+        "channel": stream.channel,
+        "note": stream.note,
+        "velocity": stream.velocity,
+        "sample_rate": stream.sample_rate,
+        "phase_inc": stream.phase_inc,
+        "source_frames_per_output": stream.phase_inc / PHASE_FRAC_SCALE,
+    }
+
+
+def summarize_workload(streams, top_count):
+    phase_steps = [stream.phase_inc / PHASE_FRAC_SCALE for stream in streams]
+    thresholds = []
+    for minimum in (1.0, 2.0, 4.0, 8.0):
+        count = sum(step >= minimum for step in phase_steps)
+        thresholds.append({
+            "minimum_source_frames_per_output": minimum,
+            "stream_count": count,
+            "stream_fraction": count / len(streams) if streams else 0.0,
+        })
+
+    top_phase = sorted(streams, key=lambda stream: stream.phase_inc, reverse=True)
+    loop_groups = {}
+    for stream in streams:
+        if stream.loop_mode == 0:
+            continue
+        key = (stream.sample_id, stream.base_addr, stream.loop_start,
+               stream.loop_end, stream.loop_mode)
+        if key not in loop_groups:
+            loop_groups[key] = {
+                "sample_id": stream.sample_id,
+                "sample": stream.sample_name,
+                "instrument": stream.instrument,
+                "preset": stream.preset,
+                "base_addr": stream.base_addr,
+                "loop_start": stream.loop_start,
+                "loop_end": stream.loop_end,
+                "loop_mode": stream.loop_mode,
+                "loop_span_words": stream.loop_end - stream.loop_start,
+                "loop_span_bytes": (stream.loop_end - stream.loop_start) * 2,
+                "trigger_count": 0,
+                "minimum_note": stream.note,
+                "maximum_note": stream.note,
+                "maximum_phase_inc": stream.phase_inc,
+                "maximum_source_frames_per_output": stream.phase_inc / PHASE_FRAC_SCALE,
+            }
+        group = loop_groups[key]
+        group["trigger_count"] += 1
+        group["minimum_note"] = min(group["minimum_note"], stream.note)
+        group["maximum_note"] = max(group["maximum_note"], stream.note)
+        if stream.phase_inc > group["maximum_phase_inc"]:
+            group["maximum_phase_inc"] = stream.phase_inc
+            group["maximum_source_frames_per_output"] = stream.phase_inc / PHASE_FRAC_SCALE
+
+    loop_regions = sorted(loop_groups.values(),
+                          key=lambda item: item["loop_span_words"], reverse=True)
+    return {
+        "unique_sample_count": len({stream.sample_id for stream in streams}),
+        "phase_step_source_frames_per_output": summarize_values(phase_steps),
+        "phase_step_thresholds": thresholds,
+        "top_phase_step_streams": [stream_identity(stream)
+                                   for stream in top_phase[:top_count]],
+        "looping_stream_count": sum(stream.loop_mode != 0 for stream in streams),
+        "unique_loop_region_count": len(loop_regions),
+        "loop_wrap_span_words": summarize_values(
+            [item["loop_span_words"] for item in loop_regions]),
+        "top_loop_wrap_regions": loop_regions[:top_count],
+    }
+
+
 def frame_pair(stream, phase, loop_active):
     frame_0 = (phase >> PHASE_FRAC_BITS) & PHASE_FRAME_MASK
     if frame_0 >= stream.length:
@@ -554,8 +441,10 @@ def endpoint_lines(stream, phase, loop_active, line_words):
     return frame_0, frame_1, line0, line1
 
 
-def segment_length_for_lines(stream, frame, phase, loop_active, line_words, end_limit):
-    info = endpoint_lines(stream, phase, loop_active, line_words)
+def segment_length_for_lines(stream, frame, phase, loop_active, line_words, end_limit,
+                             info=None):
+    if info is None:
+        info = endpoint_lines(stream, phase, loop_active, line_words)
     if info is None:
         return 0
     frame_0, _frame_1, line0, _line1 = info
@@ -596,13 +485,20 @@ def advance_phase_by(stream, phase, frames, loop_active):
     return phase_sum & 0xFFFFFFFF
 
 
-def analyze_for_line_words(streams, total_frames, sample_rate, line_words, lookahead_ms_values):
+def analyze_for_line_words(streams, total_frames, sample_rate, line_words,
+                           lookahead_ms_values, top_count):
     endpoint_reads = 0
     stream_line_fills = 0
-    physical_seen_lines = set()
-    per_frame_stream_new = Counter()
-    per_frame_physical_new = Counter()
-    active_deltas = Counter()
+    maximum_line = max(
+        ((stream.base_addr + stream.length) // line_words for stream in streams),
+        default=0,
+    )
+    physical_seen_lines = bytearray(maximum_line + 1)
+    stream_line_marks = array("I", [0]) * (maximum_line + 1)
+    physical_unique_lines = 0
+    per_frame_stream_new = [0] * total_frames
+    per_frame_physical_new = [0] * total_frames
+    active_deltas = [0] * (total_frames + 1)
     frames_per_output_values = []
     estimated_line_dwell_values = []
     max_line_jump_values = []
@@ -611,12 +507,12 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
 
     for stream in streams:
         phase = 0
-        last_lines = None
         previous_line0 = None
         last_line0 = None
         dwell = 0
         dwell_values = []
-        stream_seen_lines = set()
+        stream_unique_lines = 0
+        stream_marker = stream.stream_id + 1
         cross_line_frames = 0
         same_line_frames = 0
         frames_with_line_jump = 0
@@ -642,7 +538,8 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
                 break
             _frame_0, _frame_1, line0, line1 = line_info
             lines = (line0,) if line0 == line1 else (line0, line1)
-            frames_this = segment_length_for_lines(stream, frame, phase, loop_active, line_words, end_limit)
+            frames_this = segment_length_for_lines(
+                stream, frame, phase, loop_active, line_words, end_limit, line_info)
 
             endpoint_reads += 2 * frames_this
             stream_endpoint_reads += 2 * frames_this
@@ -671,16 +568,16 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
                 dwell = frames_this
 
             for line in lines:
-                key = (stream.stream_id, line)
-                if key not in stream_seen_lines:
-                    stream_seen_lines.add(key)
+                if stream_line_marks[line] != stream_marker:
+                    stream_line_marks[line] = stream_marker
+                    stream_unique_lines += 1
                     stream_line_fills += 1
                     per_frame_stream_new[frame] += 1
-                if line not in physical_seen_lines:
-                    physical_seen_lines.add(line)
+                if not physical_seen_lines[line]:
+                    physical_seen_lines[line] = 1
+                    physical_unique_lines += 1
                     per_frame_physical_new[frame] += 1
 
-            last_lines = lines
             phase = advance_phase_by(stream, phase, frames_this, loop_active)
             frame += frames_this
 
@@ -708,7 +605,7 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
             "loop_end": stream.loop_end,
             "loop_mode": stream.loop_mode,
             "endpoint_reads": stream_endpoint_reads,
-            "stream_line_fills": len(stream_seen_lines),
+            "stream_line_fills": stream_unique_lines,
             "same_line_endpoint_frames": same_line_frames,
             "cross_line_endpoint_frames": cross_line_frames,
             "cross_line_endpoint_rate": cross_line_frames / active_frames if active_frames else 0.0,
@@ -745,7 +642,7 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
         s["trigger_count"] += 1
         s["active_frames"] += active_frames
         s["endpoint_reads"] += stream_endpoint_reads
-        s["stream_line_fills"] += len(stream_seen_lines)
+        s["stream_line_fills"] += stream_unique_lines
         s["cross_line_endpoint_frames"] += cross_line_frames
         s["active_frames_with_line_jump"] += frames_with_line_jump
         s["max_frame_to_frame_line_jump"] = max(s["max_frame_to_frame_line_jump"], max_line_jump)
@@ -778,18 +675,9 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
     endpoint_read_values = []
     active = 0
     for frame in range(total_frames):
-        active += active_deltas.get(frame, 0)
+        active += active_deltas[frame]
         active_values.append(active)
         endpoint_read_values.append(active * 2)
-
-    new_stream_line_values = [0] * total_frames
-    for frame, count in per_frame_stream_new.items():
-        if 0 <= frame < total_frames:
-            new_stream_line_values[frame] = count
-    new_physical_line_values = [0] * total_frames
-    for frame, count in per_frame_physical_new.items():
-        if 0 <= frame < total_frames:
-            new_physical_line_values[frame] = count
 
     lookahead = {}
     for lookahead_ms in lookahead_ms_values:
@@ -798,15 +686,14 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
         physical_counts = []
         for start in range(0, total_frames, window):
             end = min(total_frames, start + window)
-            stream_counts.append(sum(new_stream_line_values[start:end]))
-            physical_counts.append(sum(new_physical_line_values[start:end]))
+            stream_counts.append(sum(per_frame_stream_new[start:end]))
+            physical_counts.append(sum(per_frame_physical_new[start:end]))
         lookahead[str(lookahead_ms)] = {
             "frames": window,
             "stream_line_fills": summarize_values(stream_counts),
             "physical_unique_lines": summarize_values(physical_counts),
         }
 
-    physical_unique_lines = len(physical_seen_lines)
     duration = total_frames / sample_rate
     return {
         "line_words": line_words,
@@ -824,22 +711,93 @@ def analyze_for_line_words(streams, total_frames, sample_rate, line_words, looka
         "max_frame_to_frame_line_jump": summarize_values(max_line_jump_values),
         "active_streams_per_frame": summarize_values(active_values),
         "endpoint_reads_per_frame": summarize_values(endpoint_read_values),
-        "new_stream_lines_per_frame": summarize_values(new_stream_line_values),
-        "new_physical_lines_per_frame": summarize_values(new_physical_line_values),
+        "new_stream_lines_per_frame": summarize_values(per_frame_stream_new),
+        "new_physical_lines_per_frame": summarize_values(per_frame_physical_new),
         "lookahead_windows_ms": lookahead,
-        "top_samples_by_stream_line_fills": sample_summaries[:20],
-        "top_streams_by_stream_line_fills": stream_summaries[:20],
+        "top_samples_by_stream_line_fills": sample_summaries[:top_count],
+        "top_streams_by_stream_line_fills": stream_summaries[:top_count],
     }
 
 
+def analyze_line_words_task(task):
+    return analyze_for_line_words(*task)
+
+
+def resolve_job_count(requested_jobs, task_count):
+    if task_count <= 0:
+        return 1
+    if requested_jobs < 0:
+        raise ValueError("analysis job count must be nonnegative")
+    available = os.cpu_count() or 1
+    jobs = available if requested_jobs == 0 else requested_jobs
+    return max(1, min(jobs, task_count))
+
+
+def analyze_line_sizes(streams, total_frames, sample_rate, line_words_values,
+                       lookahead_ms_values, top_count, requested_jobs):
+    tasks = [
+        (streams, total_frames, sample_rate, line_words, lookahead_ms_values, top_count)
+        for line_words in line_words_values
+    ]
+    jobs = resolve_job_count(requested_jobs, len(tasks))
+    print(f"analysis: line_sizes={line_words_values} jobs={jobs}", file=sys.stderr)
+    if jobs == 1:
+        results = []
+        for task in tasks:
+            result = analyze_line_words_task(task)
+            results.append(result)
+            print(f"analysis: completed LINE_WORDS={result['line_words']}", file=sys.stderr)
+        return results, jobs
+
+    indexed_results = {}
+    with ProcessPoolExecutor(max_workers=jobs) as executor:
+        futures = {executor.submit(analyze_line_words_task, task): task[3]
+                   for task in tasks}
+        for future in as_completed(futures):
+            result = future.result()
+            indexed_results[result["line_words"]] = result
+            print(f"analysis: completed LINE_WORDS={result['line_words']}", file=sys.stderr)
+    return [indexed_results[line_words] for line_words in line_words_values], jobs
+
+
 def print_text_report(result):
+    workload = result["workload_summary"]
+    phase = workload["phase_step_source_frames_per_output"]
     print(f"SF2: {result['sf2']}")
     if result.get("midi"):
         print(f"MIDI: {result['midi']}")
     print(f"duration={result['duration_seconds']:.3f}s sample_rate={result['sample_rate']}")
-    print(f"note_on_events={result['note_on_events']} streams={result['stream_count']}")
+    print(f"analysis_jobs={result['analysis_jobs']} "
+          f"elapsed={result['analysis_elapsed_seconds']:.3f}s")
+    print(f"note_on_events={result['note_on_events']} streams={result['stream_count']} "
+          f"unique_samples={workload['unique_sample_count']}")
     if result["skipped"]:
         print(f"skipped={result['skipped']}")
+    if result.get("midi_summary"):
+        midi = result["midi_summary"]
+        print(f"midi pitch_bends={midi['pitch_bend_events']} "
+              f"sustain_events={midi['sustain_events']} "
+              f"rpn_controls={midi['rpn_control_events']}")
+    print(f"phase_step source_frames/output min={phase['min']:.3f} "
+          f"p50={phase['p50']:.3f} p95={phase['p95']:.3f} "
+          f"p99={phase['p99']:.3f} max={phase['max']:.3f}")
+    print("phase thresholds: " + ", ".join(
+        f">={item['minimum_source_frames_per_output']:.0f}: "
+        f"{item['stream_count']} ({item['stream_fraction']:.2%})"
+        for item in workload["phase_step_thresholds"]))
+    print("top phase-step streams:")
+    for stream in workload["top_phase_step_streams"][:5]:
+        print(f"  sample_id={stream['sample_id']} {stream['sample']!r} "
+              f"instrument={stream['instrument']!r} ch={stream['channel']} "
+              f"note={stream['note']} phase_inc={stream['phase_inc']} "
+              f"step={stream['source_frames_per_output']:.3f}")
+    if workload["top_loop_wrap_regions"]:
+        loop = workload["top_loop_wrap_regions"][0]
+        print(f"largest loop wrap: sample_id={loop['sample_id']} {loop['sample']!r} "
+              f"instrument={loop['instrument']!r} span_words={loop['loop_span_words']} "
+              f"span_bytes={loop['loop_span_bytes']}")
+    for note in result["model_scope"]:
+        print(f"scope: {note}")
     print()
     for line in result["line_results"]:
         print(f"LINE_WORDS={line['line_words']}")
@@ -857,6 +815,12 @@ def print_text_report(result):
               f"p99={line['active_streams_per_frame']['p99']}")
         print(f"  new_stream_lines/frame max={line['new_stream_lines_per_frame']['max']} "
               f"p99={line['new_stream_lines_per_frame']['p99']}")
+        print(f"  new_physical_lines/frame max={line['new_physical_lines_per_frame']['max']} "
+              f"p99={line['new_physical_lines_per_frame']['p99']}")
+        jumps = line["max_frame_to_frame_line_jump"]
+        print(f"  max line jump p99={jumps['p99']} max={jumps['max']} "
+              f"(sample words p99={jumps['p99'] * line['line_words']} "
+              f"max={jumps['max'] * line['line_words']})")
         for ms, stats in line["lookahead_windows_ms"].items():
             fills = stats["stream_line_fills"]
             phys = stats["physical_unique_lines"]
@@ -874,6 +838,8 @@ def print_text_report(result):
 
 
 def write_markdown(path, result):
+    workload = result["workload_summary"]
+    phase = workload["phase_step_source_frames_per_output"]
     lines = [
         "# SF2 Access Span Report",
         "",
@@ -881,12 +847,86 @@ def write_markdown(path, result):
         f"- MIDI: `{result.get('midi') or '<none>'}`",
         f"- Duration: `{result['duration_seconds']:.3f}s`",
         f"- Sample rate: `{result['sample_rate']}`",
+        f"- Analysis jobs: `{result['analysis_jobs']}`",
+        f"- Analysis elapsed time: `{result['analysis_elapsed_seconds']:.3f}s`",
         f"- Note On events: `{result['note_on_events']}`",
         f"- Sample streams: `{result['stream_count']}`",
+        f"- Unique samples: `{workload['unique_sample_count']}`",
+        f"- Looping streams: `{workload['looping_stream_count']}`",
         "",
-        "| LINE_WORDS | endpoint reads/s | stream line fills/s | physical lines/s | reuse | max active streams | max new stream lines/frame |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "## Model Scope",
+        "",
     ]
+    for note in result["model_scope"]:
+        lines.append(f"- {note}")
+    if result.get("midi_summary"):
+        midi = result["midi_summary"]
+        lines.extend([
+            "",
+            "## MIDI Workload",
+            "",
+            f"- Pitch-bend events present: `{midi['pitch_bend_events']}` on channels "
+            f"`{midi['pitch_bend_channels']}`",
+            f"- Sustain-controller events present: `{midi['sustain_events']}` "
+            f"(`{midi['sustain_on_events']}` engage sustain)",
+            f"- RPN/data-entry controller events present: `{midi['rpn_control_events']}`",
+        ])
+    lines.extend([
+        "",
+        "## Phase Step Distribution",
+        "",
+        "Phase step is the static source-sample advance per output frame before runtime pitch controls.",
+        "",
+        "| Min | P50 | Average | P95 | P99 | Max |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| {phase['min']:.4f} | {phase['p50']:.4f} | {phase['avg']:.4f} | "
+        f"{phase['p95']:.4f} | {phase['p99']:.4f} | {phase['max']:.4f} |",
+        "",
+        "| Minimum source frames/output | Streams | Fraction |",
+        "| ---: | ---: | ---: |",
+    ])
+    for item in workload["phase_step_thresholds"]:
+        lines.append(
+            f"| {item['minimum_source_frames_per_output']:.0f} | "
+            f"{item['stream_count']} | {item['stream_fraction']:.2%} |"
+        )
+    lines.extend([
+        "",
+        "### Largest Phase Steps",
+        "",
+        "| Sample ID | Sample | Instrument | Channel | Note | Phase increment | Source frames/output |",
+        "| ---: | --- | --- | ---: | ---: | ---: | ---: |",
+    ])
+    for stream in workload["top_phase_step_streams"]:
+        lines.append(
+            f"| {stream['sample_id']} | `{stream['sample']}` | `{stream['instrument']}` | "
+            f"{stream['channel']} | {stream['note']} | {stream['phase_inc']} | "
+            f"{stream['source_frames_per_output']:.4f} |"
+        )
+    lines.extend([
+        "",
+        "## Loop Wrap Potential",
+        "",
+        "Loop span is the backward sample-address distance when playback wraps from loop end to loop start.",
+        "",
+        "| Sample ID | Sample | Instrument | Triggers | Notes | Span words | Span bytes | Max source frames/output |",
+        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for loop in workload["top_loop_wrap_regions"]:
+        notes = (str(loop["minimum_note"]) if loop["minimum_note"] == loop["maximum_note"]
+                 else f"{loop['minimum_note']}..{loop['maximum_note']}")
+        lines.append(
+            f"| {loop['sample_id']} | `{loop['sample']}` | `{loop['instrument']}` | "
+            f"{loop['trigger_count']} | {notes} | {loop['loop_span_words']} | "
+            f"{loop['loop_span_bytes']} | {loop['maximum_source_frames_per_output']:.4f} |"
+        )
+    lines.extend([
+        "",
+        "## Line Access Summary",
+        "",
+        "| LINE_WORDS | endpoint reads/s | stream line fills/s | physical lines/s | reuse | max active | new stream lines/frame p99/max | new physical lines/frame p99/max |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for line in result["line_results"]:
         lines.append(
             f"| {line['line_words']} | {line['endpoint_reads_per_second']:.1f} | "
@@ -894,7 +934,8 @@ def write_markdown(path, result):
             f"{line['physical_unique_lines_per_second']:.1f} | "
             f"{line['endpoint_to_stream_line_reuse_ratio']:.2f} | "
             f"{line['active_streams_per_frame']['max']} | "
-            f"{line['new_stream_lines_per_frame']['max']} |"
+            f"{line['new_stream_lines_per_frame']['p99']}/{line['new_stream_lines_per_frame']['max']} | "
+            f"{line['new_physical_lines_per_frame']['p99']}/{line['new_physical_lines_per_frame']['max']} |"
         )
     lines.extend(["", "## Lookahead Windows", ""])
     for line in result["line_results"]:
@@ -907,15 +948,16 @@ def write_markdown(path, result):
             phys = stats["physical_unique_lines"]
             lines.append(f"| {ms} | {fills['max']} | {fills['p99']} | {phys['max']} | {phys['p99']} |")
         lines.append("")
-    lines.extend(["", "## Phase Span", ""])
-    lines.append("| LINE_WORDS | src frames/output avg | src frames/output p95 | src frames/output max | estimated dwell avg | estimated dwell min |")
-    lines.append("| ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.extend(["", "## Line Dwell And Address Jumps", ""])
+    lines.append("| LINE_WORDS | estimated dwell avg | estimated dwell min | line jump p99 | line jump max | sample-word jump p99 | sample-word jump max |")
+    lines.append("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for line in result["line_results"]:
-        src = line["source_frames_per_output"]
         dwell = line["estimated_line_dwell_frames"]
+        jumps = line["max_frame_to_frame_line_jump"]
         lines.append(
-            f"| {line['line_words']} | {src['avg']:.3f} | {src['p95']:.3f} | "
-            f"{src['max']:.3f} | {dwell['avg']:.2f} | {dwell['min']:.2f} |"
+            f"| {line['line_words']} | {dwell['avg']:.2f} | {dwell['min']:.2f} | "
+            f"{jumps['p99']} | {jumps['max']} | "
+            f"{jumps['p99'] * line['line_words']} | {jumps['max'] * line['line_words']} |"
         )
     lines.append("")
     lines.extend(["## Top Samples By Stream-Line Fills", ""])
@@ -958,6 +1000,7 @@ def parse_csv_floats(text):
 
 
 def main():
+    analysis_started = time.perf_counter()
     parser = argparse.ArgumentParser(description="Analyze SF2/MIDI sample address line locality")
     parser.add_argument("--sf2", required=True, help="SoundFont2 file")
     parser.add_argument("--midi", help="Standard MIDI file. If omitted, analyze one synthetic note.")
@@ -977,10 +1020,17 @@ def main():
     parser.add_argument("--json-out", help="Write full JSON report")
     parser.add_argument("--md-out", help="Write compact Markdown report")
     parser.add_argument("--top-streams", type=int, default=20,
-                        help="Kept for CLI compatibility; JSON currently records top 20 streams.")
+                        help="Maximum stream/sample/loop details retained in JSON and Markdown.")
+    parser.add_argument("--jobs", type=int, default=0,
+                        help="Parallel line-size workers; 0 selects one worker per line size.")
     args = parser.parse_args()
+    if args.top_streams < 0:
+        parser.error("--top-streams must be nonnegative")
+    if args.jobs < 0:
+        parser.error("--jobs must be nonnegative")
 
     tables = load_sf2_tables(args.sf2)
+    events = []
     if args.midi:
         events = parse_midi_events(args.midi)
         intervals, total_frames, note_on_count = build_note_intervals(
@@ -1004,18 +1054,34 @@ def main():
     streams, skipped = build_streams(tables, intervals, args.sample_rate)
     line_words_values = parse_csv_ints(args.line_words)
     lookahead_ms_values = parse_csv_floats(args.lookahead_ms)
-    line_results = [
-        analyze_for_line_words(streams, total_frames, args.sample_rate, line_words, lookahead_ms_values)
-        for line_words in line_words_values
+    line_results, analysis_jobs = analyze_line_sizes(
+        streams, total_frames, args.sample_rate, line_words_values,
+        lookahead_ms_values, args.top_streams, args.jobs)
+    model_scope = [
+        "Phase increment is static per stream; RPN pitch-bend range, pitch-bend events, "
+        "and runtime pitch updates are not applied.",
+        "Line fills count first touches per stream or physical address; finite cache capacity, "
+        "conflicts, eviction, and replacement are not modeled.",
     ]
+    if args.midi:
+        model_scope.insert(
+            0,
+            "Stream lifetime follows Note On/Off pairing; sustain-pedal lifetime and allocator "
+            "voice stealing are not modeled.",
+        )
     result = {
         "sf2": args.sf2,
         "midi": args.midi,
         "sample_rate": args.sample_rate,
         "duration_seconds": total_frames / args.sample_rate,
+        "analysis_jobs": analysis_jobs,
+        "analysis_elapsed_seconds": time.perf_counter() - analysis_started,
         "total_frames": total_frames,
         "note_on_events": note_on_count,
         "stream_count": len(streams),
+        "midi_summary": summarize_midi_events(events) if args.midi else None,
+        "workload_summary": summarize_workload(streams, args.top_streams),
+        "model_scope": model_scope,
         "skipped": dict(skipped),
         "line_words": line_words_values,
         "lookahead_ms": lookahead_ms_values,

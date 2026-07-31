@@ -477,7 +477,6 @@ def main():
         "RENDER_GAIN_L": 0x7fff,
         "RENDER_GAIN_R": 0x7fff,
         "RENDER_MEMH": memh,
-        "RENDER_PCM": os.path.join(args.out_dir, "out.pcm"),
     }
     write_config(config_svh, cfg)
 

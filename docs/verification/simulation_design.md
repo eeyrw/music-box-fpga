@@ -8,18 +8,16 @@ Generated output belongs under `build/`.
 Run before committing behavioral or interface changes:
 
 ```bash
-make check-register-map
+make check-generated
 make check-docs
 make lint
 make test
 ```
 
-`spec/register_map.json` is the register source of truth. The generator produces
-`rtl/pkg/synth_register_pkg.sv` and
-`sim/harness/generated/register_map.h`. Generated envelope lookup tables are
-checked by the same build flow.
-Run `make generate-register-map` only after intentionally changing the register
-specification or generated DSP tables.
+`spec/register_map.json` is the register source of truth. The register generator
+produces `rtl/pkg/synth_register_pkg.sv` and
+`sim/harness/generated/register_map.h`. Use the matching exact generation target
+for register or DSP changes, and `make check-generated` to check both outputs.
 
 `make test` is split into:
 

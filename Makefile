@@ -63,6 +63,12 @@ EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
 RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
+POLYPHONY_STRESS_MIDI ?= $(BUILD_DIR)/polyphony_stress_512.mid
+SF2_ACCESS_JSON ?= $(BUILD_DIR)/polyphony_stress_sf2_access_span.json
+SF2_ACCESS_MARKDOWN ?= $(BUILD_DIR)/polyphony_stress_sf2_access_span.md
+SF2_ACCESS_LINE_WORDS ?= 8,16,32,64
+SF2_ACCESS_LOOKAHEAD_MS ?= 1,2,5,10
+SF2_ACCESS_JOBS ?= 0
 RENDER_RTL_OBJ_DIR = $(BUILD_DIR)/render_rtl_ddr3$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),_effects,)_obj_dir
 RENDER_RTL_TOP = $(if $(filter 1,$(RTL_EFFECTS_ENABLED)),voice_major_render_effects_harness,voice_major_render_harness)
 WTSF_IMAGE ?= $(BUILD_DIR)/assets/wavetable.wtsf.img
@@ -201,20 +207,22 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
+generate-generated: generate-register-map generate-dsp-lut
+
 generate-register-map:
 	python3 tools/gen_register_map.py
-	python3 tools/gen_dsp_lut.py
 
 generate-dsp-lut:
 	python3 tools/gen_dsp_lut.py
 
+check-generated: check-register-map check-dsp-lut
+
 check-register-map:
 	python3 tools/gen_register_map.py --check
-	python3 tools/gen_dsp_lut.py --check
 
 check-dsp-lut:
 	python3 tools/gen_dsp_lut.py --check
@@ -250,7 +258,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness
+test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -426,7 +434,25 @@ test-cpp-unit: host-smart-artix-bringup
 	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
 		--ddr-smoke --voice-smoke --base 0x100 --length 8
 	python3 tools/compare_reference_fluidsynth_test.py
+	python3 tools/analyze_sf2_access_span_test.py
+	python3 tools/midi_events_test.py
 	python3 tools/vivado_report_summary_test.py
+
+polyphony-stress-midi:
+	mkdir -p $(BUILD_DIR) $(dir $(POLYPHONY_STRESS_MIDI))
+	$(CXX) -std=c++17 -Wall -Wextra -Werror \
+		tools/generate_polyphony_stress_midi.cpp \
+		-o $(BUILD_DIR)/generate_polyphony_stress_midi
+	$(BUILD_DIR)/generate_polyphony_stress_midi $(POLYPHONY_STRESS_MIDI)
+
+analyze-polyphony-stress: polyphony-stress-midi
+	python3 tools/analyze_sf2_access_span.py \
+		--sf2 "$(SF2)" --midi "$(POLYPHONY_STRESS_MIDI)" \
+		--line-words "$(SF2_ACCESS_LINE_WORDS)" \
+		--lookahead-ms "$(SF2_ACCESS_LOOKAHEAD_MS)" \
+		--jobs "$(SF2_ACCESS_JOBS)" \
+		--json-out "$(SF2_ACCESS_JSON)" \
+		--md-out "$(SF2_ACCESS_MARKDOWN)"
 
 test-rtl-core:
 	mkdir -p $(BUILD_DIR)

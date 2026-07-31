@@ -328,6 +328,10 @@ image used by the MIDI/SF2 run.
 
 ### 512-Voice DDR3 Stress
 
+Use [`sf2_access_span_analysis.md`](sf2_access_span_analysis.md) to inspect the
+same SF2/MIDI workload's static phase steps, loop wraps, and line locality before
+the timed RTL run.
+
 The deterministic stress generator starts 320 simultaneous MIDI notes across
 all channels and then changes notes and programs every 25 ms. It also programs
 different RPN 0 pitch-bend ranges per channel and sends 40 Hz triangle, saw,
@@ -337,10 +341,7 @@ MIDI notes into separate mono voices, allowing the workload to fill the
 `PHASE_INC` updates.
 
 ```bash
-g++ -std=c++17 -Wall -Wextra -Werror \
-  tools/generate_polyphony_stress_midi.cpp \
-  -o build/generate_polyphony_stress_midi
-build/generate_polyphony_stress_midi build/polyphony_stress_512.mid
+make polyphony-stress-midi
 
 make render-rtl-ddr3 \
   SF2='/path/to/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2' \
@@ -348,6 +349,8 @@ make render-rtl-ddr3 \
   SECONDS=3 CONTROL_TICK_MS=1 DETAILED_DIAGNOSTICS=0 \
   RENDER_RTL_OUT_DIR=build/polyphony_stress_rtl_ddr3
 ```
+
+Override `POLYPHONY_STRESS_MIDI` when a different output path is needed.
 
 Keep detailed diagnostics disabled for this workload. The summary JSON already
 contains peak active voices, maximum render latency, deadline misses, sample-

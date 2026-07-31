@@ -15,6 +15,8 @@ import statistics
 import struct
 import wave
 
+from midi_events import parse_midi_events as parse_shared_midi_events
+
 
 SUMMARY_NAMES = (
     "reference_render_config.json",
@@ -24,182 +26,28 @@ SUMMARY_NAMES = (
 )
 
 
-def read_u16be(data, pos):
-    return (data[pos] << 8) | data[pos + 1]
-
-
-def read_u32be(data, pos):
-    return (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]
-
-
-def read_varlen(data, pos, end):
-    value = 0
-    while True:
-        if pos >= end:
-            raise ValueError("truncated MIDI varlen")
-        byte = data[pos]
-        pos += 1
-        value = (value << 7) | (byte & 0x7F)
-        if (byte & 0x80) == 0:
-            return value, pos
-
-
 def parse_midi_events(path):
-    data = Path(path).read_bytes()
-    if len(data) < 14 or data[:4] != b"MThd":
-        raise ValueError("not a standard MIDI file")
-    header_len = read_u32be(data, 4)
-    track_count = read_u16be(data, 10)
-    division = read_u16be(data, 12)
-    if division & 0x8000:
-        raise ValueError("SMPTE MIDI timing is not supported")
-
-    pos = 8 + header_len
-    tick_events = []
-    tempos = [(0, 500000, 0)]
-    tempo_order = 1
-
-    for _ in range(track_count):
-        if pos + 8 > len(data) or data[pos:pos + 4] != b"MTrk":
-            raise ValueError("missing MTrk chunk")
-        size = read_u32be(data, pos + 4)
-        pos += 8
-        end = pos + size
-        tick = 0
-        running_status = None
-        program = [0] * 16
-        bank_msb = [0] * 16
-        bank_lsb = [0] * 16
-
-        while pos < end:
-            delta, pos = read_varlen(data, pos, end)
-            tick += delta
-            if pos >= end:
-                break
-            status = data[pos]
-            if status & 0x80:
-                pos += 1
-                running_status = status
-            elif running_status is not None:
-                status = running_status
-            else:
-                raise ValueError("MIDI running status without previous status")
-
-            if status == 0xFF:
-                meta = data[pos]
-                pos += 1
-                length, pos = read_varlen(data, pos, end)
-                if meta == 0x51 and length == 3:
-                    tempo = (data[pos] << 16) | (data[pos + 1] << 8) | data[pos + 2]
-                    tempos.append((tick, tempo, tempo_order))
-                    tempo_order += 1
-                pos += length
-                continue
-            if status in (0xF0, 0xF7):
-                length, pos = read_varlen(data, pos, end)
-                pos += length
-                continue
-
-            kind = status & 0xF0
-            channel = status & 0x0F
-            if kind in (0x80, 0x90):
-                note = data[pos]
-                velocity = data[pos + 1]
-                pos += 2
-                on = kind == 0x90 and velocity != 0
-                tick_events.append({
-                    "tick": tick,
-                    "type": "note_on" if on else "note_off",
-                    "channel": channel,
-                    "note": note & 0x7F,
-                    "velocity": velocity & 0x7F,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            elif kind == 0xB0:
-                controller = data[pos] & 0x7F
-                value = data[pos + 1] & 0x7F
-                pos += 2
-                if controller == 0:
-                    bank_msb[channel] = value
-                elif controller == 32:
-                    bank_lsb[channel] = value
-                tick_events.append({
-                    "tick": tick,
-                    "type": f"cc{controller}",
-                    "channel": channel,
-                    "value": value,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            elif kind == 0xC0:
-                program[channel] = data[pos] & 0x7F
-                pos += 1
-                tick_events.append({
-                    "tick": tick,
-                    "type": "program",
-                    "channel": channel,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            elif kind == 0xE0:
-                lsb = data[pos] & 0x7F
-                msb = data[pos + 1] & 0x7F
-                pos += 2
-                tick_events.append({
-                    "tick": tick,
-                    "type": "pitch_bend",
-                    "channel": channel,
-                    "value": ((msb << 7) | lsb) - 8192,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            elif kind == 0xD0:
-                value = data[pos] & 0x7F
-                pos += 1
-                tick_events.append({
-                    "tick": tick,
-                    "type": "channel_pressure",
-                    "channel": channel,
-                    "value": value,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            elif kind == 0xA0:
-                note = data[pos] & 0x7F
-                value = data[pos + 1] & 0x7F
-                pos += 2
-                tick_events.append({
-                    "tick": tick,
-                    "type": "key_pressure",
-                    "channel": channel,
-                    "note": note,
-                    "value": value,
-                    "program": program[channel],
-                    "bank": (bank_msb[channel] << 7) | bank_lsb[channel],
-                })
-            else:
-                raise ValueError(f"unsupported MIDI status 0x{status:02x}")
-        pos = end
-
-    tempos.sort(key=lambda item: (item[0], item[2]))
-    tick_events.sort(key=lambda event: event["tick"])
-    tempo_index = 0
-    last_tick = 0
-    last_seconds = 0.0
-    tempo = tempos[0][1]
     events = []
-    for event in tick_events:
-        tick = event["tick"]
-        while tempo_index + 1 < len(tempos) and tempos[tempo_index + 1][0] <= tick:
-            next_tick, next_tempo, _ = tempos[tempo_index + 1]
-            last_seconds += (next_tick - last_tick) * tempo / division / 1000000.0
-            last_tick = next_tick
-            tempo = next_tempo
-            tempo_index += 1
-        event = dict(event)
-        event["time_seconds"] = last_seconds + (tick - last_tick) * tempo / division / 1000000.0
-        events.append(event)
+    for event in parse_shared_midi_events(path):
+        item = {
+            "time_seconds": event.time_seconds,
+            "type": event.event_type,
+            "channel": event.channel,
+            "program": event.program,
+            "bank": event.bank,
+        }
+        if event.event_type in ("note_on", "note_off", "key_pressure"):
+            item["note"] = event.note
+        if event.event_type in ("note_on", "note_off"):
+            item["velocity"] = event.velocity
+        if event.event_type == "control":
+            item["type"] = f"cc{event.controller}"
+            item["value"] = event.value
+        elif event.event_type == "pitch_bend":
+            item["value"] = event.pitch_bend
+        elif event.event_type in ("channel_pressure", "key_pressure"):
+            item["value"] = event.value
+        events.append(item)
     return events
 
 
