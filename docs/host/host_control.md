@@ -63,11 +63,11 @@ actual `1.875 MHz` and `3.75 MHz` steps; `7.5 MHz` is an upper stress point for
 the present oversampling bridge. The former `15 MHz` write target is retained
 only as a throughput-analysis point until CDC, I/O constraints, and hardware
 measurements justify it. See
-[`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md)
+[`../design/transport/spi_command_stream.md`](../design/transport/spi_command_stream.md)
 for the derivation, FIFO-capacity rule, CH347 transaction limit, and required
 hardware stress test. Register transaction limits and wire throughput are
 analyzed separately in
-[`../design/spi_register_timing.md`](../design/spi_register_timing.md).
+[`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
 Only SPI mode 0 is accepted. Both host CLIs print the requested and selected
 clock so dry runs and hardware runs use the same discrete-frequency policy.
 Requests below the CH347 minimum `468.75 kHz` step are rejected rather than

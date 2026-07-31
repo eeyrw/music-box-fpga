@@ -37,8 +37,8 @@ The default Vivado 2025.2 run configuration is timing-oriented:
 - Synthesis uses `Flow_PerfOptimized_high`. UG901 describes its
   `PerformanceOptimized` directive as reducing logic levels at the possible cost
   of area, which is appropriate for the current routed design's limited timing
-  margin, while the resulting 78.63% LUT use must be treated as constrained
-  growth capacity.
+  margin. The current design is above 75% LUT utilization, so growth capacity
+  remains constrained and every new baseline must be measured.
 - Implementation uses `Performance_ExplorePostRoutePhysOpt`. UG904 defines this
   as `Explore` optimization, placement, physical optimization, and routing plus
   an additional post-route `phys_opt_design` pass.
@@ -59,7 +59,7 @@ shows a localized problem. `Flow_Quick` is only suitable for fast utilization
 estimates, not timing signoff.
 
 For GUI work, open the generated project at
-`../../build/fpga/smart_artix/vivado/smart_artix.xpr`. If IP settings change in
+`../../../build/fpga/smart_artix/vivado/smart_artix.xpr`. If IP settings change in
 the GUI, copy only the updated source configuration files back into `ip/`.
 
 ## Reuse Behavior
@@ -78,12 +78,12 @@ plausible stale utilization report. Resource comparisons require a fresh run.
 The generated project and IP output products are still reused.
 
 Each synthesis run writes these stable report files under
-`../../build/fpga/smart_artix/vivado/reports/`:
+`../../../build/fpga/smart_artix/vivado/reports/`:
 
 - `post_synth_utilization.rpt`: flat device utilization summary.
 - `post_synth_utilization_hier.rpt`: full hierarchical utilization report.
 - `post_synth_utilization_hier_depth4.rpt`: compact hierarchy report deep enough
-  to compare `core_system`, `synth_control_plane`, `multi_voice_pipeline`, memory,
+  to compare `core_system`, `core`, the command plane, renderer, memory, effects,
   and MIG resource ownership.
 - `post_synth_timing.rpt`: post-synthesis timing summary.
 - `post_synth_summary.json`: compact machine-readable summary generated inside
@@ -162,3 +162,6 @@ them. Use the `impl.tcl` form for timing signoff; the `synth.tcl` form is only a
 resource and post-synthesis timing checkpoint. The current BRAM-inference and
 timing-closure procedure is documented in
 `../../../docs/verification/vivado_synthesis_timing.md`.
+The repository-wide rule for deciding when synthesis or fresh implementation is
+required is
+[`../../../docs/development/rtl_change_workflow.md`](../../../docs/development/rtl_change_workflow.md).

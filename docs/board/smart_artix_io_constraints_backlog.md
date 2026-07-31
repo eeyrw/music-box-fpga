@@ -12,7 +12,7 @@ Repository sources:
   `XC7A50T-FGG484`.
 - `fpga/smart_artix/docs/Schematic_Smart_Artix_260307.pdf`: board schematic,
   revision 1.3.
-- `docs/sdcard_spec_v9.10.pdf`: SD Part 1 Physical Layer Simplified
+- `docs/reference/sd-physical-layer-simplified-spec-v9.10.pdf`: SD Part 1 Physical Layer Simplified
   Specification version 9.10, dated 2023-12-01.
 
 External primary references:
@@ -168,7 +168,7 @@ Required work for a future timing-closed high-speed implementation:
 - [ ] Cross complete packets through asynchronous request/response FIFOs.
 - [ ] Add controller-data-sheet input and output delays relative to SCLK.
 - [ ] Preserve the packet atomicity and DMA flow-control work in
-  `docs/design/spi_transport_backlog.md`.
+  `docs/backlog/spi_transport.md`.
 
 ## P1: I2S Output Timing
 

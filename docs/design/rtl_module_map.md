@@ -14,9 +14,8 @@ Behavioral contracts remain in `../fixed_point.md`, `../memory_format.md`, and
 | `voice_major_render_harness` | `sim/models/voice_major_render_harness.sv` | Verilator top using the same command plane plus the behavioral DDR3 model. |
 
 The former `wavetable_render_core` family is not a production or compatibility
-target. It is excluded from `rtl/filelist.f` and the Smart Artix synthesis
-filelist and is preserved under `rtl/legacy`; its old common wrappers and
-simulation harnesses are under `fpga/common/legacy` and `sim/legacy`.
+target. Its RTL, common wrappers, simulation harnesses, and board template have
+been removed. Use Git history only when investigating that implementation.
 
 ## Production Tree
 
@@ -73,7 +72,6 @@ smart_artix_top
 | `rtl/dsp` | Interpolation, biquad, gain/envelope scaling, and contribution formatting. |
 | `rtl/memory` | Per-voice 32-word sample window and ordered 8-word refill interface. |
 | `rtl/audio` | Chorus, reverb, return mix, compressor/master processing, scheduling, and output FIFO. |
-| `rtl/legacy` | Superseded stereo renderer and transactional action plane; excluded from production builds. |
 | `fpga/common/rtl` | Reusable SPI, register routing, status, effects-to-I2S composition, SD protocol, and serializer blocks. |
 | `fpga/smart_artix/rtl` | MIG, SD pins, asset loading, DDR register access, line reads, and DDR arbitration. |
 | `sim/models` | Behavioral DDR3 timing/store adapters; never synthesis inputs. |

@@ -8,7 +8,8 @@ Generated output belongs under `build/`.
 Run before committing behavioral or interface changes:
 
 ```bash
-make generate-register-map
+make check-register-map
+make check-docs
 make lint
 make test
 ```
@@ -17,6 +18,8 @@ make test
 `rtl/pkg/synth_register_pkg.sv` and
 `sim/harness/generated/register_map.h`. Generated envelope lookup tables are
 checked by the same build flow.
+Run `make generate-register-map` only after intentionally changing the register
+specification or generated DSP tables.
 
 `make test` is split into:
 
@@ -67,12 +70,11 @@ sim/harness/
   control/       compact command construction and sinks
   common/        WAV and memory-profile helpers
   generated/     generated C++ hardware constants
-sim/legacy/      superseded renderer harnesses and their testbenches
 ```
 
 `CommandWordSink` is the voice-control transport boundary. RTL, the integer
-reference, and CH347 consume the same command words; the superseded board-loader
-adapter is retained only under `sim/legacy`.
+reference, and CH347 consume the same command words. Superseded renderer and
+board-loader compatibility harnesses have been removed.
 There is no C++ per-voice register compatibility adapter.
 
 ## Render Targets

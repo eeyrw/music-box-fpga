@@ -201,7 +201,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut check-docs lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -218,6 +218,9 @@ check-register-map:
 
 check-dsp-lut:
 	python3 tools/gen_dsp_lut.py --check
+
+check-docs:
+	python3 tools/check_docs.py
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
@@ -247,7 +250,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness
+test: check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)

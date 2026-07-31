@@ -145,8 +145,9 @@ Focused tests are:
 | `tb_smart_artix_ddr3_rw_arbiter` | multiple outstanding render reads, loader/register ownership, and response routing |
 
 The directed throughput targets measure the renderer's zero-wait ceiling only.
-Their cycle counts must not be used as evidence for the redesign plan's real
-SF2/MIDI plus DDR3 `<30,000`-clock acceptance gate. DDR-backed variants of this
+Their cycle counts must not be used as evidence for the
+[`design/renderer/optimization_plan.md`](design/renderer/optimization_plan.md)'s
+real SF2/MIDI plus DDR3 `<30,000`-clock acceptance gate. DDR-backed variants of this
 directed test were removed because every voice read the same four adjacent lines,
 so the result did not represent DDR pressure. Use `render-rtl-ddr3` for integrated
 renderer and timed-memory measurements.

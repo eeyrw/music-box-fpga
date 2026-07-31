@@ -29,3 +29,10 @@ bus_ready, bus_error, bus_rdata
 
 New transports should adapt to that bus instead of changing
 `voice_major_render_core`.
+
+The current composition entry point is `rtl/voice_major_system.sv`. Module
+ownership and the production instantiation tree are documented in
+[`../../docs/design/rtl_module_map.md`](../../docs/design/rtl_module_map.md).
+Any functional edit in this directory is production RTL and follows the full
+gate in
+[`../../docs/development/rtl_change_workflow.md`](../../docs/development/rtl_change_workflow.md).

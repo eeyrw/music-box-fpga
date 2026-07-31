@@ -5,7 +5,7 @@ This document tracks protocol-correctness and compatibility work for the custom
 closure remain tracked separately in
 [`smart_artix_io_constraints_backlog.md`](smart_artix_io_constraints_backlog.md).
 
-The review basis is `docs/sdcard_spec_v9.10.pdf`, SD Specifications Part 1
+The review basis is `docs/reference/sd-physical-layer-simplified-spec-v9.10.pdf`, SD Specifications Part 1
 Physical Layer Simplified Specification Version 9.10, dated 2023-12-01. The
 current focused SD regressions cover the principal success, fallback, timeout,
 framing, CRC, busy, and multi-block recovery paths listed below. They are not

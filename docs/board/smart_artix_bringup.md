@@ -232,7 +232,7 @@ After the `1 MHz` request smoke test passes, try requests of `2 MHz` and
 `7.5 MHz`; treat that as an upper stress point rather than a guaranteed setting.
 Do not use the old `15 MHz` write target until CDC, I/O constraints, duty cycle,
 and physical MISO timing are qualified. See
-[`../design/spi_register_timing.md`](../design/spi_register_timing.md).
+[`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
 
 That sequence applies to bidirectional register transactions. Dedicated
 opcode-`0xa5` command writes do not use MISO and have no per-word register-bus
@@ -241,7 +241,7 @@ separately at each actual CH347 step through the measured 7.5 MHz stress point.
 The command workload may require more throughput than the current bridge can
 safely provide; that is not permission to skip physical qualification. The
 workload derivation and stress criteria are documented in
-[`../design/spi_command_stream_throughput.md`](../design/spi_command_stream_throughput.md).
+[`../design/transport/spi_command_stream.md`](../design/transport/spi_command_stream.md).
 
 ```bash
 build/smart_artix_bringup --device 0 \
@@ -455,7 +455,7 @@ Start with:
 - a known valid `BASE_ADDR` and `LENGTH` from the loaded SF2 sample metadata.
 
 The command payload and ordering are documented in
-`../design/control_command_stream_plan.md`. Inspect command/parser state through
+`../command_stream.md`. Inspect command/parser state through
 `CMD_FIFO_STATUS`.
 
 If audio is silent after `VOICE_START_MONO`:

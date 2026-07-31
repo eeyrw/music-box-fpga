@@ -162,7 +162,7 @@ separate room/hall/plate type, decay time, pre-delay, density, and damping, whic
 is why `hall` uses pre-delay and decay rather than chorus to create width.
 The complete mathematical mapping, exact preset table, and unsupported-control
 list are recorded in
-[`../design/effects_parameter_mapping.md`](../design/effects_parameter_mapping.md).
+[`../design/audio/effects_parameters.md`](../design/audio/effects_parameters.md).
 
 Primary references:
 
@@ -292,7 +292,8 @@ jq '{render_target, output_samples, region_count:(.regions | length),
 This target uses the shared `render_session` input preparation and
 `render_report` schema, then appends RTL, sample-window, DDR3, deadline, and
 render-timing statistics. Superseded direct-core, cached-memory, and board-loader
-renderer sources are retained under `sim/legacy` without current Make targets.
+renderer sources have been removed; the voice-major DDR3 harness is the only
+supported RTL render flow.
 
 The window counters have distinct units. `rtl_window_client_requests` counts
 accepted renderer requests and `rtl_window_hits` counts requests served by the

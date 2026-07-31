@@ -12,10 +12,15 @@ self-checking tests.
 Read these documents before changing interfaces:
 
 - `docs/README.md`: documentation map and category entry points.
+- `docs/project_contracts.md`: authoritative project definitions and command
+  reference.
 - `docs/design/system_design.md`: current architecture and roadmap notes.
 - `docs/fixed_point.md`: numeric formats and arithmetic rules.
 - `docs/memory_format.md`: mono/stereo wave storage layout.
 - `docs/register_map.md`: control register addresses and commit behavior.
+
+Read `docs/development/rtl_change_workflow.md` before changing production RTL.
+It defines the focused-test, full-regression, synthesis, and post-route gates.
 
 ## Directory Ownership
 
@@ -102,6 +107,10 @@ package code. A DSP primitive must not depend on a voice controller.
 - Do not inspect waveforms as the only pass criterion. Tests must terminate with
   a nonzero result on failure.
 - Run `make lint` and `make test` before considering a change complete.
+- Run `make check-docs` after moving, renaming, adding, or deleting documentation.
+- Follow `docs/development/rtl_change_workflow.md` to determine the required
+  focused tests and Vivado gate. Functional production RTL changes require a
+  fresh post-route implementation; synthesis-only timing is not signoff.
 - Generated output belongs under `build/` and must not be committed.
 
 ## Change Discipline

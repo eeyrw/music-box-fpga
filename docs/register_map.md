@@ -8,7 +8,7 @@ it. Generated consumers are `rtl/pkg/synth_register_pkg.sv` and
 Voice state is not register mapped. There is no per-voice address window and no
 shadow/runtime register compatibility path. Voice definition, start, runtime
 updates, release, and stop use the transactional command stream documented in
-[`design/control_command_stream_plan.md`](design/control_command_stream_plan.md).
+[`command_stream.md`](command_stream.md).
 
 ## Generic Core Registers
 
@@ -109,7 +109,8 @@ command-transaction envelope as documented under Command Ingress.
 
 Version 13 also retains the register meanings, but replaces the external SPI
 direct/burst register frames with the single-register request/fetch mailbox
-documented in [`design/spi_register_timing.md`](design/spi_register_timing.md).
+documented in
+[`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md).
 
 ### Compressor Diagnostics
 

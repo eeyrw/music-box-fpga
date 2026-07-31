@@ -1,136 +1,106 @@
-# Documentation Index
+# Documentation
 
-The documentation is grouped by ownership. Stable hardware and software
-contracts keep their existing paths because other code, docs, and agent
-instructions refer to them directly. Board-specific status lives beside the
-board project under `fpga/`.
+This directory separates current contracts and architecture from open work,
+historical records, and third-party reference material. Start with the first
+three links below; follow the topic indexes only when working in that area.
 
 ## Start Here
 
-- [`../README.md`](../README.md): project overview, repository layout, common
-  build/test/render commands, and the short roadmap.
-- [`design/system_design.md`](design/system_design.md): current RTL architecture,
-  control split, real-time budget, and board-facing backlog.
-- [`design/rtl_module_map.md`](design/rtl_module_map.md): where each generic RTL
-  module lives and how the main tops instantiate each other.
+- [`../README.md`](../README.md): project overview, repository layout, and common
+  build and render commands.
+- [`design/system_design.md`](design/system_design.md): current system
+  architecture, ownership boundaries, and board boundary.
+- [`design/rtl_module_map.md`](design/rtl_module_map.md): production RTL entry
+  points, source ownership, and instantiation tree.
+- [`verification/simulation_design.md`](verification/simulation_design.md):
+  required checks, self-checking tests, and render harnesses.
+- [`project_contracts.md`](project_contracts.md): authoritative project
+  definitions and command opcode quick reference.
+- [`development/rtl_change_workflow.md`](development/rtl_change_workflow.md):
+  mandatory RTL change, verification, and Vivado signoff workflow.
+- [`development/tooling.md`](development/tooling.md): build graph, generators,
+  render/analyzer tools, board utilities, and Vivado entry points.
 
 ## Stable Contracts
 
-These files define externally visible behavior. Update the matching file in the
-same change as any interface, memory layout, register, or numeric behavior
-change.
+These files define externally visible or numerically exact behavior. Update the
+matching contract whenever its RTL or host implementation changes.
 
-- [`fixed_point.md`](fixed_point.md): numeric formats and arithmetic rules.
-- [`memory_format.md`](memory_format.md): wave-memory layout, core memory
-  handshake, line-memory adapter contract, and memory-profile assumptions.
-- [`register_map.md`](register_map.md): software-visible global registers,
-  compact command ingress, and status/diagnostic fields. Register constants are generated from
-  [`../spec/register_map.json`](../spec/register_map.json).
+- [`fixed_point.md`](fixed_point.md): numeric formats, rounding, and saturation.
+- [`memory_format.md`](memory_format.md): wave layout and ordered memory
+  handshakes.
+- [`register_map.md`](register_map.md): generated register, status, and debug
+  fields.
+- [`command_stream.md`](command_stream.md):
+  command framing, payloads, voice lifecycle, and commit boundaries.
 
-## Architecture Notes
+## Current Design
 
-- [`design/system_design.md`](design/system_design.md): broad architecture and
-  roadmap notes.
-- [`design/rtl_module_map.md`](design/rtl_module_map.md): concise RTL reading map
-  and instantiation tree.
-- [`design/rtl_refactoring_backlog.md`](design/rtl_refactoring_backlog.md):
-  prioritized structural cleanup for executor ownership, renderer working
-  records, typed voice-layer boundaries, debug capture, and cache state, with
-  RAM-inference and timing-preservation gates.
-- [`design/system_architecture_backlog.md`](design/system_architecture_backlog.md):
-  architecture-level control, renderer, memory/cache, effects, transport, and
-  audio-timeline redesign candidates, dependency order, and acceptance gates.
-  These items may intentionally change internal or external contracts.
-- [`design/voice_pipeline.md`](design/voice_pipeline.md): renderer state,
-  synchronous snapshots, phase/filter ownership, DSP flow, and cost model.
-- [`design/voice_major_block_renderer_plan.md`](design/voice_major_block_renderer_plan.md):
-  implementation plan for voice-major N-frame rendering, block accumulation,
-  event boundaries, state ownership, DDR locality, and ping-pong output.
-- [`design/voice_major_render_pipeline_detailed.md`](design/voice_major_render_pipeline_detailed.md):
-  current cycle-level voice-major pipeline design, including state ownership,
-  one-context envelope processing, compact descriptors, sample-window traffic,
-  the fixed DSP hazard barrel, mix ownership, and measured implementation limits.
-- [`design/streaming_voice_architecture_redesign_plan.md`](design/streaming_voice_architecture_redesign_plan.md):
-  destructive renderer redesign plan and implementation record, including
-  resource and throughput budgets, completed compact-descriptor work, and the
-  remaining sample-ready/mix-reducer candidates.
-- [`design/envelope_gain_conversion.md`](design/envelope_gain_conversion.md):
-  SoundFont envelope-domain ownership, range-reduced cB/Q1.15 conversion,
-  generated tables, error bounds, and synthesis history.
-- [`design/envelope_backlog.md`](design/envelope_backlog.md): SoundFont envelope
-  time ranges, Delay playback semantics, FluidSynth comparison, and open RTL
-  and host compatibility work.
-- [`design/effects_backlog.md`](design/effects_backlog.md): implemented global
-  chorus/reverb architecture, completion matrix, remaining qualification gates,
-  and deferred per-voice sends.
-- [`design/effects_parameter_mapping.md`](design/effects_parameter_mapping.md):
-  mapping from common chorus/reverb controls and listening terminology to the
-  implemented fixed-point algorithms, presets, and known limitations.
-- [`design/control_command_stream_plan.md`](design/control_command_stream_plan.md):
-  transactional command-stream and continuous-render contract.
-- [`design/spi_command_stream_throughput.md`](design/spi_command_stream_throughput.md):
-  command-stream workload model, renderer/control-plane throughput analysis,
-  SCLK target, FIFO limits, and board-qualification requirements.
-- [`design/spi_register_timing.md`](design/spi_register_timing.md): register
-  read/write timing paths, burst boundaries, wire throughput, separate SCLK
-  targets, and hardware-qualification requirements.
-- [`design/spi_transport_backlog.md`](design/spi_transport_backlog.md): known
-  SPI transaction-atomicity bugs, compatible staging fixes, physical timing,
-  and the optional packetized DMA transport.
+### Renderer
 
-## Verification And Render Flows
+- [`design/renderer/overview.md`](design/renderer/overview.md): concise block
+  renderer behavior and state ownership.
+- [`design/renderer/pipeline.md`](design/renderer/pipeline.md): cycle-level
+  pipeline, hazards, memory traffic, and measured limits.
+- [`design/renderer/optimization_plan.md`](design/renderer/optimization_plan.md):
+  active optimization record and replacement acceptance gates.
 
-- [`verification/simulation_design.md`](verification/simulation_design.md):
-  self-checking tests, SoundFont/MIDI render harnesses, memory-profile renders,
-  C++ harness source layout, board-loader simulation, and generated register-map
-  consistency checks.
-- [`verification/render_commands.md`](verification/render_commands.md): common
-  reference, compressor, diagnostic, RTL, and memory render command lines.
-- [`verification/render_window_ddr3_merge_inventory.md`](verification/render_window_ddr3_merge_inventory.md):
-  selective voice-major/window/DDR3 merge boundary, preserved main content,
-  production top wiring, and acceptance targets.
+### Audio Processing
+
+- [`design/audio/envelope_gain.md`](design/audio/envelope_gain.md): SoundFont
+  envelope-domain conversion and generated lookup tables.
+- [`design/audio/effects_parameters.md`](design/audio/effects_parameters.md):
+  chorus/reverb controls, fixed-point fields, and presets.
+
+### Transport
+
+- [`command_stream.md`](command_stream.md):
+  production command protocol.
+- [`design/transport/spi_command_stream.md`](design/transport/spi_command_stream.md):
+  command workload, FIFO sizing, and SCLK analysis.
+- [`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md):
+  split-phase register wire protocol and timing.
+- [`host/host_control.md`](host/host_control.md): host ownership and CH347
+  integration.
+
+## Verification
+
+- [`verification/simulation_design.md`](verification/simulation_design.md): test
+  ownership and simulation architecture.
+- [`verification/render_commands.md`](verification/render_commands.md): reusable
+  C++ and RTL render commands.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
-  Smart Artix source-list ownership, BRAM inference repairs, per-module timing
-  case studies, residual path clusters, run-freshness checks, and closure
-  criteria.
+  source lists, RAM inference, timing case studies, and closure criteria.
 - [`verification/vivado_strategy_and_report_analysis.md`](verification/vivado_strategy_and_report_analysis.md):
-  Vivado 2025.2 synthesis/implementation strategy research, measured Smart
-  Artix strategy comparison, report inspection order, and signoff gates.
-- [`Standard MIDI file format, updated.html`](Standard%20MIDI%20file%20format,%20updated.html):
-  local copy of the Standard MIDI File format reference used when validating the
-  C++ MIDI parser.
-- [`M1_v4-2-1_MIDI_1-0_Detailed_Specification_96-1-4.pdf`](M1_v4-2-1_MIDI_1-0_Detailed_Specification_96-1-4.pdf):
-  MIDI 1.0 Detailed Specification 4.2.1, including channel messages and the
-  registered-parameter/Data Entry state-machine rules.
-
-## Host Control
-
-- [`host/host_control.md`](host/host_control.md): reusable C++ control boundary,
-  CH347 USB-to-SPI utility notes, and Smart Artix bring-up runner commands.
+  measured Vivado strategy comparison and report review.
 
 ## Board Integration
 
-- [`../fpga/README.md`](../fpga/README.md): board workspace layout, expected board
-  directory contents, and synthesis source-list guidance.
-- [`../fpga/common/README.md`](../fpga/common/README.md): reusable board-facing RTL
-  boundary for transports, platform register windows, tick generation, and audio serializers.
-- [`../fpga/smart_artix/README.md`](../fpga/smart_artix/README.md): Smart Artix
-  board assumptions, current top, Vivado flow/status, resource notes, and local
-  checks.
-- [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical Smart
-  Artix hardware bring-up sequence and bring-up checklist.
+- [`../fpga/README.md`](../fpga/README.md): board workspace conventions.
+- [`../fpga/common/README.md`](../fpga/common/README.md): reusable board-facing
+  RTL.
+- [`../fpga/smart_artix/README.md`](../fpga/smart_artix/README.md): current Smart
+  Artix top and build status.
+- [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical
+  hardware bring-up sequence.
+- [`board/asset_loading.md`](board/asset_loading.md): current SD-to-DDR3 asset
+  loading contract.
 - [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):
-  confirmed non-DDR pin facts, SPI/SD/I2S timing analysis, open RTL and XDC
-  work, and board-level signoff gates.
-- [`board/asset_loading.md`](board/asset_loading.md): SD raw-image to DDR3 asset
-  loading contract, current native-SD command policy, model boundaries, and
-  Smart Artix loader blocks.
-- [`board/sd_native_backlog.md`](board/sd_native_backlog.md): SD Part 1 v9.10
-  protocol audit history, remaining qualification work, recovery requirements,
-  and focused verification gates. Use `asset_loading.md` for the current path.
+  unresolved external timing and constraint work.
+- [`board/sd_native_backlog.md`](board/sd_native_backlog.md): native SD protocol
+  audit and remaining qualification.
 
-## Local Notes
+## Work Tracking And History
 
-Short README files under `assets/`, `fpga/<board>/assets/`, `fpga/<board>/vivado/`,
-and `third_party/` describe only the local directory contents. They are not
-primary design references.
+- [`backlog/README.md`](backlog/README.md): unresolved architecture, RTL,
+  envelope, effects, and SPI work. Backlogs do not override current contracts.
+- [`archive/README.md`](archive/README.md): completed migration and merge records.
+  Archived documents are evidence, not descriptions of the current design.
+- [`reference/README.md`](reference/README.md): local third-party SoundFont, MIDI,
+  and SD specifications.
+- [`development/README.md`](development/README.md): contributor workflows and
+  completion gates.
+
+Short README files under `assets/`, `fpga/<board>/assets/`,
+`fpga/<board>/vivado/`, and `third_party/` describe only their local directory
+contents and are not primary design references.

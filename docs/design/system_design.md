@@ -6,19 +6,19 @@ external contracts live in:
 - `../fixed_point.md`: numeric formats and arithmetic rules.
 - `../memory_format.md`: PCM layout and memory handshakes.
 - `../register_map.md`: global registers, command ingress, and debug snapshot.
-- `control_command_stream_plan.md`: command words and voice lifecycle.
-- `envelope_backlog.md`: envelope timing and Delay compatibility backlog.
-- `effects_backlog.md`: implemented global chorus/reverb path, completion
+- `../command_stream.md`: command words and voice lifecycle.
+- `../backlog/envelope.md`: envelope timing and Delay compatibility backlog.
+- `../backlog/effects.md`: implemented global chorus/reverb path, completion
   matrix, remaining resource/verification gates, and deferred per-voice sends.
-- `effects_parameter_mapping.md`: common effect-control terminology mapped to
+- `audio/effects_parameters.md`: common effect-control terminology mapped to
   the implemented chorus/FDN fields, preset values, and modeling limits.
-- `spi_command_stream_throughput.md`: SPI command-stream workload and SCLK
+- `transport/spi_command_stream.md`: SPI command-stream workload and SCLK
   sizing analysis.
-- `spi_register_timing.md`: SPI register mailbox timing and throughput analysis.
-- `spi_transport_backlog.md`: compatible transaction-atomicity fixes, physical
+- `transport/spi_register_mailbox.md`: SPI register mailbox timing and throughput analysis.
+- `../backlog/spi_transport.md`: compatible transaction-atomicity fixes, physical
   timing work, and optional packetized DMA transport.
 - `../verification/simulation_design.md`: tests and render flows.
-- `system_architecture_backlog.md`: measured system-level limitations and
+- `../backlog/system_architecture.md`: measured system-level limitations and
   candidate control/render/memory/audio redesigns.
 
 ## Scope
@@ -58,9 +58,9 @@ voice_major_block_controller -> mono engine -> 32-word/voice sample window
 
 `voice_major_render_core` is the production generic top. The Smart Artix top
 uses `voice_major_system` to retain main's SPI bridge, register fabric,
-platform/common status windows, effects, PCM FIFO, and I2S serializer. Legacy
-single-frame tops remain in the tree for reference and board-template migration
-but are not in the production Smart Artix filelist.
+platform/common status windows, effects, PCM FIFO, and I2S serializer. The
+superseded single-frame tops and their compatibility wrappers have been removed;
+the voice-major path is the only supported implementation.
 
 See `rtl_module_map.md` for file ownership and the full instantiation tree.
 

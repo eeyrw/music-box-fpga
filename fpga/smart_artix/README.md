@@ -1,383 +1,94 @@
 # Smart Artix XC7A50T Target
 
-This directory is the board-specific integration workspace for the Smart Artix
-minimum system board. The RTL connects SPI control, native-SD asset loading,
-DDR3-backed wavetable reads, and I2S output. The native-SD pins and the
-project-selected SPI/I2S expansion-header pins have been checked against the
-board pin table and schematic. External timing, BANK15 voltage, wiring, and
-signal integrity still require qualification before hardware signoff. The
-source-controlled Vivado flow already generates and implements the Clocking
-Wizard and DDR3 MIG configuration.
+This is the current production board integration for the Smart Artix minimum
+system board. It connects SPI control, native-SD asset loading, MIG-backed DDR3
+wavetable reads, and I2S output around `voice_major_system`.
 
-Use [`../../docs/board/smart_artix_bringup.md`](../../docs/board/smart_artix_bringup.md) as
-the practical hardware bring-up checklist.
-Use [`../../docs/board/smart_artix_io_constraints_backlog.md`](../../docs/board/smart_artix_io_constraints_backlog.md)
-for SPI, native-SD, and I2S constraint analysis and completion gates.
+## Board Facts
 
-## Known Board Facts
+| Item | Current value |
+| --- | --- |
+| FPGA | `xc7a50tfgg484-2` (`XC7A50T-2FGG484I` board device) |
+| Oscillator | 50 MHz |
+| DDR3 | Micron `MT41K256M16TW`, 512 MB, x16 |
+| Core/application clock | MIG `ui_clk`, 100 MHz |
+| MIG application width | 128 bits, one 8-word wavetable line |
+| Control | SPI mode 0, register mailbox plus opcode `0xa5` commands |
+| Asset source | native 4-bit SDHC/SDXC WTSF image |
+| Audio | I2S data/BCLK/LRCLK; no codec initialization in this target |
 
-- FPGA family target: Xilinx Artix-7 `XC7A50T`.
-- FPGA device reported by the board owner: `XC7A50T-2FGG484I`.
-- The current Vivado 2025.2 batch flow uses part name `xc7a50tfgg484-2`.
-  Vivado does not encode the industrial temperature suffix in the part name
-  used by `create_project`; this is a device identifier, not a tool-version
-  lock.
-- External wave memory: Micron `MT41K256M16TW` DDR3.
-- DDR3 capacity and width: `256M x 16-bit`, total `512 MB`.
-- DDR3 FPGA bank: `BANK34`.
-- Control interface: external MCU or PC USB-to-SPI adapter.
-- Audio codec: I2S only, no register initialization, no MCLK requirement.
-- Board oscillator: `50 MHz`.
-- Generated clock wizard: `smart_artix_clk_50m_to_200m`, currently `50 MHz` input to `200 MHz`
-  output.
-- Generated MIG IP source configuration: `vivado/ip/smart_artix_ddr3_mig`.
+BANK15 voltage, external SPI/I2S timing, physical wiring, signal integrity, and
+codec requirements still need hardware confirmation. These are not waived by
+internal routed timing closure.
 
-Still required from peripheral documentation or hardware measurements:
-
-- Reset source and polarity.
-- Confirmation that BANK15 `VCCIO_ADJ` is 3.3 V before using the selected SPI
-  and I2S expansion pins as `LVCMOS33`.
-- External SPI and I2S timing limits.
-- Audio codec timing limits and whether MCLK, reset, mute, or codec register
-  configuration pins are actually needed.
-
-## Current Top
-
-`rtl/smart_artix_top.sv` instantiates `voice_major_system` with SPI control,
-the per-voice sample window, global effects, output FIFO, and I2S output. Board-specific SD loading, DDR3
-read/write arbitration, line reads, and DDR register access traffic are grouped behind
-`smart_artix_ddr3_subsystem`; Smart Artix platform registers are implemented by
-`smart_artix_platform_regs` through the common wrapper's platform register window
-bus. After MIG calibration completes, the top starts the SD loader, copies the
-raw SF2 byte image into DDR3, and holds the audio core in reset until
-`asset_loaded` is asserted.
-
-The intended memory replacement is:
+## Composition
 
 ```text
-SD native pins: CLK, CMD, DAT[3:0], active-low CD
-  -> smart_artix_ddr3_subsystem
-  -> sd_native_pin_phy
-  -> smart_artix_sd_native_asset_loader
-  -> sd_native_block_reader
-  -> smart_artix_asset_loader
-  -> smart_artix_ddr3_asset_writer
-  -> smart_artix_ddr3_rw_arbiter
-  -> Xilinx MIG app write interface
-  -> MT41K256M16TW
-
-voice_major_system ordered window-refill pins
-  -> smart_artix_ddr3_subsystem
-  -> smart_artix_ddr3_line_reader
-  -> smart_artix_ddr3_rw_arbiter
-  -> Xilinx MIG app read interface
-  -> MT41K256M16TW
+50 MHz clock -> Clocking Wizard -> MIG DDR3 -> 100 MHz ui_clk
+                                      |
+SPI pins -> spi_register_bridge -> voice_major_system
+                                      |
+SD pins -> native SD reader -> asset writer -> DDR3 arbiter
+                                      |
+renderer ordered reads -> line reader -> DDR3 arbiter
+                                      |
+                              effects/FIFO -> I2S pins
 ```
 
-The raw-image asset format is documented in `../../docs/board/asset_loading.md`. Sector 0
-contains the `WTSF` header; the SF2 byte image is copied into DDR3 without byte
-repacking so software can keep using absolute SF2 `smpl` offsets in voice
-definition commands.
+`rtl/smart_artix_top.sv` owns physical pins and generated IP ports.
+`rtl/smart_artix_ddr3_subsystem.sv` groups SD loading, line reads, register
+access, and MIG arbitration. `smart_artix_pkg.sv` defines board-internal payload
+types. The generated MIG, not `smart_artix_mig_stub`, is used by the Vivado top;
+the stub remains simulation support.
 
-The native 4-bit path is connected to `smart_artix_top`:
+## Source Layout
 
 ```text
-native SD pins: CLK, CMD, DAT[3:0], active-low CD
-  -> sd_native_pin_phy
-  -> smart_artix_sd_native_asset_loader
-  -> sd_native_block_reader
-  -> smart_artix_asset_loader
-  -> smart_artix_ddr3_asset_writer
-  -> smart_artix_ddr3_rw_arbiter
-  -> MIG app write interface
+filelist.f       common and board integration sources
+rtl/             board-specific synthesizable RTL
+sim/             focused board models and tests
+constraints/     board XDC; MIG owns DDR pin timing
+vivado/ip/       source-controlled Clocking Wizard and MIG configuration
+vivado/scripts/  project, synthesis, implementation, bitstream, programming
+docs/            local schematic and pin-assignment source material
+assets/          notes only; generated WTSF images belong under build/
 ```
 
-The native reader initializes SDHC/SDXC cards, selects the assigned RCA with
-R1b busy handling, disconnects the DAT3 detect pull-up with `ACMD42`, switches
-to 4-bit bus mode with `ACMD6`, queries and validates High Speed with `CMD6`, and
-reads SCR with `ACMD51`. Loader requests larger than one block use `CMD18`;
-`CMD23` is issued only when SCR advertises it, while unsupported or rejected
-CMD23 falls back to CMD18 followed by R1b-aware `CMD12`. Failed CMD18 blocks are
-stopped and retried from the failed LBA with bounded `CMD17`. The native
-pin PHY drives `SD_CLK`, transmits commands with CRC7, releases/captures the `CMD`
-line for responses, receives `DAT[3:0]` as a byte stream, and checks each data
-line's CRC16 before releasing the final byte of a block.
+Generic RTL remains owned by `rtl/filelist.f` at the repository root.
 
-The initialization policy follows the same practical sequence used by small FPGA
-SD readers, but narrowed to SDHC/SDXC: `CMD0`, `CMD8`, retrying `CMD55/ACMD41`
-with HCS, then `CMD2/CMD3/CMD7` plus `CMD55/ACMD6` for native 4-bit mode and
-CMD6 mode-0/mode-1 negotiation for optional High Speed timing.
-SDv1/SDSC, SPI-mode SD, FAT filesystems, and `CMD16` fallback remain out of
-scope for this loader path. The DDR3 subsystem selects separate initialization,
-Default Speed, and High Speed dividers. With the current
-100 MHz MIG UI clock, the divider formula is `sd_clk = clk / (2 * (clk_div + 1))`:
-`124` gives 400 kHz, `1` gives 25 MHz, and `0` gives 50 MHz. The 50 MHz divider
-is selected only after CMD6 status confirms Function Group 1 selection and the
-eight old-rate guard clocks finish.
+## Current Implementation Baseline
 
-The board pin table and schematic identify `SD_CD` on U17. The socket switch is
-active low with a board 10 kOhm pull-up. The top synchronizes and debounces it,
-waits at least 1 ms after stable insertion, and resets the complete SD/asset
-session on removal so a replacement card cannot inherit initialization or High
-Speed state.
-
-Ethernet is not part of the initial real-time audio path. If the board's
-RTL8211E interface is used later, it should first serve board control and asset
-upload needs such as UDP status, preset upload, wave-image transfer, or network
-MIDI. A full TCP/IP stack is better owned by an MCU or soft core than by the
-wavetable datapath RTL.
-
-## DDR3 Line-Reader Assumptions
-
-`smart_artix_ddr3_line_reader` targets the 7-series MIG native application read
-interface. It has bounded request and response FIFOs, issues ordered reads while
-credits are available, and holds each core response until `line_rsp_ready`:
-
-- `app_cmd = 3'b001` is treated as a read command.
-- `app_en && app_rdy` accepts one aligned read command.
-- `app_rd_data_valid && app_rd_data_end` returns one complete memory line.
-- Default `MIG_DATA_WIDTH` is `128` bits, matching `LINE_WORDS = 8` 16-bit PCM
-  words.
-- The core-side address is a 16-bit word address. `WORD_ADDR_SHIFT = 1` converts
-  it to a byte-addressed MIG app address.
-- The default queue depth is eight. The read/write arbiter independently tracks
-  up to 16 accepted render reads, preserving MIG response order.
-
-If the generated MIG uses a different app data width, address unit, burst mode,
-or clocking scheme, update the adapter before connecting hardware. The
-adapter assumes one MIG read response contains the whole line.
-
-Smart Artix RTL uses `smart_artix_pkg.sv` as the local board-facing contract for
-MIG app command, write-data, response, line-read, platform-status, and DDR register access
-structs. Generated MIG IP ports remain explicit at `smart_artix_top`; the struct
-types are used on the board-owned side of that boundary and in the DDR3
-subsystem internals.
-
-`smart_artix_mig_stub` is not a DDR3 timing model. It only provides a calibration
-delay, accepts one read command at a time, and returns a deterministic 128-bit
-pattern after a fixed latency. Replace it with the generated MIG instance for any
-hardware build that needs real DDR3 pins.
-
-Board reference files such as schematics belong under `docs/`. They are kept as
-source material for later pin and constraint work, not as synthesis inputs.
-
-## Current Vivado 2025.2 Status
-
-Vivado is installed locally under `/opt/Xilinx2051.1/2025.2/Vivado`. The batch flow in
-`vivado/scripts/synth.tcl` now creates a local project for `xc7a50tfgg484-2`,
-merges the generic `../../rtl/filelist.f` with the board integration
-`filelist.f`, applies `constraints/smart_artix.xdc`, synthesizes
-`smart_artix_top`, reads source-controlled IP configuration from `vivado/ip`,
-writes reports and checkpoints under `../../build/fpga/smart_artix/vivado`, and
-keeps the board source directory free of generated Vivado output.
-
-Run the current synthesis check from the repository root. The Makefile supplies
-the project-wide voice count and work-entry configuration:
-
-```bash
-make vivado-synth
-```
-
-The non-DDR XDC uses board-documented native-SD pins and project-selected
-BANK15 expansion-header pins for SPI and I2S. The package locations match the
-board pin table, but external wiring and BANK15 voltage still require
-verification. The current non-DDR I/O standard is `LVCMOS33`, and the primary
-board clock is constrained to `20.000 ns` for the confirmed `50 MHz`
-oscillator. DDR3 pins come from the generated MIG XDC. External timing remains
-open as detailed in the board I/O constraints backlog.
-
-`DDRPIN.ucf` is the board-provided DDR3 pin assignment source. Keep it with the
-board target: the Vivado project script checks the MIG `mig_b.prj` pin selection
-against this file before generating or reusing the MIG IP, and the generated MIG
-XDC then carries those pins into synthesis and implementation.
-
-The current board top instantiates `smart_artix_clk_50m_to_200m` and `smart_artix_ddr3_mig` when the
-generated IP configuration is present. The source-controlled IP inputs are the
-Clocking Wizard `.xci`, the MIG `.xci`, and the MIG `.prj` file under
-`vivado/ip`; generated Verilog, checkpoints, project files, and reports remain
-local Vivado output under `../../build/fpga/smart_artix/vivado`.
-`smart_artix_mig_stub` remains in the repository for unit tests and non-Vivado
-simulation, but it is no longer used by `smart_artix_top`.
-
-Clocking status: the generated `smart_artix_clk_50m_to_200m` produces `200 MHz`
-from the board's `50 MHz` oscillator, and the generated MIG project records
-`InputClkFreq = 200 MHz`, `TimePeriod = 2500 ps`, and `PHYRatio = 4:1`. The
-latest MIG wrapper has no separate `clk_ref_i` port, so `smart_artix_top` feeds
-the available `200 MHz` clock directly to MIG `sys_clk_i`.
-
-The core does not run at the Clocking Wizard's `200 MHz` output. The MIG derives
-its DDR PHY clocks internally and exposes a `100 MHz` user interface clock
-(`ui_clk`, reported as `clk_pll_i`). `smart_artix_top` intentionally uses that
-clock as `clk_sys` and sets `SYS_CLK_HZ = 100_000_000`, keeping the wavetable core
-and MIG app interface in one clock domain.
-
-The latest generated MIG native app interface is `128` bits wide with a `29` bit
-app address. The board top therefore uses `LINE_WORDS = 8` so one MIG read beat
-contains one complete wavetable cache line.
-
-Latest forced full implementation result with `smart_artix_clk_50m_to_200m`,
-`smart_artix_ddr3_mig`, the generated MIG XDC, the complete generic RTL
-filelist, and the board RTL filelist merged by `project.tcl`. The run used
-`Flow_PerfOptimized_high` synthesis and
-`Performance_ExplorePostRoutePhysOpt` implementation:
+The latest recorded forced implementation uses Vivado 2025.2,
+`Flow_PerfOptimized_high`, and `Performance_ExplorePostRoutePhysOpt`:
 
 ```text
-Design: smart_artix_top
-Device: 7a50tfgg484-2
-Vivado result: route_design completed successfully
-Errors: 0
-Critical warnings: 0
-Synthesis checksum: 997f4a67
+LUTs       24,933 / 32,600 (76.48%)
+Registers  25,911 / 65,200 (39.74%)
+DSPs       39 / 120
+BRAM       46.5 / 75 tiles
+WNS/WHS    +0.165 ns / +0.025 ns
+Routing    46,033 / 46,033 nets, 0 route errors
+DRC        0 errors; warnings remain for review
 ```
 
-Warnings remain visible and include generated-IP and board I/O timing messages.
-They do not include route or DRC errors. External SPI and I2S input/output delay
-constraints still require measured board timing contracts.
+This is a recorded baseline, not evidence for a later RTL revision. Re-run the
+required gate and confirm report freshness after production changes.
 
-Post-route utilization:
+## Entry Points
 
-```text
-Slice LUTs       24933 / 32600  76.48%
-Slice Registers 25911 / 65200  39.74%
-DSP48E1            39 / 120    32.50%
-Block RAM tiles  46.5 / 75     62.00%
-```
+- [`../../docs/board/smart_artix_bringup.md`](../../docs/board/smart_artix_bringup.md):
+  hardware sequence, status interpretation, and smoke tests.
+- [`../../docs/board/asset_loading.md`](../../docs/board/asset_loading.md): WTSF
+  format and SD-to-DDR3 contract.
+- [`../../docs/board/smart_artix_io_constraints_backlog.md`](../../docs/board/smart_artix_io_constraints_backlog.md):
+  unresolved external timing and electrical work.
+- [`vivado/README.md`](vivado/README.md): exact batch commands, generated report
+  files, run reuse, and strategy overrides.
+- [`../../docs/verification/vivado_synthesis_timing.md`](../../docs/verification/vivado_synthesis_timing.md):
+  inference and timing-closure rules.
+- [`../../docs/development/rtl_change_workflow.md`](../../docs/development/rtl_change_workflow.md):
+  mandatory change and signoff gates.
 
-Post-route timing at the MIG 100 MHz `ui_clk`:
-
-```text
-WNS  +0.165 ns
-TNS  0.000 ns
-Failing setup endpoints: 0
-WHS  +0.025 ns
-THS  0.000 ns
-Failing hold endpoints: 0
-Fully routed nets: 46033 / 46033
-Route errors: 0
-DRC errors: 0
-```
-
-The LUT line above is `24933 / 32600 (76.48%)`; occupancy remains a QoR and
-growth-budget concern even though the design fits. The DRC report also contains
-123 warnings, which require classification rather than being
-treated as errors or silently waived.
-
-The SPI atomic-command staging and byte-serial CRC optimization are included in
-this result. `spi_register_bridge` uses 816 post-route LUTs, 585 registers, and
-one RAMB18; its worst paths are not the design's setup or hold critical paths.
-
-Timing closure required BRAM-safe chorus/reverb memories and explicit numeric
-stages in the chorus, reverb, return mixer, compressor, and control executor.
-The reusable coding patterns, path-cluster history, and failure signatures are
-recorded in `../../docs/verification/vivado_synthesis_timing.md`. Strategy
-selection, the comparison experiment, and report inspection gates are recorded
-in `../../docs/verification/vivado_strategy_and_report_analysis.md`.
-
-The timing report also shows expected board-level gaps: SPI input ports and I2S
-or status output ports do not yet have external input/output delays. Add those
-only after the real board timing contract is known.
-
-## Resource Follow-Up
-
-The design fits, but the current 76.48% LUT occupancy and +0.165 ns setup slack
-still require disciplined growth and placement margins. Preserve synchronous
-BRAM templates and re-run full implementation after effects, voice-count, or
-control-record changes; post-synthesis timing is not sufficient for signoff.
-
-## Bring-Up Order
-
-1. Confirm BANK15 is at 3.3 V and wire the selected SPI/I2S expansion pins in
-   the same order recorded by the XDC and board I/O constraints backlog.
-2. Run full implementation with the `200 MHz` MIG input clock and review
-   post-route MIG DDR PHY hold timing before treating post-synthesis hold as a
-   board-blocking failure.
-3. Keep the first audio/system clock strategy on MIG `ui_clk` unless hardware
-   measurements show a need to split domains. The board top now records
-   `SYS_CLK_HZ = 100_000_000`; `sample_tick` and I2S BCLK use fractional
-   phase-accumulator dividers from that clock. Recheck I2S output timing on
-   hardware before adding a separate audio clock or CDC bridge.
-4. Add real reset conditioning and document reset polarity.
-5. Add SPI mode, maximum SCLK, CDC, and input-delay constraints for the selected
-   control source.
-6. Add I2S output delay constraints from the codec timing limits, then verify
-   `BCLK`, `LRCLK`, and `SDATA` with a scope or logic analyzer.
-7. Add a tiny BRAM-backed line-memory test source for one known waveform.
-8. Re-run Vivado synthesis and implementation with real MIG and real pin
-   constraints; record resource and timing changes here.
-9. Verify the SD raw-image loader path on hardware: native SD pins, asset header
-   parser, DDR3 write DMA, loader status, and loaded-byte readback or audio smoke
-   output.
-
-## Vivado Batch Flow
-
-Source-controlled Vivado inputs live under `fpga/smart_artix/vivado/`.
-Generated Vivado projects, reports, checkpoints, bitstreams, logs, and IP output
-products live under `build/fpga/smart_artix/vivado/` at the repository root and
-should not be committed.
-
-Generate or refresh the local Vivado project from the repository root:
-
-```bash
-make vivado-project
-```
-
-Run synthesis:
-
-```bash
-make vivado-synth
-```
-
-The synthesis script writes the flat utilization, hierarchical utilization, and
-timing reports under `../../build/fpga/smart_artix/vivado/reports/`. Use
-`post_synth_utilization_hier_depth4.rpt` first when checking resource ownership;
-it shows the major split between `core_system`, the voice-major block renderer,
-sample windows, effects, memory, and the MIG wrapper without the full IP hierarchy
-noise. Use `post_synth_utilization_hier.rpt` when a deeper instance-level trace is
-needed.
-
-Run implementation or bitstream generation:
-
-```bash
-make vivado-impl
-make vivado-bitstream
-```
-
-Program hardware with the generated bitstream:
-
-```bash
-make vivado-program
-```
-
-This JTAG operation loads volatile FPGA configuration SRAM. It is not a
-persistent configuration-flash programming flow. Run it only with one matching
-`xc7a50t` device attached and after checking the XDC against the schematic.
-
-For GUI work, open `../../build/fpga/smart_artix/vivado/smart_artix.xpr` from
-this directory. If IP settings are changed in the GUI, copy only the updated
-`.xci` or MIG `.prj` files back into `vivado/ip/`; do not commit the generated
-project, runs, checkpoints, or reports.
-
-Implementation and bitstream scripts are available for tool-flow experiments.
-Treat bitstreams built with the temporary XDC as non-hardware images until the
-temporary pins are replaced with schematic-verified Smart Artix pins.
-
-## Local Checks
-
-Run the Smart Artix board-level regression from the repository root:
-
-```bash
-make smart-artix-test
-```
-
-This builds and runs the current focused Smart Artix SystemVerilog tests for the
-raw-image asset loader, DDR3 asset writer, DDR3 line reader, DDR3 read/write
-arbiter, MIG stub, native SD command reader, native fake-card model, native pin
-PHY, and native asset-loader path.
-
-Run `make render-rtl-ddr3 SECONDS=0.1` for the current voice-major/window DDR3
-render path. SD loading remains covered by the focused Smart Artix tests in
-`make smart-artix-test`.
-
-For board-top checking, `smart_artix_top` instantiates Vivado-generated clock and
-MIG IP directly. Use the Vivado batch synthesis command above for that path; pure
-Verilator lint needs temporary stubs for those vendor modules.
+Focused board regressions run with `make smart-artix-test`. The normal synthesis
+and implementation commands run from the repository root and write only below
+`build/fpga/smart_artix/vivado/`.
