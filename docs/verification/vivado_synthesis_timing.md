@@ -45,19 +45,29 @@ does not claim closure for every future external I/O interface.
 
 ### Current 512-Voice Post-Synthesis Baseline
 
-A fresh Vivado 2025.2 synthesis on 2026-07-30 used the Makefile defaults of
+A fresh Vivado 2025.2 synthesis on 2026-07-31 used the Makefile defaults of
 `NUM_VOICES=512`, `BLOCK_WORK_ENTRIES=8`, and `MAX_BLOCK_FRAMES=16`.
 
 | Resource or estimate | Current result |
 | --- | ---: |
-| LUT | 25,938 / 32,600 (79.56%) |
-| FF | 25,562 / 65,200 (39.21%) |
+| LUT | 26,451 / 32,600 (81.14%) |
+| FF | 25,963 / 65,200 (39.82%) |
 | DSP48E1 | 39 / 120 (32.50%) |
-| BRAM tiles | 46 / 75 (61.33%) |
+| BRAM tiles | 46.5 / 75 (62.00%) |
 | Post-synthesis WNS/TNS | +0.400 ns / 0 ns |
 
-The immediate pre-change fresh baseline was 27,136 LUTs, 26,775 FFs, 39 DSPs,
-50 BRAM tiles, and +0.400 ns WNS. First moving per-job offsets out of the
+This baseline includes the atomic SPI command transaction. Its initial
+register-staged implementation attributed 2,261 LUTs and 2,573 registers to
+`spi_register_bridge`. Converting the 63 x 32 staging store to synchronous
+block RAM and advancing CRC16/CRC32 once per byte reduced the bridge to 890
+LUTs, 585 registers, and one RAMB18. The full-device post-synthesis comparison
+was 27,893 to 26,451 LUTs and 27,952 to 25,963 registers, with unchanged
++0.400 ns WNS. This is an implementation optimization only; the SPI wire
+protocol and configurable CRC checking did not change.
+
+For the earlier compact-descriptor experiment, the immediate pre-change fresh
+baseline was 27,136 LUTs, 26,775 FFs, 39 DSPs, 50 BRAM tiles, and +0.400 ns
+WNS. First moving per-job offsets out of the
 descriptor reduced it from 157 to 61 bits; then replacing its 32-bit endpoint
 mask with an inclusive 5-bit range end reduced it to 34 bits. Together these
 changes saved 1,198 LUTs, 1,213 FFs, and four BRAM tiles. Each `128 x 34`
@@ -898,20 +908,19 @@ not as evidence that the architectural cone is robust.
 9. Record final utilization, timing, checksum, and critical-path identity beside
    the board flow.
 
-The current Smart Artix implementation uses synthesis checksum `ba319fb3` and
+The current Smart Artix implementation uses synthesis checksum `997f4a67` and
 closed the constrained MIG `ui_clk` (`clk_pll_i`) domain at 100 MHz with WNS
-`+0.194 ns`, TNS `0 ns`, WHS `+0.056 ns`, THS `0 ns`, zero setup/hold failing
-endpoints, all 45,561 nets routed, and zero DRC errors. Utilization is 24,365 LUTs
-(74.74%), 25,525 registers (39.15%), 39 DSPs (32.50%), and 46 BRAM tiles
-(61.33%). Against checksum `1c312326`, `vivado_report_summary.py compare` reports
--1,268 LUTs, -1,349 registers, -4 BRAM tiles, unchanged DSP use, and +0.147 ns
-setup WNS. The critical setup path moved from the descriptor storage path to the
-compressor output saturation path.
+`+0.165 ns`, TNS `0 ns`, WHS `+0.025 ns`, THS `0 ns`, zero setup/hold failing
+endpoints, all 46,033 nets routed, and zero DRC errors. Utilization is 24,933
+LUTs (76.48%), 25,911 registers (39.74%), 39 DSPs (32.50%), and 46.5 BRAM tiles
+(62.00%). The SPI bridge contributes 816 post-route LUTs, 585 registers, and
+one RAMB18. Its CRC and staging paths are not the worst setup or hold paths;
+the worst setup path is in the renderer DSP result path.
 
-The JSON summary records 124 DRC warnings. `vivado_report_summary.py analyze`
+The JSON summary records 123 DRC warnings. `vivado_report_summary.py analyze`
 also reports 9 inputs without delay, 1 false-pathed input without delay, 13
 outputs without delay, and methodology findings `LUTAR-1=1`, `PDRC-190=12`,
-`SYNTH-6=52`, `XDCB-5=1`, and `REQP-1959=16`. It therefore classifies the run as
-`REVIEW` even though internal setup, hold, route, and DRC-error acceptance all
-pass. Internal timing closure is not a waiver for external I/O coverage or the
-remaining warning classification.
+`SYNTH-6=53`, `ULMTCS-1=1`, `XDCB-5=1`, and `REQP-1959=16`. It therefore
+classifies the run as `REVIEW` even though internal setup, hold, route, and
+DRC-error acceptance all pass. Internal timing closure is not a waiver for
+external I/O coverage or the remaining warning classification.

@@ -45,10 +45,13 @@ is not used to submit production commands. Simulation and hardware use the same
 command parser; there is no typed state-install bypass.
 
 The bridge cannot backpressure SPI after CS is asserted, so it receives the
-complete declared transaction into a 63-word staging array. A valid transaction
-is committed only after CS rises; downstream `cmd_ready` backpressure holds the
-current staged word instead of dropping it. A new command transaction that
-arrives before the prior staged commit drains is rejected as a whole.
+complete declared transaction into a 63-word synchronous block RAM. A valid
+transaction is committed only after CS rises; downstream `cmd_ready`
+backpressure holds the current staged word instead of dropping it. Synchronous
+RAM read-ahead adds one system-clock cycle before the first committed word and
+then sustains one word per system clock while `cmd_ready` remains asserted. A
+new command transaction that arrives before the prior staged commit drains is
+rejected as a whole.
 
 `CMD_FIFO_STATUS[15:2]` exposes FIFO occupancy, so software can calculate:
 

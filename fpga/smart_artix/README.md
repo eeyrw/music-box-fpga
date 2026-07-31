@@ -227,7 +227,7 @@ Device: 7a50tfgg484-2
 Vivado result: route_design completed successfully
 Errors: 0
 Critical warnings: 0
-Synthesis checksum: 1c312326
+Synthesis checksum: 997f4a67
 ```
 
 Warnings remain visible and include generated-IP and board I/O timing messages.
@@ -237,30 +237,34 @@ constraints still require measured board timing contracts.
 Post-route utilization:
 
 ```text
-Slice LUTs       25633 / 32600  78.63%
-Slice Registers 26874 / 65200  41.22%
+Slice LUTs       24933 / 32600  76.48%
+Slice Registers 25911 / 65200  39.74%
 DSP48E1            39 / 120    32.50%
-Block RAM tiles    50 / 75     66.67%
+Block RAM tiles  46.5 / 75     62.00%
 ```
 
 Post-route timing at the MIG 100 MHz `ui_clk`:
 
 ```text
-WNS  +0.047 ns
+WNS  +0.165 ns
 TNS  0.000 ns
 Failing setup endpoints: 0
-WHS  +0.053 ns
+WHS  +0.025 ns
 THS  0.000 ns
 Failing hold endpoints: 0
-Fully routed nets: 48436 / 48436
+Fully routed nets: 46033 / 46033
 Route errors: 0
 DRC errors: 0
 ```
 
-The LUT line above is `25633 / 32600 (78.63%)`; this relatively high occupancy
-is a QoR and growth-budget concern even though the design fits. The DRC report
-also contains 127 warnings, which require classification rather than being
+The LUT line above is `24933 / 32600 (76.48%)`; occupancy remains a QoR and
+growth-budget concern even though the design fits. The DRC report also contains
+123 warnings, which require classification rather than being
 treated as errors or silently waived.
+
+The SPI atomic-command staging and byte-serial CRC optimization are included in
+this result. `spi_register_bridge` uses 816 post-route LUTs, 585 registers, and
+one RAMB18; its worst paths are not the design's setup or hold critical paths.
 
 Timing closure required BRAM-safe chorus/reverb memories and explicit numeric
 stages in the chorus, reverb, return mixer, compressor, and control executor.
@@ -275,10 +279,10 @@ only after the real board timing contract is known.
 
 ## Resource Follow-Up
 
-The design fits, but the current 78.63% LUT occupancy and +0.047 ns setup slack
-leave little growth or placement margin. Preserve synchronous BRAM templates and
-re-run full implementation after effects, voice-count, or control-record
-changes; post-synthesis timing is not sufficient for signoff.
+The design fits, but the current 76.48% LUT occupancy and +0.165 ns setup slack
+still require disciplined growth and placement margins. Preserve synchronous
+BRAM templates and re-run full implementation after effects, voice-count, or
+control-record changes; post-synthesis timing is not sufficient for signoff.
 
 ## Bring-Up Order
 

@@ -111,9 +111,15 @@ Build the board runner with:
 make host-smart-artix-bringup
 ```
 
-It reads platform/global status through `RegisterIo`, exercises the DDR debug
-aperture, and sends its voice smoke test through the same `0xa5` command path as
-simulation. `--dry-run` prints both transaction classes without opening CH347.
+It requires the exact current interface value `0x000d0000`, reads
+platform/global and command-parser status through the CRC32 mailbox, exercises
+the DDR debug aperture as acknowledged single-register operations, and sends
+its voice smoke test through the same atomic `0xa5` command path as simulation.
+The voice test is mono, waits for the command FIFO/parser to drain, checks for
+new audio and parser errors, observes memory activity, and sends STOP before
+returning. `--dry-run` executes the complete workflow against a synthetic ready
+board while tracing every register and command transaction; it does not open
+CH347.
 
 The transport still requires board validation of SPI mode, maximum SCLK, CS
 timing, read turnaround, and any pin-to-system-clock CDC implementation.

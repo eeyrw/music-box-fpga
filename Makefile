@@ -353,7 +353,7 @@ measure-voice-compute-pipeline:
 		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
 	$(BUILD_DIR)/voice_compute_pipeline_model_test
 
-test-cpp-unit:
+test-cpp-unit: host-smart-artix-bringup
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/voice_compute_pipeline_model.cpp \
@@ -420,6 +420,8 @@ test-cpp-unit:
 		host/ch347_transport.cpp host/ch347_transport_test.cpp \
 		-o $(BUILD_DIR)/ch347_transport_test -ldl
 	$(BUILD_DIR)/ch347_transport_test
+	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
+		--ddr-smoke --voice-smoke --base 0x100 --length 8
 	python3 tools/compare_reference_fluidsynth_test.py
 	python3 tools/vivado_report_summary_test.py
 

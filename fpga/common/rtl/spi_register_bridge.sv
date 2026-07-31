@@ -53,7 +53,7 @@ module spi_register_bridge #(
   logic [6:0] bit_count;
   logic [30:0] data_shift;
   logic [86:0] mailbox_request_shift;
-  logic [94:0] mailbox_tx_shift;
+  logic [62:0] mailbox_tx_shift;
   logic read_sample_seen;
   logic sclk_rise;
   logic sclk_fall;
@@ -65,6 +65,7 @@ module spi_register_bridge #(
   logic [15:0] request_address;
   logic [31:0] request_wdata;
   logic [31:0] request_expected_crc;
+  logic [31:0] request_crc;
   logic response_valid;
   logic [7:0] response_status;
   logic [7:0] response_operation;
@@ -74,10 +75,19 @@ module spi_register_bridge #(
   logic [7:0] fetch_operation;
   logic [15:0] fetch_address;
   logic [31:0] fetch_data;
-  logic [31:0] fetch_crc;
-  logic [95:0] fetch_frame;
+  logic [63:0] fetch_payload;
+  logic [7:0] fetch_byte_shift;
+  logic [31:0] fetch_crc_work;
+  logic [31:0] fetch_crc_final;
+  logic [30:0] fetch_crc_shift;
 
-  logic [31:0] command_staging [0:MAX_COMMAND_WORDS-1];
+  (* ram_style = "block" *) logic [31:0]
+      command_staging [0:MAX_COMMAND_WORDS-1];
+  logic staging_write_enable;
+  logic [COMMAND_INDEX_WIDTH-1:0] staging_write_address;
+  logic [31:0] staging_write_data;
+  logic [COMMAND_INDEX_WIDTH-1:0] staging_read_address;
+  logic [31:0] staging_read_data;
   logic [7:0] stream_declared_words;
   logic [7:0] stream_received_words;
   logic [7:0] stream_command_words_remaining;
@@ -86,6 +96,7 @@ module spi_register_bridge #(
   logic stream_reject;
   logic [COMMAND_INDEX_WIDTH-1:0] commit_index;
   logic [7:0] commit_words;
+  logic commit_start_pending;
 
   function automatic logic [15:0] crc16_ccitt_byte(
     input logic [15:0] crc_in,
@@ -97,19 +108,6 @@ module spi_register_bridge #(
       for (int bit_index = 0; bit_index < 8; bit_index++)
         crc = crc[15] ? ((crc << 1) ^ 16'h1021) : (crc << 1);
       crc16_ccitt_byte = crc;
-    end
-  endfunction
-
-  function automatic logic [15:0] crc16_ccitt_word(
-    input logic [15:0] crc_in,
-    input logic [31:0] data
-  );
-    logic [15:0] crc;
-    begin
-      crc = crc16_ccitt_byte(crc_in, data[31:24]);
-      crc = crc16_ccitt_byte(crc, data[23:16]);
-      crc = crc16_ccitt_byte(crc, data[15:8]);
-      crc16_ccitt_word = crc16_ccitt_byte(crc, data[7:0]);
     end
   endfunction
 
@@ -126,31 +124,39 @@ module spi_register_bridge #(
     end
   endfunction
 
-  function automatic logic [31:0] register_frame_crc32(
-    input logic [7:0] byte0,
-    input logic [7:0] byte1,
-    input logic [15:0] address,
-    input logic [31:0] data
-  );
-    logic [31:0] crc;
-    begin
-      crc = crc32_byte(32'hffff_ffff, byte0);
-      crc = crc32_byte(crc, byte1);
-      crc = crc32_byte(crc, address[15:8]);
-      crc = crc32_byte(crc, address[7:0]);
-      crc = crc32_byte(crc, data[31:24]);
-      crc = crc32_byte(crc, data[23:16]);
-      crc = crc32_byte(crc, data[15:8]);
-      crc = crc32_byte(crc, data[7:0]);
-      register_frame_crc32 = crc ^ 32'hffff_ffff;
-    end
-  endfunction
-
   assign sclk_rise = cs_active && !sclk_sync[1] && sclk_sync[0];
   assign sclk_fall = cs_active && sclk_sync[1] && !sclk_sync[0];
   assign cs_active = !cs_sync[0];
   assign cs_start = cs_sync[1] && !cs_sync[0];
   assign cs_end = !cs_sync[1] && cs_sync[0];
+
+  always_comb begin
+    staging_write_enable = (state == STATE_STREAM_DATA) && sclk_rise &&
+        (bit_count == 7'd31) && !stream_reject &&
+        (stream_received_words < stream_declared_words) &&
+        (stream_received_words < 8'(MAX_COMMAND_WORDS));
+    staging_write_address =
+        stream_received_words[COMMAND_INDEX_WIDTH-1:0];
+    staging_write_data = {data_shift[30:0], mosi_sync[1]};
+
+    staging_read_address = commit_index;
+    if (commit_start_pending &&
+        ((8'(commit_index) + 8'd1) < commit_words)) begin
+      staging_read_address = commit_index + 1'b1;
+    end else if (cmd_valid && cmd_ready &&
+                 ((8'(commit_index) + 8'd2) < commit_words)) begin
+      staging_read_address = commit_index + COMMAND_INDEX_WIDTH'(2);
+    end else if (cmd_valid &&
+                 ((8'(commit_index) + 8'd1) < commit_words)) begin
+      staging_read_address = commit_index + 1'b1;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (staging_write_enable)
+      command_staging[staging_write_address] <= staging_write_data;
+    staging_read_data <= command_staging[staging_read_address];
+  end
 
   always_comb begin
     if (bus_valid) begin
@@ -169,11 +175,11 @@ module spi_register_bridge #(
       fetch_address = 16'd0;
       fetch_data = 32'd0;
     end
-    fetch_crc = register_frame_crc32(
-        fetch_status, fetch_operation, fetch_address, fetch_data);
-    fetch_frame = {
-      fetch_status, fetch_operation, fetch_address, fetch_data, fetch_crc
+    fetch_payload = {
+      fetch_status, fetch_operation, fetch_address, fetch_data
     };
+    fetch_crc_final = crc32_byte(
+        fetch_crc_work, fetch_byte_shift) ^ 32'hffff_ffff;
   end
 
   always_ff @(posedge clk) begin
@@ -201,6 +207,7 @@ module spi_register_bridge #(
       request_address <= '0;
       request_wdata <= '0;
       request_expected_crc <= '0;
+      request_crc <= '0;
       response_valid <= 1'b0;
       response_status <= RESPONSE_EMPTY;
       response_operation <= '0;
@@ -222,6 +229,10 @@ module spi_register_bridge #(
       stream_reject <= 1'b0;
       commit_index <= '0;
       commit_words <= '0;
+      commit_start_pending <= 1'b0;
+      fetch_byte_shift <= '0;
+      fetch_crc_work <= '0;
+      fetch_crc_shift <= '0;
     end else begin
       if (bus_valid && bus_ready) begin
         bus_valid <= 1'b0;
@@ -233,12 +244,17 @@ module spi_register_bridge #(
         spi_error <= spi_error || bus_error;
       end
 
+      if (commit_start_pending) begin
+        commit_start_pending <= 1'b0;
+        cmd_valid <= 1'b1;
+      end
+
       if (cmd_valid && cmd_ready) begin
         if ((8'(commit_index) + 8'd1) >= commit_words) begin
           cmd_valid <= 1'b0;
         end else begin
           commit_index <= commit_index + 1'b1;
-          cmd_data <= command_staging[commit_index + 1'b1];
+          cmd_data <= staging_read_data;
         end
       end
 
@@ -249,9 +265,8 @@ module spi_register_bridge #(
             if (((request_operation == REGISTER_READ) ||
                  (request_operation == REGISTER_WRITE)) &&
                 (!CHECK_REGISTER_CRC ||
-                 (request_expected_crc == register_frame_crc32(
-                     MAILBOX_REQUEST_OPCODE, request_operation,
-                     request_address, request_wdata)))) begin
+                 (request_expected_crc ==
+                  (request_crc ^ 32'hffff_ffff)))) begin
               bus_valid <= 1'b1;
               bus_write <= request_operation == REGISTER_WRITE;
               bus_address <= request_address;
@@ -267,11 +282,11 @@ module spi_register_bridge #(
               (stream_received_words == stream_declared_words) &&
               (stream_command_words_remaining == 0) &&
               (!CHECK_COMMAND_CRC || (stream_crc == stream_expected_crc)) &&
-              !cmd_valid) begin
+              !cmd_valid && !commit_start_pending) begin
             commit_index <= '0;
             commit_words <= stream_received_words;
-            cmd_data <= command_staging[0];
-            cmd_valid <= 1'b1;
+            cmd_data <= staging_read_data;
+            commit_start_pending <= 1'b1;
           end else begin
             spi_error <= 1'b1;
           end
@@ -304,6 +319,10 @@ module spi_register_bridge #(
         stream_expected_crc <= '0;
         stream_crc <= '0;
         stream_reject <= 1'b0;
+        request_crc <= '0;
+        fetch_byte_shift <= '0;
+        fetch_crc_work <= '0;
+        fetch_crc_shift <= '0;
       end else begin
         unique case (state)
           STATE_IDLE: begin
@@ -316,9 +335,16 @@ module spi_register_bridge #(
                 bit_count <= '0;
                 data_shift <= '0;
                 unique case ({command_shift[6:0], mosi_sync[1]})
-                  MAILBOX_REQUEST_OPCODE: state <= STATE_MAILBOX_REQUEST;
+                  MAILBOX_REQUEST_OPCODE: begin
+                    state <= STATE_MAILBOX_REQUEST;
+                    request_crc <= crc32_byte(
+                        32'hffff_ffff, MAILBOX_REQUEST_OPCODE);
+                  end
                   MAILBOX_FETCH_OPCODE: state <= STATE_FETCH_HEADER;
-                  COMMAND_STREAM_OPCODE: state <= STATE_STREAM_HEADER;
+                  COMMAND_STREAM_OPCODE: begin
+                    state <= STATE_STREAM_HEADER;
+                    commit_index <= '0;
+                  end
                   default: begin
                     state <= STATE_REJECT;
                     spi_error <= 1'b1;
@@ -335,6 +361,10 @@ module spi_register_bridge #(
               mailbox_request_shift <= {
                 mailbox_request_shift[85:0], mosi_sync[1]
               };
+              if ((bit_count < 7'd56) && (bit_count[2:0] == 3'd7))
+                request_crc <= crc32_byte(
+                    request_crc,
+                    {mailbox_request_shift[6:0], mosi_sync[1]});
               if (bit_count == 7'd87) begin
                 request_operation <= mailbox_request_shift[86:79];
                 request_address <= mailbox_request_shift[78:63];
@@ -363,9 +393,12 @@ module spi_register_bridge #(
               if (bit_count == 7'd23) begin
                 if ({data_shift[22:0], mosi_sync[1]} != 24'd0)
                   spi_error <= 1'b1;
-                spi_miso <= fetch_frame[95];
-                mailbox_tx_shift <= fetch_frame[94:0];
+                spi_miso <= fetch_payload[63];
+                mailbox_tx_shift <= fetch_payload[62:0];
                 read_sample_seen <= 1'b0;
+                fetch_byte_shift <= '0;
+                fetch_crc_work <= 32'hffff_ffff;
+                fetch_crc_shift <= '0;
                 bit_count <= '0;
                 state <= STATE_FETCH_DATA;
               end else begin
@@ -377,15 +410,28 @@ module spi_register_bridge #(
           STATE_FETCH_DATA: begin
             if (sclk_rise) begin
               read_sample_seen <= 1'b1;
+              if (bit_count < 7'd64)
+                fetch_byte_shift <= {fetch_byte_shift[6:0], spi_miso};
             end else if (sclk_fall && read_sample_seen) begin
               read_sample_seen <= 1'b0;
+              if ((bit_count < 7'd64) && (bit_count[2:0] == 3'd7))
+                fetch_crc_work <= crc32_byte(
+                    fetch_crc_work, fetch_byte_shift);
               if (bit_count == 7'd95) begin
                 bit_count <= '0;
                 spi_miso <= 1'b0;
                 state <= STATE_FETCH_WAIT;
+              end else if (bit_count == 7'd63) begin
+                spi_miso <= fetch_crc_final[31];
+                fetch_crc_shift <= fetch_crc_final[30:0];
+                bit_count <= bit_count + 7'd1;
+              end else if (bit_count < 7'd63) begin
+                spi_miso <= mailbox_tx_shift[62];
+                mailbox_tx_shift <= {mailbox_tx_shift[61:0], 1'b0};
+                bit_count <= bit_count + 7'd1;
               end else begin
-                spi_miso <= mailbox_tx_shift[94];
-                mailbox_tx_shift <= {mailbox_tx_shift[93:0], 1'b0};
+                spi_miso <= fetch_crc_shift[30];
+                fetch_crc_shift <= {fetch_crc_shift[29:0], 1'b0};
                 bit_count <= bit_count + 7'd1;
               end
             end
@@ -406,10 +452,10 @@ module spi_register_bridge #(
                 stream_expected_crc <= {data_shift[14:0], mosi_sync[1]};
                 stream_crc <= crc16_ccitt_byte(
                     16'hffff, data_shift[22:15]);
-                stream_reject <= cmd_valid ||
+                stream_reject <= cmd_valid || commit_start_pending ||
                     (data_shift[22:15] == 0) ||
                     (data_shift[22:15] > 8'(MAX_COMMAND_WORDS));
-                if (cmd_valid ||
+                if (cmd_valid || commit_start_pending ||
                     (data_shift[22:15] == 0) ||
                     (data_shift[22:15] > 8'(MAX_COMMAND_WORDS)))
                   spi_error <= 1'b1;
@@ -425,16 +471,11 @@ module spi_register_bridge #(
           STATE_STREAM_DATA: begin
             if (sclk_rise) begin
               data_shift <= {data_shift[29:0], mosi_sync[1]};
+              if (bit_count[2:0] == 3'd7)
+                stream_crc <= crc16_ccitt_byte(
+                    stream_crc, {data_shift[6:0], mosi_sync[1]});
               if (bit_count == 7'd31) begin
                 bit_count <= '0;
-                if (!stream_reject &&
-                    (stream_received_words < stream_declared_words) &&
-                    (stream_received_words < 8'(MAX_COMMAND_WORDS))) begin
-                  command_staging[stream_received_words[COMMAND_INDEX_WIDTH-1:0]] <=
-                      {data_shift[30:0], mosi_sync[1]};
-                end
-                stream_crc <= crc16_ccitt_word(
-                    stream_crc, {data_shift[30:0], mosi_sync[1]});
                 if (stream_command_words_remaining == 0) begin
                   if ({data_shift[6:0], mosi_sync[1]} > 8'd16)
                     stream_reject <= 1'b1;

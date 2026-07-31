@@ -39,7 +39,7 @@ The status was refreshed against `spi_register_bridge`, the command plane, and
 
 Status: fixed; sticky transport counters remain open.
 
-The bridge now receives the declared transaction into a 63-word staging array.
+The bridge now receives the declared transaction into a 63-word staging RAM.
 After validation, `cmd_valid` remains asserted with the current staged word
 until `cmd_ready` accepts it. FIFO backpressure therefore delays the commit
 instead of dropping an interior word, and another command transaction arriving
@@ -121,6 +121,31 @@ Open design choices:
 This path fixes SPI-001 and SPI-002 for the current CH347 workflow. CRC detects
 corruption when enabled, but the protocol still does not provide an ACK,
 lost-ACK recovery, or exactly-once retry.
+
+### Implementation Cost
+
+The first atomic-transaction implementation inferred the 63 x 32 staging store
+as registers and expanded CRC over complete words or frames in one cycle. A
+fresh Vivado synthesis attributed 2,261 LUTs and 2,573 registers to
+`spi_register_bridge`, which was too expensive for this device.
+
+The current implementation uses a conventional synchronous one-write/one-read
+RAM template with read-ahead. Vivado maps the staging store to one RAMB18. The
+first committed word has one system-clock cycle of internal startup latency;
+after that, an asserted `cmd_ready` accepts one word per 100 MHz system clock.
+If `cmd_ready` falls, `cmd_valid` and `cmd_data` remain stable.
+
+CRC16 and CRC32 now advance once per received or transmitted byte instead of
+forming a full-frame combinational CRC cone. This changes neither polynomial,
+initial/final value, covered bytes, wire field, nor the configurable CRC-check
+behavior. Fresh synthesis reduced the bridge to 890 LUTs, 585 registers, and
+one RAMB18. Post-route attribution was 816 LUTs, 585 registers, and one RAMB18.
+
+The corresponding forced Smart Artix implementation met the 100 MHz system
+clock with setup WNS +0.165 ns, setup TNS 0 ns, hold WHS +0.025 ns, and hold THS
+0 ns. The worst setup and hold paths were outside the SPI bridge. The complete
+design used 24,933 LUTs, 25,911 registers, 46.5 BRAM tiles, and 39 DSPs, with
+all 46,033 routable nets fully routed and no route or DRC errors.
 
 ## Optional Packetized DMA Transport
 

@@ -2,6 +2,7 @@
 
 #include "sim/harness/control/command_control.h"
 
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -9,57 +10,29 @@
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
-constexpr uint16_t kVersion = render::regs::kVersion;
-constexpr uint16_t kSystemStatus = render::regs::kSystemStatus;
-constexpr uint16_t kCommonEventFlags = render::regs::kCommonEventFlags;
-constexpr uint16_t kPipelineLatencyStatus = render::regs::kPipelineLatencyStatus;
-constexpr uint16_t kUnderrunCount = render::regs::kUnderrunCount;
-constexpr uint16_t kSampleDropCount = render::regs::kSampleDropCount;
-constexpr uint16_t kRenderDeadlineMissCount = render::regs::kRenderDeadlineMissCount;
-constexpr uint16_t kMemResponseCount = render::regs::kMemResponseCount;
-constexpr uint16_t kSampleWindowRequestCount = render::regs::kSampleWindowRequestCount;
-constexpr uint16_t kSampleWindowHitCount = render::regs::kSampleWindowHitCount;
-constexpr uint16_t kSampleWindowRefillCount = render::regs::kSampleWindowRefillCount;
-constexpr uint16_t kSampleWindowFallbackReadCount =
-    render::regs::kSampleWindowFallbackReadCount;
-constexpr uint16_t kSampleWindowMemoryReadCount =
-    render::regs::kSampleWindowMemoryReadCount;
-constexpr uint16_t kSampleWindowEvictionCount = render::regs::kSampleWindowEvictionCount;
-constexpr uint16_t kSampleWindowStallCycleCount =
-    render::regs::kSampleWindowStallCycleCount;
-constexpr uint16_t kPlatformStatus = render::regs::kPlatformStatus;
-constexpr uint16_t kPlatformErrors = render::regs::kPlatformErrors;
-constexpr uint16_t kPlatformBytesLoaded = render::regs::kPlatformBytesLoaded;
-constexpr uint16_t kPlatformSf2Size = render::regs::kPlatformSf2Size;
-constexpr uint16_t kPlatformCurrentLba = render::regs::kPlatformCurrentLba;
-constexpr uint16_t kPlatformDdrStatus = render::regs::kPlatformDdrStatus;
-constexpr uint16_t kDdrAccessControl = render::regs::kDdrAccessControl;
-constexpr uint16_t kDdrAccessStatus = render::regs::kDdrAccessStatus;
-constexpr uint16_t kDdrAccessAddr = render::regs::kDdrAccessAddr;
-constexpr uint16_t kDdrAccessByteEnable = render::regs::kDdrAccessByteEnable;
-constexpr uint16_t kDdrAccessData0 = render::regs::kDdrAccessData0;
+namespace regs = render::regs;
 
-constexpr uint32_t kPlatformRegsPresent = render::regs::kPlatformStatusPlatformRegsPresentMask;
-constexpr uint32_t kPlatformErrorPresent = render::regs::kPlatformStatusErrorPresentMask;
-constexpr uint32_t kPlatformDdrCalibrated = render::regs::kPlatformStatusDdrCalibratedMask;
-constexpr uint32_t kPlatformSdInitialized = render::regs::kPlatformStatusSdInitializedMask;
-constexpr uint32_t kPlatformAssetLoaded = render::regs::kPlatformStatusAssetLoadedMask;
-constexpr uint32_t kDdrAccessControlStart = render::regs::kDdrAccessControlStartMask;
-constexpr uint32_t kDdrAccessControlWrite = render::regs::kDdrAccessControlWriteMask;
-constexpr uint32_t kDdrAccessControlClear = render::regs::kDdrAccessControlClearMask;
-constexpr uint32_t kDdrAccessStatusPresent = render::regs::kDdrAccessStatusPresentMask;
-constexpr uint32_t kDdrAccessStatusReady = render::regs::kDdrAccessStatusReadyMask;
-constexpr uint32_t kDdrAccessStatusDone = render::regs::kDdrAccessStatusDoneMask;
-constexpr uint32_t kDdrAccessStatusError = render::regs::kDdrAccessStatusErrorMask;
+constexpr uint32_t kEventErrorMask =
+    regs::kCommonEventFlagsUnderrunMask |
+    regs::kCommonEventFlagsSampleDropMask |
+    regs::kCommonEventFlagsRenderDeadlineMissMask;
+constexpr uint32_t kCommandErrorMask =
+    regs::kCmdFifoStatusCommandErrorMask |
+    regs::kCmdFifoStatusStaleGenerationMask;
+constexpr uint32_t kDdrReadyMask =
+    regs::kDdrAccessStatusPresentMask |
+    regs::kDdrAccessStatusReadyMask;
 
 struct Args {
   host::Ch347Options ch347;
@@ -68,183 +41,173 @@ struct Args {
   bool wait_asset = false;
   bool ddr_smoke = false;
   bool voice_smoke = false;
-  uint32_t poll_ms = 250;
+  uint32_t poll_ms = 100;
   uint32_t timeout_ms = 10000;
   uint32_t ddr_addr = 0x00000100;
-  uint32_t ddr_pattern[4] = {0x01234567, 0x89abcdef, 0x76543210, 0xfedcba98};
+  std::array<uint32_t, 4> ddr_pattern = {
+      0x01234567, 0x89abcdef, 0x76543210, 0xfedcba98};
   int voice = 0;
-  bool stereo = false;
   uint32_t base = 0;
-  uint32_t base_r = 0;
   uint32_t length = 0;
-  uint32_t length_r = 0;
   uint32_t phase_inc = 0x00000100;
   int gain_l = 0x2000;
   int gain_r = 0x2000;
 };
 
-class DryRunTransport : public host::RegisterIo, public render::CommandWordSink {
- public:
-  void write_register(uint16_t address, uint32_t data) override {
-    std::cout << "dry-run write 0x" << std::hex << std::setw(4) << std::setfill('0')
-              << address << " = 0x" << std::setw(8) << data << std::dec
-              << std::setfill(' ') << "\n";
-  }
-
-  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override {
-    if (data.empty()) return;
-    std::cout << "dry-run burst-write 0x" << std::hex << std::setw(4) << std::setfill('0')
-              << start_address << " words=" << std::dec << data.size() << "\n";
-    for (size_t i = 0; i < data.size(); ++i) {
-      std::cout << "  [0x" << std::hex << std::setw(4) << std::setfill('0')
-                << uint16_t(start_address + i * 4) << "] = 0x" << std::setw(8)
-                << data[i] << std::dec << std::setfill(' ') << "\n";
-    }
-  }
-
-  uint32_t read_register(uint16_t address) override {
-    std::cout << "dry-run read  0x" << std::hex << std::setw(4) << std::setfill('0')
-              << address << std::dec << std::setfill(' ') << "\n";
-    return 0;
-  }
-
-  void write_command_words(const std::vector<uint32_t>& words) override {
-    host::Ch347RegisterTransport::validate_command_transaction(words);
-    std::cout << "dry-run command";
-    for (uint32_t word : words) {
-      std::cout << " 0x" << std::hex << std::setw(8) << std::setfill('0') << word;
-    }
-    std::cout << std::dec << std::setfill(' ') << "\n";
-  }
+struct Snapshot {
+  uint32_t version = 0;
+  uint32_t system_status = 0;
+  uint32_t event_flags = 0;
+  uint32_t pipeline_latency = 0;
+  uint32_t command_status = 0;
+  uint32_t platform_status = 0;
+  uint32_t platform_errors = 0;
+  uint32_t bytes_loaded = 0;
+  uint32_t sf2_size = 0;
+  uint32_t current_lba = 0;
+  uint32_t platform_ddr_status = 0;
+  uint32_t ddr_access_status = 0;
+  uint32_t underrun_count = 0;
+  uint32_t sample_drop_count = 0;
+  uint32_t deadline_miss_count = 0;
+  uint32_t memory_response_count = 0;
 };
 
 uint32_t parse_u32(const std::string& text, const char* name) {
   size_t pos = 0;
-  unsigned long value = std::stoul(text, &pos, 0);
-  if (pos != text.size()) throw std::runtime_error(std::string("invalid ") + name + ": " + text);
-  if (value > 0xfffffffful) throw std::runtime_error(std::string(name) + " out of range: " + text);
+  const unsigned long value = std::stoul(text, &pos, 0);
+  if (pos != text.size() || value > 0xfffffffful) {
+    throw std::runtime_error(std::string("invalid ") + name + ": " + text);
+  }
   return uint32_t(value);
 }
 
 int parse_int(const std::string& text, const char* name) {
   size_t pos = 0;
-  long value = std::stol(text, &pos, 0);
-  if (pos != text.size()) throw std::runtime_error(std::string("invalid ") + name + ": " + text);
+  const long value = std::stol(text, &pos, 0);
+  if (pos != text.size() || value < std::numeric_limits<int>::min() ||
+      value > std::numeric_limits<int>::max()) {
+    throw std::runtime_error(std::string("invalid ") + name + ": " + text);
+  }
   return int(value);
 }
 
 uint8_t parse_u8(const std::string& text, const char* name) {
-  uint32_t value = parse_u32(text, name);
-  if (value > 0xffu) throw std::runtime_error(std::string(name) + " out of range: " + text);
+  const uint32_t value = parse_u32(text, name);
+  if (value > 0xffu) {
+    throw std::runtime_error(std::string(name) + " out of range: " + text);
+  }
   return uint8_t(value);
 }
 
 std::string parse_device_path(const std::string& text) {
   bool decimal_index = !text.empty();
-  for (char c : text) decimal_index = decimal_index && std::isdigit(static_cast<unsigned char>(c));
-  if (decimal_index) return "/dev/ch34x_pis" + text;
-  return text;
+  for (char c : text) {
+    decimal_index = decimal_index &&
+        std::isdigit(static_cast<unsigned char>(c));
+  }
+  return decimal_index ? "/dev/ch34x_pis" + text : text;
 }
 
 std::string need_arg(int argc, char** argv, int& index, const char* name) {
-  if (index + 1 >= argc) throw std::runtime_error(std::string("missing value for ") + name);
+  if (index + 1 >= argc) {
+    throw std::runtime_error(std::string("missing value for ") + name);
+  }
   return argv[++index];
 }
 
 void print_usage(const char* argv0) {
   std::cout
-      << "Usage:\n"
-      << "  " << argv0 << " [transport options] [test options]\n"
-      << "\nTransport options:\n"
+      << "Usage: " << argv0 << " [transport options] [actions]\n\n"
+      << "Transport options:\n"
       << "  --lib PATH              CH347 shared library path\n"
-      << "  --device PATH|N         CH347 device path; N maps to /dev/ch34x_pisN\n"
-      << "  --clock-hz HZ           SPI clock request rounded down to a CH347 step, default 1000000\n"
-      << "  --mode N                SPI mode; Smart Artix requires 0\n"
+      << "  --device PATH|N         N maps to /dev/ch34x_pisN\n"
+      << "  --clock-hz HZ           Requested SPI clock, default 1000000\n"
       << "  --cs-mask VALUE         CH347 chip-select mask, default 0x80\n"
-      << "  --dry-run               Print register accesses without opening CH347\n"
-      << "\nTest options:\n"
-      << "  --wait-ddr              Poll until DDR calibration and DDR register access ready\n"
-      << "  --wait-asset            Poll until SD asset load completes or an error appears\n"
-      << "  --timeout-ms N          Poll timeout, default 10000\n"
-      << "  --poll-ms N             Poll interval, default 250\n"
-      << "  --ddr-smoke             Write/read one 16-byte DDR register access beat\n"
-      << "  --ddr-addr ADDR         16-byte aligned DDR byte address, default 0x100\n"
-      << "  --ddr-pattern D0 D1 D2 D3\n"
-      << "                          Four 32-bit words for --ddr-smoke\n"
-      << "  --voice-smoke           Program one conservative mono/stereo voice\n"
-      << "  --voice N               Voice slot, default 0\n"
-      << "  --stereo 0|1            Voice stereo flag, default 0\n"
-      << "  --base ADDR             Left/mono wave-memory word address\n"
-      << "  --base-r ADDR           Right wave-memory word address, default --base\n"
-      << "  --length FRAMES         Sample-frame length required by --voice-smoke\n"
-      << "  --length-r FRAMES       Right-channel length, default --length\n"
-      << "  --phase-inc Q24_8       Playback increment, default 0x00000100\n"
+      << "  --dry-run               Execute against a synthetic board and trace I/O\n\n"
+      << "Actions:\n"
+      << "  (none)                  Validate interface version and print status\n"
+      << "  --wait-ddr              Wait for MIG calibration and DDR debug readiness\n"
+      << "  --wait-asset            Wait for DDR, SD initialization, and asset load\n"
+      << "  --ddr-smoke             Write and read one 16-byte DDR debug beat\n"
+      << "  --voice-smoke           Start, observe, and stop one mono voice\n"
+      << "  --timeout-ms N          Action timeout, default 10000\n"
+      << "  --poll-ms N             Poll interval, default 100\n\n"
+      << "DDR smoke options:\n"
+      << "  --ddr-addr ADDR         16-byte aligned byte address, default 0x100\n"
+      << "  --ddr-pattern D0 D1 D2 D3\n\n"
+      << "Voice smoke options:\n"
+      << "  --voice N               Mono voice slot, default 0\n"
+      << "  --base ADDR             Wave-memory word address\n"
+      << "  --length FRAMES         Required sample-frame length\n"
+      << "  --phase-inc Q24_8       Default 0x00000100\n"
       << "  --gain-l Q1_15          Default 0x2000\n"
-      << "  --gain-r Q1_15          Default 0x2000\n"
-      ;
+      << "  --gain-r Q1_15          Default 0x2000\n";
 }
 
 Args parse_args(int argc, char** argv) {
   Args args;
   for (int i = 1; i < argc; ++i) {
-    std::string a = argv[i];
-    if (a == "--help" || a == "-h") {
+    const std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
       print_usage(argv[0]);
       std::exit(0);
-    } else if (a == "--lib") {
+    } else if (arg == "--lib") {
       args.ch347.library_path = need_arg(argc, argv, i, "--lib");
-    } else if (a == "--device") {
-      args.ch347.device_path = parse_device_path(need_arg(argc, argv, i, "--device"));
-    } else if (a == "--clock-hz") {
-      args.ch347.clock_hz = parse_int(need_arg(argc, argv, i, "--clock-hz"), "clock-hz");
-    } else if (a == "--mode") {
-      args.ch347.spi_mode = parse_int(need_arg(argc, argv, i, "--mode"), "mode");
-    } else if (a == "--cs-mask") {
-      args.ch347.chip_select_mask = parse_u8(need_arg(argc, argv, i, "--cs-mask"), "cs-mask");
-    } else if (a == "--dry-run") {
+    } else if (arg == "--device") {
+      args.ch347.device_path =
+          parse_device_path(need_arg(argc, argv, i, "--device"));
+    } else if (arg == "--clock-hz") {
+      args.ch347.clock_hz =
+          parse_int(need_arg(argc, argv, i, "--clock-hz"), "clock-hz");
+    } else if (arg == "--cs-mask") {
+      args.ch347.chip_select_mask =
+          parse_u8(need_arg(argc, argv, i, "--cs-mask"), "cs-mask");
+    } else if (arg == "--dry-run") {
       args.dry_run = true;
-    } else if (a == "--wait-ddr") {
+    } else if (arg == "--wait-ddr") {
       args.wait_ddr = true;
-    } else if (a == "--wait-asset") {
+    } else if (arg == "--wait-asset") {
       args.wait_asset = true;
-    } else if (a == "--timeout-ms") {
-      args.timeout_ms = parse_u32(need_arg(argc, argv, i, "--timeout-ms"), "timeout-ms");
-    } else if (a == "--poll-ms") {
-      args.poll_ms = parse_u32(need_arg(argc, argv, i, "--poll-ms"), "poll-ms");
-    } else if (a == "--ddr-smoke") {
+    } else if (arg == "--timeout-ms") {
+      args.timeout_ms =
+          parse_u32(need_arg(argc, argv, i, "--timeout-ms"), "timeout-ms");
+    } else if (arg == "--poll-ms") {
+      args.poll_ms =
+          parse_u32(need_arg(argc, argv, i, "--poll-ms"), "poll-ms");
+    } else if (arg == "--ddr-smoke") {
       args.ddr_smoke = true;
-    } else if (a == "--ddr-addr") {
-      args.ddr_addr = parse_u32(need_arg(argc, argv, i, "--ddr-addr"), "ddr-addr");
-    } else if (a == "--ddr-pattern") {
-      for (int word = 0; word < 4; ++word) {
-        std::ostringstream name;
-        name << "ddr-pattern word " << word;
-        args.ddr_pattern[word] = parse_u32(need_arg(argc, argv, i, "--ddr-pattern"), name.str().c_str());
+    } else if (arg == "--ddr-addr") {
+      args.ddr_addr =
+          parse_u32(need_arg(argc, argv, i, "--ddr-addr"), "ddr-addr");
+    } else if (arg == "--ddr-pattern") {
+      for (size_t word = 0; word < args.ddr_pattern.size(); ++word) {
+        args.ddr_pattern[word] = parse_u32(
+            need_arg(argc, argv, i, "--ddr-pattern"), "ddr-pattern");
       }
-    } else if (a == "--voice-smoke") {
+    } else if (arg == "--voice-smoke") {
       args.voice_smoke = true;
-    } else if (a == "--voice") {
+    } else if (arg == "--voice") {
       args.voice = parse_int(need_arg(argc, argv, i, "--voice"), "voice");
-    } else if (a == "--stereo") {
-      args.stereo = parse_int(need_arg(argc, argv, i, "--stereo"), "stereo") != 0;
-    } else if (a == "--base") {
+    } else if (arg == "--base") {
       args.base = parse_u32(need_arg(argc, argv, i, "--base"), "base");
-    } else if (a == "--base-r") {
-      args.base_r = parse_u32(need_arg(argc, argv, i, "--base-r"), "base-r");
-    } else if (a == "--length") {
-      args.length = parse_u32(need_arg(argc, argv, i, "--length"), "length");
-    } else if (a == "--length-r") {
-      args.length_r = parse_u32(need_arg(argc, argv, i, "--length-r"), "length-r");
-    } else if (a == "--phase-inc") {
-      args.phase_inc = parse_u32(need_arg(argc, argv, i, "--phase-inc"), "phase-inc");
-    } else if (a == "--gain-l") {
-      args.gain_l = parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
-    } else if (a == "--gain-r") {
-      args.gain_r = parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
+    } else if (arg == "--length") {
+      args.length =
+          parse_u32(need_arg(argc, argv, i, "--length"), "length");
+    } else if (arg == "--phase-inc") {
+      args.phase_inc =
+          parse_u32(need_arg(argc, argv, i, "--phase-inc"), "phase-inc");
+    } else if (arg == "--gain-l") {
+      args.gain_l =
+          parse_int(need_arg(argc, argv, i, "--gain-l"), "gain-l");
+    } else if (arg == "--gain-r") {
+      args.gain_r =
+          parse_int(need_arg(argc, argv, i, "--gain-r"), "gain-r");
     } else {
-      throw std::runtime_error("unknown argument: " + a);
+      throw std::runtime_error("unknown argument: " + arg);
     }
   }
+  if (args.poll_ms == 0) throw std::runtime_error("--poll-ms must be nonzero");
   return args;
 }
 
@@ -254,324 +217,411 @@ std::string hex32(uint32_t value) {
   return out.str();
 }
 
-void print_result(const char* status, const std::string& text) {
-  std::cout << '[' << status << "] " << text << "\n";
+void result(const char* status, const std::string& text) {
+  std::cout << '[' << status << "] " << text << '\n';
 }
 
-void print_reg(const char* name, uint16_t address, uint32_t value) {
-  std::cout << "  " << std::left << std::setw(24) << name << std::right
-            << " @0x" << std::hex << std::setw(4) << std::setfill('0') << address
-            << " = 0x" << std::setw(8) << value << std::dec << std::setfill(' ') << "\n";
+void print_register(const char* name, uint16_t address, uint32_t value) {
+  std::cout << "  " << std::left << std::setw(29) << name << std::right
+            << " @0x" << std::hex << std::setw(4) << std::setfill('0')
+            << address << " = 0x" << std::setw(8) << value << std::dec
+            << std::setfill(' ') << '\n';
 }
 
-class BoardAccess : public host::RegisterIo, public render::CommandWordSink {
+class SyntheticBoard final : public host::RegisterIo,
+                             public render::CommandWordSink {
  public:
-  BoardAccess(host::Ch347RegisterTransport* hardware, DryRunTransport* dry_run)
-      : hardware_(hardware), dry_run_(dry_run) {}
-
-  uint32_t read_register(uint16_t address) override {
-    if (dry_run_) return dry_run_->read_register(address);
-    return hardware_->read_register(address);
+  SyntheticBoard() {
+    values_[regs::kVersion] = regs::kVersionValue;
+    values_[regs::kPlatformStatus] =
+        regs::kPlatformStatusPlatformRegsPresentMask |
+        regs::kPlatformStatusDdrCalibratedMask |
+        regs::kPlatformStatusSdInitializedMask |
+        regs::kPlatformStatusAssetLoadedMask;
+    values_[regs::kPlatformBytesLoaded] = 4096;
+    values_[regs::kPlatformSf2Size] = 4096;
+    values_[regs::kPlatformDdrStatus] =
+        regs::kPlatformDdrStatusDdrCalibratedMask |
+        regs::kPlatformDdrStatusMigAppReadyMask |
+        regs::kPlatformDdrStatusMigWriteDataReadyMask;
+    values_[regs::kDdrAccessStatus] =
+        kDdrReadyMask | regs::kDdrAccessStatusDoneMask;
+    values_[regs::kCmdFifoStatus] =
+        regs::kCmdFifoStatusWordEmptyMask |
+        regs::kCmdFifoStatusParserIdleMask;
   }
-
-  uint32_t read(uint16_t address) { return read_register(address); }
 
   void write_register(uint16_t address, uint32_t data) override {
-    if (dry_run_) {
-      dry_run_->write_register(address, data);
+    std::cout << "  [REG-W] 0x" << std::hex << std::setw(4)
+              << std::setfill('0') << address << " <- 0x" << std::setw(8)
+              << data << std::dec << std::setfill(' ') << '\n';
+    if (address == regs::kCommonEventFlags) {
+      values_[address] &= ~data;
     } else {
-      hardware_->write_register(address, data);
+      values_[address] = data;
+    }
+    if (address == regs::kDdrAccessControl) {
+      values_[regs::kDdrAccessStatus] = kDdrReadyMask;
+      if ((data & regs::kDdrAccessControlStartMask) != 0) {
+        values_[regs::kDdrAccessStatus] |= regs::kDdrAccessStatusDoneMask;
+      }
     }
   }
 
-  void write_registers(uint16_t start_address, const std::vector<uint32_t>& data) override {
-    if (dry_run_) {
-      dry_run_->write_registers(start_address, data);
-    } else {
-      hardware_->write_registers(start_address, data);
-    }
+  uint32_t read_register(uint16_t address) override {
+    const uint32_t value = values_[address];
+    std::cout << "  [REG-R] 0x" << std::hex << std::setw(4)
+              << std::setfill('0') << address << " -> 0x" << std::setw(8)
+              << value << std::dec << std::setfill(' ') << '\n';
+    return value;
   }
 
   void write_command_words(const std::vector<uint32_t>& words) override {
-    if (dry_run_) {
-      dry_run_->write_command_words(words);
-    } else {
-      hardware_->write_command_words(words);
+    host::Ch347RegisterTransport::validate_command_transaction(words);
+    const uint16_t crc =
+        host::Ch347RegisterTransport::command_transaction_crc16(words);
+    std::cout << "  [CMD] words=" << words.size() << " crc16=0x" << std::hex
+              << std::setw(4) << std::setfill('0') << crc;
+    for (uint32_t word : words) std::cout << " 0x" << std::setw(8) << word;
+    std::cout << std::dec << std::setfill(' ') << '\n';
+    if (uint8_t(words.front() >> 24) == 0x10) {
+      values_[regs::kCommonEventFlags] |=
+          regs::kCommonEventFlagsMemResponseMask;
+      ++values_[regs::kMemResponseCount];
     }
   }
-
-  void write(uint16_t address, uint32_t data) { write_register(address, data); }
 
  private:
-  host::Ch347RegisterTransport* hardware_ = nullptr;
-  DryRunTransport* dry_run_ = nullptr;
+  std::unordered_map<uint16_t, uint32_t> values_;
 };
 
-void decode_platform(uint32_t status, uint32_t errors) {
-  uint32_t sd_error = errors & 0xffu;
-  uint32_t loader_error = (errors >> 8) & 0xffu;
-  std::cout << "  platform bits: platform_regs=" << ((status & kPlatformRegsPresent) ? 1 : 0)
-            << " error=" << ((status & kPlatformErrorPresent) ? 1 : 0)
-            << " ddr_calib=" << ((status & kPlatformDdrCalibrated) ? 1 : 0)
-            << " sd_init=" << ((status & kPlatformSdInitialized) ? 1 : 0)
-            << " asset_loaded=" << ((status & kPlatformAssetLoaded) ? 1 : 0)
-            << " loader_busy=" << ((status >> 6) & 1u)
-            << "\n";
-  std::cout << "  errors: sd=" << sd_error << " loader=" << loader_error
-            << " state=" << ((errors >> 16) & 0xfu) << "\n";
+Snapshot read_snapshot(host::RegisterIo& io) {
+  Snapshot snapshot;
+  snapshot.version = io.read_register(regs::kVersion);
+  snapshot.system_status = io.read_register(regs::kSystemStatus);
+  snapshot.event_flags = io.read_register(regs::kCommonEventFlags);
+  snapshot.pipeline_latency = io.read_register(regs::kPipelineLatencyStatus);
+  snapshot.command_status = io.read_register(regs::kCmdFifoStatus);
+  snapshot.platform_status = io.read_register(regs::kPlatformStatus);
+  snapshot.platform_errors = io.read_register(regs::kPlatformErrors);
+  snapshot.bytes_loaded = io.read_register(regs::kPlatformBytesLoaded);
+  snapshot.sf2_size = io.read_register(regs::kPlatformSf2Size);
+  snapshot.current_lba = io.read_register(regs::kPlatformCurrentLba);
+  snapshot.platform_ddr_status = io.read_register(regs::kPlatformDdrStatus);
+  snapshot.ddr_access_status = io.read_register(regs::kDdrAccessStatus);
+  snapshot.underrun_count = io.read_register(regs::kUnderrunCount);
+  snapshot.sample_drop_count = io.read_register(regs::kSampleDropCount);
+  snapshot.deadline_miss_count =
+      io.read_register(regs::kRenderDeadlineMissCount);
+  snapshot.memory_response_count = io.read_register(regs::kMemResponseCount);
+  return snapshot;
 }
 
-bool read_snapshot(BoardAccess& board, bool dry_run) {
-  std::cout << "\n== Snapshot ==\n";
-  uint32_t version = board.read(kVersion);
-  uint32_t system = board.read(kSystemStatus);
-  uint32_t events = board.read(kCommonEventFlags);
-  uint32_t latency = board.read(kPipelineLatencyStatus);
-  uint32_t platform = board.read(kPlatformStatus);
-  uint32_t errors = board.read(kPlatformErrors);
-  uint32_t bytes_loaded = board.read(kPlatformBytesLoaded);
-  uint32_t sf2_size = board.read(kPlatformSf2Size);
-  uint32_t current_lba = board.read(kPlatformCurrentLba);
-  uint32_t ddr = board.read(kPlatformDdrStatus);
-  uint32_t ddr_access = board.read(kDdrAccessStatus);
+void print_snapshot(const Snapshot& s) {
+  std::cout << "\n== Board Snapshot ==\n";
+  print_register("VERSION", regs::kVersion, s.version);
+  print_register("SYSTEM_STATUS", regs::kSystemStatus, s.system_status);
+  print_register("COMMON_EVENT_FLAGS", regs::kCommonEventFlags, s.event_flags);
+  print_register("PIPELINE_LATENCY_STATUS", regs::kPipelineLatencyStatus,
+                 s.pipeline_latency);
+  print_register("CMD_FIFO_STATUS", regs::kCmdFifoStatus, s.command_status);
+  print_register("PLATFORM_STATUS", regs::kPlatformStatus, s.platform_status);
+  print_register("PLATFORM_ERRORS", regs::kPlatformErrors, s.platform_errors);
+  print_register("PLATFORM_BYTES_LOADED", regs::kPlatformBytesLoaded,
+                 s.bytes_loaded);
+  print_register("PLATFORM_SF2_SIZE", regs::kPlatformSf2Size, s.sf2_size);
+  print_register("PLATFORM_CURRENT_LBA", regs::kPlatformCurrentLba,
+                 s.current_lba);
+  print_register("PLATFORM_DDR_STATUS", regs::kPlatformDdrStatus,
+                 s.platform_ddr_status);
+  print_register("DDR_ACCESS_STATUS", regs::kDdrAccessStatus,
+                 s.ddr_access_status);
+  print_register("UNDERRUN_COUNT", regs::kUnderrunCount, s.underrun_count);
+  print_register("SAMPLE_DROP_COUNT", regs::kSampleDropCount,
+                 s.sample_drop_count);
+  print_register("RENDER_DEADLINE_MISS_COUNT", regs::kRenderDeadlineMissCount,
+                 s.deadline_miss_count);
+  print_register("MEM_RESPONSE_COUNT", regs::kMemResponseCount,
+                 s.memory_response_count);
 
-  print_reg("VERSION", kVersion, version);
-  print_reg("SYSTEM_STATUS", kSystemStatus, system);
-  print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
-  print_reg("PIPELINE_LATENCY_STATUS", kPipelineLatencyStatus, latency);
-  print_reg("PLATFORM_STATUS", kPlatformStatus, platform);
-  print_reg("PLATFORM_ERRORS", kPlatformErrors, errors);
-  print_reg("PLATFORM_BYTES_LOADED", kPlatformBytesLoaded, bytes_loaded);
-  print_reg("PLATFORM_SF2_SIZE", kPlatformSf2Size, sf2_size);
-  print_reg("PLATFORM_CURRENT_LBA", kPlatformCurrentLba, current_lba);
-  print_reg("PLATFORM_DDR_STATUS", kPlatformDdrStatus, ddr);
-  print_reg("DDR_ACCESS_STATUS", kDdrAccessStatus, ddr_access);
-  decode_platform(platform, errors);
-
-  if (dry_run) {
-    print_result("DRY", "Snapshot register reads were emitted without hardware checks");
-    return true;
-  }
-
-  bool bus_stuck_high = version == 0xffffffffu && system == 0xffffffffu &&
-                        events == 0xffffffffu && platform == 0xffffffffu &&
-                        errors == 0xffffffffu && ddr_access == 0xffffffffu;
-  if (bus_stuck_high) {
-    print_result("FAIL", "All sampled registers read 0xffffffff; CH347 is present, but no valid FPGA SPI target responded");
-    return false;
-  } else if (platform & kPlatformRegsPresent) {
-    print_result("PASS", "SPI reached the Smart Artix platform platform register window");
-  } else {
-    print_result("FAIL", "PLATFORM_STATUS[0] is not set; check bitstream, reset, SPI pins, and MIG UI clock");
-    return false;
-  }
-  if (platform & kPlatformDdrCalibrated) {
-    print_result("PASS", "DDR calibration is complete");
-  } else {
-    print_result("WARN", "DDR calibration is not complete yet");
-  }
-  if (platform & kPlatformErrorPresent) {
-    print_result("FAIL", "Platform reports SD or loader error; decode PLATFORM_ERRORS above");
-  }
-  if (sf2_size != 0 && bytes_loaded == sf2_size && (platform & kPlatformAssetLoaded)) {
-    print_result("PASS", "Asset byte count matches SF2 size and asset_loaded is set");
-  }
-  return true;
+  const uint32_t word_level =
+      (s.command_status >> regs::kCmdFifoStatusWordLevelLsb) & 0x3fffu;
+  std::cout << "  decoded: ddr_calibrated="
+            << ((s.platform_status &
+                 regs::kPlatformStatusDdrCalibratedMask) != 0)
+            << " sd_initialized="
+            << ((s.platform_status &
+                 regs::kPlatformStatusSdInitializedMask) != 0)
+            << " asset_loaded="
+            << ((s.platform_status &
+                 regs::kPlatformStatusAssetLoadedMask) != 0)
+            << " loader_busy="
+            << ((s.platform_status &
+                 regs::kPlatformStatusAssetLoaderBusyMask) != 0)
+            << " command_words=" << word_level << '\n';
 }
 
-bool poll_until(BoardAccess& board, const Args& args, const std::string& label,
-                bool asset) {
-  std::cout << "\n== Wait: " << label << " ==\n";
-  uint32_t elapsed = 0;
-  while (elapsed <= args.timeout_ms) {
-    uint32_t platform = board.read(kPlatformStatus);
-    uint32_t errors = board.read(kPlatformErrors);
-    uint32_t bytes_loaded = board.read(kPlatformBytesLoaded);
-    uint32_t sf2_size = board.read(kPlatformSf2Size);
-    uint32_t ddr_access = board.read(kDdrAccessStatus);
-    std::cout << "  t=" << elapsed << "ms platform=" << hex32(platform)
-              << " errors=" << hex32(errors) << " bytes=" << bytes_loaded
-              << "/" << sf2_size << " ddr_access=" << hex32(ddr_access) << "\n";
+void validate_identity(const Snapshot& snapshot) {
+  if (snapshot.version == 0xffffffffu) {
+    throw std::runtime_error(
+        "SPI returned 0xffffffff; no valid FPGA target responded");
+  }
+  if (snapshot.version != regs::kVersionValue) {
+    throw std::runtime_error(
+        "interface version mismatch: expected " + hex32(regs::kVersionValue) +
+        ", received " + hex32(snapshot.version));
+  }
+  if ((snapshot.platform_status &
+       regs::kPlatformStatusPlatformRegsPresentMask) == 0) {
+    throw std::runtime_error(
+        "platform register window is absent; check bitstream, reset, and MIG UI clock");
+  }
+  result("PASS", "SPI mailbox and interface version 13 are responding");
+  if ((snapshot.platform_status & regs::kPlatformStatusErrorPresentMask) != 0) {
+    result("WARN", "platform reports an SD or asset-loader error");
+  }
+  if ((snapshot.command_status & kCommandErrorMask) != 0) {
+    result("WARN", "command parser reports an existing error summary");
+  }
+}
 
-    if (platform & kPlatformErrorPresent) {
-      print_result("FAIL", "Platform error appeared while polling");
-      return false;
-    }
-    bool ddr_ready = (platform & kPlatformDdrCalibrated) &&
-                     ((ddr_access & (kDdrAccessStatusPresent | kDdrAccessStatusReady)) ==
-                      (kDdrAccessStatusPresent | kDdrAccessStatusReady));
-    bool asset_ready = ddr_ready && (platform & kPlatformSdInitialized) &&
-                       (platform & kPlatformAssetLoaded) &&
-                       (sf2_size != 0) && (bytes_loaded == sf2_size);
-    if ((!asset && ddr_ready) || (asset && asset_ready)) {
-      print_result("PASS", label + " is ready");
-      return true;
-    }
-
-    if (args.dry_run) {
-      print_result("DRY", label + " polling sequence emitted once");
-      return true;
+template <typename Predicate>
+uint32_t poll_register(host::RegisterIo& io, uint16_t address,
+                       const Args& args, const std::string& label,
+                       Predicate predicate) {
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(args.timeout_ms);
+  while (true) {
+    const uint32_t value = io.read_register(address);
+    if (predicate(value)) return value;
+    if (std::chrono::steady_clock::now() >= deadline) {
+      throw std::runtime_error(label + " timed out, last value=" + hex32(value));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(args.poll_ms));
-    elapsed += args.poll_ms;
   }
-  print_result("FAIL", label + " timed out");
-  return false;
 }
 
-uint32_t wait_ddr_done(BoardAccess& board, uint32_t timeout_ms, uint32_t poll_ms) {
-  uint32_t elapsed = 0;
-  while (elapsed <= timeout_ms) {
-    uint32_t status = board.read(kDdrAccessStatus);
-    if (status & kDdrAccessStatusError) {
-      throw std::runtime_error("DDR register access command failed, status=" + hex32(status));
+void wait_platform(host::RegisterIo& io, const Args& args, bool require_asset) {
+  std::cout << "\n== Wait For "
+            << (require_asset ? "Asset" : "DDR") << " ==\n";
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(args.timeout_ms);
+  while (true) {
+    const uint32_t status = io.read_register(regs::kPlatformStatus);
+    const uint32_t errors = io.read_register(regs::kPlatformErrors);
+    const uint32_t ddr_access = io.read_register(regs::kDdrAccessStatus);
+    const uint32_t loaded = io.read_register(regs::kPlatformBytesLoaded);
+    const uint32_t size = io.read_register(regs::kPlatformSf2Size);
+    if ((status & regs::kPlatformStatusErrorPresentMask) != 0) {
+      throw std::runtime_error("platform error while waiting: " + hex32(errors));
     }
-    if (status & kDdrAccessStatusDone) return status;
-    std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
-    elapsed += poll_ms;
-  }
-  throw std::runtime_error("DDR register access command timed out");
-}
-
-void run_ddr_smoke(BoardAccess& board, const Args& args) {
-  if ((args.ddr_addr & 0xfu) != 0) throw std::runtime_error("DDR smoke address must be 16-byte aligned");
-  std::cout << "\n== DDR Smoke ==\n";
-  board.write(kDdrAccessControl, kDdrAccessControlClear);
-  uint32_t status = board.read(kDdrAccessStatus);
-  if (!args.dry_run && ((status & kDdrAccessStatusReady) == 0)) {
-    throw std::runtime_error("DDR register access window is not ready, status=" + hex32(status));
-  }
-  board.write(kDdrAccessAddr, args.ddr_addr);
-  board.write(kDdrAccessByteEnable, 0xffff);
-  for (int word = 0; word < 4; ++word) {
-    board.write(uint16_t(kDdrAccessData0 + word * 4), args.ddr_pattern[word]);
-  }
-  board.write(kDdrAccessControl, kDdrAccessControlStart | kDdrAccessControlWrite);
-  if (!args.dry_run) (void)wait_ddr_done(board, args.timeout_ms, args.poll_ms);
-
-  board.write(kDdrAccessControl, kDdrAccessControlClear);
-  board.write(kDdrAccessAddr, args.ddr_addr);
-  board.write(kDdrAccessControl, kDdrAccessControlStart);
-  if (!args.dry_run) (void)wait_ddr_done(board, args.timeout_ms, args.poll_ms);
-
-  bool match = true;
-  uint32_t data[4] = {};
-  for (int word = 0; word < 4; ++word) {
-    data[word] = board.read(uint16_t(kDdrAccessData0 + word * 4));
-    if (data[word] != args.ddr_pattern[word]) match = false;
-  }
-  std::cout << "  readback = " << hex32(data[3]) << '_' << hex32(data[2]) << '_'
-            << hex32(data[1]) << '_' << hex32(data[0]) << "\n";
-  if (args.dry_run) {
-    print_result("DRY", "DDR register access write/read access sequence emitted");
-  } else if (match) {
-    print_result("PASS", "DDR register access write/read pattern matched");
-  } else {
-    print_result("FAIL", "DDR register access readback did not match written pattern");
-    throw std::runtime_error("DDR smoke mismatch");
+    const bool ddr_ready =
+        (status & regs::kPlatformStatusDdrCalibratedMask) != 0 &&
+        (ddr_access & kDdrReadyMask) == kDdrReadyMask;
+    const bool asset_ready = ddr_ready &&
+        (status & regs::kPlatformStatusSdInitializedMask) != 0 &&
+        (status & regs::kPlatformStatusAssetLoadedMask) != 0 &&
+        size != 0 && loaded == size;
+    if (ddr_ready && (!require_asset || asset_ready)) {
+      result("PASS", require_asset ? "asset is loaded" : "DDR is ready");
+      return;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      throw std::runtime_error(require_asset ? "asset load timed out" :
+                                               "DDR readiness timed out");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(args.poll_ms));
   }
 }
 
-void run_voice_smoke(BoardAccess& board, const Args& args) {
-  if (args.voice < 0 || args.voice >= render::kNumVoices) throw std::runtime_error("voice index out of range");
-  if (args.length == 0) throw std::runtime_error("--voice-smoke requires --length");
+void wait_ddr_done(host::RegisterIo& io, const Args& args) {
+  (void)poll_register(
+      io, regs::kDdrAccessStatus, args, "DDR debug access",
+      [](uint32_t status) {
+        if ((status & regs::kDdrAccessStatusErrorMask) != 0) {
+          throw std::runtime_error(
+              "DDR debug access failed, status=" + hex32(status));
+        }
+        return (status & regs::kDdrAccessStatusDoneMask) != 0;
+      });
+}
 
-  std::cout << "\n== Voice Smoke ==\n";
-  board.write(kCommonEventFlags, 0x0fu);
+void run_ddr_smoke(host::RegisterIo& io, const Args& args) {
+  std::cout << "\n== DDR Mailbox Smoke ==\n";
+  wait_platform(io, args, false);
+
+  io.write_register(regs::kDdrAccessControl,
+                    regs::kDdrAccessControlClearMask);
+  io.write_register(regs::kDdrAccessAddr, args.ddr_addr);
+  io.write_register(regs::kDdrAccessByteEnable, 0xffffu);
+  io.write_registers(regs::kDdrAccessData0,
+                     std::vector<uint32_t>(args.ddr_pattern.begin(),
+                                           args.ddr_pattern.end()));
+  io.write_register(regs::kDdrAccessControl,
+                    regs::kDdrAccessControlStartMask |
+                    regs::kDdrAccessControlWriteMask);
+  wait_ddr_done(io, args);
+
+  io.write_register(regs::kDdrAccessControl,
+                    regs::kDdrAccessControlClearMask);
+  io.write_register(regs::kDdrAccessAddr, args.ddr_addr);
+  io.write_register(regs::kDdrAccessControl,
+                    regs::kDdrAccessControlStartMask);
+  wait_ddr_done(io, args);
+
+  std::array<uint32_t, 4> readback{};
+  for (size_t word = 0; word < readback.size(); ++word) {
+    readback[word] = io.read_register(
+        uint16_t(regs::kDdrAccessData0 + uint16_t(word * 4)));
+  }
+  if (readback != args.ddr_pattern) {
+    throw std::runtime_error("DDR readback mismatch");
+  }
+  result("PASS", "16-byte DDR write/read pattern matched");
+}
+
+void wait_command_idle(host::RegisterIo& io, const Args& args) {
+  (void)poll_register(
+      io, regs::kCmdFifoStatus, args, "command drain",
+      [](uint32_t status) {
+        if ((status & kCommandErrorMask) != 0) {
+          throw std::runtime_error(
+              "command parser rejected the transaction, status=" +
+              hex32(status));
+        }
+        return (status & regs::kCmdFifoStatusWordEmptyMask) != 0 &&
+               (status & regs::kCmdFifoStatusParserIdleMask) != 0 &&
+               (status & regs::kCmdFifoStatusActionPendingMask) == 0;
+      });
+}
+
+void validate_voice_args(const Args& args) {
+  if (args.voice < 0 || args.voice >= render::kNumVoices) {
+    throw std::runtime_error("voice index out of range");
+  }
+  if (args.length == 0 || args.length > 0x00ffffffu) {
+    throw std::runtime_error(
+        "--voice-smoke requires a 1..0xffffff frame --length");
+  }
+  if (args.gain_l < 0 || args.gain_l > 0x7fff ||
+      args.gain_r < 0 || args.gain_r > 0x7fff) {
+    throw std::runtime_error("voice gains must be in the Q1.15 range 0..0x7fff");
+  }
+}
+
+void run_voice_smoke(host::RegisterIo& io, render::CommandWordSink& commands,
+                     const Args& args) {
+  std::cout << "\n== Atomic Command Smoke ==\n";
+  wait_platform(io, args, false);
+  wait_command_idle(io, args);
+  const uint32_t responses_before =
+      io.read_register(regs::kMemResponseCount);
+  io.write_register(regs::kCommonEventFlags, 0x0fu);
 
   render::Region region;
-  region.stereo = args.stereo;
+  region.stereo = false;
   region.base_addr = args.base;
-  region.base_addr_r = args.base_r ? args.base_r : args.base;
   region.length = args.length;
-  region.length_r = args.length_r ? args.length_r : args.length;
-  region.loop_start = 0;
-  region.loop_start_r = 0;
-  region.loop_end = 0;
-  region.loop_end_r = 0;
-  region.loop_mode = 0;
   region.gain_l = args.gain_l;
   region.gain_r = args.gain_r;
   region.filter_enable = false;
   region.filter_b0 = 0x4000;
 
-  render::CommandVoiceControl voice_control(board);
+  render::CommandVoiceControl voice_control(commands);
   voice_control.start_voice(args.voice, args.phase_inc, region);
-  print_result("PASS", "Voice command stream completed");
+  wait_command_idle(io, args);
 
-  if (!args.dry_run) std::this_thread::sleep_for(std::chrono::milliseconds(250));
-  uint32_t events = board.read(kCommonEventFlags);
-  uint32_t system = board.read(kSystemStatus);
-  uint32_t latency = board.read(kPipelineLatencyStatus);
-  uint32_t mem_rsp_count = board.read(kMemResponseCount);
-  print_reg("COMMON_EVENT_FLAGS", kCommonEventFlags, events);
-  print_reg("SYSTEM_STATUS", kSystemStatus, system);
-  print_reg("PIPELINE_LATENCY_STATUS", kPipelineLatencyStatus, latency);
-  print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, mem_rsp_count);
-  print_reg("SAMPLE_WINDOW_REQUEST_COUNT", kSampleWindowRequestCount,
-            board.read(kSampleWindowRequestCount));
-  print_reg("SAMPLE_WINDOW_HIT_COUNT", kSampleWindowHitCount,
-            board.read(kSampleWindowHitCount));
-  print_reg("SAMPLE_WINDOW_REFILL_COUNT", kSampleWindowRefillCount,
-            board.read(kSampleWindowRefillCount));
-  print_reg("SAMPLE_WINDOW_FALLBACK_READ_COUNT", kSampleWindowFallbackReadCount,
-            board.read(kSampleWindowFallbackReadCount));
-  print_reg("SAMPLE_WINDOW_MEMORY_READ_COUNT", kSampleWindowMemoryReadCount,
-            board.read(kSampleWindowMemoryReadCount));
-  print_reg("SAMPLE_WINDOW_EVICTION_COUNT", kSampleWindowEvictionCount,
-            board.read(kSampleWindowEvictionCount));
-  print_reg("SAMPLE_WINDOW_STALL_CYCLE_COUNT", kSampleWindowStallCycleCount,
-            board.read(kSampleWindowStallCycleCount));
-
-  if (events & (1u << 3)) {
-    print_result("PASS", "Voice caused memory response activity");
-  } else {
-    print_result("WARN", "No memory activity observed yet; check base address, length, and asset load");
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(args.timeout_ms);
+  bool memory_seen = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const uint32_t events = io.read_register(regs::kCommonEventFlags);
+    const uint32_t responses = io.read_register(regs::kMemResponseCount);
+    if ((events & kEventErrorMask) != 0) {
+      voice_control.stop_voice(args.voice);
+      throw std::runtime_error(
+          "audio error occurred during voice smoke, events=" + hex32(events));
+    }
+    if ((events & regs::kCommonEventFlagsMemResponseMask) != 0 ||
+        responses != responses_before) {
+      memory_seen = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(args.poll_ms));
   }
-  if (events & 0x7u) {
-    print_result("WARN", "Audio underrun/drop/deadline flags are set; inspect timing and FIFO status");
-  }
-}
 
-void read_counters(BoardAccess& board) {
-  std::cout << "\n== Event Counters ==\n";
-  print_reg("UNDERRUN_COUNT", kUnderrunCount, board.read(kUnderrunCount));
-  print_reg("SAMPLE_DROP_COUNT", kSampleDropCount, board.read(kSampleDropCount));
-  print_reg("RENDER_DEADLINE_MISS_COUNT", kRenderDeadlineMissCount, board.read(kRenderDeadlineMissCount));
-  print_reg("MEM_RESPONSE_COUNT", kMemResponseCount, board.read(kMemResponseCount));
+  voice_control.stop_voice(args.voice);
+  wait_command_idle(io, args);
+  if (!memory_seen) {
+    throw std::runtime_error(
+        "voice command drained but no memory response was observed");
+  }
+  result("PASS", "mono START and STOP transactions completed without errors");
+
+  print_register("SAMPLE_WINDOW_REQUEST_COUNT",
+                 regs::kSampleWindowRequestCount,
+                 io.read_register(regs::kSampleWindowRequestCount));
+  print_register("SAMPLE_WINDOW_HIT_COUNT", regs::kSampleWindowHitCount,
+                 io.read_register(regs::kSampleWindowHitCount));
+  print_register("SAMPLE_WINDOW_REFILL_COUNT", regs::kSampleWindowRefillCount,
+                 io.read_register(regs::kSampleWindowRefillCount));
+  print_register("SAMPLE_WINDOW_MEMORY_READ_COUNT",
+                 regs::kSampleWindowMemoryReadCount,
+                 io.read_register(regs::kSampleWindowMemoryReadCount));
+  print_register("SAMPLE_WINDOW_STALL_CYCLE_COUNT",
+                 regs::kSampleWindowStallCycleCount,
+                 io.read_register(regs::kSampleWindowStallCycleCount));
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
   try {
-    Args args = parse_args(argc, argv);
-    if (args.ch347.spi_mode != 0) {
-      throw std::runtime_error("--mode must be 0 for the Smart Artix SPI bridge");
+    const Args args = parse_args(argc, argv);
+    if (args.ddr_smoke && (args.ddr_addr & 0xfu) != 0) {
+      throw std::runtime_error("DDR smoke address must be 16-byte aligned");
     }
-    const int configured_clock_hz =
+    if (args.voice_smoke) validate_voice_args(args);
+    const int selected_clock =
         host::Ch347RegisterTransport::selected_clock_hz(args.ch347.clock_hz);
-    if (args.poll_ms == 0) throw std::runtime_error("--poll-ms must be nonzero");
     std::cout << "CH347 SPI requested=" << args.ch347.clock_hz
-              << " Hz configured=" << configured_clock_hz << " Hz mode=0\n";
+              << " Hz selected=" << selected_clock
+              << " Hz mode=0 protocol=v13-mailbox/v12-command\n";
 
     std::unique_ptr<host::Ch347RegisterTransport> hardware;
-    DryRunTransport dry_run;
-    if (!args.dry_run) hardware.reset(new host::Ch347RegisterTransport(args.ch347));
-    BoardAccess board(hardware.get(), args.dry_run ? &dry_run : nullptr);
+    std::unique_ptr<SyntheticBoard> synthetic;
+    host::RegisterIo* register_io = nullptr;
+    render::CommandWordSink* command_sink = nullptr;
+    if (args.dry_run) {
+      synthetic = std::make_unique<SyntheticBoard>();
+      register_io = synthetic.get();
+      command_sink = synthetic.get();
+      result("DRY", "using synthetic ready board; no CH347 device was opened");
+    } else {
+      hardware = std::make_unique<host::Ch347RegisterTransport>(args.ch347);
+      register_io = hardware.get();
+      command_sink = hardware.get();
+    }
 
-    if (!read_snapshot(board, args.dry_run)) return 2;
-    if (args.wait_ddr) {
-      if (!poll_until(board, args, "DDR calibration and platform register window", false)) return 2;
+    const Snapshot initial = read_snapshot(*register_io);
+    print_snapshot(initial);
+    validate_identity(initial);
+
+    if (args.wait_ddr) wait_platform(*register_io, args, false);
+    if (args.wait_asset) wait_platform(*register_io, args, true);
+    if (args.ddr_smoke) run_ddr_smoke(*register_io, args);
+    if (args.voice_smoke) {
+      run_voice_smoke(*register_io, *command_sink, args);
     }
-    if (args.wait_asset) {
-      if (!poll_until(board, args, "SD asset load", true)) return 2;
+
+    if (args.wait_ddr || args.wait_asset || args.ddr_smoke ||
+        args.voice_smoke) {
+      const Snapshot final = read_snapshot(*register_io);
+      print_snapshot(final);
+      validate_identity(final);
     }
-    if (args.ddr_smoke) run_ddr_smoke(board, args);
-    if (args.voice_smoke) run_voice_smoke(board, args);
-    read_counters(board);
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
+  } catch (const std::exception& error) {
+    std::cerr << "error: " << error.what() << '\n';
     return 1;
   }
   return 0;

@@ -245,7 +245,7 @@ workload derivation and stress criteria are documented in
 
 ```bash
 build/smart_artix_bringup --device 0 \
-  --clock-hz 1000000 --mode 0 --cs-mask 0x80
+  --clock-hz 1000000 --cs-mask 0x80
 
 build/ch347_control --device 0 \
   --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
@@ -256,11 +256,17 @@ The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
 maps `--device 0` to that path for convenience. The copied x64 vendor library is
 used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
-`build/smart_artix_bringup` reads the same common status registers as a staged
-checklist, decodes the status bits, and exits nonzero when a required stage
-fails. If CH347 is connected to the host but not to a valid FPGA SPI target,
-MISO may read back as all ones. The runner detects the common `0xffff_ffff`
-snapshot and reports that CH347 is present but no FPGA SPI target responded.
+`build/smart_artix_bringup` reads the current mailbox-backed common status as a
+staged checklist and exits nonzero when a required stage fails. It requires
+`VERSION == 0x000d0000`; an older direct-register bitstream is rejected instead
+of being diagnosed with current semantics. If CH347 is connected to the host
+but not to a valid FPGA SPI target, MISO may read back as all ones. The runner
+detects `0xffff_ffff` and reports that no FPGA target responded.
+
+The runner has no SPI-mode option because the board transport is unconditionally
+mode 0. Its dry run is a synthetic ready-board execution, not zero-valued reads:
+the same polling, DDR comparison, command validation, and final snapshot paths
+run without opening CH347. `make test` exercises this complete synthetic flow.
 
 The useful first reads are:
 
@@ -318,7 +324,7 @@ CH347 tool to prove direct DDR access before depending on SD-loaded data:
 ```bash
 # Staged runner form. This writes one 16-byte DDR beat at the selected address.
 build/smart_artix_bringup --device 0 \
-  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
+  --clock-hz 1000000 --cs-mask 0x80 \
   --wait-ddr --ddr-smoke --ddr-addr 0x00000100
 
 # Write 16 bytes at DDR byte address 0x100.
@@ -338,6 +344,22 @@ bytes in the current Smart Artix build. To inspect or patch 128 bytes, run eight
 commands and increment the address by `0x10` each time. The address must be
 16-byte aligned; an unaligned command or a write with `--ddr-byte-enable 0`
 reports an error and does not access DDR.
+
+After loading a valid sample range, exercise the atomic command path separately:
+
+```bash
+build/smart_artix_bringup --device 0 \
+  --clock-hz 1000000 --cs-mask 0x80 \
+  --wait-asset --voice-smoke --voice 0 \
+  --base 0x00000000 --length 48000 --phase-inc 0x100
+```
+
+The runner supports only the current mono hardware voice contract. It verifies
+that the command FIFO and parser drain without command/stale-generation errors,
+waits for memory-response activity, rejects new underrun/drop/deadline flags,
+and sends a matching STOP command before returning. Linked stereo must use two
+mono voices through the application control layer; it is not a bring-up runner
+option.
 
 ## SD Raw Image Bring-Up
 
