@@ -11,3 +11,6 @@ design documents linked from [`../README.md`](../README.md).
 - [`effects.md`](effects.md): effects completion status and open qualification.
 - [`spi_transport.md`](spi_transport.md): SPI correctness, physical timing, and
   optional future transport work.
+- [`realtime_midi_host.md`](realtime_midi_host.md): SF2 loading and lookup
+  efficiency, bounded host control work, CH347 command scheduling, and the
+  future real-time MIDI application.
