@@ -275,12 +275,91 @@ selected regions, and 512 peak active voices.
 | Output frames | 48,000 | 48,000 | 48,000 |
 | Render blocks | 3,039 | 3,039 | 3,039 |
 | External 8-word lines | 3,864,271 | 3,864,271 | 3,864,271 |
+| Window stall cycles | 13,633,306 | 102,201,473 | 198,718,696 |
 | Total render cycles | 85,158,385 | 137,621,024 | 229,687,494 |
 | Maximum render cycles | 31,876 | 55,019 | 95,551 |
+| Maximum deadline utilization | 96.954% | 213.528% | 357.084% |
 | Deadline misses | 0 | 3,035 | 3,036 |
 | NOR fast/continuous lines | N/A | 910,592 | 1,814,754 |
 | NOR random transactions | N/A | 2,953,679 | 2,049,517 |
-| Parallel-NOR bus utilization | N/A | 61.822% | N/A |
+| Reported NOR bus utilization | N/A | 61.822% | 77.723% |
+| Bus time required per 1 s audio | N/A | 85.458% | 178.994% |
+
+#### Profile Metric Definitions
+
+`Output frames` is the requested audio duration after conversion to samples:
+one second at 48 kHz is 48,000 stereo output frames. It is not the count of
+render requests or memory lines.
+
+`Render blocks` counts accepted renderer work blocks. MIDI events, 1 ms control
+updates, and the configured maximum of 16 frames split 48,000 frames into 3,039
+variable-size blocks. Each block has its own real-time budget:
+
+```text
+block_deadline_cycles = block_frame_count * 100,000,000 / 48,000
+```
+
+`External 8-word lines` is `rtl_window_memory_reads`. Every line is eight
+16-bit PCM words, or 16 bytes. The identical count across all three backends is
+expected because the production 32-word window and request sequence are
+unchanged. It follows the exact accounting identity:
+
+```text
+604,918 refills * 4 lines + 1,444,599 fallback lines = 3,864,271 lines
+3,864,271 lines * 16 bytes = 61,828,336 payload bytes
+```
+
+`Window stall cycles` is the sum, over accepted sample requests, of core clocks
+spent waiting while the per-voice window cannot return the requested word. It
+includes refill and fallback memory wait, and the same stalled clock can delay
+the renderer pipeline. It is a diagnostic accumulation, not a disjoint wall
+clock duration, so it must not be added to `Total render cycles`.
+
+`Total render cycles` is the sum from each accepted block request to that
+block's renderer completion. It measures how much renderer service the complete
+one-second workload consumed. When it exceeds the one-second real-time supply
+of approximately 100 million core clocks, the run cannot keep pace on average;
+a lower total still does not prove that every individual block met its deadline.
+
+`Maximum render cycles` is the raw latency of the single slowest block. Blocks
+have different frame counts, so this number cannot be compared with one fixed
+deadline. `Maximum deadline utilization` performs the correct per-block
+normalization and reports the largest
+`render_cycles / block_deadline_cycles`. Values above 100% are deadline
+violations; a value below 100% gives the remaining worst-case margin.
+
+`Deadline misses` counts blocks whose normalized utilization exceeded 100%.
+Thus Parallel NOR's 3,035 misses mean that all but four of the 3,039 blocks were
+late. It is not a count of dropped audio samples; the offline harness still
+finishes all 48,000 frames so that timing and output can be inspected.
+
+`NOR fast/continuous lines` has backend-specific meaning. For parallel NOR it
+is `parallel_nor_page_lines`: an 8-word line whose words use page timing because
+the preceding queued line selected the same 16-word page. For QSPI it is
+`qspi_sequential_lines`: a following adjacent line transferred without another
+command/address/mode/dummy sequence. These counts show batch-read reuse but are
+not directly comparable cache hit rates.
+
+`NOR random transactions` counts lines that start the expensive portion of a
+device access. Parallel NOR pays the random first-word time for every
+`parallel_nor_random_lines` entry, and that count equals its transactions. A
+QSPI transaction pays command/address/mode/dummy overhead once and may then
+carry several continuous lines, so its transaction count can be smaller even
+though its serialized data time is larger.
+
+`Reported NOR bus utilization` is the JSON field
+`*_bus_active_cycles / rtl_core_cycles`. Its denominator expands when a slow
+memory stretches the offline render: 85,457,768 active parallel-NOR clocks over
+138,231,498 simulated core clocks produce 61.822%. It describes contention
+inside that completed simulation, not the fraction of a fixed one-second
+real-time budget.
+
+`Bus time required per 1 s audio` uses the fixed 100,000,000 clocks available
+at 100 MHz during one second. Parallel NOR requires 85,457,768 active clocks, or
+85.458%; QSPI requires 178,993,631 clocks, or 178.994%. This is the appropriate
+average-bandwidth feasibility measure. Parallel NOR passes that average test
+with little practical margin but fails burst deadlines; QSPI fails both average
+bandwidth and burst deadlines.
 
 Parallel NOR is substantially faster than QSPI, but it still misses nearly
 every block deadline. Of 3,864,271 line reads, 2,953,679 pay random latency.
