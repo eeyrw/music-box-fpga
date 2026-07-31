@@ -34,7 +34,7 @@ All RTL tests are self-checking and return a nonzero result on failure.
 | --- | --- |
 | `tb_voice_major_render_core` | Compact command framing, mono START, global audio dispatch, block render, memory traffic, and state continuity. |
 | `tb_block_voice_state_store` | Active state banks, generation arbitration, snapshots, and writeback. |
-| `tb_voice_major_throughput` | 256/512 voice IDs, block deadline, DSP issue, and optional DDR3 timing. Without `SYNTH_DDR3_MODEL`, memory is always ready with a next-cycle response, so the reported render time is a zero-wait theoretical datapath result and does not satisfy the real-pressure `<30,000`-clock acceptance gate. |
+| `tb_voice_major_throughput` | 256/512 voice IDs, block deadline, and DSP issue under always-ready, next-cycle-response memory. The reported render time is a zero-wait theoretical datapath result and does not satisfy the real-pressure `<30,000`-clock acceptance gate. |
 | `tb_voice_sample_window` | 32-word per-voice hits, ordered 8-word refills, fallback reads, and backpressure. |
 | `tb_ddr3_timing_model` | Row hit/miss, activate/precharge, refresh, and request/response accounting. |
 | `tb_lookahead_compressor` | Fixed delay, bypass, master gain, stereo-linked compression, attack/release state, backpressure, and final saturation. |

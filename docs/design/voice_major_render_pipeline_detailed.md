@@ -769,7 +769,7 @@ read/row miss 为 3,865,900 / 1,412,058，effects 单帧最大 87 clocks。完�
 make lint
 make test
 make test-voice-major-512
-make measure-voice-major-throughput-512-ddr3
+make measure-voice-major-throughput-512
 make render-rtl-ddr3
 make vivado-synth
 make vivado-impl

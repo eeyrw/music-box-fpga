@@ -201,7 +201,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-ddr3 measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered measure-voice-major-throughput-512-ddr3 measure-voice-major-throughput-512-ddr3-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-register-map generate-dsp-lut check-register-map check-dsp-lut lint test test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-ddr3-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-ddr3 vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -321,23 +321,6 @@ measure-voice-major-throughput-filtered:
 		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
 	$(BUILD_DIR)/voice_major_throughput_filtered_obj_dir/Vtb_voice_major_throughput
 
-measure-voice-major-throughput-ddr3:
-	mkdir -p $(BUILD_DIR)/ddr3_render_image
-	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
-	$(VERILATOR) -DSYNTH_NUM_VOICES=256 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
-		-DSYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
-		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
-		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir \
-		--top-module tb_voice_major_throughput \
-		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
-		sim/models/ordered_line_ddr3_bridge_model.sv \
-		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
-		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
-	$(BUILD_DIR)/voice_major_throughput_ddr3_obj_dir/Vtb_voice_major_throughput \
-		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
-
 measure-voice-major-throughput-512:
 	mkdir -p $(BUILD_DIR)
 	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
@@ -361,40 +344,6 @@ measure-voice-major-throughput-512-filtered:
 		--top-module tb_voice_major_throughput \
 		$(RTL_SOURCES) $(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES)
 	$(BUILD_DIR)/voice_major_throughput_512_filtered_obj_dir/Vtb_voice_major_throughput
-
-measure-voice-major-throughput-512-ddr3:
-	mkdir -p $(BUILD_DIR)/ddr3_render_image
-	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
-	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
-		-DSYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
-		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
-		--binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_obj_dir \
-		--top-module tb_voice_major_throughput \
-		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
-		sim/models/ordered_line_ddr3_bridge_model.sv \
-		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
-		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
-	$(BUILD_DIR)/voice_major_throughput_512_ddr3_obj_dir/Vtb_voice_major_throughput \
-		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
-
-measure-voice-major-throughput-512-ddr3-filtered:
-	mkdir -p $(BUILD_DIR)/ddr3_render_image
-	printf '\144\000' > $(BUILD_DIR)/ddr3_render_image/00000060.bin
-	$(VERILATOR) -DSYNTH_NUM_VOICES=512 -DSYNTH_ACTIVE_LANES=512 \
-		-DSYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
-		-DSYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
-		-DSYNTH_MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES) -DSYNTH_DDR3_MODEL \
-		-DSYNTH_FILTER_ENABLE --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
-		--Mdir $(BUILD_DIR)/voice_major_throughput_512_ddr3_filtered_obj_dir \
-		--top-module tb_voice_major_throughput \
-		$(RTL_SOURCES) sim/models/ddr3_timing_model.sv \
-		sim/models/ordered_line_ddr3_bridge_model.sv \
-		$(VOICE_MAJOR_THROUGHPUT_SIM_SOURCES) \
-		$(abspath sim/harness/memory/ddr3_bin_store.cpp)
-	$(BUILD_DIR)/voice_major_throughput_512_ddr3_filtered_obj_dir/Vtb_voice_major_throughput \
-		+DDR3_IMAGE=$(if $(DDR3_IMAGE),$(abspath $(DDR3_IMAGE)),$(abspath $(BUILD_DIR)/ddr3_render_image))
 
 measure-voice-compute-pipeline:
 	mkdir -p $(BUILD_DIR)

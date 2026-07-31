@@ -91,7 +91,7 @@ filelists, default tests, and compatibility contracts.
 | `make test-ddr3-model` | row hit/miss/conflict, refresh, image-backed data |
 | `make measure-voice-major-throughput` | 256-voice cycle budget |
 | `make measure-voice-major-throughput-512` | full 10-bit voice-ID and capacity budget |
-| `make measure-voice-major-throughput-ddr3` | renderer plus DDR timing bridge |
+| Removed historical `measure-voice-major-throughput-ddr3` target | used a single repeated adjacent-line workload and was not representative of DDR pressure; use `render-rtl-ddr3` |
 | `make tb_smart_artix_ddr3_line_reader tb_smart_artix_ddr3_rw_arbiter` | board DDR request conversion and MIG ownership |
 | `make render-rtl-ddr3` | real SF2/MIDI C++ policy through Verilated RTL and timed DDR model |
 

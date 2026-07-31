@@ -15,20 +15,10 @@ module tb_voice_major_throughput;
 `else
   localparam bit FILTER_ENABLE = 1'b0;
 `endif
-`ifdef SYNTH_DDR3_MODEL
-  localparam string MEMORY_PROFILE = "timed_ddr3";
-  localparam string QUALIFICATION = "timed_model_only";
-`else
-  // Requests are never backpressured and responses return on the next core
-  // clock. This measures the render datapath ceiling, not DDR3 performance.
   localparam string MEMORY_PROFILE = "ideal_zero_wait";
   localparam string QUALIFICATION = "theoretical_only";
-`endif
 
   logic clk = 1'b0;
-`ifdef SYNTH_DDR3_MODEL
-  logic ddr3_clk = 1'b0;
-`endif
   logic rst = 1'b1;
   reg_bus_req_t bus_req;
 /* verilator lint_off UNUSEDSIGNAL */
@@ -72,16 +62,6 @@ module tb_voice_major_throughput;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
   sample_window_diagnostics_t sample_window_diagnostics;
 /* verilator lint_on UNUSEDSIGNAL */
-`ifdef SYNTH_DDR3_MODEL
-  logic [BLOCK_LINE_WORDS*PCM_WIDTH-1:0] ddr3_rsp_data;
-  logic [63:0] ddr3_stat_accepted;
-  logic [63:0] ddr3_stat_returned;
-  logic [63:0] ddr3_stat_row_hits;
-  logic [63:0] ddr3_stat_row_misses;
-  logic [63:0] ddr3_stat_activates;
-  logic [63:0] ddr3_stat_precharges;
-  logic [63:0] ddr3_stat_refreshes;
-`endif
   integer cycle_count;
   integer start_cycle;
   integer block_cycles;
@@ -101,17 +81,12 @@ module tb_voice_major_throughput;
 
 /* verilator lint_off BLKSEQ */
   always #5 clk <= ~clk;
-`ifdef SYNTH_DDR3_MODEL
-  always #1.25 ddr3_clk = ~ddr3_clk;
-`endif
 /* verilator lint_on BLKSEQ */
   always_ff @(posedge clk) begin
     if (rst) begin
       cycle_count <= 0;
-`ifndef SYNTH_DDR3_MODEL
       line_rsp_valid <= 1'b0;
       line_rsp <= '0;
-`endif
       engine_start_count <= 0;
       line_request_count <= 0;
       contribution_count <= 0;
@@ -131,11 +106,9 @@ module tb_voice_major_throughput;
       cycle_count <= cycle_count + 1;
       controller_state_cycles[dut.controller.state_q] <=
           controller_state_cycles[dut.controller.state_q] + 1;
-`ifndef SYNTH_DDR3_MODEL
       line_rsp_valid <= line_req_valid && line_req_ready;
       for (int word_index = 0; word_index < BLOCK_LINE_WORDS; word_index++)
         line_rsp.words[word_index] <= 16'd100;
-`endif
 
       if (dut.controller.engine_start_valid &&
           dut.controller.engine_start_ready) begin
@@ -200,52 +173,6 @@ module tb_voice_major_throughput;
     end
   endtask
 
-`ifdef SYNTH_DDR3_MODEL
-  assign line_rsp.words = ddr3_rsp_data;
-
-  ordered_line_ddr3_bridge_model #(
-    .ADDR_WIDTH(ADDR_WIDTH),
-    .LINE_WORDS(BLOCK_LINE_WORDS),
-    .DQ_WIDTH(16),
-    .BURST_LENGTH(8),
-    .BANK_COUNT(8),
-    .ROW_BITS(15),
-    .COLUMN_BITS(7),
-    .BANK_ROW_COLUMN(1'b1),
-    .REQUEST_QUEUE_DEPTH(8),
-    .INIT_CYCLES(40),
-    .T_RCD(6),
-    .T_RP(6),
-    .T_CL(6),
-    .T_RAS(14),
-    .T_RC(20),
-    .T_CCD(4),
-    .T_RTP(3),
-    .T_RRD(4),
-    .T_FAW(20),
-    .T_RFC(104),
-    .T_REFI(3120)
-  ) ddr3_memory (
-    .core_clk(clk),
-    .core_rst(rst),
-    .ddr_clk(ddr3_clk),
-    .ddr_rst(rst),
-    .req_valid(line_req_valid),
-    .req_ready(line_req_ready),
-    .req_addr(line_req.aligned_line_addr),
-    .rsp_valid(line_rsp_valid),
-    .rsp_ready(line_rsp_ready),
-    .rsp_data(ddr3_rsp_data),
-    .stat_accepted(ddr3_stat_accepted),
-    .stat_returned(ddr3_stat_returned),
-    .stat_row_hits(ddr3_stat_row_hits),
-    .stat_row_misses(ddr3_stat_row_misses),
-    .stat_activates(ddr3_stat_activates),
-    .stat_precharges(ddr3_stat_precharges),
-    .stat_refreshes(ddr3_stat_refreshes)
-  );
-`endif
-
   task automatic install_lane(input int lane);
     logic [5:0] flags;
     logic [7:0] payload_words;
@@ -280,9 +207,7 @@ module tb_voice_major_throughput;
     cmd_stream_data = '0;
     block_req_valid = 1'b0;
     block_req = '0;
-`ifndef SYNTH_DDR3_MODEL
     line_req_ready = 1'b1;
-`endif
     block_complete_ready = 1'b0;
     block_read_req_valid = 1'b0;
     block_read_req = '0;
@@ -337,15 +262,6 @@ module tb_voice_major_throughput;
              controller_state_cycles[4], controller_state_cycles[5],
              controller_state_cycles[6],
              first_engine_start_cycle, last_engine_start_cycle);
-`ifdef SYNTH_DDR3_MODEL
-    if (ddr3_stat_accepted != 64'(line_request_count) ||
-        ddr3_stat_returned != 64'(line_request_count))
-      $fatal(1, "DDR3 model request/response accounting mismatch");
-    $display("VOICE_MAJOR_DDR3 accepted=%0d returned=%0d row_hits=%0d row_misses=%0d activates=%0d precharges=%0d refreshes=%0d",
-             ddr3_stat_accepted, ddr3_stat_returned, ddr3_stat_row_hits,
-             ddr3_stat_row_misses, ddr3_stat_activates,
-             ddr3_stat_precharges, ddr3_stat_refreshes);
-`endif
     $finish;
   end
 
