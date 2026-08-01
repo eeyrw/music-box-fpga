@@ -17,7 +17,9 @@ SF2 + MIDI ----------------> C++ reference ----------> WAV + JSON
 SF2 + MIDI + RTL ----------> Verilated harness ------> WAV + timing/memory JSON
 render artifacts ----------> analysis tools ---------> JSON/Markdown diagnostics
 
-SF2 -----------------------> make_wtsf_image.py -----> raw WTSF SD image
+SF2 -----------------------> mcu_sf2_asset ----------> packed MCU metadata
+  |
+  +------------------------> make_wtsf_image.py -----> raw WTSF SD image
 WTSF image ----------------> flash_wtsf_sd.sh -------> physical SD card
 CH347 host tools ----------> SPI mailbox/commands ---> Smart Artix board
 
@@ -31,7 +33,8 @@ interfaces:
 - `rtl/pkg/synth_register_pkg.sv`;
 - `sim/harness/generated/register_map.h`;
 - `rtl/generated/synth_dsp_lut_pkg.sv`;
-- `sim/harness/generated/dsp_lut.h`.
+- `sim/harness/generated/dsp_lut.h`;
+- `sim/harness/generated/mcu_asset_profile.h`.
 
 ## Build And Verification Tools
 
@@ -55,7 +58,7 @@ the results as if they were the same build.
 | --- | --- | --- | --- |
 | `tools/gen_register_map.py` | `spec/register_map.json` | SV and C++ register constants | `make generate-register-map` |
 | `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope, dynamics, and DSP lookup tables | `make generate-dsp-lut` |
-| `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | Target-neutral profile schema and command-interface consistency | `make check-mcu-asset-profiles` |
+| `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | `sim/harness/generated/mcu_asset_profile.h` plus profile/interface consistency | `make generate-mcu-asset-profile`; check with `make check-mcu-asset-profiles` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
 
 Use `make check-generated` in normal verification. The exact
@@ -105,6 +108,8 @@ sim/harness/apps      executable entry points
 | --- | --- |
 | `make wtsf-image` | Wraps an SF2 byte image in the board loader's WTSF sector format. |
 | `make verify-wtsf-image` | Validates the header, bounds, optional CRCs, and SF2 payload. |
+| `make mcu-sf2-asset SF2=path/to/file.sf2` | Builds the target-neutral packed semantic metadata sidecar and JSON manifest under `build/assets/`. |
+| `make verify-mcu-sf2-asset SF2=path/to/file.sf2` | Validates the sidecar structure, profile, whole-image CRC, and source SF2 identity. |
 | `make flash-wtsf-sd SD_DEVICE=...` | Writes the verified image to an explicitly selected whole-card device. |
 | `make host-ch347` | Builds the generic CH347 register/command utility. |
 | `make host-smart-artix-bringup` | Builds the board snapshot and smoke-test runner. |

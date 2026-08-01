@@ -55,6 +55,8 @@ HARNESS_CXXFLAGS := -std=c++17 $(CXX_DEFINES) \
 SF2 ?= assets/soundfonts/MT6276.sf2
 SF2_BENCHMARK ?= $(SF2)
 MCU_SF2_BASELINE_JSON ?= $(BUILD_DIR)/mcu_sf2_baseline.json
+MCU_SF2_ASSET ?= $(BUILD_DIR)/assets/wavetable.msf2
+MCU_SF2_ASSET_MANIFEST ?= $(BUILD_DIR)/assets/wavetable.msf2.json
 INSTRUMENT ?=
 KEY ?= 60
 START_SECONDS ?= 0
@@ -224,17 +226,20 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
-generate-generated: generate-register-map generate-dsp-lut
+generate-generated: generate-register-map generate-dsp-lut generate-mcu-asset-profile
 
 generate-register-map:
 	python3 tools/gen_register_map.py
 
 generate-dsp-lut:
 	python3 tools/gen_dsp_lut.py
+
+generate-mcu-asset-profile:
+	python3 tools/check_mcu_asset_profiles.py --generate
 
 check-generated: check-register-map check-dsp-lut check-mcu-asset-profiles
 
@@ -480,6 +485,12 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/formats/mcu_sf2_asset_test.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset_test
+	$(BUILD_DIR)/mcu_sf2_asset_test "$(SF2)"
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \
@@ -548,6 +559,29 @@ benchmark-mcu-sf2-baseline:
 		-o $(BUILD_DIR)/mcu_sf2_baseline
 	$(BUILD_DIR)/mcu_sf2_baseline "$(SF2_BENCHMARK)" > "$(MCU_SF2_BASELINE_JSON)"
 	sed -n '1,240p' "$(MCU_SF2_BASELINE_JSON)"
+
+test-mcu-sf2-asset:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/formats/mcu_sf2_asset_test.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset_test
+	$(BUILD_DIR)/mcu_sf2_asset_test "$(SF2)"
+
+mcu-sf2-asset:
+	mkdir -p $(BUILD_DIR) $(dir $(MCU_SF2_ASSET)) $(dir $(MCU_SF2_ASSET_MANIFEST))
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/apps/mcu_sf2_asset_main.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset
+	$(BUILD_DIR)/mcu_sf2_asset build "$(SF2)" "$(MCU_SF2_ASSET)" \
+		> "$(MCU_SF2_ASSET_MANIFEST)"
+	sed -n '1,200p' "$(MCU_SF2_ASSET_MANIFEST)"
+
+verify-mcu-sf2-asset: mcu-sf2-asset
+	$(BUILD_DIR)/mcu_sf2_asset verify "$(MCU_SF2_ASSET)" "$(SF2)"
 
 polyphony-stress-midi:
 	mkdir -p $(BUILD_DIR) $(dir $(POLYPHONY_STRESS_MIDI))

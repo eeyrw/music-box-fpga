@@ -1354,6 +1354,67 @@ Sf2LoaderStats sf2_loader_stats(const Sf2Data& sf2) {
   return stats;
 }
 
+Sf2SemanticData compile_sf2_semantics(const Sf2Data& sf2) {
+  auto checked_u32 = [](size_t value, const char* label) {
+    if (value > std::numeric_limits<uint32_t>::max()) {
+      throw std::runtime_error(std::string(label) + " exceeds 32-bit asset indexing");
+    }
+    return uint32_t(value);
+  };
+
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
+  Sf2SemanticData semantic;
+  semantic.presets.reserve(compiled->presets.size());
+  for (size_t preset_index = 0; preset_index < compiled->presets.size(); ++preset_index) {
+    const auto& source_preset = sf2.presets.at(preset_index);
+    const auto& target = compiled->presets[preset_index];
+    Sf2SemanticPreset preset;
+    preset.program = uint16_t(source_preset.preset);
+    preset.bank = uint16_t(source_preset.bank);
+    preset.first_candidate = checked_u32(semantic.candidates.size(), "candidate offset");
+    preset.candidate_count = checked_u32(target.candidates.size(), "preset candidate count");
+    semantic.presets.push_back(preset);
+
+    for (const auto& source_candidate : target.candidates) {
+      const auto keys = key_range(source_candidate.generators);
+      Sf2SemanticCandidate candidate;
+      candidate.key_low = uint8_t(keys.first);
+      candidate.key_high = uint8_t(keys.second);
+      candidate.velocity_low = uint8_t(source_candidate.velocity_low);
+      candidate.velocity_high = uint8_t(source_candidate.velocity_high);
+      candidate.instrument = uint32_t(source_candidate.instrument);
+      candidate.first_generator = checked_u32(semantic.generators.size(), "generator offset");
+      candidate.generator_count = checked_u32(source_candidate.generators.size(),
+                                              "candidate generator count");
+      for (const auto& generator : source_candidate.generators) {
+        semantic.generators.push_back(
+            {uint16_t(generator.first), uint16_t(generator.second)});
+      }
+      candidate.first_modulator = checked_u32(semantic.modulators.size(), "modulator offset");
+      for (const auto& destination : source_candidate.modulators_by_destination) {
+        semantic.modulators.insert(semantic.modulators.end(), destination.second.begin(),
+                                   destination.second.end());
+      }
+      candidate.modulator_count = checked_u32(
+          semantic.modulators.size() - candidate.first_modulator,
+          "candidate modulator count");
+      semantic.candidates.push_back(candidate);
+    }
+  }
+
+  const size_t usable_samples = sf2.samples.empty() ? 0 : sf2.samples.size() - 1;
+  semantic.samples.reserve(usable_samples);
+  for (size_t index = 0; index < usable_samples; ++index) {
+    const auto& sample = sf2.samples[index];
+    semantic.samples.push_back({
+        sample.start, sample.end, sample.start_loop, sample.end_loop,
+        sample.sample_rate, uint8_t(sample.original_pitch),
+        int8_t(sample.pitch_correction), uint16_t(sample.sample_link),
+        uint16_t(sample.sample_type)});
+  }
+  return semantic;
+}
+
 int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
   // Forced-instrument mode accepts either a numeric instrument index or a
   // case-insensitive substring of the instrument name. The terminal sentinel is

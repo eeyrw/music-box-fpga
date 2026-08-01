@@ -1,3 +1,4 @@
+#include "generated/mcu_asset_profile.h"
 #include "generated/register_map.h"
 #include "sf2_loader.h"
 
@@ -17,9 +18,9 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr int kSampleRate = 48000;
-constexpr int kControlTickSamples = 48;
-constexpr const char* kProfile = "generic-le32-48k-tick48-v13";
+constexpr int kSampleRate = int(render::mcu_asset_profile::kOutputSampleRate);
+constexpr int kControlTickSamples = int(render::mcu_asset_profile::kControlTickSamples);
+constexpr const char* kProfile = render::mcu_asset_profile::kId;
 
 struct LookupKey {
   int program = 0;
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
       std::cerr << "usage: mcu_sf2_baseline <soundfont.sf2>\n";
       return 2;
     }
-    if (render::regs::kVersionValue != 0x000d0000u) {
+    if (render::regs::kVersionValue != render::mcu_asset_profile::kCommandInterfaceVersion) {
       throw std::runtime_error("reference MCU asset profile requires command interface 13");
     }
 
@@ -178,7 +179,10 @@ int main(int argc, char** argv) {
               << "{\n"
               << "  \"schema\": \"mcu-sf2-baseline-v1\",\n"
               << "  \"profile\": \"" << kProfile << "\",\n"
-              << "  \"command_interface_version\": \"0x000d0000\",\n"
+              << "  \"command_interface_version\": \"0x" << std::hex
+              << std::setw(8) << std::setfill('0')
+              << render::mcu_asset_profile::kCommandInterfaceVersion << std::dec
+              << std::setfill(' ') << "\",\n"
               << "  \"sample_rate\": " << kSampleRate << ",\n"
               << "  \"control_tick_samples\": " << kControlTickSamples << ",\n"
               << "  \"path\": " << json_string(path) << ",\n"

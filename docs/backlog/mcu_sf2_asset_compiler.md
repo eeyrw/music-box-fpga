@@ -49,6 +49,10 @@ lookups and small integer evaluations. It does not parse RIFF, inspect SF2 bags,
 resolve zone inheritance, allocate containers, call floating-point
 transcendental functions, or build a general-purpose `Region`.
 
+The production qualification SoundFont is the external
+`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2`. The checked-in MT6276 file remains
+the fast routine fixture; it does not replace SGM signoff.
+
 ## Goals
 
 - Compile one SF2 into deterministic MCU metadata before deployment.
@@ -224,6 +228,16 @@ The version-1 design should contain at least:
 The section directory identifies section type, element stride, offset, count,
 and optional CRC. Unknown optional sections may be skipped; unknown required
 sections reject the image.
+
+Phase 1 now implements the intermediate `MSF2` semantic image version 1. Its
+96-byte header records the reference profile, command interface, source size
+and CRC32, complete image CRC32, SF2 sample span, and a five-entry section
+directory. The five required sections contain presets, expanded candidates,
+resolved generators, resolved modulators, and sample headers. All records use
+explicit little-endian fields and 32-bit image indexing. This semantic image is
+the checked serialization boundary; Phase 2 adds the final key/velocity
+dispatch and command-oriented descriptor sections without exposing the old
+private C++ compiled structs as a file format.
 
 ## Logical Tables
 
@@ -631,20 +645,36 @@ Exit gate for portable work: one named target-neutral reference profile and
 reproducible host baseline reports. Target-specific timing and memory signoff
 remain a Phase 4 exit requirement after an MCU is selected.
 
+The 2026-08-01 SGM reference-profile run covered 285 presets and all 4,632,960
+`preset/key/velocity` selections. It found 4,153,154 playable selections,
+6,342,851 ordered layer references, and at most four mono layers for one Note
+On. Host load time was 1.968 seconds, exhaustive selection conversion took
+8.290 seconds, and forced-cold/warm region lookup averaged 1,521/28 ns on the
+development container. These timings are portable-work baselines, not MCU
+qualification.
+
 ### Phase 1: Semantic IR And Packed Image
 
-- [ ] Separate the current compiled zone representation from private loader
+- [x] Separate the current compiled zone representation from private loader
   implementation details.
-- [ ] Define explicit integer semantic records without strings or native
+- [x] Define explicit integer semantic records without strings or native
   containers in runtime-required data.
-- [ ] Implement deterministic section layout, header, CRC, source digest, and
+- [x] Implement deterministic section layout, header, CRC, source digest, and
   manifest generation.
-- [ ] Implement an independent bounds-checking verifier and a pointer-free
+- [x] Implement an independent bounds-checking verifier and a pointer-free
   read-only image view.
-- [ ] Add generation, verification, and size-report Make targets.
+- [x] Add generation, verification, and size-report Make targets.
 
 Exit gate: exhaustive small-fixture region selection and field equivalence;
 repeat builds are byte identical; malformed images are rejected.
+
+The Phase 1 test compares every serialized record with the independent semantic
+IR, rebuilds and compares the complete image, and rejects truncation, bad CRC,
+misaligned sections, invalid cross-section references, profile mismatch, and
+source mismatch. It passes for both MT6276 and the production SGM file. The SGM
+image contains 285 presets, 15,714 candidates, 156,953 resolved generators,
+170,077 resolved modulators, and 1,824 samples. It is 2,761,528 bytes versus
+14,159,110 estimated bytes for the current host C++ compiled representation.
 
 ### Phase 2: Precomputed Dispatch And START Descriptors
 

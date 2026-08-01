@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = ROOT / "spec" / "mcu_asset_profiles.json"
 REGISTER_PATH = ROOT / "spec" / "register_map.json"
+GENERATED_HEADER_PATH = ROOT / "sim" / "harness" / "generated" / "mcu_asset_profile.h"
 REFERENCE_ID = "generic-le32-48k-tick48-v13"
 
 
@@ -26,7 +28,26 @@ def register_interface_version(register_spec: dict) -> int:
     raise ValueError("register map has no VERSION register")
 
 
+def render_header(reference: dict) -> str:
+    command_version = int(reference["commandInterfaceVersion"], 0)
+    return f"""// Generated from spec/mcu_asset_profiles.json. Do not edit by hand.
+#pragma once
+
+#include <cstdint>
+
+namespace render::mcu_asset_profile {{
+inline constexpr char kId[] = \"{reference['id']}\";
+constexpr uint32_t kCommandInterfaceVersion = 0x{command_version:08x}u;
+constexpr uint32_t kOutputSampleRate = {reference['outputSampleRate']}u;
+constexpr uint32_t kControlTickSamples = {reference['controlTickSamples']}u;
+}}  // namespace render::mcu_asset_profile
+"""
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--generate", action="store_true")
+    args = parser.parse_args()
     spec = load_json(PROFILE_PATH)
     if spec.get("schema") != "wavetable-mcu-asset-profiles-v1":
         raise ValueError("unsupported MCU asset profile schema")
@@ -81,9 +102,20 @@ def main() -> int:
             f"register map 0x{register_version:08x}"
         )
 
+    expected_header = render_header(reference)
+    if args.generate:
+        GENERATED_HEADER_PATH.write_text(expected_header, encoding="utf-8")
+    elif not GENERATED_HEADER_PATH.exists() or GENERATED_HEADER_PATH.read_text(
+        encoding="utf-8"
+    ) != expected_header:
+        raise ValueError(
+            "generated MCU asset profile header is stale; run "
+            "make generate-mcu-asset-profile"
+        )
+
     print(
         f"PASS: {len(profiles)} MCU asset profile(s); reference {REFERENCE_ID} "
-        f"matches interface 0x{register_version:08x}"
+        f"matches interface 0x{register_version:08x}; generated header is current"
     )
     return 0
 

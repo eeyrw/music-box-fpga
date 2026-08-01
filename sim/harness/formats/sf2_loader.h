@@ -64,8 +64,53 @@ struct Sf2LoaderStats {
   size_t sample_count = 0;
 };
 
+struct Sf2SemanticPreset {
+  uint16_t program = 0;
+  uint16_t bank = 0;
+  uint32_t first_candidate = 0;
+  uint32_t candidate_count = 0;
+};
+
+struct Sf2SemanticCandidate {
+  uint8_t key_low = 0;
+  uint8_t key_high = 127;
+  uint8_t velocity_low = 0;
+  uint8_t velocity_high = 127;
+  uint32_t instrument = 0;
+  uint32_t first_generator = 0;
+  uint32_t generator_count = 0;
+  uint32_t first_modulator = 0;
+  uint32_t modulator_count = 0;
+};
+
+struct Sf2SemanticGenerator {
+  uint16_t oper = 0;
+  uint16_t amount = 0;
+};
+
+struct Sf2SemanticSample {
+  uint32_t start = 0;
+  uint32_t end = 0;
+  uint32_t start_loop = 0;
+  uint32_t end_loop = 0;
+  uint32_t sample_rate = 0;
+  uint8_t original_pitch = 0;
+  int8_t pitch_correction = 0;
+  uint16_t sample_link = 0;
+  uint16_t sample_type = 0;
+};
+
+struct Sf2SemanticData {
+  std::vector<Sf2SemanticPreset> presets;
+  std::vector<Sf2SemanticCandidate> candidates;
+  std::vector<Sf2SemanticGenerator> generators;
+  std::vector<Sf2Modulator> modulators;
+  std::vector<Sf2SemanticSample> samples;
+};
+
 Sf2Data load_sf2(const std::string& path);
 Sf2LoaderStats sf2_loader_stats(const Sf2Data& sf2);
+Sf2SemanticData compile_sf2_semantics(const Sf2Data& sf2);
 int select_instrument(const Sf2Data& sf2, const std::string& instrument);
 
 class Sf2RegionCache {
