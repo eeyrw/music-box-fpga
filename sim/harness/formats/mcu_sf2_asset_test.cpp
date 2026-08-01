@@ -204,6 +204,48 @@ int main(int argc, char** argv) {
     require(view.find_preset_dispatch(127, 16383) == -1,
             "missing sparse preset lookup did not fail");
 
+    require(semantic.presets.size() >= 2, "fixture needs multiple presets for pruning test");
+    render::McuSf2AssetSelection subset;
+    subset.presets.emplace_back(semantic.presets[0].bank, semantic.presets[0].program);
+    const std::vector<uint8_t> subset_image = render::build_mcu_sf2_asset(
+        sf2, source_size, render::reference_mcu_sf2_asset_profile(), subset);
+    const render::McuSf2AssetView subset_view(subset_image.data(), subset_image.size());
+    require(subset_view.preset_count() == 1 && subset_view.preset_dispatch_count() == 1 &&
+                subset_view.selected_preset_count() == 1 &&
+                subset_view.selection_crc32() != 0,
+            "preset subset was not recorded");
+    require(subset_view.find_preset_dispatch(semantic.presets[0].program,
+                                             semantic.presets[0].bank) == 0,
+            "selected preset is not dispatchable");
+    require(subset_view.find_preset_dispatch(semantic.presets[1].program,
+                                             semantic.presets[1].bank) == -1,
+            "unselected preset remained dispatchable");
+    require(subset_view.candidate_count() < view.candidate_count() &&
+                subset_view.generator_count() < view.generator_count() &&
+                subset_view.modulator_count() < view.modulator_count() &&
+                subset_view.sample_count() <= view.sample_count() &&
+                subset_image.size() < image_a.size(),
+            "preset subset did not prune reachable metadata");
+    for (size_t candidate_index = 0; candidate_index < subset_view.candidate_count();
+         ++candidate_index) {
+      const auto candidate = subset_view.candidate(candidate_index);
+      for (uint32_t generator_index = 0; generator_index < candidate.generator_count;
+           ++generator_index) {
+        const auto generator = subset_view.generator(candidate.first_generator + generator_index);
+        if (generator.oper == 53) {
+          require(generator.amount < subset_view.sample_count(),
+                  "pruned sample reference was not remapped");
+        }
+      }
+    }
+
+    render::McuSf2AssetSelection duplicate = subset;
+    duplicate.presets.push_back(duplicate.presets.front());
+    require_failure([&] {
+      (void)render::build_mcu_sf2_asset(
+          sf2, source_size, render::reference_mcu_sf2_asset_profile(), duplicate);
+    }, "duplicate preset selection was accepted");
+
     require_failure([&] {
       render::McuSf2AssetView truncated(image_a.data(), image_a.size() - 1);
       (void)truncated;

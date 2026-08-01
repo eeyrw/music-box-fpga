@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace render {
@@ -67,13 +68,19 @@ struct McuSf2AssetProfile {
   uint32_t control_tick_samples = 0;
 };
 
+struct McuSf2AssetSelection {
+  // Empty means every playable preset. Entries are (bank, program).
+  std::vector<std::pair<uint16_t, uint16_t>> presets;
+};
+
 const McuSf2AssetProfile& reference_mcu_sf2_asset_profile();
 
 uint32_t mcu_sf2_asset_image_crc(const uint8_t* data, size_t size);
 std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
                                          uint64_t source_size_bytes,
                                          const McuSf2AssetProfile& profile =
-                                             reference_mcu_sf2_asset_profile());
+                                             reference_mcu_sf2_asset_profile(),
+                                         const McuSf2AssetSelection& selection = {});
 
 class McuSf2AssetView {
  public:
@@ -85,6 +92,8 @@ class McuSf2AssetView {
   uint32_t source_crc32() const { return source_crc32_; }
   uint32_t sample_word_offset() const { return sample_word_offset_; }
   uint32_t sample_word_count() const { return sample_word_count_; }
+  uint32_t selection_crc32() const { return selection_crc32_; }
+  uint32_t selected_preset_count() const { return selected_preset_count_; }
 
   size_t preset_count() const;
   size_t candidate_count() const;
@@ -134,6 +143,8 @@ class McuSf2AssetView {
   uint32_t source_crc32_ = 0;
   uint32_t sample_word_offset_ = 0;
   uint32_t sample_word_count_ = 0;
+  uint32_t selection_crc32_ = 0;
+  uint32_t selected_preset_count_ = 0;
   bool has_dispatch_ = false;
 };
 

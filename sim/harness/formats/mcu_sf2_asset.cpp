@@ -28,6 +28,7 @@ constexpr uint32_t kMonoDescriptorStride = 20;
 constexpr uint32_t kStartWordStride = 4;
 constexpr size_t kSemanticSectionCount = 5;
 constexpr size_t kKnownSectionCount = 11;
+constexpr uint16_t kGeneratorSampleId = 53;
 
 uint16_t read_u16(const uint8_t* data) {
   return uint16_t(data[0]) | (uint16_t(data[1]) << 8);
@@ -126,6 +127,119 @@ struct DispatchBuild {
   std::vector<uint32_t> start_words;
 };
 
+struct SelectedSemanticBuild {
+  Sf2SemanticData semantic;
+  std::vector<uint32_t> source_presets;
+  std::vector<std::vector<uint32_t>> source_candidates;
+  uint32_t selection_crc32 = 0;
+};
+
+SelectedSemanticBuild select_semantics(const Sf2Data& sf2,
+                                       const Sf2SemanticData& source,
+                                       const McuSf2AssetSelection& requested) {
+  std::vector<std::pair<uint16_t, uint16_t>> selected = requested.presets;
+  std::sort(selected.begin(), selected.end());
+  if (std::adjacent_find(selected.begin(), selected.end()) != selected.end()) {
+    throw std::runtime_error("duplicate MCU SF2 preset selection");
+  }
+
+  SelectedSemanticBuild result;
+  uint32_t selection_crc = 0xffffffffu;
+  for (const auto& entry : selected) {
+    selection_crc = crc32_update(selection_crc, uint8_t(entry.first));
+    selection_crc = crc32_update(selection_crc, uint8_t(entry.first >> 8));
+    selection_crc = crc32_update(selection_crc, uint8_t(entry.second));
+    selection_crc = crc32_update(selection_crc, uint8_t(entry.second >> 8));
+  }
+  result.selection_crc32 = selected.empty() ? 0 : selection_crc ^ 0xffffffffu;
+
+  if (selected.empty()) {
+    result.semantic = source;
+    result.source_presets.reserve(source.presets.size());
+    result.source_candidates.reserve(source.presets.size());
+    for (uint32_t preset = 0; preset < source.presets.size(); ++preset) {
+      result.source_presets.push_back(preset);
+      std::vector<uint32_t> candidates;
+      candidates.reserve(source.presets[preset].candidate_count);
+      for (uint32_t local = 0; local < source.presets[preset].candidate_count; ++local) {
+        candidates.push_back(local);
+      }
+      result.source_candidates.push_back(std::move(candidates));
+    }
+    return result;
+  }
+
+  std::vector<bool> retained_samples(source.samples.size());
+  for (uint32_t source_preset = 0; source_preset < source.presets.size(); ++source_preset) {
+    const auto& input_preset = source.presets[source_preset];
+    const auto key = std::make_pair(input_preset.bank, input_preset.program);
+    if (!std::binary_search(selected.begin(), selected.end(), key)) continue;
+
+    Sf2SemanticPreset output_preset = input_preset;
+    output_preset.first_candidate = checked_u32(result.semantic.candidates.size(),
+                                                "selected candidate offset");
+    output_preset.candidate_count = 0;
+    result.source_presets.push_back(source_preset);
+    result.source_candidates.emplace_back();
+    for (uint32_t local = 0; local < input_preset.candidate_count; ++local) {
+      const uint32_t source_candidate = input_preset.first_candidate + local;
+      const auto& input_candidate = source.candidates.at(source_candidate);
+      Sf2SemanticCandidate output_candidate = input_candidate;
+      output_candidate.first_generator = checked_u32(result.semantic.generators.size(),
+                                                      "selected generator offset");
+      for (uint32_t index = 0; index < input_candidate.generator_count; ++index) {
+        const auto generator = source.generators.at(input_candidate.first_generator + index);
+        result.semantic.generators.push_back(generator);
+        if (generator.oper == kGeneratorSampleId && generator.amount < retained_samples.size()) {
+          retained_samples[generator.amount] = true;
+        }
+      }
+      output_candidate.first_modulator = checked_u32(result.semantic.modulators.size(),
+                                                      "selected modulator offset");
+      result.semantic.modulators.insert(
+          result.semantic.modulators.end(),
+          source.modulators.begin() + input_candidate.first_modulator,
+          source.modulators.begin() + input_candidate.first_modulator +
+              input_candidate.modulator_count);
+      result.semantic.candidates.push_back(output_candidate);
+      result.source_candidates.back().push_back(local);
+      ++output_preset.candidate_count;
+    }
+    result.semantic.presets.push_back(output_preset);
+  }
+  if (result.semantic.presets.size() != selected.size()) {
+    throw std::runtime_error("MCU SF2 preset selection contains a missing bank/program");
+  }
+
+  for (size_t index = 0; index < retained_samples.size(); ++index) {
+    if (retained_samples[index]) {
+      const uint16_t link = source.samples[index].sample_link;
+      if (link < retained_samples.size()) retained_samples[link] = true;
+    }
+  }
+  std::vector<uint16_t> sample_remap(source.samples.size(), UINT16_MAX);
+  for (size_t index = 0; index < source.samples.size(); ++index) {
+    if (!retained_samples[index]) continue;
+    sample_remap[index] = uint16_t(result.semantic.samples.size());
+    result.semantic.samples.push_back(source.samples[index]);
+  }
+  for (auto& sample : result.semantic.samples) {
+    sample.sample_link = sample.sample_link < sample_remap.size() &&
+                                 sample_remap[sample.sample_link] != UINT16_MAX
+                             ? sample_remap[sample.sample_link]
+                             : 0;
+  }
+  for (auto& generator : result.semantic.generators) {
+    if (generator.oper != kGeneratorSampleId) continue;
+    if (generator.amount >= sample_remap.size() || sample_remap[generator.amount] == UINT16_MAX) {
+      throw std::runtime_error("selected candidate has no retained sample");
+    }
+    generator.amount = sample_remap[generator.amount];
+  }
+  (void)sf2;
+  return result;
+}
+
 uint32_t pack_pair(int high, int low) {
   return (uint32_t(uint16_t(high)) << 16) | uint32_t(uint16_t(low));
 }
@@ -178,8 +292,11 @@ std::vector<uint32_t> start_template(const Region& region) {
 }
 
 DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic,
+                             const std::vector<uint32_t>& source_presets,
+                             const std::vector<std::vector<uint32_t>>& source_candidates,
                              const McuSf2AssetProfile& profile) {
   DispatchBuild result;
+  std::map<std::vector<uint32_t>, uint32_t> interned_start_templates;
   std::map<std::pair<uint16_t, uint16_t>, uint32_t> preset_index;
   for (uint32_t index = 0; index < semantic.presets.size(); ++index) {
     const auto& preset = semantic.presets[index];
@@ -213,13 +330,20 @@ DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic
           continue;
         }
         const Region region = make_region_for_compiled_candidate(
-            sf2, semantic_preset_index, local, key,
+            sf2, source_presets.at(semantic_preset_index),
+            source_candidates.at(semantic_preset_index).at(local), key,
             int(profile.sample_rate), int(profile.control_tick_samples));
         const std::vector<uint32_t> words = start_template(region);
         McuSf2MonoDescriptor descriptor;
         descriptor.semantic_candidate = global;
-        descriptor.first_start_word = checked_u32(result.start_words.size(),
-                                                  "START word offset");
+        auto interned = interned_start_templates.find(words);
+        if (interned == interned_start_templates.end()) {
+          const uint32_t offset = checked_u32(result.start_words.size(),
+                                              "START word offset");
+          result.start_words.insert(result.start_words.end(), words.begin(), words.end());
+          interned = interned_start_templates.emplace(words, offset).first;
+        }
+        descriptor.first_start_word = interned->second;
         descriptor.start_word_count = uint8_t(words.size());
         descriptor.key = uint8_t(key);
         descriptor.exclusive_class = uint8_t(region.exclusive_class);
@@ -229,7 +353,6 @@ DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic
         const uint32_t descriptor_index = checked_u32(result.descriptors.size(),
                                                       "mono descriptor index");
         result.descriptors.push_back(descriptor);
-        result.start_words.insert(result.start_words.end(), words.begin(), words.end());
         candidates.push_back({&candidate, descriptor_index});
         breakpoints[std::max<int>(1, candidate.velocity_low)] = true;
         if (candidate.velocity_high < 127) {
@@ -314,13 +437,17 @@ uint32_t mcu_sf2_asset_image_crc(const uint8_t* data, size_t size) {
 
 std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
                                          uint64_t source_size_bytes,
-                                         const McuSf2AssetProfile& profile) {
+                                         const McuSf2AssetProfile& profile,
+                                         const McuSf2AssetSelection& selection) {
   if (profile.id.empty() || profile.command_interface_version == 0 ||
       profile.sample_rate == 0 || profile.control_tick_samples == 0) {
     throw std::runtime_error("invalid MCU SF2 asset profile");
   }
-  const Sf2SemanticData semantic = compile_sf2_semantics(sf2);
-  const DispatchBuild dispatch = build_dispatch(sf2, semantic, profile);
+  const Sf2SemanticData full_semantic = compile_sf2_semantics(sf2);
+  const SelectedSemanticBuild selected = select_semantics(sf2, full_semantic, selection);
+  const Sf2SemanticData& semantic = selected.semantic;
+  const DispatchBuild dispatch = build_dispatch(
+      sf2, semantic, selected.source_presets, selected.source_candidates, profile);
   std::vector<uint8_t> image(kMcuSf2AssetHeaderSize +
                              kKnownSectionCount * kMcuSf2AssetSectionEntrySize, 0);
   std::array<SectionBuild, kKnownSectionCount> sections{{
@@ -455,6 +582,8 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
   write_u32(image, 52, sf2.smpl_word_count);
   write_u32(image, 56, crc32_string(profile.id));
   write_u32(image, 60, kAssetFlagSourceCrc32);
+  write_u32(image, 64, selected.selection_crc32);
+  write_u32(image, 68, checked_u32(semantic.presets.size(), "selected preset count"));
 
   for (size_t index = 0; index < sections.size(); ++index) {
     const size_t offset = kMcuSf2AssetSectionDirectoryOffset +
@@ -501,6 +630,8 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   source_crc32_ = read_u32(data + 32);
   sample_word_offset_ = read_u32(data + 48);
   sample_word_count_ = read_u32(data + 52);
+  selection_crc32_ = read_u32(data + 64);
+  selected_preset_count_ = read_u32(data + 68);
   if (uint64_t(sample_word_offset_) * 2u + uint64_t(sample_word_count_) * 2u >
       source_size_bytes_) {
     throw std::runtime_error("MCU SF2 asset sample span exceeds source image");
@@ -587,6 +718,10 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
     }
   }
   if (has_dispatch_) {
+    if (selected_preset_count_ != preset_count() ||
+        selected_preset_count_ != preset_dispatch_count()) {
+      throw std::runtime_error("MCU SF2 selected preset count mismatch");
+    }
     if (key_dispatch_count() != preset_dispatch_count() * 128u) {
       throw std::runtime_error("MCU SF2 key dispatch count mismatch");
     }

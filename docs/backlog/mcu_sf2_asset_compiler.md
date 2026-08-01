@@ -359,6 +359,27 @@ globally and fits the selected memory budget. Otherwise use the already
 validated bounded fixed-point interpolation table. The manifest must report
 which representation was selected.
 
+### Deployment Preset Closure
+
+Production images must not automatically retain every preset found in the
+authoring SoundFont. A deployment preset set lists exact `(bank, program)`
+pairs. The compiler sorts and validates that set, rejects duplicates and missing
+presets, then copies only the reachable candidates, generators, modulators, and
+sample headers. All copied references are reindexed. The selection digest and
+selected-preset count are part of the checked image header so two different
+deployment sets cannot be confused merely because they use the same source SF2.
+
+The checked-in `spec/mcu_preset_sets/gm_bank0.txt` set selects the 128 melodic
+General MIDI programs in bank zero. Product-specific drum kits and nonzero-bank
+variants are explicit additional lines; the compiler never guesses them. An
+omitted set retains all presets for reference-equivalence and analysis builds.
+
+This metadata closure does not yet compact PCM. Version 1 START addresses still
+refer to the complete source SF2 wave span. A later deployment packer may copy
+only reachable sample windows and rewrite their precomputed absolute addresses;
+that is an offline image/loader change and does not require an RTL interface
+change.
+
 ### Size-Guided Choice
 
 The compiler should support at least two policies:
@@ -483,6 +504,11 @@ decision:
 - maximum terms per gain, pitch, and filter program;
 - maximum contiguous and random reads on a cold Note On;
 - compact versus precomputed policy comparison.
+
+The current planning class is an RP2040-class MCU with external nonvolatile
+storage, not a committed part number. The image must therefore support direct
+mapped/XIP reads or a bounded read-through cache and must not require complete
+metadata residency in SRAM.
 
 ## Wave Image Coupling
 
@@ -714,6 +740,8 @@ evaluation is deliberately not encoded in START templates and remains Phase 3.
 
 ### Phase 3: Fixed-Point Modulation Programs
 
+- [x] Add deployment preset allowlists and prune the complete reachable metadata
+  closure before expanding modulation data.
 - [ ] Compile gain, pitch, and filter term arrays with constant folding,
   interning, note-static separation, and dependency masks.
 - [ ] Add shared finite-domain source curves and selected key/velocity result
@@ -725,6 +753,14 @@ evaluation is deliberately not encoded in START templates and remains Phase 3.
 
 Exit gate: numeric sweeps pass their exact/error contracts and representative
 MIDI command traces match the approved reference behavior.
+
+The final SGM bank-zero GM deployment set contains 128 of 285 presets. Its
+Phase 2 direct-dispatch image is 4,230,916 bytes instead of the 9,700,276-byte
+all-preset image (56.4% smaller): 3,658 candidates, 49,229 generators, 38,901
+modulators, 1,437 reachable sample headers, 36,625 mono descriptors, and 575,142
+globally interned START words. Product-specific bank variants and drum presets
+will add only their measured reachable closure. PCM remains in the complete
+324,800,670-byte source image at this stage.
 
 ### Phase 4: MCU Runtime Integration
 

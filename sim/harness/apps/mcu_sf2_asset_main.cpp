@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,6 +34,39 @@ std::vector<uint8_t> read_file(const std::string& path) {
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(source), {});
 }
 
+render::McuSf2AssetSelection read_selection(const std::string& path) {
+  render::McuSf2AssetSelection selection;
+  if (path.empty()) return selection;
+  std::ifstream input(path);
+  if (!input) throw std::runtime_error("cannot open MCU preset set: " + path);
+  std::string line;
+  int line_number = 0;
+  while (std::getline(input, line)) {
+    ++line_number;
+    const size_t comment = line.find('#');
+    if (comment != std::string::npos) line.erase(comment);
+    std::istringstream fields(line);
+    int bank = -1;
+    int program = -1;
+    if (!(fields >> bank)) continue;
+    if (!(fields >> program) || bank < 0 || bank > 16383 ||
+        program < 0 || program > 127) {
+      throw std::runtime_error("invalid MCU preset set line " +
+                               std::to_string(line_number));
+    }
+    std::string extra;
+    if (fields >> extra) {
+      throw std::runtime_error("extra field in MCU preset set line " +
+                               std::to_string(line_number));
+    }
+    selection.presets.emplace_back(uint16_t(bank), uint16_t(program));
+  }
+  if (selection.presets.empty()) {
+    throw std::runtime_error("MCU preset set is empty; omit it to select all presets");
+  }
+  return selection;
+}
+
 void write_file(const std::string& path, const std::vector<uint8_t>& data) {
   std::ofstream output(path, std::ios::binary);
   if (!output) throw std::runtime_error("cannot create MCU SF2 asset: " + path);
@@ -57,6 +91,8 @@ void write_report(const char* action, const std::string& asset_path,
             << "  \"source_bytes\": " << view.source_size_bytes() << ",\n"
             << "  \"source_crc32\": " << view.source_crc32() << ",\n"
             << "  \"source_checked\": " << (source_checked ? "true" : "false") << ",\n"
+            << "  \"selection_crc32\": " << view.selection_crc32() << ",\n"
+            << "  \"selected_presets\": " << view.selected_preset_count() << ",\n"
             << "  \"presets\": " << view.preset_count() << ",\n"
             << "  \"candidates\": " << view.candidate_count() << ",\n"
             << "  \"generators\": " << view.generator_count() << ",\n"
@@ -76,17 +112,23 @@ void write_report(const char* action, const std::string& asset_path,
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 3 || argc > 4) {
+    if (argc < 3 || argc > 5) {
       throw std::runtime_error(
-          "usage: mcu_sf2_asset build <source.sf2> <output.msf2> | "
+          "usage: mcu_sf2_asset build <source.sf2> <output.msf2> [preset-set.txt] | "
           "verify <asset.msf2> [source.sf2]");
     }
     const std::string action = argv[1];
     if (action == "build") {
-      if (argc != 4) throw std::runtime_error("build requires source and output paths");
+      if (argc != 4 && argc != 5) {
+        throw std::runtime_error("build requires source and output paths");
+      }
       const uint64_t source_size = std::filesystem::file_size(argv[2]);
       render::Sf2Data sf2 = render::load_sf2(argv[2]);
-      const std::vector<uint8_t> image = render::build_mcu_sf2_asset(sf2, source_size);
+      const render::McuSf2AssetSelection selection =
+          read_selection(argc == 5 ? argv[4] : "");
+      const std::vector<uint8_t> image =
+          render::build_mcu_sf2_asset(sf2, source_size,
+                                      render::reference_mcu_sf2_asset_profile(), selection);
       write_file(argv[3], image);
       const render::McuSf2AssetView view(image.data(), image.size());
       if (!view.matches_source(sf2, source_size)) {
@@ -96,6 +138,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     if (action == "verify") {
+      if (argc > 4) throw std::runtime_error("verify accepts only an optional source path");
       const std::vector<uint8_t> image = read_file(argv[2]);
       const render::McuSf2AssetView view(image.data(), image.size());
       bool source_checked = false;

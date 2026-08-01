@@ -57,6 +57,7 @@ SF2_BENCHMARK ?= $(SF2)
 MCU_SF2_BASELINE_JSON ?= $(BUILD_DIR)/mcu_sf2_baseline.json
 MCU_SF2_ASSET ?= $(BUILD_DIR)/assets/wavetable.msf2
 MCU_SF2_ASSET_MANIFEST ?= $(BUILD_DIR)/assets/wavetable.msf2.json
+MCU_PRESET_SET ?=
 INSTRUMENT ?=
 KEY ?= 60
 START_SECONDS ?= 0
@@ -579,6 +580,7 @@ mcu-sf2-asset:
 		sim/harness/apps/mcu_sf2_asset_main.cpp \
 		-o $(BUILD_DIR)/mcu_sf2_asset
 	$(BUILD_DIR)/mcu_sf2_asset build "$(SF2)" "$(MCU_SF2_ASSET)" \
+		$(if $(strip $(MCU_PRESET_SET)),"$(MCU_PRESET_SET)") \
 		> "$(MCU_SF2_ASSET_MANIFEST)"
 	sed -n '1,200p' "$(MCU_SF2_ASSET_MANIFEST)"
 
