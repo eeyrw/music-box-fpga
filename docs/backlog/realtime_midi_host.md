@@ -191,45 +191,63 @@ timestamped MIDI input
   -> CH347
 ```
 
-- [ ] Add a dedicated SPI worker that owns `Ch347RegisterTransport` and all
+- [x] Add a dedicated SPI worker that owns `Ch347RegisterTransport` and all
   blocking driver calls.
-- [ ] Use bounded queues with explicit overload behavior between MIDI input,
+- [x] Use bounded queues with explicit overload behavior between MIDI input,
   control processing, and SPI output.
-- [ ] Coalesce multiple complete commands into one transaction without
+- [x] Coalesce multiple complete commands into one transaction without
   exceeding 63 words or splitting a command.
-- [ ] Keep the two mono starts for one linked-stereo note adjacent.
-- [ ] Prioritize START, RELEASE, STOP, and recovery actions over replaceable
+- [x] Keep the two mono starts for one linked-stereo note adjacent.
+- [x] Prioritize START, RELEASE, STOP, and recovery actions over replaceable
   continuous modulation updates.
-- [ ] Coalesce queued gain, pitch, and filter replacements per voice and
+- [x] Coalesce queued gain, pitch, and filter replacements per voice and
   generation so only the newest unsent value remains.
-- [ ] Never discard Note Off, RELEASE, STOP, generation changes, or transport
+- [x] Never discard Note Off, RELEASE, STOP, generation changes, or transport
   recovery actions as an overload shortcut.
-- [ ] Record queue high-water marks, coalesced updates, dropped replaceable
+- [x] Record queue high-water marks, coalesced updates, dropped replaceable
   updates, transaction sizes, driver latency, and maximum command age.
-- [ ] Provide a dry-run transport that exercises the same scheduler without
+- [x] Provide a dry-run transport that exercises the same scheduler without
   opening hardware.
 
-FIFO preflight, transport error counters, and recovery remain dependent on the
-open items in [`spi_transport.md`](spi_transport.md).
+FPGA FIFO preflight and physical transport-recovery qualification remain
+dependent on the open items in [`spi_transport.md`](spi_transport.md).
+
+The completed scheduler uses fixed lifecycle and normal rings plus fixed
+per-voice replacement slots. It retries the unchanged failed transaction,
+records persistent-failure abandonment explicitly during shutdown, and keeps
+all CH347 calls on its worker thread. The MIDI queue separately reserves 256 of
+2048 entries for Note Off and mode recovery.
 
 ## Priority 7: Real-Time MIDI Application
 
-- [ ] Add a PC application entry point using the shared SF2 compiler, MCU
+- [x] Add a PC application entry point using the shared SF2 compiler, MCU
   policy, command builder, and CH347 scheduler rather than duplicating them.
-- [ ] Select a MIDI input API and define supported host platforms.
-- [ ] Preserve source MIDI timestamps through the event queue.
-- [ ] Define how timestamps map to the FPGA renderer's block-boundary command
+- [x] Select a MIDI input API and define supported host platforms.
+- [x] Preserve source MIDI timestamps through the event queue.
+- [x] Define how timestamps map to the FPGA renderer's block-boundary command
   visibility; the current command format has no target-frame timestamp.
-- [ ] Load and compile the soundfont before opening the real-time performance
+- [x] Load and compile the soundfont before opening the real-time performance
   path.
-- [ ] Retain one `CommandVoiceControl` instance for the process lifetime so
+- [x] Retain one `CommandVoiceControl` instance for the process lifetime so
   voice generations cannot reset between events.
-- [ ] Reuse voice allocation, sustain, sostenuto, exclusive-class, pitch-bend,
+- [x] Reuse voice allocation, sustain, sostenuto, exclusive-class, pitch-bend,
   pressure, and controller policy from the simulation harness.
-- [ ] Handle MIDI-device disconnect, CH347 failure, queue overload, and explicit
+- [x] Handle MIDI-device disconnect, CH347 failure, queue overload, and explicit
   stop/reset without leaving unknown active voices.
-- [ ] Report Note On command latency, scheduling jitter, queue depth, transport
+- [x] Report Note On command latency, scheduling jitter, queue depth, transport
   errors, active voices, and voice steals.
+
+The first application supports Linux raw-MIDI character devices and standard
+input byte streams. It timestamps each completed ingress message with the
+monotonic time captured at `read(2)`, then reports ingress-to-enqueue latency.
+Because commands do not contain a target frame, delivered state is visible at
+the next admitted FPGA render-block boundary. SoundFont loading and compilation
+finish before the MIDI descriptor opens; the bounded region registry refuses
+to recycle any region referenced by an active MCU voice.
+
+ALSA Sequencer input, including direct `aplaymidi` routing, is not part of this
+first entry point. `aplaymidi` requires either a future Sequencer backend or a
+virtual raw-MIDI bridge that exposes a `/dev/snd/midiC*D*` path.
 
 ## Priority 8: Bandwidth And Protocol Follow-Up
 
@@ -255,15 +273,15 @@ CDC qualification in `spi_transport.md` is complete.
 
 ## End-To-End Acceptance
 
-- [ ] `make lint`, `make test`, and documentation checks pass after each
+- [x] `make lint`, `make test`, and documentation checks pass after each
   applicable change.
 - [ ] The SGM workload loads within the memory targets and produces the same
   selected regions and exact fixed-point fields as the approved baseline.
-- [ ] The Note On hot path performs no file access, no unbounded allocation, and
+- [x] The Note On hot path performs no file access, no unbounded allocation, and
   no synchronous USB operation.
 - [ ] Control work meets its deadline for the declared maximum active voices
   with measured headroom on the target PC class.
-- [ ] Command queues remain bounded and lifecycle commands survive modulation
+- [x] Command queues remain bounded and lifecycle commands survive modulation
   overload.
 - [ ] Dry-run, C++ reference, RTL simulation, and physical CH347 paths share the
   same command encoding and scheduling policy.

@@ -376,6 +376,13 @@ void McuModel::handle_event(const NoteEvent& event) {
   else if (event.type == NoteEvent::EVENT_NOTE) note_off(event.channel, event.note, event.note_instance);
 }
 
+bool McuModel::region_in_use(int region) const {
+  for (int index = 0; index < active_voice_count_; ++index) {
+    if (voices_[active_voices_[index]].region == region) return true;
+  }
+  return false;
+}
+
 void McuModel::control_tick() {
   const auto tick_start = std::chrono::steady_clock::now();
   int active_index = 0;

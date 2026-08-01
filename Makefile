@@ -222,7 +222,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -417,7 +417,7 @@ measure-voice-compute-pipeline:
 		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
 	$(BUILD_DIR)/voice_compute_pipeline_model_test
 
-test-cpp-unit: host-smart-artix-bringup
+test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/voice_compute_pipeline_model.cpp \
@@ -485,6 +485,25 @@ test-cpp-unit: host-smart-artix-bringup
 		host/ch347_transport.cpp host/ch347_transport_test.cpp \
 		-o $(BUILD_DIR)/ch347_transport_test -ldl
 	$(BUILD_DIR)/ch347_transport_test
+	$(CXX) $(CXX_STD_FLAGS) -I. \
+		host/command_scheduler.cpp host/ch347_transport.cpp \
+		host/command_scheduler_test.cpp \
+		-o $(BUILD_DIR)/command_scheduler_test -ldl -pthread
+	$(BUILD_DIR)/command_scheduler_test
+	$(CXX) $(CXX_STD_FLAGS) -I. \
+		host/realtime_midi.cpp host/realtime_midi_test.cpp \
+		-o $(BUILD_DIR)/realtime_midi_test -pthread
+	$(BUILD_DIR)/realtime_midi_test
+	$(CXX) $(CXX_STD_FLAGS) -I. \
+		host/realtime_region_bank.cpp host/realtime_region_bank_test.cpp \
+		sim/harness/render/render_support.cpp \
+		sim/harness/control/command_control.cpp \
+		sim/harness/formats/midi_parser.cpp \
+		sim/harness/formats/sf2_loader.cpp \
+		-o $(BUILD_DIR)/realtime_region_bank_test
+	$(BUILD_DIR)/realtime_region_bank_test "$(SF2)"
+	$(BUILD_DIR)/realtime_midi_host --dry-run --midi-input /dev/null \
+		--sf2 "$(SF2)" --run-ms 10
 	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
 		--ddr-smoke --voice-smoke --base 0x100 --length 8
 	python3 tools/compare_reference_fluidsynth_test.py
@@ -644,6 +663,18 @@ host-ch347:
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
 		sim/harness/control/command_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
+
+host-realtime-midi:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
+		host/realtime_midi_main.cpp host/realtime_midi.cpp \
+		host/realtime_region_bank.cpp host/command_scheduler.cpp \
+		host/ch347_transport.cpp \
+		sim/harness/render/render_support.cpp \
+		sim/harness/control/command_control.cpp \
+		sim/harness/formats/midi_parser.cpp \
+		sim/harness/formats/sf2_loader.cpp \
+		-o $(BUILD_DIR)/realtime_midi_host -ldl -pthread
 
 host-smart-artix-bringup:
 	mkdir -p $(BUILD_DIR)

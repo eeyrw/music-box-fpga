@@ -54,10 +54,10 @@ does not submit command words through the debug-only `CMD_FIFO_DATA` register.
   followed by consecutive big-endian command words for voice control.
 
 The CH347 command API accepts one or more complete commands in a CS assertion,
-up to the adapter buffer's 63-word transfer limit. It rejects empty vectors,
+up to the adapter buffer's 63-word transfer limit. `AsyncCommandScheduler`
+combines queued commands up to that limit without splitting a command. It rejects empty vectors,
 incomplete final commands, and headers above the command parser's 16-word
-payload limit before opening a transfer. Current command producers still send
-one command per CS. The host computes CRC-16/CCITT-FALSE with a table-driven
+payload limit before opening a transfer. The host computes CRC-16/CCITT-FALSE with a table-driven
 byte update over the word-count byte and all big-endian payload bytes. A
 retained bit-at-a-time implementation is the independent unit-test oracle.
 Command transactions are encoded directly into a fixed 256-byte buffer. The
@@ -108,6 +108,89 @@ current and maximum active voices, modulator evaluations, dirty-group
 evaluations, and emitted commands. `make benchmark-mcu-control` runs the same
 representative controller/modulator workload at 128, 256, and 512 active mono
 voices after a warm-up interval.
+
+## Asynchronous Command Scheduling
+
+`AsyncCommandScheduler` is the only owner of the blocking command transport.
+The MIDI/control thread copies complete fixed commands into bounded storage and
+never calls the CH347 driver. START, RELEASE, STOP, and FLUSH use a 2048-entry
+lifecycle queue. Other nonreplaceable commands use a 512-entry queue. Gain,
+pitch, and filter updates use one replaceable slot per voice and command kind;
+the newest matching voice generation replaces the older unsent value.
+
+A producer batch prevents the worker from observing a partially constructed
+group, so all layers of one Note On are inserted together and linked-stereo
+mono starts remain adjacent. Transactions contain at most 63 words. A failed
+driver call retries the identical transaction after 1 ms. One hundred
+consecutive failures cause the real-time application to stop accepting input,
+queue All Sound Off, and shut down. Commands that still cannot be delivered at
+shutdown are reported by `abandoned_commands`; they are never reported as
+successfully emitted.
+
+Queue depth/high-water, replacement coalescing and invalidation, transaction
+size, driver duration, command age, transient errors, consecutive errors, and
+abandoned commands are recorded. `DryRunCommandTransport` uses the same worker,
+priorities, batching, retry, and transaction coalescer without opening CH347.
+
+## Real-Time MIDI Host
+
+`realtime_midi_host` supports Linux raw-MIDI character devices such as
+`/dev/snd/midiC0D0`; `--midi-input -` reads a raw byte stream from standard
+input. A dedicated input thread decodes running status and channel messages and
+pushes them into a 2048-event queue with a 256-event lifecycle reserve. Note
+Off and MIDI mode recovery events can consume the reserve. Replaceable control
+events coalesce under pressure, Note On is explicitly rejected once the normal
+capacity is exhausted, and lifecycle exhaustion triggers controlled shutdown.
+
+This first version does not open an ALSA Sequencer port. `aplay` plays PCM and
+cannot send MIDI; `aplaymidi` sends an SMF file to an ALSA Sequencer destination
+and therefore cannot target `--midi-input` directly. Use a physical or virtual
+raw-MIDI device that exposes `/dev/snd/midiC*D*`, or add a Sequencer input
+backend in a later change. A Sequencer-only `Midi Through` port is not a raw
+device path.
+
+Raw-MIDI supplies no event timestamp in this interface. The host captures a
+monotonic ingress timestamp immediately after each `read(2)` and preserves the
+timestamp assigned when the message's final byte arrives through the event
+queue. Commands have no target-frame field: after the SPI worker delivers a
+transaction, its state becomes visible at the next command admission and FPGA
+render-block boundary. Reported `note_on_enqueue_*` is ingress-to-command-queue
+latency; `maximum_command_age_ns` includes scheduler and driver delay.
+
+The complete SF2 file is loaded and its compiled lookup is built before the
+MIDI device is opened. One process-lifetime `CommandVoiceControl` preserves
+voice generations, while `McuModel` supplies the same allocation, pedal,
+exclusive-class, pitch-bend, pressure, and controller behavior used by the
+simulation harness. The exact same SF2 wave image must already be loaded in the
+FPGA address space.
+
+Build and run the application with:
+
+```bash
+make host-realtime-midi
+
+# Exercise the complete scheduling path without CH347 hardware.
+build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
+  --sf2 /path/to/soundfont.sf2
+
+# Current SGM development workload.
+build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
+  --sf2 '/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2'
+```
+
+SIGINT, SIGTERM, MIDI disconnect, lifecycle overflow, and persistent CH347
+failure all stop input first, issue All Sound Off on every channel, wait up to
+two seconds for the command queue, and report final JSON statistics. The report
+includes Note On latency, control scheduling jitter, MIDI and command queue
+high-water marks, transport failures, current/maximum active voices, voice
+steals, and region-cache activity.
+
+On 2026-08-01, a dry-run C4 Note On/Off using the 324,800,670-byte SGM workload
+selected four layers, reached four active voices and a 63-word transaction,
+then drained with no transport errors or abandoned commands. Ingress-to-command
+enqueue latency for that single cold lookup was 1,146,115 ns. This is a
+functional development-container measurement, not target-PC or physical-USB
+qualification.
 
 Build the low-level tool with:
 

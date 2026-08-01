@@ -68,6 +68,7 @@ class McuModel {
   void handle_event(const NoteEvent& event);
   void control_tick();
   void set_current_sample(uint32_t sample) { current_sample_ = sample; }
+  bool region_in_use(int region) const;
 
  private:
   struct ChannelState {
