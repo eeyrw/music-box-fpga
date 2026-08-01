@@ -2,6 +2,7 @@
 #include "command_control.h"
 
 #include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -182,6 +183,143 @@ void compare_dispatch(const render::Sf2Data& sf2,
   }
 }
 
+double curve_reference(uint8_t curve, int value) {
+  auto concave = [](int input) {
+    if (input <= 0) return 0.0;
+    if (input >= 127) return 1.0;
+    return (-400.0 / 960.0) * std::log10(double(127 - input) / 127.0);
+  };
+  auto convex = [&](int input) {
+    if (input <= 0) return 0.0;
+    if (input >= 127) return 1.0;
+    return 1.0 - (-400.0 / 960.0) * std::log10(double(input) / 127.0);
+  };
+  const int type = curve & 3;
+  const bool bipolar = (curve & 4u) != 0;
+  const int directed = (curve & 8u) != 0 ? 127 - value : value;
+  const double x = double(directed) / 128.0;
+  if (!bipolar) {
+    if (type == 1) return std::min(concave(directed), 127.0 / 128.0);
+    if (type == 2) return std::min(convex(directed), 127.0 / 128.0);
+    if (type == 3) return x >= 0.5 ? 1.0 : 0.0;
+    return x;
+  }
+  const double v = -1.0 + 2.0 * x;
+  if (type == 3) return v >= 0.0 ? 1.0 : -1.0;
+  if (type == 0) return v;
+  const int magnitude = int(std::round(std::abs(v) * 128.0));
+  const double shaped = type == 1 ? concave(magnitude) : convex(magnitude);
+  return std::copysign(v >= 0.0 ? std::min(shaped, 127.0 / 128.0) : shaped, v);
+}
+
+bool destination_in_family(uint16_t destination, int family) {
+  if (family == 0) return destination == 13 || destination == 17 || destination == 48;
+  if (family == 1) return destination == 0 || destination == 5 ||
+                          destination == 6 || destination == 7;
+  return destination == 8 || destination == 10 || destination == 11;
+}
+
+void compare_modulation(const render::Sf2SemanticData& semantic,
+                        const render::McuSf2AssetView& view) {
+  require(view.has_modulation_programs(), "asset has no fixed modulation programs");
+  require(view.candidate_program_count() == semantic.candidates.size(),
+          "candidate modulation reference count mismatch");
+  int maximum_curve_error = 0;
+  int maximum_curve = 0;
+  int maximum_curve_value = 0;
+  for (uint8_t curve = 0; curve < render::kMcuSourceCurveCount; ++curve) {
+    for (uint8_t value = 0; value < render::kMcuSourceCurveSize; ++value) {
+      const int32_t expected = int32_t(std::llround(
+          curve_reference(curve, value) * render::kMcuModulationOne));
+      const int32_t generated = view.source_curve_value(
+          size_t(curve) * render::kMcuSourceCurveSize + value);
+      const int32_t runtime = render::mcu_sf2_source_curve_q16(curve, value);
+      const int error = int(std::abs(int64_t(runtime) - expected));
+      if (error > maximum_curve_error) {
+        maximum_curve_error = error;
+        maximum_curve = curve;
+        maximum_curve_value = value;
+      }
+      require(generated == runtime, "serialized source curve differs from runtime curve");
+    }
+  }
+  if (maximum_curve_error > 1) {
+    throw std::runtime_error("Q16.16 source curve exceeds one-LSB error at curve " +
+                             std::to_string(maximum_curve) + " value " +
+                             std::to_string(maximum_curve_value) + ": " +
+                             std::to_string(maximum_curve_error));
+  }
+
+  for (size_t candidate_index = 0; candidate_index < semantic.candidates.size();
+       ++candidate_index) {
+    const auto& candidate = semantic.candidates[candidate_index];
+    const auto references = view.candidate_programs(candidate_index);
+    const uint32_t programs[3] = {references.gain, references.pitch, references.filter};
+    for (int family = 0; family < 3; ++family) {
+      std::vector<render::McuSf2ModulationTerm> expected;
+      for (uint32_t index = 0; index < candidate.modulator_count; ++index) {
+        const auto& mod = semantic.modulators[candidate.first_modulator + index];
+        if (mod.amount == 0 || !destination_in_family(mod.dest, family)) continue;
+        expected.push_back({mod.src, mod.dest, int16_t(mod.amount), mod.amount_src,
+                            mod.transform,
+                            uint16_t(render::mcu_sf2_source_dependencies(mod.src) |
+                                     render::mcu_sf2_source_dependencies(mod.amount_src))});
+      }
+      std::stable_partition(expected.begin(), expected.end(), [](const auto& term) {
+        return (term.dependencies & ~render::kMcuDependencyNote) == 0;
+      });
+      if (expected.empty()) {
+        require(programs[family] == UINT32_MAX, "empty modulation family has a program");
+        continue;
+      }
+      require(programs[family] < view.modulation_program_count(),
+              "modulation family program is missing");
+      const auto program = view.modulation_program(programs[family]);
+      require(int(program.family) == family && program.term_count == expected.size(),
+              "modulation family shape mismatch");
+      uint16_t dependencies = 0;
+      for (size_t index = 0; index < expected.size(); ++index) {
+        const auto actual = view.modulation_term(program.first_term + index);
+        const auto& wanted = expected[index];
+        require(actual.source == wanted.source &&
+                    actual.destination == wanted.destination &&
+                    actual.amount == wanted.amount &&
+                    actual.amount_source == wanted.amount_source &&
+                    actual.transform == wanted.transform &&
+                    actual.dependencies == wanted.dependencies,
+                "compiled modulation term mismatch");
+        dependencies |= actual.dependencies;
+      }
+      require(program.dependencies == dependencies,
+              "compiled modulation dependency mismatch");
+    }
+  }
+
+  render::McuFixedChannelState channel;
+  render::McuFixedVoiceSources voice;
+  for (uint8_t curve = 0; curve < render::kMcuSourceCurveCount; ++curve) {
+    const uint16_t source = uint16_t(0x0081u | (uint16_t(curve & 3u) << 10) |
+                                     ((curve & 4u) ? 0x0200u : 0) |
+                                     ((curve & 8u) ? 0x0100u : 0));
+    for (int value = 0; value < 128; ++value) {
+      channel.cc[1] = uint8_t(value);
+      const render::McuSf2ModulationTerm term{source, 0, 12700, 0, 0,
+                                              render::kMcuDependencyCc};
+      const int64_t actual = render::mcu_sf2_evaluate_term_q16(term, channel, voice);
+      const int64_t expected = int64_t(std::llround(
+          12700.0 * curve_reference(curve, value) * render::kMcuModulationOne));
+      require(std::abs(int64_t(actual) - expected) <= 12700,
+              "fixed modulation term exceeds source-quantization error contract");
+    }
+  }
+  channel.cc[1] = 0;
+  const render::McuSf2ModulationTerm positive_limit{
+      0x0281, 0, INT16_MIN, 0, 0, render::kMcuDependencyCc};
+  require(render::mcu_sf2_evaluate_term_q16(positive_limit, channel, voice) ==
+              int64_t(32768) * render::kMcuModulationOne,
+          "fixed modulation term clipped the positive Q16.16 boundary");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -201,6 +339,7 @@ int main(int argc, char** argv) {
             "sample span mismatch");
     compare_semantics(semantic, view);
     compare_dispatch(sf2, semantic, view);
+    compare_modulation(semantic, view);
     require(view.find_preset_dispatch(127, 16383) == -1,
             "missing sparse preset lookup did not fail");
 
@@ -286,6 +425,20 @@ int main(int argc, char** argv) {
       render::McuSf2AssetView invalid(bad_layer.data(), bad_layer.size());
       (void)invalid;
     }, "invalid layer descriptor reference was accepted");
+
+    std::vector<uint8_t> bad_program = image_a;
+    const size_t candidate_program_section_entry =
+        render::kMcuSf2AssetSectionDirectoryOffset +
+        11 * render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t candidate_program_offset =
+        read_u32(bad_program, candidate_program_section_entry + 4);
+    write_u32(bad_program, candidate_program_offset,
+              uint32_t(view.modulation_program_count()));
+    refresh_crc(bad_program);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_program.data(), bad_program.size());
+      (void)invalid;
+    }, "invalid modulation program reference was accepted");
 
     render::McuSf2AssetProfile wrong_profile = render::reference_mcu_sf2_asset_profile();
     ++wrong_profile.control_tick_samples;

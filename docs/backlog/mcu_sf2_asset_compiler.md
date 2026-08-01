@@ -242,6 +242,13 @@ validate the five required semantic sections; a runtime requiring direct
 dispatch rejects an incomplete optional group. The old private C++ compiled
 structs are never exposed as a file format.
 
+Phase 3 adds another all-or-none group containing one three-program reference
+record per candidate, globally interned gain/pitch/filter programs, fixed-stride
+terms, and 16 shared 128-entry Q16.16 source curves. Programs keep a note-static
+prefix and a dependency mask. Zero-amount terms are removed; `none` sources are
+folded to the Q16.16 unity constant by the evaluator. Candidate records never
+copy a term list.
+
 ## Logical Tables
 
 ### Preset Directory
@@ -448,9 +455,17 @@ masks, evaluates due destinations, and suppresses unchanged command results.
 Gain and pitch may run every tick; filter retains an independently configurable
 slower maximum rate. Event-driven changes remain immediate.
 
-All arithmetic in this path must be integer or fixed point. Saturation,
-rounding, accumulator widths, and approximation error limits must be documented
-before replacing the current C++ reference expressions.
+Source curves and modulator results use signed Q16.16. Source tables are rounded
+to nearest and remain within one Q16.16 LSB of the independent double oracle for
+all 2,048 curve points. A term multiplies two Q16.16 sources in signed 64-bit
+intermediate precision, rounds once back to Q16.16, multiplies by the signed
+16-bit SF2 amount, applies the optional absolute transform, and accumulates in
+signed 64-bit Q16.16. Its declared result error limit is `abs(amount)` Q16.16
+LSBs for one dynamic source, including source quantization and multiply
+rounding. Generator offsets, triangle LFO values, modulation-envelope ratios,
+and destination composition also remain Q16.16. Conversion to double occurs
+only at the existing table-backed pitch-ratio, attenuation, and filter-
+coefficient quantization boundaries.
 
 ## Work That Remains Dynamic
 
@@ -742,13 +757,13 @@ evaluation is deliberately not encoded in START templates and remains Phase 3.
 
 - [x] Add deployment preset allowlists and prune the complete reachable metadata
   closure before expanding modulation data.
-- [ ] Compile gain, pitch, and filter term arrays with constant folding,
+- [x] Compile gain, pitch, and filter term arrays with constant folding,
   interning, note-static separation, and dependency masks.
-- [ ] Add shared finite-domain source curves and selected key/velocity result
+- [x] Add shared finite-domain source curves and selected key/velocity result
   tables.
-- [ ] Implement fixed channel source state and active-voice modulation state.
-- [ ] Replace hot-path double arithmetic with documented fixed-point operations.
-- [ ] Retain independent gain, pitch, and filter update rates and unchanged
+- [x] Implement fixed channel source state and active-voice modulation state.
+- [x] Replace hot-path double arithmetic with documented fixed-point operations.
+- [x] Retain independent gain, pitch, and filter update rates and unchanged
   output suppression.
 
 Exit gate: numeric sweeps pass their exact/error contracts and representative
@@ -761,6 +776,13 @@ modulators, 1,437 reachable sample headers, 36,625 mono descriptors, and 575,142
 globally interned START words. Product-specific bank variants and drum presets
 will add only their measured reachable closure. PCM remains in the complete
 324,800,670-byte source image at this stage.
+
+The Phase 3 bank-zero SGM image is 4,284,724 bytes. Its 3,658 candidate program
+records intern to only 32 unique programs and 106 terms; the largest program has
+six terms. The 16 shared curves contribute 2,048 values. The complete C++ unit
+suite preserves representative command behavior after the fixed-point hot-loop
+switch, including controller, pressure, pitch-bend, independent update-rate,
+and unchanged-output suppression cases.
 
 ### Phase 4: MCU Runtime Integration
 

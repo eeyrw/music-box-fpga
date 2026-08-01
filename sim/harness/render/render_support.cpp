@@ -50,6 +50,25 @@ constexpr uint8_t kDirtyPitch = 1u << 1;
 constexpr uint8_t kDirtyFilter = 1u << 2;
 constexpr uint8_t kDirtyAll = kDirtyGain | kDirtyPitch | kDirtyFilter;
 
+int64_t integer_to_q16(int value) {
+  return int64_t(value) * kMcuModulationOne;
+}
+
+int64_t multiply_q16(int64_t a, int64_t b) {
+  const int64_t product = a * b;
+  const int64_t bias = product >= 0 ? int64_t(1) << 15 : -(int64_t(1) << 15);
+  return (product + bias) / (int64_t(1) << 16);
+}
+
+int round_q16_to_int(int64_t value) {
+  const int64_t bias = value >= 0 ? int64_t(1) << 15 : -(int64_t(1) << 15);
+  return int((value + bias) / (int64_t(1) << 16));
+}
+
+double q16_to_double(int64_t value) {
+  return double(value) / double(kMcuModulationOne);
+}
+
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
 }
@@ -106,51 +125,6 @@ bool is_realtime_source(uint16_t source) {
   return index == 10 || index == 13 || index == 14 || index == 16;
 }
 
-constexpr int kVelCbSize = 128;
-constexpr double kPeakAttenuation = 960.0;
-constexpr double kSourceClamp = 127.0 / 128.0;
-
-const std::array<double, kVelCbSize>& concave_tab() {
-  static const std::array<double, kVelCbSize> tab = [] {
-    std::array<double, kVelCbSize> t{};
-    for (int i = 0; i < kVelCbSize; ++i) {
-      if (i == 0)
-        t[i] = 0.0;
-      else if (i == kVelCbSize - 1)
-        t[i] = 1.0;
-      else
-        t[i] = (-200.0 * 2.0 / kPeakAttenuation) *
-               std::log10(double((kVelCbSize - 1) - i) / double(kVelCbSize - 1));
-    }
-    return t;
-  }();
-  return tab;
-}
-
-const std::array<double, kVelCbSize>& convex_tab() {
-  static const std::array<double, kVelCbSize> tab = [] {
-    std::array<double, kVelCbSize> t{};
-    for (int i = 0; i < kVelCbSize; ++i) {
-      if (i == 0)
-        t[i] = 0.0;
-      else if (i == kVelCbSize - 1)
-        t[i] = 1.0;
-      else
-        t[i] = 1.0 - (-200.0 * 2.0 / kPeakAttenuation) *
-                         std::log10(double(i) / double(kVelCbSize - 1));
-    }
-    return t;
-  }();
-  return tab;
-}
-
-double curve_lookup(const std::array<double, kVelCbSize>& tab, double val) {
-  if (val <= 0.0) return 0.0;
-  if (val >= double(kVelCbSize - 1)) return tab[kVelCbSize - 1];
-  int i = int(val);
-  return tab[i] + (tab[i + 1] - tab[i]) * (val - double(i));
-}
-
 double pitch_ratio(double cents) {
   constexpr int kMinCents = -24000;
   constexpr int kMaxCents = 24000;
@@ -172,37 +146,6 @@ double pitch_ratio(double cents) {
   const double low = ratios[lower];
   const double high = ratios[lower + 1];
   return low + (high - low) * fraction;
-}
-
-double concave_unit(double x) { return curve_lookup(concave_tab(), double(kVelCbSize) * x); }
-double convex_unit(double x) { return curve_lookup(convex_tab(), double(kVelCbSize) * x); }
-
-double shape_unipolar(double x, int type) {
-  x = std::max(0.0, std::min(1.0, x));
-  switch (type) {
-    case 1:
-      return std::min(concave_unit(x), kSourceClamp);
-    case 2:
-      return std::min(convex_unit(x), kSourceClamp);
-    case 3:
-      return x >= 0.5 ? 1.0 : 0.0;
-    default:
-      return x;
-  }
-}
-
-double shape_bipolar(double v, int type) {
-  v = std::max(-1.0, std::min(1.0, v));
-  switch (type) {
-    case 1:
-      return v >= 0.0 ? std::min(concave_unit(v), kSourceClamp) : -concave_unit(-v);
-    case 2:
-      return v >= 0.0 ? std::min(convex_unit(v), kSourceClamp) : -convex_unit(-v);
-    case 3:
-      return v >= 0.0 ? 1.0 : -1.0;
-    default:
-      return v;
-  }
 }
 
 bool same_filter_config(const FilterConfig& a, const FilterConfig& b) {
@@ -340,6 +283,11 @@ McuModel::McuModel(VoiceCommandSink& sink, const std::vector<Region>& regions,
     throw std::invalid_argument("control update rates must be nonzero");
   }
   active_positions_.fill(-1);
+  for (auto& channel : channels_) {
+    channel.fixed_sources.cc[7] = 127;
+    channel.fixed_sources.cc[10] = 64;
+    channel.fixed_sources.cc[11] = 127;
+  }
 }
 
 void McuModel::activate_voice(int voice) {
@@ -457,6 +405,7 @@ void McuModel::control_change(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   int value = std::max(0, std::min(127, event.value));
   channels_[channel].cc[event.controller & 0x7f] = value;
+  channels_[channel].fixed_sources.cc[event.controller & 0x7f] = uint8_t(value);
   switch (event.controller & 0x7f) {
     case 1:
       channels_[channel].modulation = value;
@@ -567,6 +516,8 @@ void McuModel::control_change(const NoteEvent& event) {
 void McuModel::channel_pressure(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   channels_[channel].channel_pressure = std::max(0, std::min(127, event.value));
+  channels_[channel].fixed_sources.channel_pressure =
+      uint8_t(channels_[channel].channel_pressure);
   update_channel_controls(channel);
 }
 
@@ -574,6 +525,8 @@ void McuModel::key_pressure(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   int note = event.note & 0x7f;
   channels_[channel].key_pressure[note] = std::max(0, std::min(127, event.value));
+  channels_[channel].fixed_sources.key_pressure[note] =
+      uint8_t(channels_[channel].key_pressure[note]);
   for (int v = 0; v < kNumVoices; ++v) {
     if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel && voices_[v].note == note) {
       update_voice_controls(v);
@@ -584,6 +537,7 @@ void McuModel::key_pressure(const NoteEvent& event) {
 void McuModel::pitch_bend(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   channels_[channel].pitch_bend = std::max(-8192, std::min(8191, event.pitch_bend));
+  channels_[channel].fixed_sources.pitch_bend = int16_t(channels_[channel].pitch_bend);
   update_channel_controls(channel, kDirtyPitch);
 }
 
@@ -611,9 +565,8 @@ void McuModel::apply_data_entry(int channel, int msb_value) {
   int data14 = (std::max(0, std::min(127, msb_value)) << 7) |
                std::max(0, std::min(127, c.data_entry_lsb));
   if (c.data_entry_is_nrpn && c.nrpn_msb == 120 && c.nrpn_generator >= 0 &&
-      c.nrpn_generator < int(c.generator_offsets.size())) {
-    double centered = double(data14 - 0x2000) / 8192.0;
-    auto range = [](int generator) -> double {
+      c.nrpn_generator < int(c.generator_offsets_q16.size())) {
+    auto range = [](int generator) -> int {
       switch (generator) {
         case kGenInitialFilterFc:
         case kGenModLfoToPitch:
@@ -621,24 +574,25 @@ void McuModel::apply_data_entry(int channel, int msb_value) {
         case kGenModEnvToPitch:
         case kGenModLfoToFilterFc:
         case kGenModEnvToFilterFc:
-          return 6000.0;
+          return 6000;
         case kGenModLfoToVolume:
-          return 1920.0;
+          return 1920;
         case kGenPan:
-          return 1000.0;
+          return 1000;
         case kGenInitialAttenuation:
-          return 1440.0;
+          return 1440;
         case kGenCoarseTune:
-          return 240.0;
+          return 240;
         case kGenFineTune:
-          return 198.0;
+          return 198;
         default:
-          return 0.0;
+          return 0;
       }
     };
-    double span = range(c.nrpn_generator);
-    if (span > 0.0) {
-      c.generator_offsets[c.nrpn_generator] = centered * span;
+    const int span = range(c.nrpn_generator);
+    if (span > 0) {
+      c.generator_offsets_q16[c.nrpn_generator] = int32_t(
+          (int64_t(data14 - 0x2000) * span * kMcuModulationOne) / 8192);
       update_channel_controls(channel);
     }
     return;
@@ -647,13 +601,16 @@ void McuModel::apply_data_entry(int channel, int msb_value) {
   if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 0) {
     c.pitch_bend_range_semitones = std::max(0, std::min(127, msb_value));
     c.pitch_bend_range_cents = c.data_entry_lsb;
+    c.fixed_sources.pitch_bend_range_semitones = uint8_t(c.pitch_bend_range_semitones);
+    c.fixed_sources.pitch_bend_range_cents = uint8_t(c.pitch_bend_range_cents);
     update_channel_controls(channel);
   } else if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 1) {
-    c.generator_offsets[kGenFineTune] = (double(data14) - 8192.0) * 100.0 / 8192.0;
+    c.generator_offsets_q16[kGenFineTune] = int32_t(
+        (int64_t(data14 - 8192) * 100 * kMcuModulationOne) / 8192);
     update_channel_controls(channel);
   } else if (!c.data_entry_is_nrpn && c.rpn_msb == 0 && c.rpn_lsb == 2) {
-    c.generator_offsets[kGenCoarseTune] =
-        double(std::max(0, std::min(127, msb_value)) - 64) * 100.0;
+    c.generator_offsets_q16[kGenCoarseTune] = int32_t(integer_to_q16(
+        (std::max(0, std::min(127, msb_value)) - 64) * 100));
     update_channel_controls(channel);
   }
 }
@@ -662,7 +619,11 @@ void McuModel::reset_controllers(int channel) {
   ChannelState& c = channels_[channel];
   c.cc.fill(0);
   c.key_pressure.fill(0);
-  c.generator_offsets.fill(0.0);
+  c.generator_offsets_q16.fill(0);
+  c.fixed_sources = {};
+  c.fixed_sources.cc[7] = 127;
+  c.fixed_sources.cc[10] = 64;
+  c.fixed_sources.cc[11] = 127;
   c.volume = 127;
   c.expression = 127;
   c.pan = 64;
@@ -796,15 +757,18 @@ void McuModel::update_voice_modulation(int voice, uint8_t dirty_groups,
   }
   state.mod_env_level = clamp_q15(mod_next);
 
-  auto lfo_value = [](uint32_t phase) {
-    double x = double(phase & 0xffffu) / 65536.0;
-    if (x < 0.25) return x * 4.0;
-    if (x < 0.75) return 2.0 - x * 4.0;
-    return x * 4.0 - 4.0;
+  auto lfo_value_q16 = [](uint32_t phase) -> int32_t {
+    const int32_t x = int32_t(phase & 0xffffu);
+    if (x < 16384) return x * 4;
+    if (x < 49152) return 131072 - x * 4;
+    return x * 4 - 262144;
   };
-  double mod_lfo = state.mod_lfo_wait_ticks > 0 ? 0.0 : lfo_value(state.mod_lfo_phase);
-  double vib_lfo = state.vib_lfo_wait_ticks > 0 ? 0.0 : lfo_value(state.vib_lfo_phase);
-  double env = double(state.mod_env_level) / double(kQ15Full);
+  const int32_t mod_lfo_q16 = state.mod_lfo_wait_ticks > 0
+                                  ? 0 : lfo_value_q16(state.mod_lfo_phase);
+  const int32_t vib_lfo_q16 = state.vib_lfo_wait_ticks > 0
+                                  ? 0 : lfo_value_q16(state.vib_lfo_phase);
+  const int32_t env_q16 = int32_t((int64_t(state.mod_env_level) *
+                                   kMcuModulationOne + kQ15Full / 2) / kQ15Full);
 
   if (diagnostics_) {
     diagnostics_->control_dirty_group_evaluations +=
@@ -817,26 +781,36 @@ void McuModel::update_voice_modulation(int voice, uint8_t dirty_groups,
   uint32_t phase_inc = runtime_phase_valid_[voice] ? last_runtime_phase_inc_[voice]
                                                    : r.phase_inc;
   if ((dirty_groups & kDirtyPitch) != 0) {
-    double pitch_cents = c.generator_offsets[kGenFineTune] + c.generator_offsets[kGenCoarseTune] +
-                         modulator_sum(r, state, c, 0);
-    pitch_cents += mod_lfo * (double(r.mod_lfo_to_pitch) + c.generator_offsets[kGenModLfoToPitch] +
-                              modulator_sum(r, state, c, kGenModLfoToPitch));
-    pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
-    pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
-    phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
+    int64_t pitch_q16 = c.generator_offsets_q16[kGenFineTune] +
+                        c.generator_offsets_q16[kGenCoarseTune] +
+                        modulator_sum_q16(r, state, c, 0);
+    pitch_q16 += multiply_q16(mod_lfo_q16,
+        integer_to_q16(r.mod_lfo_to_pitch) +
+        c.generator_offsets_q16[kGenModLfoToPitch] +
+        modulator_sum_q16(r, state, c, kGenModLfoToPitch));
+    pitch_q16 += multiply_q16(vib_lfo_q16,
+        integer_to_q16(r.vib_lfo_to_pitch) +
+        modulator_sum_q16(r, state, c, kGenVibLfoToPitch));
+    pitch_q16 += multiply_q16(env_q16,
+        integer_to_q16(r.mod_env_to_pitch) +
+        modulator_sum_q16(r, state, c, kGenModEnvToPitch));
+    phase_inc = modulated_phase_inc(r.phase_inc, q16_to_double(pitch_q16));
     phase_changed = !runtime_phase_valid_[voice] || phase_inc != last_runtime_phase_inc_[voice];
   }
 
   if ((dirty_groups & kDirtyFilter) != 0) {
-    double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
-                          modulator_sum(r, state, c, kGenInitialFilterFc) +
-                          mod_lfo * (double(r.mod_lfo_to_filter_fc) +
-                                     c.generator_offsets[kGenModLfoToFilterFc] +
-                                     modulator_sum(r, state, c, kGenModLfoToFilterFc)) +
-                          env * (double(r.mod_env_to_filter_fc) +
-                                 c.generator_offsets[kGenModEnvToFilterFc] +
-                                 modulator_sum(r, state, c, kGenModEnvToFilterFc));
-    FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q,
+    int64_t filter_q16 = integer_to_q16(r.initial_filter_fc) +
+                         c.generator_offsets_q16[kGenInitialFilterFc] +
+                         modulator_sum_q16(r, state, c, kGenInitialFilterFc);
+    filter_q16 += multiply_q16(mod_lfo_q16,
+        integer_to_q16(r.mod_lfo_to_filter_fc) +
+        c.generator_offsets_q16[kGenModLfoToFilterFc] +
+        modulator_sum_q16(r, state, c, kGenModLfoToFilterFc));
+    filter_q16 += multiply_q16(env_q16,
+        integer_to_q16(r.mod_env_to_filter_fc) +
+        c.generator_offsets_q16[kGenModEnvToFilterFc] +
+        modulator_sum_q16(r, state, c, kGenModEnvToFilterFc));
+    FilterConfig filter = filter_for(round_q16_to_int(filter_q16), r.initial_filter_q,
                                      r.output_sample_rate);
     if (!runtime_filter_valid_[voice] || !same_filter_config(filter, last_runtime_filter_[voice])) {
       record_runtime_filter_update(voice, filter);
@@ -848,9 +822,10 @@ void McuModel::update_voice_modulation(int voice, uint8_t dirty_groups,
   std::pair<int, int> gains = {last_runtime_gain_l_[voice], last_runtime_gain_r_[voice]};
   bool gain_changed = false;
   if ((dirty_groups & kDirtyGain) != 0) {
-    state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
-                                              c.generator_offsets[kGenModLfoToVolume] +
-                                              modulator_sum(r, state, c, kGenModLfoToVolume));
+    state.tremolo_attenuation_cb_q16 = int32_t(-multiply_q16(
+        mod_lfo_q16, integer_to_q16(r.mod_lfo_to_volume) +
+        c.generator_offsets_q16[kGenModLfoToVolume] +
+        modulator_sum_q16(r, state, c, kGenModLfoToVolume)));
     gains = runtime_gains(r, state, c);
     gain_changed = !runtime_gain_valid_[voice] ||
         !same_runtime_gain(gains.first, gains.second,
@@ -971,7 +946,7 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].sostenuto_held = false;
   voices_[slot].key_released = false;
   voices_[slot].note_instance = note_instance;
-  voices_[slot].tremolo_attenuation_cb = 0.0;
+  voices_[slot].tremolo_attenuation_cb_q16 = 0;
   voices_[slot].mod_lfo_phase = 0;
   voices_[slot].vib_lfo_phase = 0;
   voices_[slot].mod_lfo_wait_ticks = r.mod_lfo_delay_ticks;
@@ -993,9 +968,12 @@ void McuModel::note_on(const NoteEvent& event) {
     voices_[slot].mod_env_state = r.mod_env_hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
   }
   const ChannelState& channel = channels_[event.channel & 0x0f];
+  const int64_t initial_pitch_q16 =
+      channel.generator_offsets_q16[kGenFineTune] +
+      channel.generator_offsets_q16[kGenCoarseTune] +
+      modulator_sum_q16(r, voices_[slot], channel, 0);
   uint32_t phase_inc = modulated_phase_inc(event.phase_inc,
-      channel.generator_offsets[kGenFineTune] + channel.generator_offsets[kGenCoarseTune] +
-      modulator_sum(r, voices_[slot], channel, 0));
+                                            q16_to_double(initial_pitch_q16));
   auto initial_gains = runtime_gains(r, voices_[slot], channel);
   r.gain_l = initial_gains.first;
   r.gain_r = initial_gains.second;
@@ -1046,13 +1024,15 @@ int McuModel::first_free_or_steal_slot() {
 
 std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceState& voice,
                                             const ChannelState& channel) {
-  double attenuation = modulator_sum(region, voice, channel, kGenInitialAttenuation, false, true);
-  attenuation += channel.generator_offsets[kGenInitialAttenuation] + voice.tremolo_attenuation_cb;
-  if (channel.soft) attenuation += 30.0;
-  double level = attenuation_gain(attenuation);
-  int total_pan = std::max(-500, std::min(500, int(std::round(
-      double(region.pan) + channel.generator_offsets[kGenPan] +
-      modulator_sum(region, voice, channel, kGenPan, false, true)))));
+  int64_t attenuation_q16 = modulator_sum_q16(
+      region, voice, channel, kGenInitialAttenuation, false, true);
+  attenuation_q16 += channel.generator_offsets_q16[kGenInitialAttenuation] +
+                     voice.tremolo_attenuation_cb_q16;
+  if (channel.soft) attenuation_q16 += integer_to_q16(30);
+  const double level = attenuation_gain(q16_to_double(attenuation_q16));
+  const int total_pan = std::max(-500, std::min(500, round_q16_to_int(
+      integer_to_q16(region.pan) + channel.generator_offsets_q16[kGenPan] +
+      modulator_sum_q16(region, voice, channel, kGenPan, false, true))));
   int base_left = region.stereo ? region.base_gain_l : region.base_gain;
   int base_right = region.stereo ? region.base_gain_r : region.base_gain;
   int scaled_left = clamp_q15(int(std::round(double(base_left) * level)));
@@ -1062,72 +1042,34 @@ std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceSta
   return equal_power_pan_gains(scaled_left, scaled_right, total_pan, region.stereo);
 }
 
-double McuModel::modulator_sum(const Region& region, const VoiceState& voice,
-                               const ChannelState& channel, uint16_t dest,
-                               bool include_note_sources, bool include_realtime_sources) {
-  auto native_7bit = [&](uint16_t source) -> double {
-    bool cc = (source & 0x0080u) != 0;
-    int index = source & 0x007fu;
-    if (cc) {
-      if (index == 1) return channel.modulation;
-      if (index == 7) return channel.volume;
-      if (index == 10) return channel.pan;
-      if (index == 11) return channel.expression;
-      return channel.cc[index];
-    }
-    switch (index) {
-      case 2:
-        return std::max(1, std::min(127, voice.velocity));
-      case 3:
-        return std::max(0, std::min(127, voice.note));
-      case 10:
-        return std::max(0, std::min(127, channel.key_pressure[voice.note & 0x7f]));
-      case 13:
-        return std::max(0, std::min(127, channel.channel_pressure));
-      case 16:
-        return std::max(0.0, std::min(127.0, double(channel.pitch_bend_range_semitones) +
-                                                 double(channel.pitch_bend_range_cents) / 100.0));
-      default:
-        return 0.0;
-    }
-  };
-
-  auto map_source = [&](uint16_t source) -> double {
-    if (source == kModSrcNone) return 1.0;
-    int type = (source >> 10) & 0x3f;
-    bool bipolar = (source & 0x0200u) != 0;
-    bool negative = (source & 0x0100u) != 0;
-    bool cc = (source & 0x0080u) != 0;
-    int index = source & 0x007fu;
-    if (!cc && index == 14) {
-      double value = double(std::max(-8192, std::min(8191, channel.pitch_bend))) / 8192.0;
-      return negative ? -value : value;
-    }
-    double native = native_7bit(source);
-    double x = negative ? (127.0 - native) / 128.0 : native / 128.0;
-    if (bipolar) return shape_bipolar(-1.0 + 2.0 * x, type);
-    return shape_unipolar(x, type);
-  };
-
+int64_t McuModel::modulator_sum_q16(const Region& region, const VoiceState& voice,
+                                   const ChannelState& channel, uint16_t dest,
+                                   bool include_note_sources,
+                                   bool include_realtime_sources) {
   const std::vector<Sf2Modulator>* mods = nullptr;
   if (!region.modulators_by_destination.empty()) {
     auto found = region.modulators_by_destination.find(dest);
-    if (found == region.modulators_by_destination.end()) return 0.0;
+    if (found == region.modulators_by_destination.end()) return 0;
     mods = &found->second;
   } else {
     mods = &fallback_default_modulators();
   }
-  double sum = 0.0;
+  int64_t sum_q16 = 0;
+  const McuFixedVoiceSources fixed_voice{
+      uint8_t(std::max(0, std::min(127, voice.note))),
+      uint8_t(std::max(1, std::min(127, voice.velocity)))};
   for (const auto& mod : *mods) {
     if (mod.dest != dest) continue;
     if (!include_note_sources && (is_note_on_source(mod.src) || is_note_on_source(mod.amount_src))) continue;
     if (!include_realtime_sources && (is_realtime_source(mod.src) || is_realtime_source(mod.amount_src))) continue;
-    double value = double(mod.amount) * map_source(mod.src) * map_source(mod.amount_src);
-    if (mod.transform == kTransformAbsoluteValue) value = std::abs(value);
-    sum += value;
+    const McuSf2ModulationTerm term{
+        mod.src, mod.dest, int16_t(mod.amount), mod.amount_src, mod.transform,
+        uint16_t(mcu_sf2_source_dependencies(mod.src) |
+                 mcu_sf2_source_dependencies(mod.amount_src))};
+    sum_q16 += mcu_sf2_evaluate_term_q16(term, channel.fixed_sources, fixed_voice);
     if (diagnostics_) diagnostics_->control_modulator_evaluations += 1;
   }
-  return sum;
+  return sum_q16;
 }
 
 uint32_t McuModel::modulated_phase_inc(uint32_t base_phase_inc, double cents) {

@@ -26,8 +26,13 @@ constexpr uint32_t kVelocitySpanStride = 8;
 constexpr uint32_t kLayerReferenceStride = 4;
 constexpr uint32_t kMonoDescriptorStride = 20;
 constexpr uint32_t kStartWordStride = 4;
+constexpr uint32_t kCandidateProgramsStride = 12;
+constexpr uint32_t kModulationProgramStride = 12;
+constexpr uint32_t kModulationTermStride = 12;
+constexpr uint32_t kSourceCurveStride = 4;
 constexpr size_t kSemanticSectionCount = 5;
-constexpr size_t kKnownSectionCount = 11;
+constexpr size_t kDispatchSectionCount = 11;
+constexpr size_t kKnownSectionCount = 15;
 constexpr uint16_t kGeneratorSampleId = 53;
 
 uint16_t read_u16(const uint8_t* data) {
@@ -133,6 +138,93 @@ struct SelectedSemanticBuild {
   std::vector<std::vector<uint32_t>> source_candidates;
   uint32_t selection_crc32 = 0;
 };
+
+struct ModulationBuild {
+  std::vector<McuSf2CandidatePrograms> candidates;
+  std::vector<McuSf2ModulationProgram> programs;
+  std::vector<McuSf2ModulationTerm> terms;
+};
+
+bool destination_in_family(uint16_t destination, McuSf2ModulationFamily family) {
+  switch (family) {
+    case McuSf2ModulationFamily::kGain:
+      return destination == 13 || destination == 17 || destination == 48;
+    case McuSf2ModulationFamily::kPitch:
+      return destination == 0 || destination == 5 || destination == 6 || destination == 7;
+    case McuSf2ModulationFamily::kFilter:
+      return destination == 8 || destination == 10 || destination == 11;
+  }
+  return false;
+}
+
+std::vector<int64_t> modulation_program_key(
+    McuSf2ModulationFamily family, const std::vector<McuSf2ModulationTerm>& terms) {
+  std::vector<int64_t> key;
+  key.reserve(1 + terms.size() * 3);
+  key.push_back(int64_t(family));
+  for (const auto& term : terms) {
+    key.push_back(int64_t(term.source) | (int64_t(term.destination) << 16) |
+                  (int64_t(uint16_t(term.amount)) << 32));
+    key.push_back(int64_t(term.amount_source) | (int64_t(term.transform) << 16) |
+                  (int64_t(term.dependencies) << 32));
+  }
+  return key;
+}
+
+ModulationBuild build_modulation(const Sf2SemanticData& semantic) {
+  ModulationBuild result;
+  std::map<std::vector<int64_t>, uint32_t> interned;
+  result.candidates.reserve(semantic.candidates.size());
+  for (const auto& candidate : semantic.candidates) {
+    McuSf2CandidatePrograms references;
+    for (int raw_family = 0; raw_family < 3; ++raw_family) {
+      const auto family = McuSf2ModulationFamily(raw_family);
+      std::vector<McuSf2ModulationTerm> terms;
+      for (uint32_t index = 0; index < candidate.modulator_count; ++index) {
+        const auto& source = semantic.modulators.at(candidate.first_modulator + index);
+        if (source.amount == 0 || !destination_in_family(source.dest, family)) continue;
+        McuSf2ModulationTerm term;
+        term.source = source.src;
+        term.destination = source.dest;
+        term.amount = int16_t(source.amount);
+        term.amount_source = source.amount_src;
+        term.transform = source.transform;
+        term.dependencies = mcu_sf2_source_dependencies(term.source) |
+                            mcu_sf2_source_dependencies(term.amount_source);
+        terms.push_back(term);
+      }
+      std::stable_partition(terms.begin(), terms.end(), [](const auto& term) {
+        return (term.dependencies & ~kMcuDependencyNote) == 0;
+      });
+      if (terms.empty()) continue;
+      const auto key = modulation_program_key(family, terms);
+      auto found = interned.find(key);
+      uint32_t program_index = 0;
+      if (found != interned.end()) {
+        program_index = found->second;
+      } else {
+        McuSf2ModulationProgram program;
+        program.first_term = checked_u32(result.terms.size(), "modulation term offset");
+        program.term_count = uint16_t(terms.size());
+        program.note_static_term_count = uint16_t(std::count_if(
+            terms.begin(), terms.end(), [](const auto& term) {
+              return (term.dependencies & ~kMcuDependencyNote) == 0;
+            }));
+        for (const auto& term : terms) program.dependencies |= term.dependencies;
+        program.family = family;
+        program_index = checked_u32(result.programs.size(), "modulation program index");
+        result.programs.push_back(program);
+        result.terms.insert(result.terms.end(), terms.begin(), terms.end());
+        interned.emplace(key, program_index);
+      }
+      if (family == McuSf2ModulationFamily::kGain) references.gain = program_index;
+      else if (family == McuSf2ModulationFamily::kPitch) references.pitch = program_index;
+      else references.filter = program_index;
+    }
+    result.candidates.push_back(references);
+  }
+  return result;
+}
 
 SelectedSemanticBuild select_semantics(const Sf2Data& sf2,
                                        const Sf2SemanticData& source,
@@ -448,6 +540,7 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
   const Sf2SemanticData& semantic = selected.semantic;
   const DispatchBuild dispatch = build_dispatch(
       sf2, semantic, selected.source_presets, selected.source_candidates, profile);
+  const ModulationBuild modulation = build_modulation(semantic);
   std::vector<uint8_t> image(kMcuSf2AssetHeaderSize +
                              kKnownSectionCount * kMcuSf2AssetSectionEntrySize, 0);
   std::array<SectionBuild, kKnownSectionCount> sections{{
@@ -462,6 +555,10 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
       {McuSf2AssetSection::kLayerReferences, kLayerReferenceStride, 0},
       {McuSf2AssetSection::kMonoDescriptors, kMonoDescriptorStride, 0},
       {McuSf2AssetSection::kStartWords, kStartWordStride, 0},
+      {McuSf2AssetSection::kCandidatePrograms, kCandidateProgramsStride, 0},
+      {McuSf2AssetSection::kModulationPrograms, kModulationProgramStride, 0},
+      {McuSf2AssetSection::kModulationTerms, kModulationTermStride, 0},
+      {McuSf2AssetSection::kSourceCurves, kSourceCurveStride, 0},
   }};
 
   auto start_section = [&](size_t section, size_t count) {
@@ -562,6 +659,40 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
 
   start_section(10, dispatch.start_words.size());
   for (uint32_t word : dispatch.start_words) append_u32(image, word);
+
+  start_section(11, modulation.candidates.size());
+  for (const auto& candidate : modulation.candidates) {
+    append_u32(image, candidate.gain);
+    append_u32(image, candidate.pitch);
+    append_u32(image, candidate.filter);
+  }
+
+  start_section(12, modulation.programs.size());
+  for (const auto& program : modulation.programs) {
+    append_u32(image, program.first_term);
+    append_u16(image, program.term_count);
+    append_u16(image, program.note_static_term_count);
+    append_u16(image, program.dependencies);
+    image.push_back(uint8_t(program.family));
+    image.push_back(0);
+  }
+
+  start_section(13, modulation.terms.size());
+  for (const auto& term : modulation.terms) {
+    append_u16(image, term.source);
+    append_u16(image, term.destination);
+    append_u16(image, uint16_t(term.amount));
+    append_u16(image, term.amount_source);
+    append_u16(image, term.transform);
+    append_u16(image, term.dependencies);
+  }
+
+  start_section(14, kMcuSourceCurveCount * kMcuSourceCurveSize);
+  for (uint8_t curve = 0; curve < kMcuSourceCurveCount; ++curve) {
+    for (uint8_t value = 0; value < kMcuSourceCurveSize; ++value) {
+      append_u32(image, uint32_t(mcu_sf2_source_curve_q16(curve, value)));
+    }
+  }
   align_four(image);
 
   if (image.size() > std::numeric_limits<uint32_t>::max()) {
@@ -648,7 +779,8 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       kPresetStride, kCandidateStride, kGeneratorStride, kModulatorStride,
       kSampleStride, kPresetDispatchStride, kKeyDispatchStride,
       kVelocitySpanStride, kLayerReferenceStride, kMonoDescriptorStride,
-      kStartWordStride};
+      kStartWordStride, kCandidateProgramsStride, kModulationProgramStride,
+      kModulationTermStride, kSourceCurveStride};
   uint64_t previous_end = kMcuSf2AssetHeaderSize +
                           uint64_t(section_count) * kMcuSf2AssetSectionEntrySize;
   std::array<bool, kKnownSectionCount> seen{};
@@ -687,13 +819,23 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
     throw std::runtime_error("missing required MCU SF2 asset section");
   }
   const bool any_dispatch = std::find(seen.begin() + kSemanticSectionCount,
-                                      seen.end(), true) != seen.end();
+                                      seen.begin() + kDispatchSectionCount, true) !=
+                            seen.begin() + kDispatchSectionCount;
   const bool all_dispatch = std::find(seen.begin() + kSemanticSectionCount,
-                                      seen.end(), false) == seen.end();
+                                      seen.begin() + kDispatchSectionCount, false) ==
+                            seen.begin() + kDispatchSectionCount;
   if (any_dispatch != all_dispatch) {
     throw std::runtime_error("incomplete MCU SF2 asset dispatch sections");
   }
   has_dispatch_ = all_dispatch;
+  const bool any_modulation = std::find(seen.begin() + kDispatchSectionCount,
+                                        seen.end(), true) != seen.end();
+  const bool all_modulation = std::find(seen.begin() + kDispatchSectionCount,
+                                        seen.end(), false) == seen.end();
+  if (any_modulation != all_modulation || (all_modulation && !has_dispatch_)) {
+    throw std::runtime_error("incomplete MCU SF2 asset modulation sections");
+  }
+  has_modulation_programs_ = all_modulation;
 
   for (size_t index = 0; index < preset_count(); ++index) {
     const auto value = preset(index);
@@ -777,6 +919,41 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       }
     }
   }
+  if (has_modulation_programs_) {
+    if (candidate_program_count() != candidate_count() ||
+        source_curve_value_count() != kMcuSourceCurveCount * kMcuSourceCurveSize) {
+      throw std::runtime_error("MCU SF2 modulation table count mismatch");
+    }
+    for (size_t index = 0; index < candidate_program_count(); ++index) {
+      const auto references = candidate_programs(index);
+      for (uint32_t program : {references.gain, references.pitch, references.filter}) {
+        if (program != UINT32_MAX && program >= modulation_program_count()) {
+          throw std::runtime_error("candidate references invalid modulation program");
+        }
+      }
+    }
+    for (size_t index = 0; index < modulation_program_count(); ++index) {
+      const auto program = modulation_program(index);
+      if (uint8_t(program.family) > uint8_t(McuSf2ModulationFamily::kFilter) ||
+          program.note_static_term_count > program.term_count) {
+        throw std::runtime_error("invalid MCU SF2 modulation program");
+      }
+      validate_range(program.first_term, program.term_count,
+                     uint32_t(modulation_term_count()), "modulation program terms");
+      uint16_t observed_dependencies = 0;
+      for (uint32_t term = 0; term < program.term_count; ++term) {
+        const auto value = modulation_term(program.first_term + term);
+        observed_dependencies |= value.dependencies;
+        if (term < program.note_static_term_count &&
+            (value.dependencies & ~kMcuDependencyNote) != 0) {
+          throw std::runtime_error("live modulation term is in note-static prefix");
+        }
+      }
+      if (observed_dependencies != program.dependencies) {
+        throw std::runtime_error("modulation dependency mask mismatch");
+      }
+    }
+  }
 }
 
 const McuSf2AssetView::SectionView& McuSf2AssetView::section(McuSf2AssetSection type) const {
@@ -799,6 +976,10 @@ size_t McuSf2AssetView::velocity_span_count() const { return section(McuSf2Asset
 size_t McuSf2AssetView::layer_reference_count() const { return section(McuSf2AssetSection::kLayerReferences).count; }
 size_t McuSf2AssetView::mono_descriptor_count() const { return section(McuSf2AssetSection::kMonoDescriptors).count; }
 size_t McuSf2AssetView::start_word_count() const { return section(McuSf2AssetSection::kStartWords).count; }
+size_t McuSf2AssetView::candidate_program_count() const { return section(McuSf2AssetSection::kCandidatePrograms).count; }
+size_t McuSf2AssetView::modulation_program_count() const { return section(McuSf2AssetSection::kModulationPrograms).count; }
+size_t McuSf2AssetView::modulation_term_count() const { return section(McuSf2AssetSection::kModulationTerms).count; }
+size_t McuSf2AssetView::source_curve_value_count() const { return section(McuSf2AssetSection::kSourceCurves).count; }
 
 Sf2SemanticPreset McuSf2AssetView::preset(size_t index) const {
   const uint8_t* value = record(section(McuSf2AssetSection::kPresets), index);
@@ -858,6 +1039,27 @@ McuSf2MonoDescriptor McuSf2AssetView::mono_descriptor(size_t index) const {
 
 uint32_t McuSf2AssetView::start_word(size_t index) const {
   return read_u32(record(section(McuSf2AssetSection::kStartWords), index));
+}
+
+McuSf2CandidatePrograms McuSf2AssetView::candidate_programs(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kCandidatePrograms), index);
+  return {read_u32(value), read_u32(value + 4), read_u32(value + 8)};
+}
+
+McuSf2ModulationProgram McuSf2AssetView::modulation_program(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kModulationPrograms), index);
+  return {read_u32(value), read_u16(value + 4), read_u16(value + 6),
+          read_u16(value + 8), McuSf2ModulationFamily(value[10])};
+}
+
+McuSf2ModulationTerm McuSf2AssetView::modulation_term(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kModulationTerms), index);
+  return {read_u16(value), read_u16(value + 2), int16_t(read_u16(value + 4)),
+          read_u16(value + 6), read_u16(value + 8), read_u16(value + 10)};
+}
+
+int32_t McuSf2AssetView::source_curve_value(size_t index) const {
+  return int32_t(read_u32(record(section(McuSf2AssetSection::kSourceCurves), index)));
 }
 
 int32_t McuSf2AssetView::find_preset_dispatch(int program, int bank) const {

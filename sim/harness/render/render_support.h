@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_types.h"
+#include "mcu_sf2_modulation.h"
 #include "sf2_loader.h"
 
 #include <array>
@@ -74,7 +75,8 @@ class McuModel {
   struct ChannelState {
     std::array<int, 128> cc{};
     std::array<int, 128> key_pressure{};
-    std::array<double, 64> generator_offsets{};
+    std::array<int32_t, 64> generator_offsets_q16{};
+    McuFixedChannelState fixed_sources{};
     int volume = 127;
     int expression = 127;
     int pan = 64;
@@ -116,10 +118,10 @@ class McuModel {
   int first_free_or_steal_slot();
   std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
                                     const ChannelState& channel);
-  double modulator_sum(const Region& region, const VoiceState& voice,
-                       const ChannelState& channel, uint16_t dest,
-                       bool include_note_sources = true,
-                       bool include_realtime_sources = true);
+  int64_t modulator_sum_q16(const Region& region, const VoiceState& voice,
+                            const ChannelState& channel, uint16_t dest,
+                            bool include_note_sources = true,
+                            bool include_realtime_sources = true);
   static uint32_t modulated_phase_inc(uint32_t base_phase_inc, double cents);
   static FilterConfig filter_for(int cutoff_cents, int resonance_cb, int sample_rate);
   void activate_voice(int voice);

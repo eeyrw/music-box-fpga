@@ -260,7 +260,7 @@ struct VoiceState {
   int mod_env_stage_tick = 0;
   int mod_env_release_start = 0;
   int velocity = 127;
-  double tremolo_attenuation_cb = 0.0;
+  int32_t tremolo_attenuation_cb_q16 = 0;
   bool key_released = false;
   bool sostenuto_held = false;
   uint64_t note_instance = 0;

@@ -78,8 +78,13 @@ void write_report(const char* action, const std::string& asset_path,
                   const render::McuSf2AssetView& view, size_t image_size,
                   bool source_checked) {
   uint16_t maximum_layers = 0;
+  uint16_t maximum_modulation_terms = 0;
   for (size_t index = 0; index < view.velocity_span_count(); ++index) {
     maximum_layers = std::max(maximum_layers, view.velocity_span(index).layer_count);
+  }
+  for (size_t index = 0; index < view.modulation_program_count(); ++index) {
+    maximum_modulation_terms = std::max(maximum_modulation_terms,
+                                        view.modulation_program(index).term_count);
   }
   std::cout << "{\n"
             << "  \"schema\": \"mcu-sf2-asset-report-v1\",\n"
@@ -104,7 +109,12 @@ void write_report(const char* action, const std::string& asset_path,
             << "  \"layer_references\": " << view.layer_reference_count() << ",\n"
             << "  \"mono_descriptors\": " << view.mono_descriptor_count() << ",\n"
             << "  \"start_words\": " << view.start_word_count() << ",\n"
-            << "  \"maximum_layers\": " << maximum_layers << "\n"
+            << "  \"candidate_programs\": " << view.candidate_program_count() << ",\n"
+            << "  \"modulation_programs\": " << view.modulation_program_count() << ",\n"
+            << "  \"modulation_terms\": " << view.modulation_term_count() << ",\n"
+            << "  \"source_curve_values\": " << view.source_curve_value_count() << ",\n"
+            << "  \"maximum_layers\": " << maximum_layers << ",\n"
+            << "  \"maximum_modulation_terms\": " << maximum_modulation_terms << "\n"
             << "}\n";
 }
 
