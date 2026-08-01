@@ -9,6 +9,7 @@ one exists.
 
 ```text
 spec/register_map.json ----> gen_register_map.py ----> SV/C++ register constants
+spec/mcu_asset_profiles.json -> offline MCU asset compiler profile selection
 tools/gen_dsp_lut.py ------> generated DSP tables ----> RTL + C++ reference
 
 RTL filelists + SV TBs ----> Verilator -------------> self-checking executables
@@ -54,6 +55,7 @@ the results as if they were the same build.
 | --- | --- | --- | --- |
 | `tools/gen_register_map.py` | `spec/register_map.json` | SV and C++ register constants | `make generate-register-map` |
 | `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope, dynamics, and DSP lookup tables | `make generate-dsp-lut` |
+| `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | Target-neutral profile schema and command-interface consistency | `make check-mcu-asset-profiles` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
 
 Use `make check-generated` in normal verification. The exact
@@ -79,6 +81,7 @@ source update, not a harmless check.
 | `tools/sf2_extract.py` | Lists or extracts one SF2 instrument/sample for focused work. |
 | `tools/sf2_filter_report.py` | Audits SoundFont filter-generator use and can emit probe MIDI. |
 | `make benchmark-sf2-loader SF2_BENCHMARK=path/to/file.sf2` | Reports SF2 file size, load time, peak RSS, retained and compiled-table bytes, metadata counts, and compiled candidate counts. |
+| `make benchmark-mcu-sf2-baseline SF2_BENCHMARK=path/to/file.sf2` | Writes the target-neutral 48 kHz/1 ms profile's exhaustive preset/key/velocity selection, compiled-memory, and cold/warm region-lookup baseline to `build/mcu_sf2_baseline.json`. |
 | `tools/render_report_schema_test.py` | Validates normalized render-report catalogs and every cross-catalog reference. |
 | `tools/make_filter_probe_assets.py` | Generates a tiny filtered SF2/MIDI regression fixture under `build/`. |
 | `make polyphony-stress-midi` | Builds the deterministic high-polyphony stress MIDI generator and writes its fixture under `build/`. |

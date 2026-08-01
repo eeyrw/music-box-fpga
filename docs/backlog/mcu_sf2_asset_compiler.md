@@ -168,10 +168,14 @@ one exact output profile:
 - filter coefficient quantization policy;
 - enabled SoundFont feature subset.
 
-The initial profile should be the production configuration chosen for the
-first MCU, normally 48 kHz and one fixed control-tick length. Supporting several
-sample rates in one image is not a first-version requirement. Separate images
-are simpler, smaller, and make mismatch rejection unambiguous.
+The initial target-neutral reference profile is
+`generic-le32-48k-tick48-v13`, defined in
+[`../../spec/mcu_asset_profiles.json`](../../spec/mcu_asset_profiles.json). It
+fixes 48 kHz output, a 48-sample/1 ms control tick, little-endian 32-bit words,
+command interface 13, and the current numeric policies. It deliberately leaves
+the MCU and metadata storage unspecified. Supporting several sample rates in
+one image is not a first-version requirement. Separate images are simpler,
+smaller, and make mismatch rejection unambiguous.
 
 Changing any profile field invalidates all fields derived from it. The compiler
 must rebuild the whole sidecar rather than patching individual tables.
@@ -612,14 +616,20 @@ evidence only and cannot qualify MCU timing.
 
 ### Phase 0: Baseline And Target Selection
 
-- [ ] Select the MCU, clock, internal SRAM/flash, external metadata storage, and
-  expected storage bandwidth.
-- [ ] Freeze the initial sample rate, control tick, SoundFont feature subset,
+- [x] Define the target-neutral `generic-le32-48k-tick48-v13` reference profile
+  with the current sample rate, control tick, SoundFont subset, numeric policy,
   and command interface version.
-- [ ] Record current SGM C++ compiled size, cache-miss time, Note On time, and
-  control-tick work as the comparison baseline.
+- [x] Add a reproducible SF2 baseline that reports compiled size, exhaustive
+  preset/key/velocity selection fanout, and forced-cold/warm region lookup time.
+- [x] Retain the existing reproducible 128/256/512-voice MCU control benchmark
+  as the reference-profile control-loop baseline.
+- [ ] Select the MCU, clock, internal SRAM/flash, external metadata storage, and
+  expected storage bandwidth before Phase 4 target qualification. This is
+  intentionally deferred and does not block the portable image/compiler work.
 
-Exit gate: one named deployment profile and reproducible baseline reports.
+Exit gate for portable work: one named target-neutral reference profile and
+reproducible host baseline reports. Target-specific timing and memory signoff
+remain a Phase 4 exit requirement after an MCU is selected.
 
 ### Phase 1: Semantic IR And Packed Image
 

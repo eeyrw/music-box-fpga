@@ -1,0 +1,21 @@
+{
+  "schema": "wavetable-mcu-asset-profiles-v1",
+  "profiles": [
+    {
+      "id": "generic-le32-48k-tick48-v13",
+      "status": "reference",
+      "targetMcu": null,
+      "byteOrder": "little",
+      "wordBits": 32,
+      "outputSampleRate": 48000,
+      "controlTickSamples": 48,
+      "commandInterfaceVersion": "0x000d0000",
+      "fileAttenuationPolicy": "fluidsynth-emu-factor-0.4",
+      "panLaw": "sine-equal-power-v1",
+      "filterPolicy": "q2.14-one-cent-two-centibel-cache-v1",
+      "soundFontSubset": "current-render-subset-v1",
+      "waveAddressing": "wtsf-complete-sf2-word-offset-v1",
+      "metadataStorage": "unspecified"
+    }
+  ]
+}
