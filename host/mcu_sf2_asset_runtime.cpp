@@ -158,7 +158,8 @@ uint16_t McuSf2AssetRuntime::allocate_voice() {
 
 int64_t McuSf2AssetRuntime::destination_sum_q16(
     uint32_t candidate, uint32_t program_index, uint16_t destination,
-    uint8_t channel, uint8_t note, uint8_t velocity) const {
+    uint8_t channel, uint8_t note, uint8_t velocity,
+    bool include_note_sources) const {
   if (program_index == UINT32_MAX) return 0;
   const auto program = asset_.modulation_program(program_index);
   const render::McuFixedVoiceSources voice{note, velocity};
@@ -166,6 +167,10 @@ int64_t McuSf2AssetRuntime::destination_sum_q16(
   for (uint32_t index = 0; index < program.term_count; ++index) {
     const auto term = asset_.modulation_term(program.first_term + index);
     if (term.destination != destination) continue;
+    if (!include_note_sources &&
+        (term.dependencies & render::kMcuDependencyNote) != 0) {
+      continue;
+    }
     sum += render::mcu_sf2_evaluate_term_q16(
         term, channels_[channel].sources, voice);
   }
@@ -220,12 +225,12 @@ void McuSf2AssetRuntime::refresh_voice(uint16_t voice, uint8_t destination_group
                             state.channel, state.note, velocity)));
     const int64_t attenuation = destination_sum_q16(
         descriptor.semantic_candidate, programs.gain, 48, state.channel,
-        state.note, velocity) + state.tremolo_attenuation_q16 +
+        state.note, velocity, false) + state.tremolo_attenuation_q16 +
         (channels_[state.channel].soft
              ? int64_t(30) * render::kMcuModulationOne : 0);
     const int64_t pan = destination_sum_q16(
         descriptor.semantic_candidate, programs.gain, 17, state.channel,
-        state.note, velocity);
+        state.note, velocity, false);
     const auto gains = render::mcu_sf2_mono_gains(
         descriptor.base_gain, descriptor.pan, attenuation, pan);
     if (uint16_t(gains.first) != state.gain_l ||
@@ -427,23 +432,34 @@ uint16_t McuSf2AssetRuntime::note_on(uint8_t channel, uint16_t program,
         state.base_phase_increment, pitch_q16);
     const int64_t attenuation_q16 = destination_sum_q16(
         descriptor.semantic_candidate, programs.gain, 48, channel, note,
-        effective_velocity) +
+        effective_velocity, false) +
         (channels_[channel].soft ? int64_t(30) * render::kMcuModulationOne : 0);
     const int64_t pan_q16 = destination_sum_q16(
         descriptor.semantic_candidate, programs.gain, 17, channel, note,
-        effective_velocity);
+        effective_velocity, false);
     const auto gains = render::mcu_sf2_mono_gains(
         descriptor.base_gain, descriptor.pan, attenuation_q16, pan_q16);
     state.gain_l = uint16_t(gains.first);
     state.gain_r = uint16_t(gains.second);
     command.words[phase_index] = state.phase_increment;
     command.words[phase_index + 1] = pack_gains(state.gain_l, state.gain_r);
+    const bool has_filter = ((header >> 10) & 1u) != 0;
+    state.filter_valid = true;
+    if (has_filter) {
+      const uint32_t first = command.words[phase_index + 2];
+      const uint32_t second = command.words[phase_index + 3];
+      const uint32_t third = command.words[phase_index + 4];
+      state.filter = {
+          (third & 0x00010000u) != 0,
+          int16_t(first), int16_t(first >> 16), int16_t(second),
+          int16_t(second >> 16), int16_t(third)};
+    }
     mark_exclusive(voice, true);
     ++stats_.active_voices;
     stats_.maximum_active_voices = std::max(stats_.maximum_active_voices,
                                             stats_.active_voices);
     commands_.write_command_words(command.view());
-    refresh_voice(voice, kGainGroup | kPitchGroup | kFilterGroup);
+    advance_modulation(voice);
     ++stats_.started_voices;
   }
   return span.layer_count;

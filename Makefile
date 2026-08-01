@@ -503,6 +503,18 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		sim/harness/control/command_control.cpp \
 		-o $(BUILD_DIR)/mcu_sf2_asset_runtime_test
 	$(BUILD_DIR)/mcu_sf2_asset_runtime_test "$(SF2)"
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
+		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_equivalence_test.cpp \
+		sim/harness/render/render_support.cpp \
+		sim/harness/formats/mcu_sf2_modulation.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/control/command_control.cpp \
+		sim/harness/render/reference_synth.cpp \
+		sim/harness/formats/midi_parser.cpp sim/harness/render/render_args.cpp \
+		sim/harness/render/render_report.cpp sim/harness/render/render_session.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset_equivalence_test
+	$(BUILD_DIR)/mcu_sf2_asset_equivalence_test "$(SF2)"
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
 		sim/harness/formats/mcu_sf2_modulation.cpp \

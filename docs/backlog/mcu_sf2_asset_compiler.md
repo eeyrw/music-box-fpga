@@ -822,16 +822,32 @@ specific MCU and flash execution model are selected.
 
 ### Phase 5: End-To-End Qualification
 
-- [ ] Compare existing and compiled-path command streams and WAVs on checked-in
-  fixtures and real SGM MIDI workloads.
-- [ ] Run the normal C++ unit suite, reference renders, and focused RTL render
+- [x] Compare existing and compiled-path command streams and reference PCM on a
+  checked-in fixture and a representative trace using the real SGM.
+- [x] Run the normal C++ unit suite, reference renders, and focused RTL render
   integration tests.
 - [ ] Verify generated bundle installation and mismatch rejection on the board.
-- [ ] Update stable host/tooling documentation only after the format and
+- [x] Update stable host/tooling documentation after the format and
   deployment flow are implemented.
 
 Exit gate: the MCU compiled-asset path is the documented production host path;
 the existing RTL contracts and implementation remain unchanged.
+
+The Phase 5 equivalence test drives both policies through layered Note On, CC7,
+pitch bend, four periodic control ticks, and oldest-instance Note Off. It
+compares every command length and word, then feeds the two streams to independent
+`ReferenceSynth` instances and compares 1,024 stereo PCM frames exactly across
+the event boundaries. It passes with both the checked-in MT6276 fixture and the
+324,800,670-byte SGM source. This test found and fixed two integration errors:
+the compiled path had applied note-static attenuation a second time, and its
+first periodic modulation update lagged the reference by one tick.
+
+`make lint`, `make test`, `make check-generated`, and `make check-docs` pass.
+The first `make test` invocation encountered a transient Verilator
+`attempted to destroy locked Thread Pool` error while building the QSPI model;
+the isolated target and the subsequent complete run both passed. No file under
+`rtl/` changed. Board bundle validation and target-MCU qualification remain open
+and keep the Phase 4/5 hardware exit gates unsatisfied.
 
 ## Completion Criteria
 

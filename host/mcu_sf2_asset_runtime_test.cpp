@@ -62,12 +62,6 @@ int main(int argc, char** argv) {
       0, cell.program, cell.bank, cell.key, cell.velocity);
   require(layers != 0 && !sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "compiled runtime did not emit START first");
-  bool saw_initial_filter = false;
-  for (const auto& command : sink.commands) {
-    saw_initial_filter |= opcode(command) == 0x17;
-  }
-  require(saw_initial_filter,
-          "compiled runtime did not apply the initial filter configuration");
   const uint16_t first_voice = uint16_t((sink.commands.front().words[0] >> 14) & 0x3ffu);
   const uint16_t first_generation = uint16_t(sink.commands.front().words[1]);
   require(first_generation == 1, "first START generation is not one");

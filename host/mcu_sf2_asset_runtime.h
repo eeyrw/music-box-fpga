@@ -89,7 +89,8 @@ class McuSf2AssetRuntime {
   void advance_modulation(uint16_t voice);
   int64_t destination_sum_q16(uint32_t candidate, uint32_t program,
                               uint16_t destination, uint8_t channel,
-                              uint8_t note, uint8_t velocity) const;
+                              uint8_t note, uint8_t velocity,
+                              bool include_note_sources = true) const;
   void emit_short(uint8_t opcode, uint16_t voice, uint16_t generation,
                   uint32_t value = 0, bool has_value = false);
   void mark_exclusive(uint16_t voice, bool active);
