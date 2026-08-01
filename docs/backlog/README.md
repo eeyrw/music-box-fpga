@@ -14,3 +14,7 @@ design documents linked from [`../README.md`](../README.md).
 - [`realtime_midi_host.md`](realtime_midi_host.md): SF2 loading and lookup
   efficiency, bounded host control work, CH347 command scheduling, and the
   future real-time MIDI application.
+- [`mcu_sf2_asset_compiler.md`](mcu_sf2_asset_compiler.md): proposed offline
+  SoundFont metadata compiler, packed MCU asset format, allocation-free lookup,
+  fixed-point modulation execution, and acceptance gates that preserve the
+  current RTL and command-stream contracts.
