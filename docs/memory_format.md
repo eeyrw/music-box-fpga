@@ -136,7 +136,8 @@ accepted/returned accounting, row hits and misses, activate/precharge timing,
 refresh blocking, and configurable queue/backpressure behavior. It does not
 model MIG calibration, board pins, electrical timing, or CDC.
 
-`render-rtl-ddr3` loads the selected SF2 file as the DDR image, drives the same
+The shared `render_rtl_memory_main.cpp` harness loads the selected SF2 image and
+selects a memory backend at build time. `render-rtl-ddr3` drives the same
 compact command words as hardware, writes `out.wav`, and emits
 `rtl_ddr3_render_config.json` through the shared main-branch report/session code.
 
@@ -173,6 +174,7 @@ Focused tests are:
 | `tb_voice_major_throughput` | active-lane traversal and block deadline; the default memory path is an always-ready, next-cycle-response theoretical model |
 | `measure-voice-major-throughput-512` | full 10-bit voice IDs and capacity timing |
 | `render-rtl-ddr3` | real SF2/MIDI control, DDR image, PCM output, and JSON diagnostics |
+| `render-rtl-direct` | the same renderer flow with simulation-only direct line memory |
 | `render-rtl-qspi` | the same real workload through the timed 100 MHz QSPI NOR profile |
 | `tb_smart_artix_ddr3_line_reader` | queued, ordered line-to-MIG conversion and response backpressure |
 | `tb_smart_artix_ddr3_rw_arbiter` | multiple outstanding render reads, loader/register ownership, and response routing |
@@ -191,7 +193,8 @@ MIG reader and arbiter; those board wrappers use focused SV tests so long
 SF2/MIDI renders are not burdened with a second protocol model.
 
 Every accepted refill must have exactly one returned response. Deadline checks
-must use measured block cycles, not inferred memory bandwidth alone.
+must use accepted-request-to-publication renderer cycles, not command/request
+wait time or inferred memory bandwidth alone.
 
 ## Capacity Notes
 

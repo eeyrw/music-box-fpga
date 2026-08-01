@@ -157,13 +157,13 @@ so note releases and the spatial tail are both retained. The summary JSON
 records the selected preset, tail length, effect validity, configuration-clamp
 state, and saturation counters.
 
-Render reports use schema version 2. Each entry in `regions` contains only
+Render reports use schema version 3. Each entry in `regions` contains only
 note-specific numeric state and integer references into `catalogs`. Preset,
 instrument, sample-window, volume-envelope, generator/modulation, and modulator
 data are interned once. `modulation_profiles` references a `modulator_set`, and
-sample windows reference `samples`; consumers must resolve these indexes rather
-than expect the former inline arrays. There is intentionally no compatibility
-copy of the version-1 fields. `tools/render_report_schema_test.py report.json`
+sample windows reference `samples`; consumers resolve these indexes through the
+catalogs. RTL reports use accepted-request renderer service metrics and separate
+request-wait diagnostics. `tools/render_report_schema_test.py report.json`
 checks the schema and all reference bounds.
 
 For the 907-region, one-second SGM polyphony-stress render measured on
@@ -272,10 +272,11 @@ Use sample-accurate updates when isolating control-rate artifacts. This ignores
 make render-reference SECONDS=10 SAMPLE_ACCURATE_CONTROL=1
 ```
 
-## RTL DDR3 Render
+## RTL Memory-Backend Render
 
-Render the current voice-major RTL with its 32-word sample window and timed DDR3
-model:
+All RTL memory render targets build the shared
+`sim/harness/apps/render_rtl_memory_main.cpp` entry point. Select the timed DDR3
+backend with:
 
 ```bash
 make render-rtl-ddr3 \
@@ -304,7 +305,8 @@ switching the option does not reuse an incompatible executable. The C++ code
 still parses MIDI/SF2 and produces the effect register values, but the rendered
 samples and effect timing come from `global_audio_effects_chain` RTL. The
 effects harness shares the production `voice_major_block_output_manager`:
-C++ advances to the next MIDI/control boundary after renderer completion, while
+C++ advances by the configured maximum block size after renderer completion,
+while MIDI and control events are quantized to the next block boundary and
 RTL independently drains and releases the prior mix bank. C++ does not manage
 bank IDs or an overlap queue. The report's renderer and release cycles start at
 the accepted RTL request handshake; `rtl_max_block_initiation_cycles` also
@@ -321,8 +323,11 @@ Inspect the integrated report with:
 jq '{render_target, output_samples, region_count:(.regions | length),
      rtl_effects_loaded,
      rtl_core_cycles, rtl_render_blocks, rtl_render_frames,
-     rtl_max_render_cycles, rtl_max_end_to_end_cycles,
-     rtl_end_to_end_deadline_misses,
+     rtl_renderer_max_cycles, rtl_renderer_max_utilization_ppm,
+     rtl_renderer_deadline_misses,
+     rtl_renderer_timing_by_block_frames,
+     rtl_request_wait_max_cycles, rtl_output_release_max_cycles,
+     rtl_output_release_deadline_misses,
      rtl_window_words, rtl_window_bytes,
      rtl_window_client_requests, rtl_window_hits,
      rtl_window_memory_reads, rtl_window_refills,
@@ -334,8 +339,8 @@ jq '{render_target, output_samples, region_count:(.regions | length),
 This target uses the shared `render_session` input preparation and
 `render_report` schema, then appends RTL, sample-window, DDR3, deadline, and
 render-timing statistics. Superseded direct-core, cached-memory, and board-loader
-renderer sources have been removed; the voice-major DDR3 harness is the only
-supported RTL render flow.
+renderer sources have been removed; the shared voice-major memory harness is
+the only supported RTL render flow.
 
 The window counters have distinct units. `rtl_window_client_requests` counts
 accepted renderer requests and `rtl_window_hits` counts requests served by the
@@ -353,12 +358,21 @@ window_memory_reads = 4 * window_refills + window_fallback_reads
 the serialized window transaction is busy; it is not a pure DDR latency
 counter.
 
-The timing fields have distinct boundaries:
+The timing fields have distinct boundaries and responsibilities:
 
-- `rtl_max_render_cycles` measures block request through renderer publication.
-- With effects loaded, `rtl_max_end_to_end_cycles` additionally includes reading
-  the published mix buffer into the effect input and releasing that buffer. This
-  is the scheduling deadline for starting the next render block.
+- `rtl_renderer_total_cycles`, `rtl_renderer_max_cycles`,
+  `rtl_renderer_max_utilization_ppm`, and `rtl_renderer_deadline_misses` measure
+  only accepted block request through renderer publication. These are the RTL
+  throughput and downstream audio-starvation qualification fields.
+- `rtl_renderer_timing_by_block_frames` contains the same totals, maximum, and
+  miss count separately for each observed frame count. Normal runs contain the
+  configured maximum block size plus at most one shorter final tail.
+- `rtl_request_wait_total_cycles` and `rtl_request_wait_max_cycles` measure time
+  before request acceptance, including command drain. They are control/scheduler
+  diagnostics and never contribute to renderer deadline utilization.
+- With effects loaded, `rtl_output_release_max_cycles` additionally includes
+  reading the published mix buffer into the effect input and releasing that
+  buffer. This is the scheduling deadline for starting the next render block.
 - Effect processing after input acceptance can overlap the next block. The report
   records its worst per-frame cost as `rtl_effects_max_processing_cycles`; the
   session-end lookahead/tail drain is not charged to an individual block.
@@ -458,7 +472,8 @@ board-level MIG and audio-underrun qualification.
 - `reference_render_config.json`: inputs, timing, output counts, synthesizer
   diagnostics, and compressor diagnostics.
 
-`render-rtl-ddr3` produces `out.wav` and `rtl_ddr3_render_config.json`, including
-shared session diagnostics plus RTL/window/DDR3 timing statistics.
+Each backend target produces `out.wav` and its backend-named JSON report. The
+DDR3 entry is `rtl_ddr3_render_config.json`; all variants contain shared session
+diagnostics plus renderer/window/backend timing statistics.
 
 Generated render output belongs under `build/` and must not be committed.

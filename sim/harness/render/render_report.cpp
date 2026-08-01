@@ -261,7 +261,7 @@ void write_summary(const std::string& path, const std::vector<Region>& regions,
   std::ofstream f(path);
   if (!f) throw std::runtime_error("failed to open " + path);
   ReportCatalog catalog = build_catalog(regions);
-  f << "{\n  \"report_schema_version\": 2"
+  f << "{\n  \"report_schema_version\": 3"
     << ",\n  \"output_sample_rate\": " << sample_rate
     << ",\n  \"output_samples\": " << samples
     << ",\n  \"event_count\": " << events;

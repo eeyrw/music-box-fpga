@@ -122,7 +122,8 @@ make render-rtl-qspi \
 ```
 
 The render writes `rtl_qspi_render_config.json`. The decisive fields are
-`rtl_max_render_cycles`, `rtl_deadline_misses`, `qspi_lines`,
+`rtl_renderer_max_cycles`, `rtl_renderer_max_utilization_ppm`,
+`rtl_renderer_deadline_misses`, `qspi_lines`,
 `qspi_sequential_lines`, `qspi_random_lines`, `qspi_transactions`,
 `qspi_overhead_cycles`, `qspi_data_cycles`, and
 `qspi_bus_utilization_ppm`. Feasibility requires zero deadline misses on the
@@ -260,7 +261,8 @@ make render-rtl-parallel-nor \
 ```
 
 The report is `rtl_parallel_nor_render_config.json`. Key fields are
-`rtl_max_render_cycles`, `rtl_deadline_misses`, `parallel_nor_lines`,
+`rtl_renderer_max_cycles`, `rtl_renderer_max_utilization_ppm`,
+`rtl_renderer_deadline_misses`, `parallel_nor_lines`,
 `parallel_nor_page_lines`, `parallel_nor_random_lines`,
 `parallel_nor_transactions`, and `parallel_nor_bus_utilization_ppm`.
 
@@ -315,20 +317,21 @@ includes refill and fallback memory wait, and the same stalled clock can delay
 the renderer pipeline. It is a diagnostic accumulation, not a disjoint wall
 clock duration, so it must not be added to `Total render cycles`.
 
-`Total render cycles` is the sum from each accepted block request to that
+`rtl_renderer_total_cycles` is the sum from each accepted block request to that
 block's renderer completion. It measures how much renderer service the complete
 one-second workload consumed. When it exceeds the one-second real-time supply
 of approximately 100 million core clocks, the run cannot keep pace on average;
 a lower total still does not prove that every individual block met its deadline.
 
-`Maximum render cycles` is the raw latency of the single slowest block. Blocks
+`rtl_renderer_max_cycles` is the raw latency of the single slowest block. Blocks
 have different frame counts, so this number cannot be compared with one fixed
-deadline. `Maximum deadline utilization` performs the correct per-block
+deadline. `rtl_renderer_max_utilization_ppm` performs the correct per-block
 normalization and reports the largest
 `render_cycles / block_deadline_cycles`. Values above 100% are deadline
 violations; a value below 100% gives the remaining worst-case margin.
 
-`Deadline misses` counts blocks whose normalized utilization exceeded 100%.
+`rtl_renderer_deadline_misses` counts blocks whose normalized utilization
+exceeded 100%.
 Thus Parallel NOR's 3,035 misses mean that all but four of the 3,039 blocks were
 late. It is not a count of dropped audio samples; the offline harness still
 finishes all 48,000 frames so that timing and output can be inspected.

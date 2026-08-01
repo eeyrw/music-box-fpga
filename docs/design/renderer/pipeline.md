@@ -693,9 +693,17 @@ mix-buffer 层级仍为 1,063 LUT / 1,671 FF，说明 Vivado 原先已依据 25-
 post-route 数据需等下一次 implementation 才能更新。
 
 1 秒、48 kHz、512 peak voices、timed DDR3、关闭 effects 的 dry run 完成 48,000 frames，
-`max_render_cycles=31,876`，zero renderer deadline miss。它距离 16-frame 的 33,333-clock
+maximum renderer service 为 31,876 cycles，zero renderer deadline miss。它距离
+16-frame 的 33,333-clock
 理论 deadline 已不宽裕，因此当前优化优先级仍应看完整 render latency，而不是单独追求
 某一级的名义 II。
+
+2026-08-01 使用 Hedwig 片段 237-247 秒、SGM v2.01、512-slot build 和 direct-memory
+backend 重跑固定 16-frame workload。30,000 个 block 全部为 16 帧，peak active voices 为
+298；accepted request 到 renderer publication 的最坏服务时间为 16,851 clocks，最大利用率
+50.553%，renderer deadline miss 为 0。握手前 request wait 最坏为 192 clocks，但不计入
+renderer deadline。该结果隔离证明此片段没有 RTL 核心算力不足；direct memory 不含 DDR3
+timing，因此不能替代 timed-DDR 或板级 FIFO/I2S qualification。
 
 打开 production RTL effects 的一秒压力中，最大 renderer latency 为 31,905 clocks，最大
 request-to-effects-release latency 为 33,228 clocks。该结果来自 overlap 改动前的串行

@@ -498,7 +498,7 @@ int main() {
         summary_text.find("\"samples\": [\"PianoC\\\\L\"") == std::string::npos) {
       throw std::runtime_error("summary JSON did not escape nested sample metadata");
     }
-    if (summary_text.find("\"report_schema_version\": 2") == std::string::npos ||
+    if (summary_text.find("\"report_schema_version\": 3") == std::string::npos ||
         summary_text.find("\"sf2_loader\": {\"region_count\": 2") == std::string::npos ||
         summary_text.find("\"sample_windows\": [") == std::string::npos ||
         summary_text.find("\"gain\": {\"pan\":") == std::string::npos ||

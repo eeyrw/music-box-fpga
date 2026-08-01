@@ -50,12 +50,14 @@ true-dual-port BRAM mix。ordered line descriptor 已完成，下一步不再回
 
 2026-07-30 使用最终 34-bit descriptor、默认 16-frame 配置和 SGM v2.01 SF2 对
 `polyphony_stress_512.mid` 重跑 0.02 秒 RTL DDR3 smoke：960 frames、60 blocks、峰值 465
-active voices、`max_render_cycles=26,847`、zero deadline miss、58,804 DDR reads 和 18,752
+active voices、maximum renderer service 26,847 cycles、zero deadline miss、58,804 DDR
+reads 和 18,752
 row misses。该单配置复测与下方既有 16-frame 数据一致；本次没有重跑 8/16 A/B。
 
 同一最终 RTL 的 1 秒 dry 对比关闭 reference compressor/chorus/reverb，并使用不加载
 effects chain 的 RTL top。RTL 完成 48,000 frames、3,039 blocks，达到 512 peak active
-voices；`max_render_cycles=31,876`、最大 deadline utilization 96.954%、zero deadline
+voices；maximum renderer service 31,876 cycles、最大 deadline utilization 96.954%、
+zero deadline
 miss。与 C++ reference 的 96,000 个 PCM16 channel samples 中只有 5 个不同：左右声道
 完全相同比例分别为 99.995833% 和 99.993750%，相关系数分别为 0.999999996746 和
 0.999999975892。5 个差异都位于 16-frame block 的 frame 15，后续若追求整段 bit exact，
@@ -106,7 +108,7 @@ image 装载会显著增加短 smoke 的启动时间，但不属于 `timing_rend
 执行瓶颈。后续优化顺序应为：先给该 render target 使用 `-O3`，再减少 renderer core
 cycles；只有 profile 证明 mailbox/DPI 占比上升后，才值得重写 DDR3 simulation bridge。
 
-此前 2 秒结果中的 `max_render_cycles=16,347` 来自旧 harness 的固定 8-frame boundary，
+此前 2 秒结果中的 maximum renderer service 16,347 cycles 来自固定 8-frame workload，
 尽管编译 RTL 的上限是 16，也没有实际请求 16-frame block。该结果只保留为 8-frame 真实
 SF2/MIDI 证据，不能用于 16-frame `<30,000` 验收。harness 现从 SV 导出的
 `configured_max_block_frames` 取得边界，并在 JSON 中记录配置上限、实际最大请求和直方图。
@@ -117,8 +119,9 @@ RTL DDR3 render 现可通过 `RTL_EFFECTS=1` 选择
 `voice_major_render_effects_harness`，将 published mix buffer 自动读入生产级
 `global_audio_effects_chain`。默认关闭该选项以保留纯 renderer 分析；打开后 WAV 来自 RTL
 chorus/reverb/compressor/master-volume 通路，而 C++ 只负责 MIDI/SF2 策略和效果寄存器配置，
-不作为 DSP 输出或周期验证参考。`rtl_max_render_cycles` 仍以 renderer publish 为终点；
-`rtl_max_end_to_end_cycles` 以 mix buffer 全部送入 effects 并 release 为终点，对应下一 render
+不作为 DSP 输出或周期验证参考。`rtl_renderer_max_cycles` 以 accepted request 到 renderer
+publish 为边界；`rtl_output_release_max_cycles` 以 mix buffer 全部送入 effects 并
+release 为终点，对应下一 render
 block 可启动的真实串联预算。逐 frame effects 运算可与下一块 renderer 重叠，session 结束时
 额外送入的 48-frame compressor lookahead flush 不计入某一 block deadline。
 

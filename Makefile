@@ -74,7 +74,8 @@ REVERB_ENABLE ?= auto
 EFFECTS_TAIL_SECONDS ?= 0
 MIDI ?=
 RENDER_REFERENCE_OUT_DIR ?= $(BUILD_DIR)/render_reference
-RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
+RENDER_RTL_OUT_DIR ?= $(BUILD_DIR)/render_rtl_$(RENDER_MEMORY)
+RENDER_RTL_DDR3_OUT_DIR ?= $(BUILD_DIR)/render_rtl_ddr3
 RENDER_RTL_DIRECT_OUT_DIR ?= $(BUILD_DIR)/render_rtl_direct
 RENDER_RTL_QSPI_OUT_DIR ?= $(BUILD_DIR)/render_rtl_qspi
 RENDER_RTL_PARALLEL_NOR_OUT_DIR ?= $(BUILD_DIR)/render_rtl_parallel_nor
@@ -222,7 +223,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -429,6 +430,10 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		sim/harness/render/block_scheduler_test.cpp \
 		-o $(BUILD_DIR)/block_scheduler_test
 	$(BUILD_DIR)/block_scheduler_test
+	$(CXX) $(CXX_STD_FLAGS) \
+		sim/harness/render/rtl_block_timing_test.cpp \
+		-o $(BUILD_DIR)/rtl_block_timing_test
+	$(BUILD_DIR)/rtl_block_timing_test
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/formats/midi_parser.cpp sim/harness/formats/midi_parser_test.cpp \
 		-o $(BUILD_DIR)/midi_parser_test
@@ -735,8 +740,8 @@ render-reference:
 		--effects-tail-seconds $(EFFECTS_TAIL_SECONDS) \
 		--out-dir $(RENDER_REFERENCE_OUT_DIR)
 
-render-rtl-ddr3:
-	# Set RTL_EFFECTS=1 to include the RTL chorus/reverb/compressor path in end-to-end timing.
+render-rtl-memory:
+	# Set RTL_EFFECTS=1 to include RTL effects and output-release timing.
 	mkdir -p $(RENDER_RTL_OUT_DIR)
 	$(VERILATOR) $(RTL_DEFINES) --cc --exe --build $(VERILATOR_JOBS) --timing \
 		--Wall -Wno-fatal --Mdir $(RENDER_RTL_OBJ_DIR) \
@@ -752,7 +757,7 @@ render-rtl-ddr3:
 		sim/models/voice_major_render_harness.sv \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),fpga/common/rtl/voice_major_block_output_manager.sv,) \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)),sim/models/voice_major_render_effects_harness.sv,) \
-		$(abspath sim/harness/apps/render_rtl_ddr3_main.cpp) \
+		$(abspath sim/harness/apps/render_rtl_memory_main.cpp) \
 		$(HARNESS_RENDER_COMMON_SRCS) \
 		$(if $(filter 1,$(RTL_EFFECTS_ENABLED)), \
 			$(abspath sim/harness/render/stereo_chorus_model.cpp) \
@@ -785,15 +790,19 @@ render-rtl-ddr3:
 		$(if $(filter 1,$(RENDER_DIRECT_ENABLED)),+DIRECT_MEMORY_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2)))))
 
 render-rtl-direct:
-	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=direct \
+	$(MAKE) render-rtl-memory RENDER_MEMORY=direct \
 		RENDER_RTL_OUT_DIR=$(RENDER_RTL_DIRECT_OUT_DIR)
 
+render-rtl-ddr3:
+	$(MAKE) render-rtl-memory RENDER_MEMORY=ddr3 \
+		RENDER_RTL_OUT_DIR=$(RENDER_RTL_DDR3_OUT_DIR)
+
 render-rtl-qspi:
-	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=qspi \
+	$(MAKE) render-rtl-memory RENDER_MEMORY=qspi \
 		RENDER_RTL_OUT_DIR=$(RENDER_RTL_QSPI_OUT_DIR)
 
 render-rtl-parallel-nor:
-	$(MAKE) render-rtl-ddr3 RENDER_MEMORY=parallel-nor \
+	$(MAKE) render-rtl-memory RENDER_MEMORY=parallel-nor \
 		RENDER_RTL_OUT_DIR=$(RENDER_RTL_PARALLEL_NOR_OUT_DIR)
 
 vivado-project:

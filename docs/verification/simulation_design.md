@@ -107,12 +107,15 @@ modulation envelopes, LFOs, and dynamic gain, pitch, and filter commands. Set
 in that mode `CONTROL_TICK_MS` is ignored. The reference synthesizer's volume
 envelope itself always advances once per output sample in both modes.
 
-`render-reference` uses only the C++ integer synthesizer. `render-rtl-ddr3`
-drives the compact command stream into the current Verilated voice-major core,
-uses the 32-word sample window and timed DDR3 model, and writes
+`render-reference` uses only the C++ integer synthesizer. The RTL backend
+targets share `render_rtl_memory_main.cpp`; `render-rtl-ddr3` selects its timed
+DDR3 backend and drives the compact command stream into the current Verilated
+voice-major core, uses the 32-word sample window and timed DDR3 model, and writes
 `rtl_ddr3_render_config.json`. The report includes shared input/session data,
 region diagnostics, RTL cycle counts, window/refill statistics, DDR timing, and
-render timing.
+render timing. Normal requests use the configured maximum block length; MIDI
+and control events are applied at the following block boundary instead of
+splitting renderer work into event-sized blocks.
 
 `render-rtl-qspi` uses the same RTL, commands, sample window, SF2 image, WAV
 output, and deadline accounting while replacing the DDR3 backend with the

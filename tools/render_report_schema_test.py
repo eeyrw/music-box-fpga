@@ -15,8 +15,8 @@ def require_index(value, catalog, context):
 def validate(path):
     with open(path, "r", encoding="utf-8") as report_file:
         report = json.load(report_file)
-    if report.get("report_schema_version") != 2:
-        raise ValueError("report_schema_version must be 2")
+    if report.get("report_schema_version") != 3:
+        raise ValueError("report_schema_version must be 3")
     catalogs = report["catalogs"]
     required = (
         "presets", "instruments", "samples", "sample_windows",

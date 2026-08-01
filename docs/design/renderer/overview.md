@@ -15,6 +15,27 @@ Commands and block requests share one boundary. A block is not accepted until
 the command FIFO, parser, and pending dispatcher work are drained. No typed
 simulation port can install state behind that boundary.
 
+The common RTL memory render harness submits `MAX_BLOCK_FRAMES` on every normal
+request and uses a shorter request only for the final tail of a render. MIDI and
+MCU control events are applied at the next block boundary; they do not split a
+block. This deliberately bounds control latency by one block so musical event
+placement cannot distort renderer throughput qualification.
+
+## Deadline Boundary
+
+Renderer service time starts on `block_req_valid && block_req_ready` and ends
+when `block_complete_valid` first publishes the result. At 100 MHz and 48 kHz,
+the deadline for an accepted request is `frame_count * 100000000 / 48000`
+clocks. A renderer deadline miss means the RTL and selected memory backend could
+not publish that block within its audio duration and can therefore starve the
+downstream effects/FIFO/I2S path.
+
+Time spent waiting for the block request handshake is not renderer work. It can
+include command FIFO/parser drain or ownership of a prior output bank and is
+reported separately as request-wait latency. With RTL effects enabled, render
+to mix-buffer release is a third boundary; it measures output-pipeline ownership
+and must not replace the renderer deadline.
+
 ## State Ownership
 
 | State | Owner |

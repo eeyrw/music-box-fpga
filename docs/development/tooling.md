@@ -38,7 +38,7 @@ interfaces:
 | --- | --- | --- |
 | GNU Make | `make <target>` | Orchestrates shared parameters, source lists, output directories, and tools. |
 | Documentation checker | `make check-docs` | Validates local links, path-like code spans, and index coverage. |
-| Verilator | `make lint`, `make test-*`, `make render-rtl-ddr3` | Lints synthesizable RTL, builds self-checking SystemVerilog tests, and builds RTL render harnesses. |
+| Verilator | `make lint`, `make test-*`, `make render-rtl-*` | Lints synthesizable RTL, builds self-checking SystemVerilog tests, and builds RTL memory-backend render harnesses. |
 | C++ compiler | `make test-cpp-unit`, `make render-reference`, host targets | Builds parser/model tests, the bit-exact reference synth, and CH347 utilities. |
 | Vivado 2025.2 | `make vivado-*` | Creates the Smart Artix project, synthesizes, implements, writes reports/bitstream, and programs SRAM. |
 | FluidSynth and FFmpeg | `tools/compare_reference_fluidsynth.py` | Optional external listening/numeric comparison; not an RTL golden model. |
@@ -67,8 +67,11 @@ source update, not a harmless check.
 | Entry point | Purpose |
 | --- | --- |
 | `make render-reference` | Pure C++ integer reference using the production command words and host policy. |
+| `make render-rtl-memory RENDER_MEMORY=<backend>` | Shared implementation target for the RTL memory render harness; normally use one of the backend-specific entries below. |
 | `make render-rtl-direct` | Fast functional Verilator render using the production voice/block configuration and simulation-only direct line memory. |
 | `make render-rtl-ddr3` | Verilated production renderer with timed DDR3 and WAV/JSON output. |
+| `make render-rtl-qspi` | The same renderer and report contract with the timed QSPI NOR backend. |
+| `make render-rtl-parallel-nor` | The same renderer and report contract with the timed x16 parallel NOR backend. |
 | `tools/analyze_render_artifacts.py` | Finds PCM transients and correlates them with MIDI/control timing. |
 | `tools/analyze_sf2_access_span.py` | Models SF2/MIDI phase steps, loop wraps, and address locality; see [`../verification/sf2_access_span_analysis.md`](../verification/sf2_access_span_analysis.md). |
 | `make analyze-polyphony-stress` | Generates the deterministic stress MIDI and writes its complete SF2 access JSON/Markdown reports. |
