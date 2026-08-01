@@ -389,12 +389,11 @@ change.
 
 ### Size-Guided Choice
 
-The compiler should support at least two policies:
-
-- `compact`: interval dispatch, shared source tables, and small fixed-point
-  runtime programs;
-- `precomputed`: additionally materialize note/key/velocity tables when doing
-  so removes MCU multiplies or branches within the configured image budget.
+The compiler should support at least two policies. The implemented
+`direct-v1` policy keeps interval dispatch and materialized START commands for
+minimum Note On work. The planned `compact-v2` policy keeps bounded dispatch
+but replaces per-key START commands with shared candidate recipes and performs
+fixed, integer-only command construction at Note On.
 
 Both policies must produce the same selected layers and command-visible
 quantized results. The build report compares their size and worst-case
@@ -849,6 +848,271 @@ the isolated target and the subsequent complete run both passed. No file under
 `rtl/` changed. Board bundle validation and target-MCU qualification remain open
 and keep the Phase 4/5 hardware exit gates unsatisfied.
 
+## Compact MSF2 Extension
+
+The 4,450,632-byte bank-zero SGM image is a speed-first reference, not a
+metadata lower bound. Selecting only 128 presets removes unreachable SF2
+objects, but `direct-v1` then expands every playable candidate/key combination
+into a descriptor and nearly complete START command. That is the correct
+tradeoff for establishing a simple bounded runtime, but it spends external
+flash to avoid work that occurs only at Note On rate.
+
+### Measured Direct-V1 Size
+
+The production SGM bank-zero image has the following byte accounting. The
+26-byte difference from the image total is section alignment padding.
+
+| Group | Bytes | Image share | Reason retained |
+| --- | ---: | ---: | --- |
+| START words | 2,300,568 | 51.69% | 575,142 prepacked command words |
+| mono descriptors | 732,500 | 16.46% | 36,625 candidate/key records |
+| semantic presets/candidates/generators/modulators/samples | 716,002 | 16.09% | verification and reconstruction data |
+| preset/key/span/layer dispatch | 481,572 | 10.82% | bounded Note On selection |
+| programs, curves, and runtime configurations | 219,620 | 4.93% | live modulation and descriptor references |
+| header and directory | 344 | 0.01% | identity and checked section views |
+
+The average key-specific descriptor references 15.7 START words. Exact whole
+image compression confirms that the expanded representation contains large
+structural redundancy: the 4,450,632-byte image becomes 529,488 bytes with
+`gzip -9`, 441,329 bytes with `zstd -3`, 419,022 bytes with `zstd -9`, and
+393,695 bytes with `zstd -19`. These are diagnostic lower-bound observations,
+not proposed MCU formats. A monolithic compressed stream would remove bounded
+random access and require memory for the complete 4.45 MB expansion, which is
+not acceptable for an RP2040-class design.
+
+### Layout Selection And Compatibility
+
+Layout is separate from the numeric output profile. Both layouts use
+`generic-le32-48k-tick48-v13` and must emit identical command words:
+
+- `direct-v1` remains readable and is the latency/reference baseline;
+- `compact-v2` uses a new format version because its required sections and
+  record meanings differ from version 1;
+- the compiler accepts an explicit `--layout direct|compact`; it never silently
+  changes layout because an image exceeds a heuristic size;
+- the host verifier supports both during migration, while target firmware may
+  compile in only the deployed reader;
+- format, layout, source SF2 identity, preset-selection digest, numeric profile,
+  and command interface remain fail-closed header checks;
+- there is no MCU fallback from a rejected compact image to runtime SF2 parsing.
+
+No compact layout field is visible to the FPGA. Sample addresses, command
+payloads, WTSF contents, and every RTL interface remain unchanged.
+
+### Compact-V2 Logical Sections
+
+Compact version 2 is a deployment image, not a serialization of the compiler's
+semantic IR. It should contain only these runtime classes:
+
+1. A sorted sparse preset directory and one compact key directory per preset.
+2. Preset-local velocity spans and ordered candidate references.
+3. Normalized candidate recipes containing the immutable values needed to
+   construct one mono START command.
+4. Interned sample-window, volume-envelope, initial-filter, runtime-config, and
+   modulation-program tables where measurements show net savings.
+5. Shared fixed-point conversion tables required by candidate materialization.
+6. Source/wave identity, section bounds, declared maxima, and CRC data.
+
+The Phase 1 semantic preset, generator, raw modulator, and sample-header
+sections are compiler/verifier evidence and are omitted from `compact-v2`.
+Offline verification compares the compact result with the semantic IR before
+writing the deployment image. Runtime modulation retains only the already
+interned typed programs and terms; it never reconstructs an SF2 modulator map.
+
+### Compact Dispatch Encoding
+
+The current eight-byte key and velocity records favor simple aligned reads.
+Version 2 may use preset-local 16-bit indices because the measured bank-zero
+closure is far below 65,536 candidates, spans, and layer references per preset.
+The compiler must reject an overflow; it must not truncate or silently switch
+record interpretation.
+
+The reference encoding should evaluate this representation:
+
+- each preset owns 129 cumulative key-boundary entries, allowing the count for
+  key `k` to be derived from boundaries `k` and `k + 1`;
+- each key boundary supplies preset-local span and layer cursors;
+- a velocity span stores only its inclusive upper velocity and layer count;
+  its lower velocity and first layer follow from the preceding span;
+- a layer reference is a 16-bit candidate-recipe ID in the reference closure;
+- empty keys retain a valid pair of equal boundaries and require no special
+  allocation or sentinel pointer.
+
+This keeps lookup bounded by one preset search, two key-boundary reads, a small
+velocity-span search, and at most the declared four layers. It does not scan
+the 3,658 candidates or 49,229 generators.
+
+### Candidate Recipe
+
+A recipe represents one fully resolved SF2 candidate before key-dependent
+output conversion. It contains fixed-width IDs and numeric fields only:
+
+- sample-window ID, loop mode, and stereo adjacency/routing policy;
+- root pitch, pitch correction, scale tuning, and base phase inputs;
+- base gain, pan, file attenuation policy, and effective-velocity override;
+- volume-envelope timecents, sustain, key scaling, and presence flags;
+- initial filter inputs and optional precomputed base coefficient ID;
+- modulation-envelope and LFO configuration ID;
+- gain, pitch, and filter program IDs and dependency masks;
+- exclusive class and preset-local allocation identity;
+- exact START optional-section flags.
+
+At Note On, the runtime copies one recipe into a fixed local structure,
+computes key-dependent phase and FPGA envelope fields with generated integer
+tables, evaluates the same initial modulation policy, and packs at most 17
+command words into `FixedCommand`. Voice ID and generation are applied last.
+The runtime must not allocate, parse generators, call a transcendental
+function, or retain a pointer into an evictable metadata cache.
+
+The compiler should compare three recipe representations before freezing the
+v2 record layout:
+
+- one fixed record per candidate;
+- a small fixed candidate record plus one-level interned sample/envelope/filter
+  records;
+- a fixed candidate base plus compact per-key patches only for values whose
+  integer reconstruction is slower or larger than a patch.
+
+The selected representation is the smallest one meeting the measured cold
+Note On budget. Reference depth is limited to one shared-record lookup beyond
+the candidate; chains of interned records are forbidden.
+
+### Integer Materialization Kernel
+
+Space reduction moves a deliberately bounded set of calculations back to Note
+On. Generated fixed-point tables or integer interpolation must cover:
+
+- timecents to sample counts and envelope steps;
+- root-key, correction, scale-tuning, and output-rate phase conversion;
+- base attenuation and pan conversion;
+- initial filter selection or coefficient lookup;
+- patching the optional START payload layout.
+
+These calculations use the same rounding and saturation policy already checked
+against `McuModel`. A compact image is invalid if it requires an unsupported
+formula or an out-of-range intermediate. Direct and compact command streams
+must be bit exact; a size win does not authorize a new numeric tolerance.
+
+The added work belongs only to Note On and cold preset acquisition. Periodic
+gain, pitch, and filter evaluation continues to use the same interned programs
+and fixed active-voice state as `direct-v1`.
+
+### Optional Block Compression
+
+Structural compaction is implemented and measured before adding a codec. If
+raw `compact-v2` still exceeds the selected flash budget, the compiler may
+encode preset-local Note On data as independently decodable blocks.
+
+The block design must satisfy all of the following:
+
+- a small uncompressed directory locates every block and records compressed
+  size, expanded size, and CRC;
+- no block requires a history window from another block;
+- maximum expanded block size is declared and checked before firmware starts;
+- runtime modulation programs/configurations and source identity remain in an
+  uncompressed directly accessible section;
+- a started voice copies every later-needed immutable ID/value into fixed voice
+  state, so a recipe block may be evicted immediately after Note On;
+- program change may prefetch, but correctness cannot depend on prefetch
+  completing before the first Note On;
+- the fixed cache has explicit entry count, replacement policy, hit/miss
+  counters, and a fail-closed corrupt-block path;
+- codec workspace, stack, and worst-case decode time are part of the manifest
+  and target qualification.
+
+LZ4 block, heatshrink, and an uncompressed baseline should be compared after an
+MCU is selected. Zstd results above establish compressibility but do not select
+zstd for firmware. Codec support is accepted only if it saves at least 25% over
+raw compact data after indexes while meeting cold Note On and SRAM limits.
+
+### Size And Performance Budgets
+
+For the exact SGM source, `gm_bank0.txt`, and reference output profile:
+
+- mandatory raw `compact-v2` acceptance ceiling: 1,500,000 bytes;
+- raw compact design target: 1,000,000 bytes or less;
+- optional block-compressed target: 768 KiB or less;
+- maximum selected layers remains four;
+- command buffer remains 17 words with no heap allocation;
+- the build report must list logical and stored bytes per section, record
+  counts/strides, interning savings, index widths, and largest cold-read block;
+- the benchmark must report direct versus compact cold/warm Note On latency,
+  storage reads, bytes read, and commands emitted for the same trace.
+
+The size ceilings are portable compiler gates. Timing, cache size, and codec
+acceptance remain target-dependent until the MCU and flash interface are fixed.
+If exact command equivalence cannot fit the mandatory ceiling, the compiler
+must report the responsible sections and stop; it must not weaken SoundFont
+behavior implicitly.
+
+## Compact Implementation Phases
+
+### Phase 6: Accounting And Deployment-Only Image
+
+- [ ] Add exact per-section byte accounting and direct/compact comparison to
+  the JSON manifest.
+- [ ] Separate verification-only semantic sections from runtime-required data.
+- [ ] Define the `compact-v2` header, layout ID, required-section set, and
+  independent malformed-image tests while preserving `direct-v1` reading.
+- [ ] Emit a first compact image without semantic sections and remap descriptors
+  directly to interned program/configuration IDs.
+- [ ] Re-run deterministic-build, source-mismatch, selection-mismatch, and CRC
+  tests on both layouts.
+
+Exit gate: byte-identical repeat builds, exact direct/compact selected layers,
+and a compact intermediate below 3,750,000 bytes for SGM bank zero.
+
+### Phase 7: Candidate Recipes And Compact Dispatch
+
+- [ ] Implement preset-local cumulative key boundaries, compact velocity spans,
+  and checked 16-bit candidate references.
+- [ ] Define and generate normalized candidate recipes with at most one level
+  of shared-record indirection.
+- [ ] Implement the fixed-capacity integer materialization kernel and construct
+  START commands without stored START word arrays.
+- [ ] Add a small optional immutable-recipe cache keyed by candidate/key; report
+  its SRAM cost separately and keep correctness independent of it.
+- [ ] Exhaust every selected preset/key/velocity against `direct-v1`, including
+  layer order and START words before live channel patching.
+
+Exit gate: the SGM raw compact image is no larger than 1,500,000 bytes, targets
+1,000,000 bytes, performs no heap allocation or semantic-object scan, and emits
+bit-exact commands and reference PCM on checked and SGM traces.
+
+### Phase 8: Optional Preset-Local Compression
+
+- [ ] Measure uncompressed, LZ4-block, and heatshrink preset-local payloads with
+  complete index and padding overhead included.
+- [ ] Implement independently checked blocks and a fixed read/decode cache only
+  if the measured saving is at least 25%.
+- [ ] Add program-change prefetch, cold-first-note, corrupt-block, truncated-
+  block, cache-thrash, and multitimbral tests.
+- [ ] Prove that active voices retain no pointer/reference into evictable block
+  storage.
+- [ ] Report decoder code size, workspace, stack, expanded-block maximum, and
+  cold/warm bytes read.
+
+Exit gate: adopt a codec only when it meets the selected MCU's latency/SRAM
+budget and materially improves on raw compact. Otherwise ship raw compact and
+record Phase 8 as measured but rejected.
+
+### Phase 9: Deployment Qualification
+
+- [ ] Select `direct-v1` or `compact-v2` explicitly in the product bundle and
+  record the choice in its manifest.
+- [ ] Run exact command/PCM comparisons on complete checked-in MIDI workloads
+  and representative SGM bank/program changes.
+- [ ] Measure target cold/warm Note On, controller tick, cache behavior, flash
+  traffic, stack, SRAM high-water, and command age.
+- [ ] Verify atomic sidecar/WTSF installation and mismatch rejection on the
+  board.
+- [ ] Promote compact layout documentation from backlog to stable tooling/host
+  contracts only after the selected target passes.
+
+Exit gate: the chosen deployment image meets its flash, SRAM, timing, and
+integrity budgets on hardware. `direct-v1` remains a supported diagnostic
+baseline; compact deployment still causes no production RTL change.
+
 ## Completion Criteria
 
 This backlog is complete only when:
@@ -860,6 +1124,14 @@ This backlog is complete only when:
   capacities and measured worst-case work;
 - command-visible numeric behavior is exact or has an explicitly approved and
   tested fixed-point error contract;
+- `direct-v1` and `compact-v2` produce bit-exact command streams and reference
+  PCM for the same compiler profile, MIDI input, and event schedule;
+- the selected compact deployment image satisfies its declared raw or
+  block-compressed size ceiling with all indexes, padding, and integrity data
+  included;
+- any block-compressed deployment has measured fixed decoder/cache memory
+  bounds, bounded cold-note work, and no active-voice reference into evictable
+  storage;
 - complete MIDI traces preserve layer order, voice lifecycle, generation,
   controller behavior, and linked-stereo adjacency;
 - target-MCU timing and memory measurements satisfy the chosen product profile;
