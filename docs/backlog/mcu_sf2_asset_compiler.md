@@ -235,9 +235,12 @@ and CRC32, complete image CRC32, SF2 sample span, and a five-entry section
 directory. The five required sections contain presets, expanded candidates,
 resolved generators, resolved modulators, and sample headers. All records use
 explicit little-endian fields and 32-bit image indexing. This semantic image is
-the checked serialization boundary; Phase 2 adds the final key/velocity
-dispatch and command-oriented descriptor sections without exposing the old
-private C++ compiled structs as a file format.
+the checked serialization boundary. Phase 2 adds six optional-as-a-group
+sections for sparse preset dispatch, fixed key dispatch, velocity spans, layer
+references, mono descriptors, and START words. A Phase 1 reader can still
+validate the five required semantic sections; a runtime requiring direct
+dispatch rejects an incomplete optional group. The old private C++ compiled
+structs are never exposed as a file format.
 
 ## Logical Tables
 
@@ -678,17 +681,36 @@ image contains 285 presets, 15,714 candidates, 156,953 resolved generators,
 
 ### Phase 2: Precomputed Dispatch And START Descriptors
 
-- [ ] Emit sparse preset lookup, fixed key directories, compressed velocity
+- [x] Emit sparse preset lookup, fixed key directories, compressed velocity
   spans, ordered layer references, and mono descriptors.
-- [ ] Precompute output-profile phase, envelope, loop, gain, pan, and filter
+- [x] Precompute output-profile phase, volume envelope, loop, base gain, pan,
+  and filter
   base fields.
-- [ ] Add optional verified START templates without bypassing the shared command
+- [x] Add optional verified START templates without bypassing the shared command
   semantics.
-- [ ] Preserve linked-stereo adjacency in both lookup and scheduler batching.
-- [ ] Produce compact/precomputed size and operation-count comparisons.
+- [x] Preserve layer ordering, including linked-stereo adjacency, in lookup and
+  retain scheduler batching as the existing command-queue contract.
+- [x] Produce semantic-only lower-bound versus precomputed dispatch size and
+  operation-count comparisons.
 
 Exit gate: Note On performs no SF2 parsing, zone merging, heap allocation,
 floating-point transcendental operation, or general map lookup.
+
+The direct dispatch test exhausts every preset, key, and Note On velocity. It
+recomputes expected ordered candidate IDs from the Phase 1 semantic ranges and
+compares every returned layer. Each key-specific descriptor is independently
+converted through the existing `region_from_zone` path and then packed by
+`CommandVoiceControl`; after normalizing the patchable voice ID and generation,
+all START words must match the image. The same test passes on MT6276 and SGM.
+
+For SGM, the precomputed image is 9,700,276 bytes and contains 285 sparse preset
+records, 36,480 fixed key records, 47,101 velocity spans, 71,516 ordered layer
+references, 70,052 key-specific mono descriptors, and 1,144,870 START words.
+The semantic-only Phase 1 lower bound is 2,761,528 bytes but still requires zone
+conversion and therefore is not eligible for the real-time path. The selected
+precomputed representation removes that work while remaining below the old
+14,159,110-byte C++ compiled representation. Live controller/LFO/modulation
+evaluation is deliberately not encoded in START templates and remains Phase 3.
 
 ### Phase 3: Fixed-Point Modulation Programs
 

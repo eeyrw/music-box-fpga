@@ -1,5 +1,6 @@
 #include "mcu_sf2_asset.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,10 @@ void write_file(const std::string& path, const std::vector<uint8_t>& data) {
 void write_report(const char* action, const std::string& asset_path,
                   const render::McuSf2AssetView& view, size_t image_size,
                   bool source_checked) {
+  uint16_t maximum_layers = 0;
+  for (size_t index = 0; index < view.velocity_span_count(); ++index) {
+    maximum_layers = std::max(maximum_layers, view.velocity_span(index).layer_count);
+  }
   std::cout << "{\n"
             << "  \"schema\": \"mcu-sf2-asset-report-v1\",\n"
             << "  \"action\": \"" << action << "\",\n"
@@ -56,7 +61,14 @@ void write_report(const char* action, const std::string& asset_path,
             << "  \"candidates\": " << view.candidate_count() << ",\n"
             << "  \"generators\": " << view.generator_count() << ",\n"
             << "  \"modulators\": " << view.modulator_count() << ",\n"
-            << "  \"samples\": " << view.sample_count() << "\n"
+            << "  \"samples\": " << view.sample_count() << ",\n"
+            << "  \"preset_dispatch\": " << view.preset_dispatch_count() << ",\n"
+            << "  \"key_dispatch\": " << view.key_dispatch_count() << ",\n"
+            << "  \"velocity_spans\": " << view.velocity_span_count() << ",\n"
+            << "  \"layer_references\": " << view.layer_reference_count() << ",\n"
+            << "  \"mono_descriptors\": " << view.mono_descriptor_count() << ",\n"
+            << "  \"start_words\": " << view.start_word_count() << ",\n"
+            << "  \"maximum_layers\": " << maximum_layers << "\n"
             << "}\n";
 }
 

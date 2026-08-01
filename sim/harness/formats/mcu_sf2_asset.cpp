@@ -7,6 +7,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -19,7 +20,14 @@ constexpr uint32_t kCandidateStride = 24;
 constexpr uint32_t kGeneratorStride = 4;
 constexpr uint32_t kModulatorStride = 10;
 constexpr uint32_t kSampleStride = 28;
-constexpr size_t kSectionCount = 5;
+constexpr uint32_t kPresetDispatchStride = 12;
+constexpr uint32_t kKeyDispatchStride = 8;
+constexpr uint32_t kVelocitySpanStride = 8;
+constexpr uint32_t kLayerReferenceStride = 4;
+constexpr uint32_t kMonoDescriptorStride = 20;
+constexpr uint32_t kStartWordStride = 4;
+constexpr size_t kSemanticSectionCount = 5;
+constexpr size_t kKnownSectionCount = 11;
 
 uint16_t read_u16(const uint8_t* data) {
   return uint16_t(data[0]) | (uint16_t(data[1]) << 8);
@@ -104,9 +112,168 @@ uint32_t checked_u32(size_t value, const char* label) {
 struct SectionBuild {
   McuSf2AssetSection type;
   uint32_t stride;
+  uint16_t flags = 0;
   uint32_t offset = 0;
   uint32_t count = 0;
 };
+
+struct DispatchBuild {
+  std::vector<McuSf2PresetDispatch> presets;
+  std::vector<McuSf2KeyDispatch> keys;
+  std::vector<McuSf2VelocitySpan> spans;
+  std::vector<uint32_t> layers;
+  std::vector<McuSf2MonoDescriptor> descriptors;
+  std::vector<uint32_t> start_words;
+};
+
+uint32_t pack_pair(int high, int low) {
+  return (uint32_t(uint16_t(high)) << 16) | uint32_t(uint16_t(low));
+}
+
+uint32_t ceil_step(uint64_t distance, uint32_t duration) {
+  if (duration == 0) return 0;
+  return uint32_t(std::min<uint64_t>(0xffffffffu,
+                                    (distance + duration - 1u) / duration));
+}
+
+std::vector<uint32_t> start_template(const Region& region) {
+  constexpr uint32_t kSilenceCbQ12_20 = 1000u << 20;
+  const auto& env = region.volume_envelope;
+  const bool has_loop = region.loop_mode != 0;
+  const bool has_filter = region.filter_enable;
+  const bool has_envelope = env.delay_samples != 0 || env.attack_samples != 0 ||
+      env.hold_samples != 0 || env.decay_samples != 0 ||
+      env.sustain_cb_q12_20 != 0 || env.release_samples != 0;
+  uint8_t flags = uint8_t(region.loop_mode & 3);
+  if (has_filter) flags |= 1u << 2;
+  if (has_envelope) flags |= 1u << 3;
+
+  std::vector<uint32_t> words;
+  words.reserve(17);
+  words.push_back(0);
+  words.push_back(1);  // Voice zero and generation one are patchable template values.
+  words.push_back(region.base_addr);
+  words.push_back(region.length);
+  if (has_loop) {
+    words.push_back(region.loop_start);
+    words.push_back(region.loop_end);
+  }
+  words.push_back(region.phase_inc);
+  words.push_back(pack_pair(region.gain_r, region.gain_l));
+  if (has_filter) {
+    words.push_back(pack_pair(region.filter_b1, region.filter_b0));
+    words.push_back(pack_pair(region.filter_a1, region.filter_b2));
+    words.push_back(uint32_t(uint16_t(region.filter_a2)) | 0x00010000u);
+  }
+  if (has_envelope) {
+    words.push_back(env.delay_samples);
+    words.push_back(ceil_step(0xffffffffu, env.attack_samples));
+    words.push_back(env.hold_samples);
+    words.push_back(ceil_step(env.sustain_cb_q12_20, env.decay_samples));
+    words.push_back(env.sustain_cb_q12_20);
+    words.push_back(ceil_step(kSilenceCbQ12_20, env.release_samples));
+  }
+  words[0] = (0x10u << 24) | (uint32_t(flags) << 8) | uint32_t(words.size() - 1);
+  return words;
+}
+
+DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic,
+                             const McuSf2AssetProfile& profile) {
+  DispatchBuild result;
+  std::map<std::pair<uint16_t, uint16_t>, uint32_t> preset_index;
+  for (uint32_t index = 0; index < semantic.presets.size(); ++index) {
+    const auto& preset = semantic.presets[index];
+    preset_index.emplace(std::make_pair(preset.bank, preset.program), index);
+  }
+
+  for (const auto& entry : preset_index) {
+    const uint32_t semantic_preset_index = entry.second;
+    const auto& preset = semantic.presets.at(semantic_preset_index);
+    McuSf2PresetDispatch dispatch;
+    dispatch.program = preset.program;
+    dispatch.bank = preset.bank;
+    dispatch.semantic_preset = semantic_preset_index;
+    dispatch.first_key = checked_u32(result.keys.size(), "key dispatch offset");
+    result.presets.push_back(dispatch);
+
+    for (int key = 0; key < 128; ++key) {
+      struct CandidateLayer {
+        const Sf2SemanticCandidate* candidate = nullptr;
+        uint32_t descriptor = 0;
+      };
+      std::vector<CandidateLayer> candidates;
+      std::array<bool, 129> breakpoints{};
+      breakpoints[1] = true;
+      breakpoints[128] = true;
+      for (uint32_t local = 0; local < preset.candidate_count; ++local) {
+        const uint32_t global = preset.first_candidate + local;
+        const auto& candidate = semantic.candidates.at(global);
+        if (key < candidate.key_low || key > candidate.key_high ||
+            candidate.velocity_high < 1) {
+          continue;
+        }
+        const Region region = make_region_for_compiled_candidate(
+            sf2, semantic_preset_index, local, key,
+            int(profile.sample_rate), int(profile.control_tick_samples));
+        const std::vector<uint32_t> words = start_template(region);
+        McuSf2MonoDescriptor descriptor;
+        descriptor.semantic_candidate = global;
+        descriptor.first_start_word = checked_u32(result.start_words.size(),
+                                                  "START word offset");
+        descriptor.start_word_count = uint8_t(words.size());
+        descriptor.key = uint8_t(key);
+        descriptor.exclusive_class = uint8_t(region.exclusive_class);
+        descriptor.effective_velocity = int8_t(region.effective_velocity);
+        descriptor.base_gain = uint16_t(region.base_gain);
+        descriptor.pan = int16_t(region.pan);
+        const uint32_t descriptor_index = checked_u32(result.descriptors.size(),
+                                                      "mono descriptor index");
+        result.descriptors.push_back(descriptor);
+        result.start_words.insert(result.start_words.end(), words.begin(), words.end());
+        candidates.push_back({&candidate, descriptor_index});
+        breakpoints[std::max<int>(1, candidate.velocity_low)] = true;
+        if (candidate.velocity_high < 127) {
+          breakpoints[size_t(candidate.velocity_high + 1)] = true;
+        }
+      }
+
+      McuSf2KeyDispatch key_dispatch;
+      key_dispatch.first_span = checked_u32(result.spans.size(), "velocity span offset");
+      std::vector<uint32_t> previous_layers;
+      for (int low = 1; low < 128;) {
+        int next = low + 1;
+        while (next < 128 && !breakpoints[size_t(next)]) ++next;
+        std::vector<uint32_t> selected;
+        for (const auto& candidate : candidates) {
+          if (low >= candidate.candidate->velocity_low &&
+              low <= candidate.candidate->velocity_high) {
+            selected.push_back(candidate.descriptor);
+          }
+        }
+        if (!result.spans.empty() && key_dispatch.span_count != 0 &&
+            selected == previous_layers) {
+          result.spans.back().velocity_high = uint8_t(next - 1);
+        } else {
+          McuSf2VelocitySpan span;
+          span.velocity_low = uint8_t(low);
+          span.velocity_high = uint8_t(next - 1);
+          span.first_layer = checked_u32(result.layers.size(), "layer reference offset");
+          if (selected.size() > std::numeric_limits<uint16_t>::max()) {
+            throw std::runtime_error("velocity span exceeds 16-bit layer count");
+          }
+          span.layer_count = uint16_t(selected.size());
+          result.layers.insert(result.layers.end(), selected.begin(), selected.end());
+          result.spans.push_back(span);
+          ++key_dispatch.span_count;
+          previous_layers = std::move(selected);
+        }
+        low = next;
+      }
+      result.keys.push_back(key_dispatch);
+    }
+  }
+  return result;
+}
 
 void align_four(std::vector<uint8_t>& data) {
   while ((data.size() & 3u) != 0) data.push_back(0);
@@ -153,14 +320,21 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
     throw std::runtime_error("invalid MCU SF2 asset profile");
   }
   const Sf2SemanticData semantic = compile_sf2_semantics(sf2);
+  const DispatchBuild dispatch = build_dispatch(sf2, semantic, profile);
   std::vector<uint8_t> image(kMcuSf2AssetHeaderSize +
-                             kSectionCount * kMcuSf2AssetSectionEntrySize, 0);
-  std::array<SectionBuild, kSectionCount> sections{{
-      {McuSf2AssetSection::kPresets, kPresetStride},
-      {McuSf2AssetSection::kCandidates, kCandidateStride},
-      {McuSf2AssetSection::kGenerators, kGeneratorStride},
-      {McuSf2AssetSection::kModulators, kModulatorStride},
-      {McuSf2AssetSection::kSamples, kSampleStride},
+                             kKnownSectionCount * kMcuSf2AssetSectionEntrySize, 0);
+  std::array<SectionBuild, kKnownSectionCount> sections{{
+      {McuSf2AssetSection::kPresets, kPresetStride, 1},
+      {McuSf2AssetSection::kCandidates, kCandidateStride, 1},
+      {McuSf2AssetSection::kGenerators, kGeneratorStride, 1},
+      {McuSf2AssetSection::kModulators, kModulatorStride, 1},
+      {McuSf2AssetSection::kSamples, kSampleStride, 1},
+      {McuSf2AssetSection::kPresetDispatch, kPresetDispatchStride, 0},
+      {McuSf2AssetSection::kKeyDispatch, kKeyDispatchStride, 0},
+      {McuSf2AssetSection::kVelocitySpans, kVelocitySpanStride, 0},
+      {McuSf2AssetSection::kLayerReferences, kLayerReferenceStride, 0},
+      {McuSf2AssetSection::kMonoDescriptors, kMonoDescriptorStride, 0},
+      {McuSf2AssetSection::kStartWords, kStartWordStride, 0},
   }};
 
   auto start_section = [&](size_t section, size_t count) {
@@ -219,6 +393,48 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
     append_u16(image, sample.sample_type);
     append_u16(image, 0);
   }
+
+  start_section(5, dispatch.presets.size());
+  for (const auto& preset : dispatch.presets) {
+    append_u16(image, preset.program);
+    append_u16(image, preset.bank);
+    append_u32(image, preset.semantic_preset);
+    append_u32(image, preset.first_key);
+  }
+
+  start_section(6, dispatch.keys.size());
+  for (const auto& key : dispatch.keys) {
+    append_u32(image, key.first_span);
+    append_u16(image, key.span_count);
+    append_u16(image, 0);
+  }
+
+  start_section(7, dispatch.spans.size());
+  for (const auto& span : dispatch.spans) {
+    image.push_back(span.velocity_low);
+    image.push_back(span.velocity_high);
+    append_u16(image, span.layer_count);
+    append_u32(image, span.first_layer);
+  }
+
+  start_section(8, dispatch.layers.size());
+  for (uint32_t descriptor : dispatch.layers) append_u32(image, descriptor);
+
+  start_section(9, dispatch.descriptors.size());
+  for (const auto& descriptor : dispatch.descriptors) {
+    append_u32(image, descriptor.semantic_candidate);
+    append_u32(image, descriptor.first_start_word);
+    image.push_back(descriptor.start_word_count);
+    image.push_back(descriptor.key);
+    image.push_back(descriptor.exclusive_class);
+    image.push_back(uint8_t(descriptor.effective_velocity));
+    append_u16(image, descriptor.base_gain);
+    append_u16(image, uint16_t(descriptor.pan));
+    append_u32(image, 0);
+  }
+
+  start_section(10, dispatch.start_words.size());
+  for (uint32_t word : dispatch.start_words) append_u32(image, word);
   align_four(image);
 
   if (image.size() > std::numeric_limits<uint32_t>::max()) {
@@ -234,7 +450,7 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
   write_u64(image, 24, source_size_bytes);
   write_u32(image, 32, sf2_source_crc32(sf2, source_size_bytes));
   write_u32(image, 40, uint32_t(kMcuSf2AssetSectionDirectoryOffset));
-  write_u16(image, 44, uint16_t(kSectionCount));
+  write_u16(image, 44, uint16_t(kKnownSectionCount));
   write_u32(image, 48, sf2.smpl_word_offset);
   write_u32(image, 52, sf2.smpl_word_count);
   write_u32(image, 56, crc32_string(profile.id));
@@ -244,7 +460,7 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
     const size_t offset = kMcuSf2AssetSectionDirectoryOffset +
                           index * kMcuSf2AssetSectionEntrySize;
     write_u16(image, offset, uint16_t(sections[index].type));
-    write_u16(image, offset + 2, 1);
+    write_u16(image, offset + 2, sections[index].flags);
     write_u32(image, offset + 4, sections[index].offset);
     write_u32(image, offset + 8, sections[index].count);
     write_u32(image, offset + 12, sections[index].stride);
@@ -292,16 +508,19 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   const uint32_t directory_offset = read_u32(data + 40);
   const uint16_t section_count = read_u16(data + 44);
   if (directory_offset != kMcuSf2AssetSectionDirectoryOffset ||
-      section_count != kSectionCount ||
+      section_count < kSemanticSectionCount ||
       uint64_t(directory_offset) + uint64_t(section_count) * kMcuSf2AssetSectionEntrySize > size) {
     throw std::runtime_error("invalid MCU SF2 asset section directory");
   }
 
-  const std::array<uint32_t, kSectionCount> expected_strides = {
-      kPresetStride, kCandidateStride, kGeneratorStride, kModulatorStride, kSampleStride};
+  const std::array<uint32_t, kKnownSectionCount> expected_strides = {
+      kPresetStride, kCandidateStride, kGeneratorStride, kModulatorStride,
+      kSampleStride, kPresetDispatchStride, kKeyDispatchStride,
+      kVelocitySpanStride, kLayerReferenceStride, kMonoDescriptorStride,
+      kStartWordStride};
   uint64_t previous_end = kMcuSf2AssetHeaderSize +
-                          kSectionCount * kMcuSf2AssetSectionEntrySize;
-  std::array<bool, kSectionCount> seen{};
+                          uint64_t(section_count) * kMcuSf2AssetSectionEntrySize;
+  std::array<bool, kKnownSectionCount> seen{};
   for (size_t index = 0; index < section_count; ++index) {
     const uint8_t* entry = data + directory_offset + index * kMcuSf2AssetSectionEntrySize;
     const uint16_t raw_type = read_u16(entry);
@@ -309,24 +528,41 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
     const uint32_t offset = read_u32(entry + 4);
     const uint32_t count = read_u32(entry + 8);
     const uint32_t stride = read_u32(entry + 12);
-    if (raw_type == 0 || raw_type > kSectionCount || seen[raw_type - 1] || flags != 1) {
-      throw std::runtime_error("invalid or duplicate MCU SF2 asset section type");
-    }
-    const size_t slot = raw_type - 1;
-    if (stride != expected_strides[slot] || (offset & 3u) != 0) {
+    if (raw_type == 0 || flags > 1 || stride == 0 || (offset & 3u) != 0) {
       throw std::runtime_error("invalid MCU SF2 asset section stride/alignment");
     }
     const uint64_t end = uint64_t(offset) + uint64_t(count) * stride;
     if (offset < previous_end || end > size) {
       throw std::runtime_error("overlapping or out-of-bounds MCU SF2 asset section");
     }
-    sections_[slot] = {data + offset, count, stride};
-    seen[slot] = true;
+    if (raw_type <= kKnownSectionCount) {
+      const size_t slot = raw_type - 1;
+      if (seen[slot] || stride != expected_strides[slot]) {
+        throw std::runtime_error("invalid or duplicate MCU SF2 asset section type");
+      }
+      if ((slot < kSemanticSectionCount && flags != 1) ||
+          (slot >= kSemanticSectionCount && flags != 0)) {
+        throw std::runtime_error("invalid MCU SF2 asset section requirement flag");
+      }
+      sections_[slot] = {data + offset, count, stride};
+      seen[slot] = true;
+    } else if (flags != 0) {
+      throw std::runtime_error("unknown required MCU SF2 asset section");
+    }
     previous_end = end;
   }
-  if (std::find(seen.begin(), seen.end(), false) != seen.end()) {
+  if (std::find(seen.begin(), seen.begin() + kSemanticSectionCount, false) !=
+      seen.begin() + kSemanticSectionCount) {
     throw std::runtime_error("missing required MCU SF2 asset section");
   }
+  const bool any_dispatch = std::find(seen.begin() + kSemanticSectionCount,
+                                      seen.end(), true) != seen.end();
+  const bool all_dispatch = std::find(seen.begin() + kSemanticSectionCount,
+                                      seen.end(), false) == seen.end();
+  if (any_dispatch != all_dispatch) {
+    throw std::runtime_error("incomplete MCU SF2 asset dispatch sections");
+  }
+  has_dispatch_ = all_dispatch;
 
   for (size_t index = 0; index < preset_count(); ++index) {
     const auto value = preset(index);
@@ -350,6 +586,62 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       throw std::runtime_error("invalid MCU SF2 asset sample bounds");
     }
   }
+  if (has_dispatch_) {
+    if (key_dispatch_count() != preset_dispatch_count() * 128u) {
+      throw std::runtime_error("MCU SF2 key dispatch count mismatch");
+    }
+    for (size_t index = 0; index < preset_dispatch_count(); ++index) {
+      const auto value = preset_dispatch(index);
+      if (value.semantic_preset >= preset_count() || value.first_key != index * 128u) {
+        throw std::runtime_error("invalid MCU SF2 preset dispatch reference");
+      }
+      if (index != 0) {
+        const auto previous = preset_dispatch(index - 1);
+        if (std::make_pair(value.bank, value.program) <=
+            std::make_pair(previous.bank, previous.program)) {
+          throw std::runtime_error("MCU SF2 preset dispatch is not sorted");
+        }
+      }
+    }
+    for (size_t index = 0; index < key_dispatch_count(); ++index) {
+      const auto key = key_dispatch(index);
+      validate_range(key.first_span, key.span_count,
+                     uint32_t(velocity_span_count()), "key velocity span");
+      if (key.span_count == 0) throw std::runtime_error("key has no velocity spans");
+      int expected_low = 1;
+      for (uint32_t span_index = 0; span_index < key.span_count; ++span_index) {
+        const auto span = velocity_span(key.first_span + span_index);
+        if (span.velocity_low != expected_low || span.velocity_low > span.velocity_high) {
+          throw std::runtime_error("velocity spans are not contiguous");
+        }
+        validate_range(span.first_layer, span.layer_count,
+                       uint32_t(layer_reference_count()), "velocity layer");
+        expected_low = int(span.velocity_high) + 1;
+      }
+      if (expected_low != 128) throw std::runtime_error("velocity spans do not cover 1..127");
+    }
+    for (size_t index = 0; index < layer_reference_count(); ++index) {
+      if (layer_reference(index) >= mono_descriptor_count()) {
+        throw std::runtime_error("layer references invalid mono descriptor");
+      }
+    }
+    for (size_t index = 0; index < mono_descriptor_count(); ++index) {
+      const auto descriptor = mono_descriptor(index);
+      if (descriptor.semantic_candidate >= candidate_count() ||
+          descriptor.key > 127 || descriptor.start_word_count < 6 ||
+          descriptor.start_word_count > 17) {
+        throw std::runtime_error("invalid mono descriptor");
+      }
+      validate_range(descriptor.first_start_word, descriptor.start_word_count,
+                     uint32_t(start_word_count()), "descriptor START words");
+      const uint32_t header = start_word(descriptor.first_start_word);
+      if (uint8_t(header >> 24) != 0x10 || ((header >> 14) & 0x3ffu) != 0 ||
+          uint8_t(header) != descriptor.start_word_count - 1 ||
+          start_word(descriptor.first_start_word + 1) != 1) {
+        throw std::runtime_error("invalid mono descriptor START template");
+      }
+    }
+  }
 }
 
 const McuSf2AssetView::SectionView& McuSf2AssetView::section(McuSf2AssetSection type) const {
@@ -366,6 +658,12 @@ size_t McuSf2AssetView::candidate_count() const { return section(McuSf2AssetSect
 size_t McuSf2AssetView::generator_count() const { return section(McuSf2AssetSection::kGenerators).count; }
 size_t McuSf2AssetView::modulator_count() const { return section(McuSf2AssetSection::kModulators).count; }
 size_t McuSf2AssetView::sample_count() const { return section(McuSf2AssetSection::kSamples).count; }
+size_t McuSf2AssetView::preset_dispatch_count() const { return section(McuSf2AssetSection::kPresetDispatch).count; }
+size_t McuSf2AssetView::key_dispatch_count() const { return section(McuSf2AssetSection::kKeyDispatch).count; }
+size_t McuSf2AssetView::velocity_span_count() const { return section(McuSf2AssetSection::kVelocitySpans).count; }
+size_t McuSf2AssetView::layer_reference_count() const { return section(McuSf2AssetSection::kLayerReferences).count; }
+size_t McuSf2AssetView::mono_descriptor_count() const { return section(McuSf2AssetSection::kMonoDescriptors).count; }
+size_t McuSf2AssetView::start_word_count() const { return section(McuSf2AssetSection::kStartWords).count; }
 
 Sf2SemanticPreset McuSf2AssetView::preset(size_t index) const {
   const uint8_t* value = record(section(McuSf2AssetSection::kPresets), index);
@@ -395,6 +693,68 @@ Sf2SemanticSample McuSf2AssetView::sample(size_t index) const {
   return {read_u32(value), read_u32(value + 4), read_u32(value + 8),
           read_u32(value + 12), read_u32(value + 16), value[20], int8_t(value[21]),
           read_u16(value + 22), read_u16(value + 24)};
+}
+
+McuSf2PresetDispatch McuSf2AssetView::preset_dispatch(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kPresetDispatch), index);
+  return {read_u16(value), read_u16(value + 2), read_u32(value + 4),
+          read_u32(value + 8)};
+}
+
+McuSf2KeyDispatch McuSf2AssetView::key_dispatch(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kKeyDispatch), index);
+  return {read_u32(value), read_u16(value + 4)};
+}
+
+McuSf2VelocitySpan McuSf2AssetView::velocity_span(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kVelocitySpans), index);
+  return {value[0], value[1], read_u16(value + 2), read_u32(value + 4)};
+}
+
+uint32_t McuSf2AssetView::layer_reference(size_t index) const {
+  return read_u32(record(section(McuSf2AssetSection::kLayerReferences), index));
+}
+
+McuSf2MonoDescriptor McuSf2AssetView::mono_descriptor(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kMonoDescriptors), index);
+  return {read_u32(value), read_u32(value + 4), value[8], value[9], value[10],
+          int8_t(value[11]), read_u16(value + 12), int16_t(read_u16(value + 14))};
+}
+
+uint32_t McuSf2AssetView::start_word(size_t index) const {
+  return read_u32(record(section(McuSf2AssetSection::kStartWords), index));
+}
+
+int32_t McuSf2AssetView::find_preset_dispatch(int program, int bank) const {
+  if (!has_dispatch_ || program < 0 || program > 127 || bank < 0 || bank > 16383) return -1;
+  const auto wanted = std::make_pair(uint16_t(bank), uint16_t(program));
+  size_t low = 0;
+  size_t high = preset_dispatch_count();
+  while (low < high) {
+    const size_t middle = low + (high - low) / 2;
+    const auto value = preset_dispatch(middle);
+    const auto key = std::make_pair(value.bank, value.program);
+    if (key < wanted) low = middle + 1;
+    else high = middle;
+  }
+  if (low == preset_dispatch_count()) return -1;
+  const auto value = preset_dispatch(low);
+  return std::make_pair(value.bank, value.program) == wanted ? int32_t(low) : -1;
+}
+
+McuSf2VelocitySpan McuSf2AssetView::find_velocity_span(
+    size_t preset_dispatch_index, int key, int velocity) const {
+  if (!has_dispatch_ || preset_dispatch_index >= preset_dispatch_count() ||
+      key < 0 || key > 127 || velocity < 1 || velocity > 127) {
+    throw std::out_of_range("MCU SF2 dispatch lookup");
+  }
+  const auto preset = preset_dispatch(preset_dispatch_index);
+  const auto key_value = key_dispatch(preset.first_key + uint32_t(key));
+  for (uint32_t index = 0; index < key_value.span_count; ++index) {
+    const auto span = velocity_span(key_value.first_span + index);
+    if (velocity >= span.velocity_low && velocity <= span.velocity_high) return span;
+  }
+  throw std::runtime_error("validated MCU SF2 dispatch has no velocity span");
 }
 
 bool McuSf2AssetView::matches_source(const Sf2Data& sf2, uint64_t source_size_bytes) const {

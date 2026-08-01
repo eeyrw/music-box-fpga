@@ -1,4 +1,5 @@
 #include "mcu_sf2_asset.h"
+#include "command_control.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -8,6 +9,14 @@
 #include <vector>
 
 namespace {
+
+class LatestCommandSink : public render::CommandWordSink {
+ public:
+  void write_command_words(render::CommandWordView words) override {
+    latest.assign(words.begin(), words.end());
+  }
+  std::vector<uint32_t> latest;
+};
 
 void require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
@@ -27,6 +36,12 @@ void write_u32(std::vector<uint8_t>& data, size_t offset, uint32_t value) {
   for (int byte = 0; byte < 4; ++byte) {
     data.at(offset + size_t(byte)) = uint8_t(value >> (8 * byte));
   }
+}
+
+uint32_t read_u32(const std::vector<uint8_t>& data, size_t offset) {
+  return uint32_t(data.at(offset)) | (uint32_t(data.at(offset + 1)) << 8) |
+         (uint32_t(data.at(offset + 2)) << 16) |
+         (uint32_t(data.at(offset + 3)) << 24);
 }
 
 void refresh_crc(std::vector<uint8_t>& data) {
@@ -89,6 +104,84 @@ void compare_semantics(const render::Sf2SemanticData& expected,
   }
 }
 
+void compare_dispatch(const render::Sf2Data& sf2,
+                      const render::Sf2SemanticData& semantic,
+                      const render::McuSf2AssetView& view) {
+  require(view.has_dispatch(), "asset has no direct dispatch tables");
+  require(view.key_dispatch_count() == view.preset_dispatch_count() * 128u,
+          "direct key table size mismatch");
+
+  for (size_t dispatch_index = 0; dispatch_index < view.preset_dispatch_count();
+       ++dispatch_index) {
+    const auto dispatch = view.preset_dispatch(dispatch_index);
+    require(view.find_preset_dispatch(dispatch.program, dispatch.bank) ==
+                int32_t(dispatch_index),
+            "sparse preset lookup mismatch");
+    const auto& preset = semantic.presets.at(dispatch.semantic_preset);
+    for (int key = 0; key < 128; ++key) {
+      for (int velocity = 1; velocity < 128; ++velocity) {
+        std::vector<uint32_t> expected_candidates;
+        for (uint32_t local = 0; local < preset.candidate_count; ++local) {
+          const uint32_t candidate_index = preset.first_candidate + local;
+          const auto& candidate = semantic.candidates.at(candidate_index);
+          if (key >= candidate.key_low && key <= candidate.key_high &&
+              velocity >= candidate.velocity_low &&
+              velocity <= candidate.velocity_high) {
+            expected_candidates.push_back(candidate_index);
+          }
+        }
+        const auto span = view.find_velocity_span(dispatch_index, key, velocity);
+        require(span.layer_count == expected_candidates.size(),
+                "velocity dispatch layer count mismatch");
+        for (uint32_t layer = 0; layer < span.layer_count; ++layer) {
+          const uint32_t descriptor_index =
+              view.layer_reference(span.first_layer + layer);
+          const auto descriptor = view.mono_descriptor(descriptor_index);
+          require(descriptor.semantic_candidate == expected_candidates[layer] &&
+                      descriptor.key == key,
+                  "velocity dispatch layer ordering mismatch");
+        }
+      }
+    }
+  }
+
+  std::vector<uint32_t> candidate_preset(semantic.candidates.size());
+  std::vector<uint32_t> candidate_local(semantic.candidates.size());
+  for (size_t preset_index = 0; preset_index < semantic.presets.size(); ++preset_index) {
+    const auto& preset = semantic.presets[preset_index];
+    for (uint32_t local = 0; local < preset.candidate_count; ++local) {
+      candidate_preset[preset.first_candidate + local] = uint32_t(preset_index);
+      candidate_local[preset.first_candidate + local] = local;
+    }
+  }
+
+  LatestCommandSink sink;
+  render::CommandVoiceControl control(sink);
+  for (size_t index = 0; index < view.mono_descriptor_count(); ++index) {
+    const auto descriptor = view.mono_descriptor(index);
+    const render::Region region = render::make_region_for_compiled_candidate(
+        sf2, candidate_preset.at(descriptor.semantic_candidate),
+        candidate_local.at(descriptor.semantic_candidate), descriptor.key,
+        int(render::reference_mcu_sf2_asset_profile().sample_rate),
+        int(render::reference_mcu_sf2_asset_profile().control_tick_samples));
+    const int voice = int(index % render::kNumVoices);
+    control.start_voice(voice, region.phase_inc, region);
+    require(sink.latest.size() == descriptor.start_word_count,
+            "START template word count mismatch");
+    sink.latest[0] &= ~(0x3ffu << 14);
+    sink.latest[1] = 1;
+    for (uint32_t word = 0; word < descriptor.start_word_count; ++word) {
+      require(sink.latest[word] ==
+                  view.start_word(descriptor.first_start_word + word),
+              "START template word mismatch");
+    }
+    require(descriptor.base_gain == region.base_gain && descriptor.pan == region.pan &&
+                descriptor.exclusive_class == region.exclusive_class &&
+                descriptor.effective_velocity == region.effective_velocity,
+            "mono descriptor policy field mismatch");
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -107,6 +200,9 @@ int main(int argc, char** argv) {
                 view.sample_word_count() == sf2.smpl_word_count,
             "sample span mismatch");
     compare_semantics(semantic, view);
+    compare_dispatch(sf2, semantic, view);
+    require(view.find_preset_dispatch(127, 16383) == -1,
+            "missing sparse preset lookup did not fail");
 
     require_failure([&] {
       render::McuSf2AssetView truncated(image_a.data(), image_a.size() - 1);
@@ -138,6 +234,17 @@ int main(int argc, char** argv) {
       (void)invalid;
     }, "invalid cross-section reference was accepted");
 
+    std::vector<uint8_t> bad_layer = image_a;
+    const size_t layer_section_entry = render::kMcuSf2AssetSectionDirectoryOffset +
+        8 * render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t first_layer_offset = read_u32(bad_layer, layer_section_entry + 4);
+    write_u32(bad_layer, first_layer_offset, uint32_t(view.mono_descriptor_count()));
+    refresh_crc(bad_layer);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_layer.data(), bad_layer.size());
+      (void)invalid;
+    }, "invalid layer descriptor reference was accepted");
+
     render::McuSf2AssetProfile wrong_profile = render::reference_mcu_sf2_asset_profile();
     ++wrong_profile.control_tick_samples;
     require_failure([&] {
@@ -148,7 +255,8 @@ int main(int argc, char** argv) {
     sf2.file_words.at(0) ^= 1;
     require(!view.matches_source(sf2, source_size), "source mismatch was not detected");
 
-    std::cout << "PASS: MCU SF2 semantic image deterministic, equivalent, and validated\n";
+    std::cout << "PASS: MCU SF2 semantic image and direct dispatch are deterministic, "
+                 "equivalent, and validated\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "mcu_sf2_asset_test failed: " << error.what() << '\n';

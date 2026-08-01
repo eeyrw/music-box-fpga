@@ -1415,6 +1415,27 @@ Sf2SemanticData compile_sf2_semantics(const Sf2Data& sf2) {
   return semantic;
 }
 
+Region make_region_for_compiled_candidate(const Sf2Data& sf2,
+                                          size_t preset_index,
+                                          size_t candidate_index,
+                                          int key, int sample_rate,
+                                          int tick_samples) {
+  const auto compiled = sf2.compiled ? sf2.compiled : compile_sf2_data(sf2);
+  const auto& target = compiled->presets.at(preset_index);
+  const auto& candidate = target.candidates.at(candidate_index);
+  if (key < 0 || key > 127) throw std::out_of_range("compiled candidate key");
+  const auto keys = key_range(candidate.generators);
+  if (key < keys.first || key > keys.second) {
+    throw std::out_of_range("key is outside compiled candidate range");
+  }
+  const auto& preset = sf2.presets.at(preset_index);
+  return region_from_zone(
+      sf2, candidate.generators, key, sample_rate, tick_samples,
+      preset.preset, preset.bank, preset.name,
+      sf2.instruments.at(size_t(candidate.instrument)).name,
+      candidate.modulators_by_destination);
+}
+
 int select_instrument(const Sf2Data& sf2, const std::string& instrument) {
   // Forced-instrument mode accepts either a numeric instrument index or a
   // case-insensitive substring of the instrument name. The terminal sentinel is

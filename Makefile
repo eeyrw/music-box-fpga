@@ -486,6 +486,7 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \
 		sim/harness/formats/mcu_sf2_asset.cpp \
 		sim/harness/formats/mcu_sf2_asset_test.cpp \
@@ -563,6 +564,7 @@ benchmark-mcu-sf2-baseline:
 test-mcu-sf2-asset:
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \
 		sim/harness/formats/mcu_sf2_asset.cpp \
 		sim/harness/formats/mcu_sf2_asset_test.cpp \

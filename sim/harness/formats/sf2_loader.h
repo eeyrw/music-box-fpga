@@ -111,6 +111,11 @@ struct Sf2SemanticData {
 Sf2Data load_sf2(const std::string& path);
 Sf2LoaderStats sf2_loader_stats(const Sf2Data& sf2);
 Sf2SemanticData compile_sf2_semantics(const Sf2Data& sf2);
+Region make_region_for_compiled_candidate(const Sf2Data& sf2,
+                                          size_t preset_index,
+                                          size_t candidate_index,
+                                          int key, int sample_rate,
+                                          int tick_samples);
 int select_instrument(const Sf2Data& sf2, const std::string& instrument);
 
 class Sf2RegionCache {
