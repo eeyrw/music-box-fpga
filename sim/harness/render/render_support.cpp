@@ -125,29 +125,6 @@ bool is_realtime_source(uint16_t source) {
   return index == 10 || index == 13 || index == 14 || index == 16;
 }
 
-double pitch_ratio(double cents) {
-  constexpr int kMinCents = -24000;
-  constexpr int kMaxCents = 24000;
-  constexpr int kStepsPerCent = 4;
-  constexpr int kRatioCount = (kMaxCents - kMinCents) * kStepsPerCent + 1;
-  static const std::array<double, kRatioCount> ratios = [] {
-    std::array<double, kRatioCount> values{};
-    for (int index = 0; index < kRatioCount; ++index) {
-      const double table_cents = double(index) / kStepsPerCent + kMinCents;
-      values[index] = std::pow(2.0, table_cents / 1200.0);
-    }
-    return values;
-  }();
-  if (cents <= kMinCents) return ratios.front();
-  if (cents >= kMaxCents) return ratios.back();
-  const double position = (cents - kMinCents) * kStepsPerCent;
-  const int lower = int(position);
-  const double fraction = position - lower;
-  const double low = ratios[lower];
-  const double high = ratios[lower + 1];
-  return low + (high - low) * fraction;
-}
-
 bool same_filter_config(const FilterConfig& a, const FilterConfig& b) {
   return a.enable == b.enable && a.b0 == b.b0 && a.b1 == b.b1 &&
          a.b2 == b.b2 && a.a1 == b.a1 && a.a2 == b.a2;
@@ -1073,10 +1050,8 @@ int64_t McuModel::modulator_sum_q16(const Region& region, const VoiceState& voic
 }
 
 uint32_t McuModel::modulated_phase_inc(uint32_t base_phase_inc, double cents) {
-  double raw = double(base_phase_inc) * pitch_ratio(cents);
-  if (raw < 1.0) return 1;
-  if (raw > double(UINT32_MAX)) return UINT32_MAX;
-  return uint32_t(std::round(raw));
+  return mcu_sf2_phase_increment(
+      base_phase_inc, int64_t(std::llround(cents * kMcuModulationOne)));
 }
 
 int q2_14(double value) {
@@ -1141,7 +1116,8 @@ ControlMathValidation validate_control_math_approximations() {
   for (int quarter_cent = -96000; quarter_cent <= 96000; ++quarter_cent) {
     const double cents = double(quarter_cent) * 0.25;
     const double exact = std::pow(2.0, cents / 1200.0);
-    const double approximate = pitch_ratio(cents);
+    const double approximate = mcu_sf2_pitch_ratio(
+        int64_t(std::llround(cents * kMcuModulationOne)));
     result.max_pitch_ratio_error = std::max(
         result.max_pitch_ratio_error, std::abs(exact - approximate));
     const uint32_t exact_phase = uint32_t(std::round(256.0 * exact));

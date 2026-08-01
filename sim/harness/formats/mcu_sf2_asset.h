@@ -34,6 +34,8 @@ enum class McuSf2AssetSection : uint16_t {
   kModulationPrograms = 13,
   kModulationTerms = 14,
   kSourceCurves = 15,
+  kDescriptorRuntimeConfigs = 16,
+  kRuntimeConfigs = 17,
 };
 
 struct McuSf2PresetDispatch {
@@ -64,6 +66,7 @@ struct McuSf2MonoDescriptor {
   int8_t effective_velocity = -1;
   uint16_t base_gain = 0;
   int16_t pan = 0;
+  uint32_t release_samples = 0;
 };
 
 enum class McuSf2ModulationFamily : uint8_t {
@@ -84,6 +87,28 @@ struct McuSf2ModulationProgram {
   uint16_t note_static_term_count = 0;
   uint16_t dependencies = 0;
   McuSf2ModulationFamily family = McuSf2ModulationFamily::kGain;
+};
+
+struct McuSf2RuntimeConfig {
+  uint32_t mod_lfo_delay_ticks = 0;
+  uint32_t mod_lfo_step = 0;
+  uint32_t vib_lfo_delay_ticks = 0;
+  uint32_t vib_lfo_step = 0;
+  int16_t mod_lfo_to_pitch = 0;
+  int16_t vib_lfo_to_pitch = 0;
+  int16_t mod_env_to_pitch = 0;
+  int16_t mod_lfo_to_filter_fc = 0;
+  int16_t mod_env_to_filter_fc = 0;
+  int16_t mod_lfo_to_volume = 0;
+  int16_t initial_filter_fc = 13500;
+  int16_t initial_filter_q = 0;
+  uint32_t mod_env_delay_ticks = 0;
+  uint32_t mod_env_hold_ticks = 0;
+  uint32_t mod_env_attack_ticks = 1;
+  uint32_t mod_env_decay_ticks = 1;
+  uint32_t mod_env_release_ticks = 1;
+  uint16_t mod_env_sustain_level = render::kQ15Full;
+  bool mod_env_attack_sub_tick = false;
 };
 
 struct McuSf2AssetProfile {
@@ -137,6 +162,9 @@ class McuSf2AssetView {
   size_t modulation_program_count() const;
   size_t modulation_term_count() const;
   size_t source_curve_value_count() const;
+  bool has_runtime_configs() const { return has_runtime_configs_; }
+  size_t descriptor_runtime_config_count() const;
+  size_t runtime_config_count() const;
 
   Sf2SemanticPreset preset(size_t index) const;
   Sf2SemanticCandidate candidate(size_t index) const;
@@ -153,6 +181,8 @@ class McuSf2AssetView {
   McuSf2ModulationProgram modulation_program(size_t index) const;
   McuSf2ModulationTerm modulation_term(size_t index) const;
   int32_t source_curve_value(size_t index) const;
+  uint32_t descriptor_runtime_config(size_t index) const;
+  McuSf2RuntimeConfig runtime_config(size_t index) const;
 
   int32_t find_preset_dispatch(int program, int bank) const;
   McuSf2VelocitySpan find_velocity_span(size_t preset_dispatch_index,
@@ -172,7 +202,7 @@ class McuSf2AssetView {
 
   const uint8_t* data_ = nullptr;
   size_t size_ = 0;
-  std::array<SectionView, 15> sections_{};
+  std::array<SectionView, 17> sections_{};
   uint64_t source_size_bytes_ = 0;
   uint32_t source_crc32_ = 0;
   uint32_t sample_word_offset_ = 0;
@@ -181,6 +211,7 @@ class McuSf2AssetView {
   uint32_t selected_preset_count_ = 0;
   bool has_dispatch_ = false;
   bool has_modulation_programs_ = false;
+  bool has_runtime_configs_ = false;
 };
 
 }  // namespace render

@@ -109,6 +109,7 @@ void compare_dispatch(const render::Sf2Data& sf2,
                       const render::Sf2SemanticData& semantic,
                       const render::McuSf2AssetView& view) {
   require(view.has_dispatch(), "asset has no direct dispatch tables");
+  require(view.has_runtime_configs(), "asset has no runtime modulation configs");
   require(view.key_dispatch_count() == view.preset_dispatch_count() * 128u,
           "direct key table size mismatch");
 
@@ -178,8 +179,30 @@ void compare_dispatch(const render::Sf2Data& sf2,
     }
     require(descriptor.base_gain == region.base_gain && descriptor.pan == region.pan &&
                 descriptor.exclusive_class == region.exclusive_class &&
-                descriptor.effective_velocity == region.effective_velocity,
+                descriptor.effective_velocity == region.effective_velocity &&
+                descriptor.release_samples == region.volume_envelope.release_samples,
             "mono descriptor policy field mismatch");
+    const auto runtime = view.runtime_config(view.descriptor_runtime_config(index));
+    require(runtime.mod_lfo_delay_ticks == uint32_t(region.mod_lfo_delay_ticks) &&
+                runtime.mod_lfo_step == region.mod_lfo_step &&
+                runtime.vib_lfo_delay_ticks == uint32_t(region.vib_lfo_delay_ticks) &&
+                runtime.vib_lfo_step == region.vib_lfo_step &&
+                runtime.mod_lfo_to_pitch == region.mod_lfo_to_pitch &&
+                runtime.vib_lfo_to_pitch == region.vib_lfo_to_pitch &&
+                runtime.mod_env_to_pitch == region.mod_env_to_pitch &&
+                runtime.mod_lfo_to_filter_fc == region.mod_lfo_to_filter_fc &&
+                runtime.mod_env_to_filter_fc == region.mod_env_to_filter_fc &&
+                runtime.mod_lfo_to_volume == region.mod_lfo_to_volume &&
+                runtime.initial_filter_fc == region.initial_filter_fc &&
+                runtime.initial_filter_q == region.initial_filter_q &&
+                runtime.mod_env_delay_ticks == uint32_t(region.mod_env_delay_ticks) &&
+                runtime.mod_env_hold_ticks == uint32_t(region.mod_env_hold_ticks) &&
+                runtime.mod_env_attack_ticks == uint32_t(region.mod_env_attack_ticks) &&
+                runtime.mod_env_decay_ticks == uint32_t(region.mod_env_decay_ticks) &&
+                runtime.mod_env_release_ticks == uint32_t(region.mod_env_release_ticks) &&
+                runtime.mod_env_sustain_level == region.mod_env_sustain_level &&
+                runtime.mod_env_attack_sub_tick == region.mod_env_attack_sub_tick,
+            "runtime modulation config mismatch");
   }
 }
 

@@ -113,6 +113,7 @@ void write_report(const char* action, const std::string& asset_path,
             << "  \"modulation_programs\": " << view.modulation_program_count() << ",\n"
             << "  \"modulation_terms\": " << view.modulation_term_count() << ",\n"
             << "  \"source_curve_values\": " << view.source_curve_value_count() << ",\n"
+            << "  \"runtime_configs\": " << view.runtime_config_count() << ",\n"
             << "  \"maximum_layers\": " << maximum_layers << ",\n"
             << "  \"maximum_modulation_terms\": " << maximum_modulation_terms << "\n"
             << "}\n";

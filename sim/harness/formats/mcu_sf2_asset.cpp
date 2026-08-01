@@ -30,9 +30,12 @@ constexpr uint32_t kCandidateProgramsStride = 12;
 constexpr uint32_t kModulationProgramStride = 12;
 constexpr uint32_t kModulationTermStride = 12;
 constexpr uint32_t kSourceCurveStride = 4;
+constexpr uint32_t kDescriptorRuntimeConfigStride = 4;
+constexpr uint32_t kRuntimeConfigStride = 56;
 constexpr size_t kSemanticSectionCount = 5;
 constexpr size_t kDispatchSectionCount = 11;
-constexpr size_t kKnownSectionCount = 15;
+constexpr size_t kModulationSectionCount = 15;
+constexpr size_t kKnownSectionCount = 17;
 constexpr uint16_t kGeneratorSampleId = 53;
 
 uint16_t read_u16(const uint8_t* data) {
@@ -130,7 +133,47 @@ struct DispatchBuild {
   std::vector<uint32_t> layers;
   std::vector<McuSf2MonoDescriptor> descriptors;
   std::vector<uint32_t> start_words;
+  std::vector<uint32_t> descriptor_runtime_configs;
+  std::vector<McuSf2RuntimeConfig> runtime_configs;
 };
+
+McuSf2RuntimeConfig runtime_config_for(const Region& region) {
+  McuSf2RuntimeConfig config;
+  config.mod_lfo_delay_ticks = uint32_t(region.mod_lfo_delay_ticks);
+  config.mod_lfo_step = region.mod_lfo_step;
+  config.vib_lfo_delay_ticks = uint32_t(region.vib_lfo_delay_ticks);
+  config.vib_lfo_step = region.vib_lfo_step;
+  config.mod_lfo_to_pitch = int16_t(region.mod_lfo_to_pitch);
+  config.vib_lfo_to_pitch = int16_t(region.vib_lfo_to_pitch);
+  config.mod_env_to_pitch = int16_t(region.mod_env_to_pitch);
+  config.mod_lfo_to_filter_fc = int16_t(region.mod_lfo_to_filter_fc);
+  config.mod_env_to_filter_fc = int16_t(region.mod_env_to_filter_fc);
+  config.mod_lfo_to_volume = int16_t(region.mod_lfo_to_volume);
+  config.initial_filter_fc = int16_t(region.initial_filter_fc);
+  config.initial_filter_q = int16_t(region.initial_filter_q);
+  config.mod_env_delay_ticks = uint32_t(region.mod_env_delay_ticks);
+  config.mod_env_hold_ticks = uint32_t(region.mod_env_hold_ticks);
+  config.mod_env_attack_ticks = uint32_t(region.mod_env_attack_ticks);
+  config.mod_env_decay_ticks = uint32_t(region.mod_env_decay_ticks);
+  config.mod_env_release_ticks = uint32_t(region.mod_env_release_ticks);
+  config.mod_env_sustain_level = uint16_t(region.mod_env_sustain_level);
+  config.mod_env_attack_sub_tick = region.mod_env_attack_sub_tick;
+  return config;
+}
+
+std::vector<int64_t> runtime_config_key(const McuSf2RuntimeConfig& config) {
+  return {
+      config.mod_lfo_delay_ticks, config.mod_lfo_step,
+      config.vib_lfo_delay_ticks, config.vib_lfo_step,
+      config.mod_lfo_to_pitch, config.vib_lfo_to_pitch,
+      config.mod_env_to_pitch, config.mod_lfo_to_filter_fc,
+      config.mod_env_to_filter_fc, config.mod_lfo_to_volume,
+      config.initial_filter_fc, config.initial_filter_q,
+      config.mod_env_delay_ticks, config.mod_env_hold_ticks,
+      config.mod_env_attack_ticks, config.mod_env_decay_ticks,
+      config.mod_env_release_ticks, config.mod_env_sustain_level,
+      config.mod_env_attack_sub_tick};
+}
 
 struct SelectedSemanticBuild {
   Sf2SemanticData semantic;
@@ -389,6 +432,7 @@ DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic
                              const McuSf2AssetProfile& profile) {
   DispatchBuild result;
   std::map<std::vector<uint32_t>, uint32_t> interned_start_templates;
+  std::map<std::vector<int64_t>, uint32_t> interned_runtime_configs;
   std::map<std::pair<uint16_t, uint16_t>, uint32_t> preset_index;
   for (uint32_t index = 0; index < semantic.presets.size(); ++index) {
     const auto& preset = semantic.presets[index];
@@ -442,9 +486,20 @@ DispatchBuild build_dispatch(const Sf2Data& sf2, const Sf2SemanticData& semantic
         descriptor.effective_velocity = int8_t(region.effective_velocity);
         descriptor.base_gain = uint16_t(region.base_gain);
         descriptor.pan = int16_t(region.pan);
+        descriptor.release_samples = region.volume_envelope.release_samples;
         const uint32_t descriptor_index = checked_u32(result.descriptors.size(),
                                                       "mono descriptor index");
         result.descriptors.push_back(descriptor);
+        const McuSf2RuntimeConfig runtime_config = runtime_config_for(region);
+        const auto runtime_key = runtime_config_key(runtime_config);
+        auto runtime = interned_runtime_configs.find(runtime_key);
+        if (runtime == interned_runtime_configs.end()) {
+          const uint32_t runtime_index = checked_u32(
+              result.runtime_configs.size(), "runtime config index");
+          result.runtime_configs.push_back(runtime_config);
+          runtime = interned_runtime_configs.emplace(runtime_key, runtime_index).first;
+        }
+        result.descriptor_runtime_configs.push_back(runtime->second);
         candidates.push_back({&candidate, descriptor_index});
         breakpoints[std::max<int>(1, candidate.velocity_low)] = true;
         if (candidate.velocity_high < 127) {
@@ -559,6 +614,9 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
       {McuSf2AssetSection::kModulationPrograms, kModulationProgramStride, 0},
       {McuSf2AssetSection::kModulationTerms, kModulationTermStride, 0},
       {McuSf2AssetSection::kSourceCurves, kSourceCurveStride, 0},
+      {McuSf2AssetSection::kDescriptorRuntimeConfigs,
+       kDescriptorRuntimeConfigStride, 0},
+      {McuSf2AssetSection::kRuntimeConfigs, kRuntimeConfigStride, 0},
   }};
 
   auto start_section = [&](size_t section, size_t count) {
@@ -654,7 +712,7 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
     image.push_back(uint8_t(descriptor.effective_velocity));
     append_u16(image, descriptor.base_gain);
     append_u16(image, uint16_t(descriptor.pan));
-    append_u32(image, 0);
+    append_u32(image, descriptor.release_samples);
   }
 
   start_section(10, dispatch.start_words.size());
@@ -692,6 +750,33 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
     for (uint8_t value = 0; value < kMcuSourceCurveSize; ++value) {
       append_u32(image, uint32_t(mcu_sf2_source_curve_q16(curve, value)));
     }
+  }
+
+  start_section(15, dispatch.descriptor_runtime_configs.size());
+  for (uint32_t config : dispatch.descriptor_runtime_configs) append_u32(image, config);
+
+  start_section(16, dispatch.runtime_configs.size());
+  for (const auto& config : dispatch.runtime_configs) {
+    append_u32(image, config.mod_lfo_delay_ticks);
+    append_u32(image, config.mod_lfo_step);
+    append_u32(image, config.vib_lfo_delay_ticks);
+    append_u32(image, config.vib_lfo_step);
+    append_u16(image, uint16_t(config.mod_lfo_to_pitch));
+    append_u16(image, uint16_t(config.vib_lfo_to_pitch));
+    append_u16(image, uint16_t(config.mod_env_to_pitch));
+    append_u16(image, uint16_t(config.mod_lfo_to_filter_fc));
+    append_u16(image, uint16_t(config.mod_env_to_filter_fc));
+    append_u16(image, uint16_t(config.mod_lfo_to_volume));
+    append_u16(image, uint16_t(config.initial_filter_fc));
+    append_u16(image, uint16_t(config.initial_filter_q));
+    append_u32(image, config.mod_env_delay_ticks);
+    append_u32(image, config.mod_env_hold_ticks);
+    append_u32(image, config.mod_env_attack_ticks);
+    append_u32(image, config.mod_env_decay_ticks);
+    append_u32(image, config.mod_env_release_ticks);
+    append_u16(image, config.mod_env_sustain_level);
+    image.push_back(config.mod_env_attack_sub_tick ? 1 : 0);
+    image.push_back(0);
   }
   align_four(image);
 
@@ -780,7 +865,8 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       kSampleStride, kPresetDispatchStride, kKeyDispatchStride,
       kVelocitySpanStride, kLayerReferenceStride, kMonoDescriptorStride,
       kStartWordStride, kCandidateProgramsStride, kModulationProgramStride,
-      kModulationTermStride, kSourceCurveStride};
+      kModulationTermStride, kSourceCurveStride, kDescriptorRuntimeConfigStride,
+      kRuntimeConfigStride};
   uint64_t previous_end = kMcuSf2AssetHeaderSize +
                           uint64_t(section_count) * kMcuSf2AssetSectionEntrySize;
   std::array<bool, kKnownSectionCount> seen{};
@@ -829,13 +915,23 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   }
   has_dispatch_ = all_dispatch;
   const bool any_modulation = std::find(seen.begin() + kDispatchSectionCount,
-                                        seen.end(), true) != seen.end();
+                                        seen.begin() + kModulationSectionCount,
+                                        true) != seen.begin() + kModulationSectionCount;
   const bool all_modulation = std::find(seen.begin() + kDispatchSectionCount,
-                                        seen.end(), false) == seen.end();
+                                        seen.begin() + kModulationSectionCount,
+                                        false) == seen.begin() + kModulationSectionCount;
   if (any_modulation != all_modulation || (all_modulation && !has_dispatch_)) {
     throw std::runtime_error("incomplete MCU SF2 asset modulation sections");
   }
   has_modulation_programs_ = all_modulation;
+  const bool any_runtime = std::find(seen.begin() + kModulationSectionCount,
+                                     seen.end(), true) != seen.end();
+  const bool all_runtime = std::find(seen.begin() + kModulationSectionCount,
+                                     seen.end(), false) == seen.end();
+  if (any_runtime != all_runtime || (all_runtime && !has_modulation_programs_)) {
+    throw std::runtime_error("incomplete MCU SF2 runtime config sections");
+  }
+  has_runtime_configs_ = all_runtime;
 
   for (size_t index = 0; index < preset_count(); ++index) {
     const auto value = preset(index);
@@ -954,6 +1050,23 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       }
     }
   }
+  if (has_runtime_configs_) {
+    if (descriptor_runtime_config_count() != mono_descriptor_count()) {
+      throw std::runtime_error("descriptor runtime config count mismatch");
+    }
+    for (size_t index = 0; index < descriptor_runtime_config_count(); ++index) {
+      if (descriptor_runtime_config(index) >= runtime_config_count()) {
+        throw std::runtime_error("descriptor references invalid runtime config");
+      }
+    }
+    for (size_t index = 0; index < runtime_config_count(); ++index) {
+      const auto config = runtime_config(index);
+      if (config.mod_env_attack_ticks == 0 || config.mod_env_decay_ticks == 0 ||
+          config.mod_env_release_ticks == 0 || config.mod_env_sustain_level > kQ15Full) {
+        throw std::runtime_error("invalid MCU SF2 runtime modulation config");
+      }
+    }
+  }
 }
 
 const McuSf2AssetView::SectionView& McuSf2AssetView::section(McuSf2AssetSection type) const {
@@ -980,6 +1093,8 @@ size_t McuSf2AssetView::candidate_program_count() const { return section(McuSf2A
 size_t McuSf2AssetView::modulation_program_count() const { return section(McuSf2AssetSection::kModulationPrograms).count; }
 size_t McuSf2AssetView::modulation_term_count() const { return section(McuSf2AssetSection::kModulationTerms).count; }
 size_t McuSf2AssetView::source_curve_value_count() const { return section(McuSf2AssetSection::kSourceCurves).count; }
+size_t McuSf2AssetView::descriptor_runtime_config_count() const { return section(McuSf2AssetSection::kDescriptorRuntimeConfigs).count; }
+size_t McuSf2AssetView::runtime_config_count() const { return section(McuSf2AssetSection::kRuntimeConfigs).count; }
 
 Sf2SemanticPreset McuSf2AssetView::preset(size_t index) const {
   const uint8_t* value = record(section(McuSf2AssetSection::kPresets), index);
@@ -1034,7 +1149,8 @@ uint32_t McuSf2AssetView::layer_reference(size_t index) const {
 McuSf2MonoDescriptor McuSf2AssetView::mono_descriptor(size_t index) const {
   const uint8_t* value = record(section(McuSf2AssetSection::kMonoDescriptors), index);
   return {read_u32(value), read_u32(value + 4), value[8], value[9], value[10],
-          int8_t(value[11]), read_u16(value + 12), int16_t(read_u16(value + 14))};
+          int8_t(value[11]), read_u16(value + 12), int16_t(read_u16(value + 14)),
+          read_u32(value + 16)};
 }
 
 uint32_t McuSf2AssetView::start_word(size_t index) const {
@@ -1060,6 +1176,23 @@ McuSf2ModulationTerm McuSf2AssetView::modulation_term(size_t index) const {
 
 int32_t McuSf2AssetView::source_curve_value(size_t index) const {
   return int32_t(read_u32(record(section(McuSf2AssetSection::kSourceCurves), index)));
+}
+
+uint32_t McuSf2AssetView::descriptor_runtime_config(size_t index) const {
+  return read_u32(record(section(McuSf2AssetSection::kDescriptorRuntimeConfigs), index));
+}
+
+McuSf2RuntimeConfig McuSf2AssetView::runtime_config(size_t index) const {
+  const uint8_t* value = record(section(McuSf2AssetSection::kRuntimeConfigs), index);
+  return {
+      read_u32(value), read_u32(value + 4), read_u32(value + 8),
+      read_u32(value + 12), int16_t(read_u16(value + 16)),
+      int16_t(read_u16(value + 18)), int16_t(read_u16(value + 20)),
+      int16_t(read_u16(value + 22)), int16_t(read_u16(value + 24)),
+      int16_t(read_u16(value + 26)), int16_t(read_u16(value + 28)),
+      int16_t(read_u16(value + 30)), read_u32(value + 32),
+      read_u32(value + 36), read_u32(value + 40), read_u32(value + 44),
+      read_u32(value + 48), read_u16(value + 52), value[54] != 0};
 }
 
 int32_t McuSf2AssetView::find_preset_dispatch(int program, int bank) const {

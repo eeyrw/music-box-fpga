@@ -1,5 +1,6 @@
 #include "host/ch347_transport.h"
 #include "host/command_scheduler.h"
+#include "host/mcu_sf2_asset_runtime.h"
 #include "host/realtime_midi.h"
 #include "host/realtime_region_bank.h"
 #include "sim/harness/control/command_control.h"
@@ -18,7 +19,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <poll.h>
@@ -36,6 +40,7 @@ struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
   std::string midi_input;
   std::string midi_file;
+  std::string mcu_asset;
   int sample_rate = 48000;
   double control_tick_ms = 5.0;
   int run_ms = 0;
@@ -65,6 +70,7 @@ Args parse_args(int argc, char** argv) {
     if (option == "--sf2") args.sf2 = require_value(argc, argv, index);
     else if (option == "--midi-input") args.midi_input = require_value(argc, argv, index);
     else if (option == "--midi-file") args.midi_file = require_value(argc, argv, index);
+    else if (option == "--mcu-asset") args.mcu_asset = require_value(argc, argv, index);
     else if (option == "--sample-rate") args.sample_rate = std::stoi(require_value(argc, argv, index));
     else if (option == "--control-tick-ms") args.control_tick_ms = std::stod(require_value(argc, argv, index));
     else if (option == "--run-ms") args.run_ms = std::stoi(require_value(argc, argv, index));
@@ -75,7 +81,8 @@ Args parse_args(int argc, char** argv) {
     else if (option == "--clock-hz") args.ch347.clock_hz = std::stoi(require_value(argc, argv, index));
     else if (option == "--help") {
       std::cout
-          << "usage: realtime_midi_host [--sf2 PATH] [--midi-input PATH|- | --midi-file PATH]\n"
+          << "usage: realtime_midi_host [--sf2 PATH] [--mcu-asset PATH]\n"
+          << "       [--midi-input PATH|- | --midi-file PATH]\n"
           << "       [--dry-run] [--sample-rate HZ] [--control-tick-ms MS]\n"
           << "       [--run-ms MS] [--midi-tail-ms MS]\n"
           << "       [--library PATH] [--device PATH] [--clock-hz HZ]\n";
@@ -96,6 +103,12 @@ Args parse_args(int argc, char** argv) {
         "sample rate and control tick must be positive; run-ms and midi-tail-ms must be nonnegative");
   }
   return args;
+}
+
+std::vector<uint8_t> read_binary_file(const std::string& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("cannot open MCU SF2 asset: " + path);
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
 }
 
 int open_midi_input(const std::string& path) {
@@ -236,6 +249,40 @@ void handle_midi_event(const host::TimestampedMidiEvent& input,
   stats.note_on_enqueue_max_ns = std::max(stats.note_on_enqueue_max_ns, elapsed);
 }
 
+void handle_compiled_midi_event(const host::TimestampedMidiEvent& input,
+                                host::McuSf2AssetRuntime& compiled,
+                                host::AsyncCommandScheduler& scheduler,
+                                RuntimeStats& stats) {
+  auto batch = scheduler.batch();
+  const auto& event = input.event;
+  if (event.type == render::NoteEvent::EVENT_NOTE) {
+    if (event.on && event.velocity != 0) {
+      ++stats.note_on_events;
+      const int bank = event.channel == 9 ? 128 : event.bank;
+      if (compiled.note_on(uint8_t(event.channel), uint16_t(event.program),
+                           uint16_t(bank), uint8_t(event.note),
+                           uint8_t(event.velocity)) == 0) {
+        ++stats.unmapped_note_ons;
+      }
+      const uint64_t elapsed = monotonic_ns() - input.timestamp_ns;
+      stats.note_on_enqueue_total_ns += elapsed;
+      stats.note_on_enqueue_max_ns = std::max(stats.note_on_enqueue_max_ns, elapsed);
+    } else {
+      compiled.note_off(uint8_t(event.channel), uint8_t(event.note));
+    }
+  } else if (event.type == render::NoteEvent::EVENT_CONTROL) {
+    compiled.control_change(uint8_t(event.channel), uint8_t(event.controller),
+                            uint8_t(event.value));
+  } else if (event.type == render::NoteEvent::EVENT_PITCH_BEND) {
+    compiled.pitch_bend(uint8_t(event.channel), int16_t(event.pitch_bend));
+  } else if (event.type == render::NoteEvent::EVENT_CHANNEL_PRESSURE) {
+    compiled.channel_pressure(uint8_t(event.channel), uint8_t(event.value));
+  } else if (event.type == render::NoteEvent::EVENT_KEY_PRESSURE) {
+    compiled.key_pressure(uint8_t(event.channel), uint8_t(event.note),
+                          uint8_t(event.value));
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -253,7 +300,17 @@ int main(int argc, char** argv) {
       midi_file_events = render::parse_midi(args.midi_file);
     }
     render::Sf2Data sf2 = render::load_sf2(args.sf2);
-    host::RealtimeRegionBank region_bank(sf2, args.sample_rate, tick_samples);
+    std::vector<uint8_t> compiled_asset_bytes;
+    std::unique_ptr<render::McuSf2AssetView> compiled_asset_view;
+    if (!args.mcu_asset.empty()) {
+      compiled_asset_bytes = read_binary_file(args.mcu_asset);
+      compiled_asset_view = std::make_unique<render::McuSf2AssetView>(
+          compiled_asset_bytes.data(), compiled_asset_bytes.size());
+      if (!compiled_asset_view->matches_source(
+              sf2, std::filesystem::file_size(args.sf2))) {
+        throw std::runtime_error("MCU SF2 sidecar/source identity mismatch");
+      }
+    }
 
     std::unique_ptr<render::CommandWordSink> transport;
     if (args.dry_run) {
@@ -262,10 +319,22 @@ int main(int argc, char** argv) {
       transport = std::make_unique<host::Ch347RegisterTransport>(args.ch347);
     }
     host::AsyncCommandScheduler scheduler(std::move(transport));
-    render::CommandVoiceControl command_control(scheduler);
     render::RenderDiagnostics diagnostics;
-    render::McuModel mcu(command_control, region_bank.regions(), &diagnostics,
-                         {1, 1, 4});
+    std::unique_ptr<host::RealtimeRegionBank> region_bank;
+    std::unique_ptr<render::CommandVoiceControl> command_control;
+    std::unique_ptr<render::McuModel> mcu;
+    std::unique_ptr<host::McuSf2AssetRuntime> compiled_runtime;
+    if (compiled_asset_view) {
+      compiled_runtime = std::make_unique<host::McuSf2AssetRuntime>(
+          *compiled_asset_view, scheduler);
+    } else {
+      region_bank = std::make_unique<host::RealtimeRegionBank>(
+          sf2, args.sample_rate, tick_samples);
+      command_control = std::make_unique<render::CommandVoiceControl>(scheduler);
+      mcu = std::make_unique<render::McuModel>(
+          *command_control, region_bank->regions(), &diagnostics,
+          render::ControlUpdateRates{1, 1, 4});
+    }
 
     host::BoundedMidiEventQueue midi_queue;
     std::signal(SIGINT, signal_handler);
@@ -315,13 +384,17 @@ int main(int argc, char** argv) {
           (elapsed_ns / 1000000000ull) * uint64_t(args.sample_rate) +
           ((elapsed_ns % 1000000000ull) * uint64_t(args.sample_rate)) /
               1000000000ull;
-      mcu.set_current_sample(uint32_t(sample));
+      if (mcu) mcu->set_current_sample(uint32_t(sample));
 
       host::TimestampedMidiEvent event;
       while (midi_queue.pop(event)) {
         try {
-          handle_midi_event(event, region_bank, mcu, scheduler,
-                            next_note_instance, runtime);
+          if (compiled_runtime) {
+            handle_compiled_midi_event(event, *compiled_runtime, scheduler, runtime);
+          } else {
+            handle_midi_event(event, *region_bank, *mcu, scheduler,
+                              next_note_instance, runtime);
+          }
         } catch (const std::exception& error) {
           std::cerr << "error: MIDI event handling failed: " << error.what() << '\n';
           fatal = true;
@@ -338,7 +411,8 @@ int main(int argc, char** argv) {
                 tick_now - next_tick).count()));
         {
           auto batch = scheduler.batch();
-          mcu.control_tick();
+          if (compiled_runtime) compiled_runtime->advance_samples(uint32_t(tick_samples));
+          else mcu->control_tick();
         }
         next_tick += tick_period;
         if (next_tick <= tick_now) next_tick = tick_now + tick_period;
@@ -361,7 +435,14 @@ int main(int argc, char** argv) {
 
     if (midi_input) midi_input->stop();
     try {
-      all_sound_off(mcu, scheduler);
+      if (compiled_runtime) {
+        auto batch = scheduler.batch();
+        for (int channel = 0; channel < 16; ++channel) {
+          compiled_runtime->all_sound_off(uint8_t(channel));
+        }
+      } else {
+        all_sound_off(*mcu, scheduler);
+      }
     } catch (const std::exception& error) {
       std::cerr << "error: failed to queue all-sound-off recovery: " << error.what() << '\n';
       fatal = true;
@@ -372,7 +453,10 @@ int main(int argc, char** argv) {
 
     const host::MidiEventQueueStats midi_stats = midi_queue.stats();
     const host::CommandSchedulerStats command_stats = scheduler.stats();
-    const host::RealtimeRegionBankStats region_stats = region_bank.stats();
+    const host::RealtimeRegionBankStats region_stats =
+        region_bank ? region_bank->stats() : host::RealtimeRegionBankStats{};
+    const host::McuSf2AssetRuntimeStats compiled_stats = compiled_runtime
+        ? compiled_runtime->stats() : host::McuSf2AssetRuntimeStats{};
     const uint64_t average_note_on_ns = runtime.note_on_events == 0 ? 0 :
         runtime.note_on_enqueue_total_ns / runtime.note_on_events;
     const bool midi_disconnected = midi_input && midi_input->disconnected();
@@ -397,9 +481,14 @@ int main(int argc, char** argv) {
         << ",\"note_on_enqueue_average_ns\":" << average_note_on_ns
         << ",\"note_on_enqueue_max_ns\":" << runtime.note_on_enqueue_max_ns
         << ",\"scheduling_jitter_max_ns\":" << runtime.scheduling_jitter_max_ns
-        << ",\"active_voices\":" << diagnostics.control_active_voices
-        << ",\"maximum_active_voices\":" << diagnostics.control_max_active_voices
-        << ",\"voice_steals\":" << diagnostics.voice_steals
+        << ",\"compiled_asset\":" << (compiled_runtime ? "true" : "false")
+        << ",\"active_voices\":" << (compiled_runtime ? compiled_stats.active_voices
+                                                            : diagnostics.control_active_voices)
+        << ",\"maximum_active_voices\":"
+        << (compiled_runtime ? compiled_stats.maximum_active_voices
+                             : diagnostics.control_max_active_voices)
+        << ",\"voice_steals\":" << (compiled_runtime ? compiled_stats.stolen_voices
+                                                          : diagnostics.voice_steals)
         << ",\"command_queue_high_water\":" << command_stats.queue_high_water
         << ",\"coalesced_commands\":" << command_stats.coalesced_updates
         << ",\"dropped_replaceable_commands\":" << command_stats.dropped_replaceable_updates

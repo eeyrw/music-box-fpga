@@ -133,4 +133,81 @@ int64_t mcu_sf2_evaluate_term_q16(const McuSf2ModulationTerm& term,
   return result;
 }
 
+double mcu_sf2_pitch_ratio(int64_t cents_q16) {
+  constexpr int kMinimumCents = -24000;
+  constexpr int kMaximumCents = 24000;
+  constexpr int kStepsPerCent = 4;
+  constexpr int kRatioCount =
+      (kMaximumCents - kMinimumCents) * kStepsPerCent + 1;
+  static const std::array<double, kRatioCount> ratios = [] {
+    std::array<double, kRatioCount> values{};
+    for (int index = 0; index < kRatioCount; ++index) {
+      const double cents = double(index) / kStepsPerCent + kMinimumCents;
+      values[index] = std::pow(2.0, cents / 1200.0);
+    }
+    return values;
+  }();
+  const double cents = double(cents_q16) / kMcuModulationOne;
+  double ratio = ratios.front();
+  if (cents >= kMaximumCents) {
+    ratio = ratios.back();
+  } else if (cents > kMinimumCents) {
+    const double position = (cents - kMinimumCents) * kStepsPerCent;
+    const int lower = int(position);
+    const double fraction = position - lower;
+    ratio = ratios[lower] + (ratios[lower + 1] - ratios[lower]) * fraction;
+  }
+  return ratio;
+}
+
+uint32_t mcu_sf2_phase_increment(uint32_t base_phase_increment,
+                                 int64_t cents_q16) {
+  const double raw = double(base_phase_increment) * mcu_sf2_pitch_ratio(cents_q16);
+  if (raw < 1.0) return 1;
+  if (raw > double(UINT32_MAX)) return UINT32_MAX;
+  return uint32_t(std::round(raw));
+}
+
+std::pair<int, int> mcu_sf2_mono_gains(uint16_t base_gain, int16_t base_pan,
+                                       int64_t attenuation_q16,
+                                       int64_t pan_delta_q16) {
+  const double attenuation = double(attenuation_q16) / kMcuModulationOne;
+  const double level = attenuation_gain(attenuation);
+  const int scaled = clamp_q15(int(std::round(double(base_gain) * level)));
+  const int64_t pan_q16 = int64_t(base_pan) * kMcuModulationOne + pan_delta_q16;
+  const int64_t bias = pan_q16 >= 0 ? int64_t(1) << 15 : -(int64_t(1) << 15);
+  const int pan = std::max(-500, std::min(500,
+      int((pan_q16 + bias) / (int64_t(1) << 16))));
+  return equal_power_pan_gains(scaled, scaled, pan, false);
+}
+
+FilterConfig mcu_sf2_filter_config(int cutoff_cents, int resonance_cb,
+                                   int sample_rate) {
+  auto q2_14 = [](double value) {
+    const double raw = std::round(value * 16384.0);
+    return int(std::max(double(INT16_MIN), std::min(double(INT16_MAX), raw)));
+  };
+  cutoff_cents = std::max(1500, std::min(13500, cutoff_cents));
+  const double cutoff_hz = 8.176 * std::pow(2.0, double(cutoff_cents) / 1200.0);
+  const double nyquist = double(sample_rate) * 0.5;
+  FilterConfig filter;
+  if (cutoff_hz >= nyquist * 0.97) return filter;
+  resonance_cb = std::max(0, std::min(960, ((resonance_cb + 1) / 2) * 2));
+  const double q = std::max(
+      0.5, std::pow(10.0, double(resonance_cb) / 200.0) * 0.7071067811865476);
+  const double omega = 2.0 * 3.14159265358979323846 * cutoff_hz /
+                       double(sample_rate);
+  const double sin_w = std::sin(omega);
+  const double cos_w = std::cos(omega);
+  const double alpha = sin_w / (2.0 * q);
+  const double a0 = 1.0 + alpha;
+  filter.enable = true;
+  filter.b0 = q2_14(((1.0 - cos_w) * 0.5) / a0);
+  filter.b1 = q2_14((1.0 - cos_w) / a0);
+  filter.b2 = q2_14(((1.0 - cos_w) * 0.5) / a0);
+  filter.a1 = q2_14((-2.0 * cos_w) / a0);
+  filter.a2 = q2_14((1.0 - alpha) / a0);
+  return filter;
+}
+
 }  // namespace render

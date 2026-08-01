@@ -167,12 +167,22 @@ render-block boundary. Reported `note_on_enqueue_*` is ingress-to-command-queue
 latency for raw input and due-time-to-command-queue latency for file playback;
 `maximum_command_age_ns` includes scheduler and driver delay.
 
-The complete SF2 file is loaded and its compiled lookup is built before the
-MIDI device is opened. One process-lifetime `CommandVoiceControl` preserves
-voice generations, while `McuModel` supplies the same allocation, pedal,
-exclusive-class, pitch-bend, pressure, and controller behavior used by the
-simulation harness. The exact same SF2 wave image must already be loaded in the
-FPGA address space.
+Without `--mcu-asset`, the complete SF2 file is loaded and its dynamic lookup is
+built before the MIDI device is opened. One process-lifetime
+`CommandVoiceControl` preserves voice generations, while `McuModel` supplies
+the allocation, pedal, exclusive-class, pitch-bend, pressure, and controller
+behavior used by the simulation harness.
+
+With `--mcu-asset PATH`, the host instead uses the offline-compiled direct
+dispatch image and fixed-capacity MCU runtime. The sidecar is loaded and fully
+validated before the command scheduler starts. Startup fails closed unless its
+recorded SF2 byte size and CRC match the `--sf2` file; malformed section bounds,
+references, or profile fields are also rejected. The complete SF2 is currently
+still parsed by this host application solely to perform the source identity
+check. A board integration may validate the same identity from its WTSF bundle
+manifest without parsing SF2 metadata. In either mode, the exact wave image
+referenced by the control metadata must already be present in FPGA-visible
+storage.
 
 Build and run the application with:
 
@@ -189,7 +199,8 @@ build/realtime_midi_host --dry-run --midi-file /path/to/song.mid \
 
 # Current SGM development workload.
 build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
-  --sf2 '/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2'
+  --sf2 '/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2' \
+  --mcu-asset build/assets/sgm-gm-bank0.msf2
 ```
 
 SMF playback exits automatically after its final event plus `--midi-tail-ms`
@@ -199,7 +210,8 @@ failure all stop input first, issue All Sound Off on every channel, wait up to
 two seconds for the command queue, and report final JSON statistics. The report
 identifies the source and file completion counts in addition to Note On latency,
 control scheduling jitter, MIDI and command queue high-water marks, transport
-failures, current/maximum active voices, voice steals, and region-cache activity.
+failures, current/maximum active voices, voice steals, compiled-path selection,
+and region-cache activity.
 
 On 2026-08-01, a dry-run C4 Note On/Off using the 324,800,670-byte SGM workload
 selected four layers, reached four active voices and a 63-word transaction,

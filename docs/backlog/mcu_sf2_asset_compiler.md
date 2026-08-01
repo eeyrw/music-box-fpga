@@ -762,7 +762,8 @@ evaluation is deliberately not encoded in START templates and remains Phase 3.
 - [x] Add shared finite-domain source curves and selected key/velocity result
   tables.
 - [x] Implement fixed channel source state and active-voice modulation state.
-- [x] Replace hot-path double arithmetic with documented fixed-point operations.
+- [x] Replace modulation source and term evaluation with documented fixed-point
+  operations; retain output-conversion approximation validation separately.
 - [x] Retain independent gain, pitch, and filter update rates and unchanged
   output suppression.
 
@@ -786,16 +787,38 @@ and unchanged-output suppression cases.
 
 ### Phase 4: MCU Runtime Integration
 
-- [ ] Integrate the image view with MIDI channel state, allocation policy,
-  `CommandVoiceControl`, and the asynchronous command scheduler.
-- [ ] Remove runtime STL/heap requirements from the target MCU control core.
-- [ ] Add fixed free-slot and exclusive-class indexing.
-- [ ] Add sidecar/WTSF identity checks and fail-closed startup behavior.
+- [x] Integrate the image view with MIDI channel state, allocation policy, the
+  fixed command protocol, and the asynchronous command scheduler.
+- [x] Remove runtime STL/heap requirements from the portable MCU control core.
+- [x] Add fixed free-slot and exclusive-class indexing.
+- [x] Add sidecar/SF2 identity checks and fail-closed host startup behavior.
 - [ ] Measure the actual target under 128-, 256-, and 512-voice stress where the
   configured voice count permits it.
 
 Exit gate: target timing, SRAM, stack, flash bandwidth, command age, and overload
 behavior meet the deployment profile with margin.
+
+The portable Phase 4 runtime reads records directly from the memory-mapped
+image, keeps channel/voice/allocation/exclusive state in fixed arrays, and emits
+complete bounded commands through `CommandWordSink`. It implements Note On,
+oldest-instance Note Off, sustain, soft pedal, channel and key pressure, pitch
+bend, All Sound Off, exclusive class, bounded stealing, release reclamation,
+modulation LFOs, the modulation envelope, and independent gain/pitch/filter
+updates. The real-time host selects this path with `--mcu-asset`; it validates
+the sidecar against the complete SF2 size and CRC before constructing the
+command scheduler or accepting MIDI.
+
+Adding the interned runtime configurations increases the SGM bank-zero image
+from 4,284,724 to 4,450,632 bytes. It contains 346 unique 56-byte runtime
+configurations for 36,625 descriptors. On the development x86 host, the fixed
+512-voice runtime object is 75,008 bytes. The host/XIP proxy benchmark measured
+Note On averages of 1,205, 1,004, and 972 ns at 128, 256, and 512 voices;
+full-channel controller walks measured 75,131, 153,279, and 300,006 ns. These
+are functional scaling measurements only. They do not include RP2040 flash
+latency, SRAM placement, stack use, transport contention, or interrupt jitter,
+and therefore do not satisfy the target exit gate. The output conversion
+helpers also retain host-oriented lookup/floating-point implementations until a
+specific MCU and flash execution model are selected.
 
 ### Phase 5: End-To-End Qualification
 

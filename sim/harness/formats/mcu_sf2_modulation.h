@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace render {
 
@@ -53,5 +54,13 @@ int32_t mcu_sf2_source_value_q16(uint16_t source,
 int64_t mcu_sf2_evaluate_term_q16(const McuSf2ModulationTerm& term,
                                   const McuFixedChannelState& channel,
                                   const McuFixedVoiceSources& voice);
+double mcu_sf2_pitch_ratio(int64_t cents_q16);
+uint32_t mcu_sf2_phase_increment(uint32_t base_phase_increment,
+                                 int64_t cents_q16);
+std::pair<int, int> mcu_sf2_mono_gains(uint16_t base_gain, int16_t base_pan,
+                                       int64_t attenuation_q16,
+                                       int64_t pan_delta_q16);
+FilterConfig mcu_sf2_filter_config(int cutoff_cents, int resonance_cb,
+                                   int sample_rate);
 
 }  // namespace render
