@@ -44,10 +44,26 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
                                 std::vector<Region>& regions,
                                 std::vector<int16_t>& wave_memory);
 
+struct ControlUpdateRates {
+  uint32_t gain_ticks = 1;
+  uint32_t pitch_ticks = 1;
+  uint32_t filter_ticks = 4;
+};
+
+struct ControlMathValidation {
+  double max_pitch_ratio_error = 0.0;
+  double max_attenuation_gain_error = 0.0;
+  uint32_t max_phase_increment_error = 0;
+  uint32_t max_filter_coefficient_error = 0;
+};
+
+ControlMathValidation validate_control_math_approximations();
+
 class McuModel {
  public:
   McuModel(VoiceCommandSink& sink, const std::vector<Region>& regions,
-           RenderDiagnostics* diagnostics = nullptr);
+           RenderDiagnostics* diagnostics = nullptr,
+           ControlUpdateRates update_rates = {});
 
   void handle_event(const NoteEvent& event);
   void control_tick();
@@ -82,9 +98,10 @@ class McuModel {
   void channel_pressure(const NoteEvent& event);
   void key_pressure(const NoteEvent& event);
   void pitch_bend(const NoteEvent& event);
-  void update_voice_controls(int voice);
-  void update_voice_modulation(int voice);
-  void update_channel_controls(int channel);
+  void update_voice_controls(int voice, uint8_t dirty_groups = 0x07);
+  void update_voice_modulation(int voice, uint8_t dirty_groups,
+                               bool advance_modulation);
+  void update_channel_controls(int channel, uint8_t dirty_groups = 0x07);
   void release_deferred_pedal_voices(int channel);
   void all_notes_off(int channel);
   void apply_data_entry(int channel, int msb_value);
@@ -95,15 +112,18 @@ class McuModel {
   void release_voice(int voice);
   void note_off(int channel, int note, uint64_t note_instance = 0);
   void note_on(const NoteEvent& event);
-  int first_free_or_steal_slot() const;
-  static std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
-                                           const ChannelState& channel);
-  static double modulator_sum(const Region& region, const VoiceState& voice,
-                              const ChannelState& channel, uint16_t dest,
-                              bool include_note_sources = true,
-                              bool include_realtime_sources = true);
+  int first_free_or_steal_slot();
+  std::pair<int, int> runtime_gains(const Region& region, const VoiceState& voice,
+                                    const ChannelState& channel);
+  double modulator_sum(const Region& region, const VoiceState& voice,
+                       const ChannelState& channel, uint16_t dest,
+                       bool include_note_sources = true,
+                       bool include_realtime_sources = true);
   static uint32_t modulated_phase_inc(uint32_t base_phase_inc, double cents);
   static FilterConfig filter_for(int cutoff_cents, int resonance_cb, int sample_rate);
+  void activate_voice(int voice);
+  void deactivate_voice(int voice);
+  void record_emitted_commands(uint64_t count = 1);
 
   VoiceCommandSink& sink_;
   const std::vector<Region>& regions_;
@@ -117,7 +137,11 @@ class McuModel {
   std::array<uint32_t, kNumVoices> last_runtime_phase_inc_{};
   std::array<bool, kNumVoices> runtime_filter_valid_{};
   std::array<FilterConfig, kNumVoices> last_runtime_filter_{};
+  std::array<int, kNumVoices> active_positions_{};
+  std::array<int, kNumVoices> active_voices_{};
+  int active_voice_count_ = 0;
   RenderDiagnostics* diagnostics_ = nullptr;
+  ControlUpdateRates update_rates_;
   int alloc_stamp_ = 0;
   uint64_t next_note_instance_ = 0;
   uint64_t control_tick_index_ = 0;

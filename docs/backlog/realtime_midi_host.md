@@ -118,41 +118,65 @@ changes. Its immutable shared results remain valid for callers after eviction.
 
 ## Priority 4: Bounded MCU Control Work
 
-- [ ] Maintain a compact active-voice set instead of scanning every silent slot
+- [x] Maintain a compact active-voice set instead of scanning every silent slot
   on every control tick.
-- [ ] Track dirty controller and generator groups so an unrelated controller
+- [x] Track dirty controller and generator groups so an unrelated controller
   does not recompute all gain, pitch, and filter state.
-- [ ] Replace repeated pitch-ratio, attenuation, and pan transcendental calls
+- [x] Replace repeated pitch-ratio, attenuation, and pan transcendental calls
   with validated lookup tables or bounded fixed-point approximations.
-- [ ] Quantize and cache filter coefficients by cutoff, resonance, and output
+- [x] Quantize and cache filter coefficients by cutoff, resonance, and output
   sample rate.
-- [ ] Retain exact output-change suppression before command generation.
-- [ ] Give gain, pitch, and filter independent maximum update rates. Filter
+- [x] Retain exact output-change suppression before command generation.
+- [x] Give gain, pitch, and filter independent maximum update rates. Filter
   modulation should normally run slower than pitch or gain modulation.
-- [ ] Add timing counters for control-tick duration, active voices, modulator
+- [x] Add timing counters for control-tick duration, active voices, modulator
   evaluations, dirty groups, and emitted commands.
-- [ ] Benchmark 128, 256, and 512 active mono voices with representative SGM
+- [x] Benchmark 128, 256, and 512 active mono voices with representative SGM
   modulators and controller traffic.
 
 Optimization must preserve the existing reference results. Approximation
 tables need exhaustive or high-coverage comparison against the current
 floating-point functions with documented maximum error.
 
+The bounded implementation uses a dense active set and destination dirty masks.
+Gain and pitch run at most once per tick; filter modulation defaults to once per
+four ticks, while event-driven changes remain immediate. Quarter-cent pitch,
+eighth-centibel attenuation, and integer-pan tables remove the repeated hot-path
+transcendental calls. A 4096-entry fixed filter cache quantizes cutoff to one
+cent and resonance to two centibels. The validation sweep covers quarter-cent
+pitch, eighth-centibel attenuation, and filter points across 44.1, 48, and
+96 kHz. Its measured maximum filter deviation is 89 Q2.14 LSB against the old
+formula, below the enforced 96-LSB limit; pitch phase and attenuation are exact
+on their validation grids.
+
+On the 2026-08-01 development container, `make benchmark-mcu-control` measured
+average/max tick durations of 48/115 us at 128 voices, 82/148 us at 256 voices,
+and 94/125 us at 512 voices for the representative modulator/controller load.
+These are host measurements, not a target-PC release qualification.
+
 ## Priority 5: Allocation-Free Command Construction
 
-- [ ] Introduce a fixed-capacity command value containing at most 17 words and
+- [x] Introduce a fixed-capacity command value containing at most 17 words and
   an explicit length.
-- [ ] Remove the `initializer_list -> payload vector -> command vector`
+- [x] Remove the `initializer_list -> payload vector -> command vector`
   allocation chain from `CommandVoiceControl` and global audio control.
-- [ ] Extend or replace `CommandWordSink` with a non-owning command-word view
+- [x] Extend or replace `CommandWordSink` with a non-owning command-word view
   while retaining adapters for existing tests and reference sinks.
-- [ ] Encode CH347 transactions directly into a fixed 256-byte buffer.
-- [ ] Replace bit-at-a-time CRC16 in the hot path with a verified table-driven
+- [x] Encode CH347 transactions directly into a fixed 256-byte buffer.
+- [x] Replace bit-at-a-time CRC16 in the hot path with a verified table-driven
   or otherwise bounded implementation.
-- [ ] Keep the current CRC implementation as an independent test oracle.
+- [x] Keep the current CRC implementation as an independent test oracle.
 
 Command construction and queue insertion on the control thread must not
 perform heap allocation after application initialization.
+
+`FixedCommand` owns a 17-word array and explicit length. All command consumers
+accept `CommandWordView`; deferring sinks copy into fixed owned storage. The
+frame-batched queue is a fixed 1024-entry ring and rejects overflow. A unit-test
+allocation probe covers voice/global command construction plus queue insertion
+and application. CH347 uses the final fixed transaction buffer directly, and
+4096 generated transactions compare the table-driven CRC with the retained
+bit-at-a-time oracle.
 
 ## Priority 6: Asynchronous CH347 Command Scheduling
 

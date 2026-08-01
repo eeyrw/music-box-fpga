@@ -31,7 +31,7 @@ uint32_t ceil_step(uint64_t distance, uint32_t duration) {
 
 }  // namespace
 
-void CommandFanout::write_command_words(const std::vector<uint32_t>& words) {
+void CommandFanout::write_command_words(CommandWordView words) {
   first_.write_command_words(words);
   second_.write_command_words(words);
 }
@@ -45,26 +45,39 @@ FrameBatchedCommandSink::FrameBatchedCommandSink(
 }
 
 void FrameBatchedCommandSink::write_command_words(
-    const std::vector<uint32_t>& words) {
+    CommandWordView words) {
   if (words.empty()) return;
-  pending_.push_back({words, frame_index_});
+  if (words.size() > kMaxCommandWords) {
+    throw std::length_error("frame-batched command exceeds 17 words");
+  }
+  if (pending_count_ == pending_.size()) {
+    throw std::length_error("frame-batched command queue is full");
+  }
+  PendingCommand& pending = pending_[pending_tail_];
+  pending.command = {};
+  for (uint32_t word : words) pending.command.push_back(word);
+  pending.enqueue_frame = frame_index_;
+  pending_tail_ = (pending_tail_ + 1) % pending_.size();
+  ++pending_count_;
   ++total_enqueued_actions_;
-  max_pending_actions_ = std::max(max_pending_actions_, pending_.size());
+  max_pending_actions_ = std::max(max_pending_actions_, pending_count_);
 }
 
 std::size_t FrameBatchedCommandSink::apply_frame() {
   std::size_t applied = 0;
-  while (applied < max_actions_per_frame_ && !pending_.empty()) {
-    PendingCommand command = std::move(pending_.front());
-    pending_.pop_front();
+  while (applied < max_actions_per_frame_ && pending_count_ != 0) {
+    PendingCommand command = pending_[pending_head_];
+    pending_head_ = (pending_head_ + 1) % pending_.size();
+    --pending_count_;
     max_deferred_frames_ = std::max(
         max_deferred_frames_, frame_index_ - command.enqueue_frame);
-    const bool flush = uint8_t(command.words.front() >> 24) == 0x7f;
-    sink_.write_command_words(command.words);
+    const bool flush = uint8_t(command.command.words[0] >> 24) == 0x7f;
+    sink_.write_command_words(command.command.view());
     ++applied;
     ++total_applied_actions_;
     if (flush) {
-      pending_.clear();
+      pending_count_ = 0;
+      pending_head_ = pending_tail_;
       break;
     }
   }
@@ -77,21 +90,20 @@ CommandVoiceControl::CommandVoiceControl(CommandWordSink& sink) : sink_(sink) {}
 void CommandVoiceControl::emit(uint8_t opcode, int voice,
                                std::initializer_list<uint32_t> payload,
                                uint8_t flags) {
-  emit(opcode, voice, std::vector<uint32_t>(payload), flags);
+  emit(opcode, voice, CommandWordView(payload.begin(), payload.size()), flags);
 }
 
 void CommandVoiceControl::emit(uint8_t opcode, int voice,
-                               const std::vector<uint32_t>& payload,
+                               CommandWordView payload,
                                uint8_t flags) {
   if (voice < 0 || voice >= kNumVoices) throw std::out_of_range("voice command slot");
   if (flags > 0x3f) throw std::out_of_range("voice command flags");
-  std::vector<uint32_t> words;
-  words.reserve(payload.size() + 1);
-  words.push_back((uint32_t(opcode) << 24) |
+  FixedCommand command;
+  command.push_back((uint32_t(opcode) << 24) |
                   (uint32_t(voice & 0x3ff) << 14) |
                   (uint32_t(flags) << 8) | uint32_t(payload.size()));
-  words.insert(words.end(), payload.cbegin(), payload.cend());
-  sink_.write_command_words(words);
+  for (uint32_t word : payload) command.push_back(word);
+  sink_.write_command_words(command.view());
 }
 
 void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Region& r) {
@@ -114,8 +126,10 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
   uint8_t flags = uint8_t(r.loop_mode & 3);
   if (has_filter) flags |= 1u << 2;
   if (has_envelope) flags |= 1u << 3;
-  std::vector<uint32_t> payload{
-      uint32_t(mirror.generation), r.base_addr, r.length};
+  FixedCommand payload;
+  payload.push_back(uint32_t(mirror.generation));
+  payload.push_back(r.base_addr);
+  payload.push_back(r.length);
   if (has_loop) {
     payload.push_back(r.loop_start);
     payload.push_back(r.loop_end);
@@ -135,7 +149,7 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
     payload.push_back(env.sustain_cb_q12_20);
     payload.push_back(envelope_release_step(r));
   }
-  emit(kDefineMono, voice, payload, flags);
+  emit(kDefineMono, voice, payload.view(), flags);
   mirror.active = true;
   mirror.released = false;
   mirror.gain_l = r.gain_l;
@@ -203,12 +217,16 @@ void CommandVoiceControl::stop_voice(int voice) {
 }
 
 void CommandAudioControl::emit(uint8_t opcode,
+                               CommandWordView payload) {
+  FixedCommand command;
+  command.push_back((uint32_t(opcode) << 24) | uint32_t(payload.size()));
+  for (uint32_t word : payload) command.push_back(word);
+  sink_.write_command_words(command.view());
+}
+
+void CommandAudioControl::emit(uint8_t opcode,
                                std::initializer_list<uint32_t> payload) {
-  std::vector<uint32_t> words;
-  words.reserve(payload.size() + 1);
-  words.push_back((uint32_t(opcode) << 24) | uint32_t(payload.size()));
-  words.insert(words.end(), payload.begin(), payload.end());
-  sink_.write_command_words(words);
+  emit(opcode, CommandWordView(payload.begin(), payload.size()));
 }
 
 void CommandAudioControl::configure_compressor(

@@ -1,20 +1,81 @@
 #include "command_control.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <new>
 #include <stdexcept>
 #include <vector>
+
+namespace {
+bool track_allocations = false;
+std::size_t tracked_allocations = 0;
+}
+
+void* operator new(std::size_t size) {
+  if (track_allocations) ++tracked_allocations;
+  if (void* memory = std::malloc(size)) return memory;
+  throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
 namespace render {
 namespace {
 
 class CaptureSink : public CommandWordSink {
  public:
-  void write_command_words(const std::vector<uint32_t>& words) override {
-    commands.push_back(words);
+  void write_command_words(CommandWordView words) override {
+    commands.emplace_back(words.begin(), words.end());
   }
   std::vector<std::vector<uint32_t>> commands;
 };
+
+class FixedCaptureSink : public CommandWordSink {
+ public:
+  void write_command_words(CommandWordView words) override {
+    if (count >= commands.size()) throw std::runtime_error("fixed capture overflow");
+    for (uint32_t word : words) commands[count].push_back(word);
+    ++count;
+  }
+  std::array<FixedCommand, 16> commands{};
+  std::size_t count = 0;
+};
+
+void test_command_construction_does_not_allocate() {
+  FixedCaptureSink sink;
+  FrameBatchedCommandSink batched(sink);
+  CommandVoiceControl voice_control(sink);
+  CommandAudioControl audio_control(sink);
+  Region region;
+  region.length = 64;
+  region.loop_start = 4;
+  region.loop_end = 60;
+  region.loop_mode = 1;
+  region.filter_enable = true;
+  region.volume_envelope.attack_samples = 16;
+  tracked_allocations = 0;
+  track_allocations = true;
+  voice_control.start_voice(0, 0x100, region);
+  voice_control.update_gain_phase(0, 0x1234, 0x2345, 0x110);
+  voice_control.update_filter(0, {true, 0x3000, 1, 2, 3, 4});
+  voice_control.release_voice(0, 0x100000);
+  voice_control.stop_voice(0);
+  audio_control.set_master_volume(0x4000);
+  audio_control.clear_effects(3);
+  FixedCommand queued;
+  queued.push_back(0x7f000000u);
+  batched.write_command_words(queued.view());
+  batched.apply_frame();
+  track_allocations = false;
+  if (tracked_allocations != 0) {
+    throw std::runtime_error("command construction performed heap allocation");
+  }
+}
 
 uint8_t opcode(const std::vector<uint32_t>& command) {
   return uint8_t(command.at(0) >> 24);
@@ -160,7 +221,7 @@ void test_frame_batched_command_sink() {
   CaptureSink sink;
   FrameBatchedCommandSink batched(sink);
   for (uint32_t index = 0; index < 18; ++index) {
-    batched.write_command_words({0x15000000u | index});
+    batched.write_command_words(std::vector<uint32_t>{0x15000000u | index});
   }
   if (batched.pending_actions() != 18 || batched.max_pending_actions() != 18 ||
       batched.total_enqueued_actions() != 18) {
@@ -178,9 +239,9 @@ void test_frame_batched_command_sink() {
 
   CaptureSink flush_sink;
   FrameBatchedCommandSink flush_batch(flush_sink);
-  flush_batch.write_command_words({0x15000000u});
-  flush_batch.write_command_words({0x7f000000u});
-  flush_batch.write_command_words({0x15000000u});
+  flush_batch.write_command_words(std::vector<uint32_t>{0x15000000u});
+  flush_batch.write_command_words(std::vector<uint32_t>{0x7f000000u});
+  flush_batch.write_command_words(std::vector<uint32_t>{0x15000000u});
   if (flush_batch.apply_frame() != 2 || flush_batch.pending_actions() != 0 ||
       flush_sink.commands.size() != 2 || opcode(flush_sink.commands.back()) != 0x7f) {
     throw std::runtime_error("STREAM_FLUSH did not discard deferred actions");
@@ -244,6 +305,7 @@ void test_global_audio_commands() {
 
 int main() {
   try {
+    render::test_command_construction_does_not_allocate();
     render::test_mono_start_and_runtime_actions();
     render::test_mono_word_count_and_generation();
     render::test_stereo_region_is_rejected();

@@ -237,7 +237,7 @@ class RtlDriver : public render::CommandWordSink {
 
   ~RtlDriver() { dut_.final(); }
 
-  void write_command_words(const std::vector<uint32_t>& words) override {
+  void write_command_words(render::CommandWordView words) override {
     for (uint32_t word : words) {
       dut_.cmd_stream_data = word;
       pulse_until_ready(dut_.cmd_stream_valid, dut_.cmd_stream_ready,

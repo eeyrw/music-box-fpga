@@ -16,7 +16,7 @@ class LookaheadCompressorModel : public CommandWordSink {
                                     RenderDiagnostics* diagnostics = nullptr);
 
   void reset();
-  void write_command_words(const std::vector<uint32_t>& words) override;
+  void write_command_words(CommandWordView words) override;
 
   std::optional<std::pair<int16_t, int16_t>> process_frame(int32_t mix_l,
                                                            int32_t mix_r);

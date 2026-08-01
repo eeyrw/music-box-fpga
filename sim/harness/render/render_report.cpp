@@ -420,7 +420,15 @@ std::string diagnostics_json_fields(const RenderDiagnostics& d) {
     << ",\n  \"diagnostics_max_runtime_filter_coeff_jump\": " << d.max_runtime_filter_coeff_jump
     << ",\n  \"diagnostics_max_audible_envelope_jump\": " << d.max_audible_envelope_jump
     << ",\n  \"diagnostics_max_audible_envelope_jump_voice\": " << d.max_audible_envelope_jump_voice
-    << ",\n  \"diagnostics_max_audible_envelope_jump_frame\": " << d.max_audible_envelope_jump_frame;
+    << ",\n  \"diagnostics_max_audible_envelope_jump_frame\": " << d.max_audible_envelope_jump_frame
+    << ",\n  \"control_tick_count\": " << d.control_tick_count
+    << ",\n  \"control_tick_total_ns\": " << d.control_tick_total_ns
+    << ",\n  \"control_tick_max_ns\": " << d.control_tick_max_ns
+    << ",\n  \"control_active_voices\": " << d.control_active_voices
+    << ",\n  \"control_max_active_voices\": " << d.control_max_active_voices
+    << ",\n  \"control_modulator_evaluations\": " << d.control_modulator_evaluations
+    << ",\n  \"control_dirty_group_evaluations\": " << d.control_dirty_group_evaluations
+    << ",\n  \"control_emitted_commands\": " << d.control_emitted_commands;
   return s.str();
 }
 

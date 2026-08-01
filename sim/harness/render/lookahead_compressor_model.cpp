@@ -41,7 +41,7 @@ void LookaheadCompressorModel::reset() {
   sync_diagnostics();
 }
 
-void LookaheadCompressorModel::write_command_words(const std::vector<uint32_t>& words) {
+void LookaheadCompressorModel::write_command_words(CommandWordView words) {
   if (words.empty()) return;
   const uint8_t opcode = uint8_t(words[0] >> 24);
   const uint8_t voice = uint8_t(words[0] >> 16);

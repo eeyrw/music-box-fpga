@@ -109,9 +109,15 @@ uint32_t Ch347RegisterTransport::read_register(uint16_t address) {
   return transact_register(false, address, 0).data;
 }
 
-void Ch347RegisterTransport::write_command_words(const std::vector<uint32_t>& words) {
-  const std::vector<uint8_t> bytes = encode_command_transaction(words);
-  send_transaction(bytes.data(), bytes.size());
+void Ch347RegisterTransport::write_command_words(render::CommandWordView words) {
+  CommandTransaction bytes = encode_command_transaction(words);
+  const bool ok = spi_write_(fd_, false, options_.chip_select_mask,
+                             int(bytes.size()), int(bytes.size()), bytes.bytes.data());
+  if (!ok) {
+    std::ostringstream msg;
+    msg << "CH347SPI_Write failed for " << bytes.size() << " command bytes";
+    throw std::runtime_error(msg.str());
+  }
 }
 
 int Ch347RegisterTransport::selected_clock_hz(int requested_hz) {
@@ -119,7 +125,7 @@ int Ch347RegisterTransport::selected_clock_hz(int requested_hz) {
 }
 
 void Ch347RegisterTransport::validate_command_transaction(
-    const std::vector<uint32_t>& words) {
+    render::CommandWordView words) {
   if (words.empty()) {
     throw std::invalid_argument("CH347 command transaction must not be empty");
   }
@@ -145,17 +151,22 @@ void Ch347RegisterTransport::validate_command_transaction(
 }
 
 uint16_t Ch347RegisterTransport::command_transaction_crc16(
-    const std::vector<uint32_t>& words) {
+    render::CommandWordView words) {
   validate_command_transaction(words);
-
-  auto update = [](uint16_t crc, uint8_t byte) {
-    crc ^= uint16_t(byte) << 8;
-    for (int bit = 0; bit < 8; ++bit) {
-      crc = (crc & 0x8000u) != 0
-                ? uint16_t((uint16_t(crc << 1)) ^ 0x1021u)
-                : uint16_t(crc << 1);
+  static const std::array<uint16_t, 256> table = [] {
+    std::array<uint16_t, 256> result{};
+    for (std::size_t i = 0; i < result.size(); ++i) {
+      uint16_t crc = uint16_t(i << 8);
+      for (int bit = 0; bit < 8; ++bit) {
+        crc = (crc & 0x8000u) ? uint16_t((crc << 1) ^ 0x1021u)
+                              : uint16_t(crc << 1);
+      }
+      result[i] = crc;
     }
-    return crc;
+    return result;
+  }();
+  auto update = [&](uint16_t crc, uint8_t byte) {
+    return uint16_t((crc << 8) ^ table[uint8_t((crc >> 8) ^ byte)]);
   };
 
   uint16_t crc = update(0xffffu, uint8_t(words.size()));
@@ -168,22 +179,43 @@ uint16_t Ch347RegisterTransport::command_transaction_crc16(
   return crc;
 }
 
-std::vector<uint8_t> Ch347RegisterTransport::encode_command_transaction(
-    const std::vector<uint32_t>& words) {
-  const uint16_t crc = command_transaction_crc16(words);
-  std::vector<uint8_t> bytes;
-  bytes.reserve(4 + words.size() * 4);
-  bytes.push_back(0xa5);
-  bytes.push_back(uint8_t(words.size()));
-  bytes.push_back(uint8_t(crc >> 8));
-  bytes.push_back(uint8_t(crc));
+uint16_t Ch347RegisterTransport::command_transaction_crc16_oracle(
+    render::CommandWordView words) {
+  validate_command_transaction(words);
+  auto update = [](uint16_t crc, uint8_t byte) {
+    crc ^= uint16_t(byte) << 8;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x8000u) ? uint16_t((crc << 1) ^ 0x1021u)
+                            : uint16_t(crc << 1);
+    }
+    return crc;
+  };
+  uint16_t crc = update(0xffffu, uint8_t(words.size()));
   for (uint32_t word : words) {
-    bytes.push_back(uint8_t(word >> 24));
-    bytes.push_back(uint8_t(word >> 16));
-    bytes.push_back(uint8_t(word >> 8));
-    bytes.push_back(uint8_t(word));
+    crc = update(crc, uint8_t(word >> 24));
+    crc = update(crc, uint8_t(word >> 16));
+    crc = update(crc, uint8_t(word >> 8));
+    crc = update(crc, uint8_t(word));
   }
-  return bytes;
+  return crc;
+}
+
+Ch347RegisterTransport::CommandTransaction
+Ch347RegisterTransport::encode_command_transaction(render::CommandWordView words) {
+  const uint16_t crc = command_transaction_crc16(words);
+  CommandTransaction transaction;
+  auto push = [&](uint8_t byte) { transaction.bytes[transaction.length++] = byte; };
+  push(0xa5);
+  push(uint8_t(words.size()));
+  push(uint8_t(crc >> 8));
+  push(uint8_t(crc));
+  for (uint32_t word : words) {
+    push(uint8_t(word >> 24));
+    push(uint8_t(word >> 16));
+    push(uint8_t(word >> 8));
+    push(uint8_t(word));
+  }
+  return transaction;
 }
 
 uint32_t Ch347RegisterTransport::register_frame_crc32(

@@ -5,23 +5,61 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <initializer_list>
+#include <stdexcept>
 #include <vector>
 
 namespace render {
 
+constexpr std::size_t kMaxCommandWords = 17;
+
+class CommandWordView {
+ public:
+  CommandWordView() = default;
+  CommandWordView(const uint32_t* data, std::size_t size)
+      : data_(data), size_(size) {}
+  CommandWordView(const std::vector<uint32_t>& words)
+      : data_(words.data()), size_(words.size()) {}
+
+  const uint32_t* begin() const { return data_; }
+  const uint32_t* end() const { return size_ == 0 ? data_ : data_ + size_; }
+  const uint32_t* data() const { return data_; }
+  std::size_t size() const { return size_; }
+  bool empty() const { return size_ == 0; }
+  uint32_t operator[](std::size_t index) const { return data_[index]; }
+  uint32_t at(std::size_t index) const {
+    if (index >= size_) throw std::out_of_range("command word index");
+    return data_[index];
+  }
+  uint32_t front() const { return data_[0]; }
+
+ private:
+  const uint32_t* data_ = nullptr;
+  std::size_t size_ = 0;
+};
+
+struct FixedCommand {
+  std::array<uint32_t, kMaxCommandWords> words{};
+  uint8_t length = 0;
+
+  void push_back(uint32_t word) {
+    if (length >= words.size()) throw std::length_error("command exceeds 17 words");
+    words[length++] = word;
+  }
+  CommandWordView view() const { return {words.data(), length}; }
+};
+
 class CommandWordSink {
  public:
   virtual ~CommandWordSink() = default;
-  virtual void write_command_words(const std::vector<uint32_t>& words) = 0;
+  virtual void write_command_words(CommandWordView words) = 0;
 };
 
 class CommandFanout : public CommandWordSink {
  public:
   CommandFanout(CommandWordSink& first, CommandWordSink& second)
       : first_(first), second_(second) {}
-  void write_command_words(const std::vector<uint32_t>& words) override;
+  void write_command_words(CommandWordView words) override;
 
  private:
   CommandWordSink& first_;
@@ -29,6 +67,7 @@ class CommandFanout : public CommandWordSink {
 };
 
 constexpr std::size_t kMaxControlActionsPerFrame = 16;
+constexpr std::size_t kFrameCommandQueueCapacity = 1024;
 
 class FrameBatchedCommandSink : public CommandWordSink {
  public:
@@ -36,10 +75,10 @@ class FrameBatchedCommandSink : public CommandWordSink {
       CommandWordSink& sink,
       std::size_t max_actions_per_frame = kMaxControlActionsPerFrame);
 
-  void write_command_words(const std::vector<uint32_t>& words) override;
+  void write_command_words(CommandWordView words) override;
   std::size_t apply_frame();
 
-  std::size_t pending_actions() const { return pending_.size(); }
+  std::size_t pending_actions() const { return pending_count_; }
   std::size_t max_pending_actions() const { return max_pending_actions_; }
   uint64_t total_enqueued_actions() const { return total_enqueued_actions_; }
   uint64_t total_applied_actions() const { return total_applied_actions_; }
@@ -47,13 +86,16 @@ class FrameBatchedCommandSink : public CommandWordSink {
 
  private:
   struct PendingCommand {
-    std::vector<uint32_t> words;
+    FixedCommand command;
     uint64_t enqueue_frame = 0;
   };
 
   CommandWordSink& sink_;
   std::size_t max_actions_per_frame_;
-  std::deque<PendingCommand> pending_;
+  std::array<PendingCommand, kFrameCommandQueueCapacity> pending_{};
+  std::size_t pending_head_ = 0;
+  std::size_t pending_tail_ = 0;
+  std::size_t pending_count_ = 0;
   std::size_t max_pending_actions_ = 0;
   uint64_t frame_index_ = 0;
   uint64_t total_enqueued_actions_ = 0;
@@ -83,10 +125,10 @@ class CommandVoiceControl : public VoiceCommandSink {
     FilterConfig filter;
   };
 
+  void emit(uint8_t opcode, int voice, CommandWordView payload,
+            uint8_t flags = 0);
   void emit(uint8_t opcode, int voice,
             std::initializer_list<uint32_t> payload, uint8_t flags = 0);
-  void emit(uint8_t opcode, int voice, const std::vector<uint32_t>& payload,
-            uint8_t flags = 0);
   CommandWordSink& sink_;
   std::array<VoiceMirror, kNumVoices> voices_{};
 };
@@ -131,6 +173,7 @@ class CommandAudioControl {
   void clear_effects(uint8_t mask);
 
  private:
+  void emit(uint8_t opcode, CommandWordView payload);
   void emit(uint8_t opcode, std::initializer_list<uint32_t> payload);
   CommandWordSink& sink_;
 };

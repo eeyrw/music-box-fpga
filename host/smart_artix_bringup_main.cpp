@@ -276,7 +276,7 @@ class SyntheticBoard final : public host::RegisterIo,
     return value;
   }
 
-  void write_command_words(const std::vector<uint32_t>& words) override {
+  void write_command_words(render::CommandWordView words) override {
     host::Ch347RegisterTransport::validate_command_transaction(words);
     const uint16_t crc =
         host::Ch347RegisterTransport::command_transaction_crc16(words);

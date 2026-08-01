@@ -40,14 +40,28 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
 
   void write_register(uint16_t address, uint32_t data) override;
   uint32_t read_register(uint16_t address) override;
-  void write_command_words(const std::vector<uint32_t>& words) override;
+  void write_command_words(render::CommandWordView words) override;
+
+  struct CommandTransaction {
+    std::array<uint8_t, 256> bytes{};
+    uint16_t length = 0;
+    const uint8_t* data() const { return bytes.data(); }
+    std::size_t size() const { return length; }
+    uint8_t operator[](std::size_t index) const { return bytes[index]; }
+  };
 
   int configured_clock_hz() const { return configured_clock_hz_; }
   static int selected_clock_hz(int requested_hz);
-  static void validate_command_transaction(const std::vector<uint32_t>& words);
-  static uint16_t command_transaction_crc16(const std::vector<uint32_t>& words);
-  static std::vector<uint8_t> encode_command_transaction(
-      const std::vector<uint32_t>& words);
+  static void validate_command_transaction(render::CommandWordView words);
+  static void validate_command_transaction(std::initializer_list<uint32_t> words) {
+    validate_command_transaction({words.begin(), words.size()});
+  }
+  static uint16_t command_transaction_crc16(render::CommandWordView words);
+  static uint16_t command_transaction_crc16(std::initializer_list<uint32_t> words) {
+    return command_transaction_crc16({words.begin(), words.size()});
+  }
+  static uint16_t command_transaction_crc16_oracle(render::CommandWordView words);
+  static CommandTransaction encode_command_transaction(render::CommandWordView words);
   static uint32_t register_frame_crc32(uint8_t byte0, uint8_t byte1,
                                        uint16_t address, uint32_t data);
   static RegisterRequest encode_register_request(

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <deque>
@@ -44,6 +45,10 @@ constexpr uint16_t kModSrcPitchWheel = 0x020e;
 constexpr uint16_t kModSrcPitchWheelSensitivity = 0x0010;
 constexpr uint16_t kTransformLinear = 0;
 constexpr uint16_t kTransformAbsoluteValue = 2;
+constexpr uint8_t kDirtyGain = 1u << 0;
+constexpr uint8_t kDirtyPitch = 1u << 1;
+constexpr uint8_t kDirtyFilter = 1u << 2;
+constexpr uint8_t kDirtyAll = kDirtyGain | kDirtyPitch | kDirtyFilter;
 
 bool is_no_matching_zone_error(const std::runtime_error& e) {
   return std::string(e.what()) == "no SF2 zone matches key/velocity";
@@ -144,6 +149,29 @@ double curve_lookup(const std::array<double, kVelCbSize>& tab, double val) {
   if (val >= double(kVelCbSize - 1)) return tab[kVelCbSize - 1];
   int i = int(val);
   return tab[i] + (tab[i + 1] - tab[i]) * (val - double(i));
+}
+
+double pitch_ratio(double cents) {
+  constexpr int kMinCents = -24000;
+  constexpr int kMaxCents = 24000;
+  constexpr int kStepsPerCent = 4;
+  constexpr int kRatioCount = (kMaxCents - kMinCents) * kStepsPerCent + 1;
+  static const std::array<double, kRatioCount> ratios = [] {
+    std::array<double, kRatioCount> values{};
+    for (int index = 0; index < kRatioCount; ++index) {
+      const double table_cents = double(index) / kStepsPerCent + kMinCents;
+      values[index] = std::pow(2.0, table_cents / 1200.0);
+    }
+    return values;
+  }();
+  if (cents <= kMinCents) return ratios.front();
+  if (cents >= kMaxCents) return ratios.back();
+  const double position = (cents - kMinCents) * kStepsPerCent;
+  const int lower = int(position);
+  const double fraction = position - lower;
+  const double low = ratios[lower];
+  const double high = ratios[lower + 1];
+  return low + (high - low) * fraction;
 }
 
 double concave_unit(double x) { return curve_lookup(concave_tab(), double(kVelCbSize) * x); }
@@ -304,8 +332,40 @@ void prepare_events_and_regions(const Args& args, const Sf2Data& sf2, int sample
 }
 
 McuModel::McuModel(VoiceCommandSink& sink, const std::vector<Region>& regions,
-                   RenderDiagnostics* diagnostics)
-    : sink_(sink), regions_(regions), diagnostics_(diagnostics) {}
+                   RenderDiagnostics* diagnostics, ControlUpdateRates update_rates)
+    : sink_(sink), regions_(regions), diagnostics_(diagnostics),
+      update_rates_(update_rates) {
+  if (update_rates_.gain_ticks == 0 || update_rates_.pitch_ticks == 0 ||
+      update_rates_.filter_ticks == 0) {
+    throw std::invalid_argument("control update rates must be nonzero");
+  }
+  active_positions_.fill(-1);
+}
+
+void McuModel::activate_voice(int voice) {
+  if (active_positions_[voice] >= 0) return;
+  active_positions_[voice] = active_voice_count_;
+  active_voices_[active_voice_count_++] = voice;
+  if (diagnostics_) {
+    diagnostics_->control_active_voices = uint32_t(active_voice_count_);
+    diagnostics_->control_max_active_voices = std::max(
+        diagnostics_->control_max_active_voices, uint32_t(active_voice_count_));
+  }
+}
+
+void McuModel::deactivate_voice(int voice) {
+  const int position = active_positions_[voice];
+  if (position < 0) return;
+  const int replacement = active_voices_[--active_voice_count_];
+  active_voices_[position] = replacement;
+  active_positions_[replacement] = position;
+  active_positions_[voice] = -1;
+  if (diagnostics_) diagnostics_->control_active_voices = uint32_t(active_voice_count_);
+}
+
+void McuModel::record_emitted_commands(uint64_t count) {
+  if (diagnostics_) diagnostics_->control_emitted_commands += count;
+}
 
 void McuModel::handle_event(const NoteEvent& event) {
   if (event.type == NoteEvent::EVENT_CONTROL) control_change(event);
@@ -317,7 +377,10 @@ void McuModel::handle_event(const NoteEvent& event) {
 }
 
 void McuModel::control_tick() {
-  for (int v = 0; v < kNumVoices; ++v) {
+  const auto tick_start = std::chrono::steady_clock::now();
+  int active_index = 0;
+  while (active_index < active_voice_count_) {
+    const int v = active_voices_[active_index];
     int next = voices_[v].level;
     if (voices_[v].state == ENV_DELAY) {
       if (voices_[v].ticks_remaining > 0) --voices_[v].ticks_remaining;
@@ -358,10 +421,29 @@ void McuModel::control_tick() {
 
     if (voices_[v].state != ENV_SILENT || voices_[v].level != 0) {
       voices_[v].level = clamp_q15(next);
-      update_voice_modulation(v);
+      uint8_t periodic_groups = 0;
+      if ((control_tick_index_ % update_rates_.gain_ticks) == 0) periodic_groups |= kDirtyGain;
+      if ((control_tick_index_ % update_rates_.pitch_ticks) == 0) periodic_groups |= kDirtyPitch;
+      if ((control_tick_index_ % update_rates_.filter_ticks) == 0) periodic_groups |= kDirtyFilter;
+      update_voice_modulation(v, periodic_groups, true);
+    }
+    if (voices_[v].state == ENV_SILENT && voices_[v].level == 0) {
+      deactivate_voice(v);
+    } else {
+      ++active_index;
     }
   }
   control_tick_index_ += 1;
+  if (diagnostics_) {
+    const uint64_t elapsed = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - tick_start).count());
+    diagnostics_->control_tick_count += 1;
+    diagnostics_->control_tick_total_ns += elapsed;
+    diagnostics_->control_tick_max_ns = std::max(diagnostics_->control_tick_max_ns, elapsed);
+    diagnostics_->control_active_voices = uint32_t(active_voice_count_);
+    diagnostics_->control_max_active_voices = std::max(
+        diagnostics_->control_max_active_voices, uint32_t(active_voice_count_));
+  }
 }
 
 void McuModel::control_change(const NoteEvent& event) {
@@ -375,19 +457,19 @@ void McuModel::control_change(const NoteEvent& event) {
       break;
     case 7:
       channels_[channel].volume = value;
-      update_channel_controls(channel);
+      update_channel_controls(channel, kDirtyGain);
       break;
     case 10:
       channels_[channel].pan = value;
-      update_channel_controls(channel);
+      update_channel_controls(channel, kDirtyGain);
       break;
     case 11:
       channels_[channel].expression = value;
-      update_channel_controls(channel);
+      update_channel_controls(channel, kDirtyGain);
       break;
     case 67:
       channels_[channel].soft = value >= 64;
-      update_channel_controls(channel);
+      update_channel_controls(channel, kDirtyGain);
       break;
     case 66:
       if (value >= 64 && !channels_[channel].sostenuto) {
@@ -453,6 +535,8 @@ void McuModel::control_change(const NoteEvent& event) {
           voices_[v].sostenuto_held = false;
           voices_[v].mod_env_state = ENV_SILENT;
           sink_.stop_voice(v);
+          record_emitted_commands();
+          deactivate_voice(v);
         }
       }
       break;
@@ -493,7 +577,7 @@ void McuModel::key_pressure(const NoteEvent& event) {
 void McuModel::pitch_bend(const NoteEvent& event) {
   int channel = event.channel & 0x0f;
   channels_[channel].pitch_bend = std::max(-8192, std::min(8191, event.pitch_bend));
-  update_channel_controls(channel);
+  update_channel_controls(channel, kDirtyPitch);
 }
 
 void McuModel::release_deferred_pedal_voices(int channel) {
@@ -653,27 +737,29 @@ void McuModel::record_runtime_filter_update(int voice, const FilterConfig& filte
   last_runtime_filter_[voice] = filter;
 }
 
-void McuModel::update_channel_controls(int channel) {
-  for (int v = 0; v < kNumVoices; ++v) {
-    if (voices_[v].state != ENV_SILENT && voices_[v].channel == channel) update_voice_controls(v);
+void McuModel::update_channel_controls(int channel, uint8_t dirty_groups) {
+  for (int index = 0; index < active_voice_count_; ++index) {
+    const int voice = active_voices_[index];
+    if (voices_[voice].channel == channel) update_voice_controls(voice, dirty_groups);
   }
 }
 
-void McuModel::update_voice_controls(int voice) {
-  update_voice_modulation(voice);
+void McuModel::update_voice_controls(int voice, uint8_t dirty_groups) {
+  update_voice_modulation(voice, dirty_groups, false);
 }
 
-void McuModel::update_voice_modulation(int voice) {
+void McuModel::update_voice_modulation(int voice, uint8_t dirty_groups,
+                                       bool advance_modulation) {
   VoiceState& state = voices_.at(voice);
   if (state.state == ENV_SILENT) return;
   const Region& r = regions_.at(state.region);
   const ChannelState& c = channels_.at(state.channel & 0x0f);
 
   int mod_next = state.mod_env_level;
-  if (state.mod_env_state == ENV_DELAY) {
+  if (advance_modulation && state.mod_env_state == ENV_DELAY) {
     if (state.mod_env_ticks_remaining > 0) --state.mod_env_ticks_remaining;
     if (state.mod_env_ticks_remaining == 0) state.mod_env_state = ENV_ATTACK;
-  } else if (state.mod_env_state == ENV_ATTACK) {
+  } else if (advance_modulation && state.mod_env_state == ENV_ATTACK) {
     state.mod_env_stage_tick += 1;
     mod_next = linear_ramp(0, kQ15Full, state.mod_env_stage_tick, r.mod_env_attack_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_attack_ticks) {
@@ -682,10 +768,10 @@ void McuModel::update_voice_modulation(int voice) {
       state.mod_env_stage_tick = 0;
       state.mod_env_state = state.mod_env_ticks_remaining > 0 ? ENV_HOLD : ENV_DECAY;
     }
-  } else if (state.mod_env_state == ENV_HOLD) {
+  } else if (advance_modulation && state.mod_env_state == ENV_HOLD) {
     if (state.mod_env_ticks_remaining > 0) --state.mod_env_ticks_remaining;
     if (state.mod_env_ticks_remaining == 0) state.mod_env_state = ENV_DECAY;
-  } else if (state.mod_env_state == ENV_DECAY) {
+  } else if (advance_modulation && state.mod_env_state == ENV_DECAY) {
     state.mod_env_stage_tick += 1;
     mod_next = linear_ramp(kQ15Full, r.mod_env_sustain_level, state.mod_env_stage_tick, r.mod_env_decay_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_decay_ticks) {
@@ -693,7 +779,7 @@ void McuModel::update_voice_modulation(int voice) {
       state.mod_env_stage_tick = 0;
       state.mod_env_state = ENV_SUSTAIN;
     }
-  } else if (state.mod_env_state == ENV_RELEASE) {
+  } else if (advance_modulation && state.mod_env_state == ENV_RELEASE) {
     state.mod_env_stage_tick += 1;
     mod_next = linear_release(state.mod_env_release_start, state.mod_env_stage_tick, r.mod_env_release_ticks);
     if (state.mod_env_stage_tick >= r.mod_env_release_ticks) {
@@ -713,47 +799,70 @@ void McuModel::update_voice_modulation(int voice) {
   double vib_lfo = state.vib_lfo_wait_ticks > 0 ? 0.0 : lfo_value(state.vib_lfo_phase);
   double env = double(state.mod_env_level) / double(kQ15Full);
 
-  double pitch_cents = c.generator_offsets[kGenFineTune] + c.generator_offsets[kGenCoarseTune] +
-                       modulator_sum(r, state, c, 0);
-  pitch_cents += mod_lfo * (double(r.mod_lfo_to_pitch) + c.generator_offsets[kGenModLfoToPitch] +
-                            modulator_sum(r, state, c, kGenModLfoToPitch));
-  pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
-  pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
-  uint32_t phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
-  const bool phase_changed = !runtime_phase_valid_[voice] ||
-                             phase_inc != last_runtime_phase_inc_[voice];
-
-  double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
-                        modulator_sum(r, state, c, kGenInitialFilterFc) +
-                        mod_lfo * (double(r.mod_lfo_to_filter_fc) +
-                                   c.generator_offsets[kGenModLfoToFilterFc] +
-                                   modulator_sum(r, state, c, kGenModLfoToFilterFc)) +
-                        env * (double(r.mod_env_to_filter_fc) +
-                               c.generator_offsets[kGenModEnvToFilterFc] +
-                               modulator_sum(r, state, c, kGenModEnvToFilterFc));
-  FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q, r.output_sample_rate);
-  if (!runtime_filter_valid_[voice] || !same_filter_config(filter, last_runtime_filter_[voice])) {
-    record_runtime_filter_update(voice, filter);
-    sink_.update_filter(voice, filter);
+  if (diagnostics_) {
+    diagnostics_->control_dirty_group_evaluations +=
+        uint64_t((dirty_groups & kDirtyGain) != 0) +
+        uint64_t((dirty_groups & kDirtyPitch) != 0) +
+        uint64_t((dirty_groups & kDirtyFilter) != 0);
   }
-  state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
-                                            c.generator_offsets[kGenModLfoToVolume] +
-                                            modulator_sum(r, state, c, kGenModLfoToVolume));
-  auto gains = runtime_gains(r, state, c);
-  const bool gain_changed = !runtime_gain_valid_[voice] ||
-      !same_runtime_gain(gains.first, gains.second,
-                         last_runtime_gain_l_[voice], last_runtime_gain_r_[voice]);
+
+  bool phase_changed = false;
+  uint32_t phase_inc = runtime_phase_valid_[voice] ? last_runtime_phase_inc_[voice]
+                                                   : r.phase_inc;
+  if ((dirty_groups & kDirtyPitch) != 0) {
+    double pitch_cents = c.generator_offsets[kGenFineTune] + c.generator_offsets[kGenCoarseTune] +
+                         modulator_sum(r, state, c, 0);
+    pitch_cents += mod_lfo * (double(r.mod_lfo_to_pitch) + c.generator_offsets[kGenModLfoToPitch] +
+                              modulator_sum(r, state, c, kGenModLfoToPitch));
+    pitch_cents += vib_lfo * (double(r.vib_lfo_to_pitch) + modulator_sum(r, state, c, kGenVibLfoToPitch));
+    pitch_cents += env * (double(r.mod_env_to_pitch) + modulator_sum(r, state, c, kGenModEnvToPitch));
+    phase_inc = modulated_phase_inc(r.phase_inc, pitch_cents);
+    phase_changed = !runtime_phase_valid_[voice] || phase_inc != last_runtime_phase_inc_[voice];
+  }
+
+  if ((dirty_groups & kDirtyFilter) != 0) {
+    double filter_cents = double(r.initial_filter_fc) + c.generator_offsets[kGenInitialFilterFc] +
+                          modulator_sum(r, state, c, kGenInitialFilterFc) +
+                          mod_lfo * (double(r.mod_lfo_to_filter_fc) +
+                                     c.generator_offsets[kGenModLfoToFilterFc] +
+                                     modulator_sum(r, state, c, kGenModLfoToFilterFc)) +
+                          env * (double(r.mod_env_to_filter_fc) +
+                                 c.generator_offsets[kGenModEnvToFilterFc] +
+                                 modulator_sum(r, state, c, kGenModEnvToFilterFc));
+    FilterConfig filter = filter_for(int(std::round(filter_cents)), r.initial_filter_q,
+                                     r.output_sample_rate);
+    if (!runtime_filter_valid_[voice] || !same_filter_config(filter, last_runtime_filter_[voice])) {
+      record_runtime_filter_update(voice, filter);
+      sink_.update_filter(voice, filter);
+      record_emitted_commands();
+    }
+  }
+
+  std::pair<int, int> gains = {last_runtime_gain_l_[voice], last_runtime_gain_r_[voice]};
+  bool gain_changed = false;
+  if ((dirty_groups & kDirtyGain) != 0) {
+    state.tremolo_attenuation_cb = -mod_lfo * (double(r.mod_lfo_to_volume) +
+                                              c.generator_offsets[kGenModLfoToVolume] +
+                                              modulator_sum(r, state, c, kGenModLfoToVolume));
+    gains = runtime_gains(r, state, c);
+    gain_changed = !runtime_gain_valid_[voice] ||
+        !same_runtime_gain(gains.first, gains.second,
+                           last_runtime_gain_l_[voice], last_runtime_gain_r_[voice]);
+  }
   if (phase_changed || gain_changed) {
     if (phase_changed) record_runtime_phase_update(voice, phase_inc);
     if (gain_changed)
     record_runtime_gain_update(voice, gains.first, gains.second);
     sink_.update_gain_phase(voice, gains.first, gains.second, phase_inc);
+    record_emitted_commands(uint64_t(phase_changed) + uint64_t(gain_changed));
   }
 
-  if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
-  else state.mod_lfo_phase += r.mod_lfo_step;
-  if (state.vib_lfo_wait_ticks > 0) --state.vib_lfo_wait_ticks;
-  else state.vib_lfo_phase += r.vib_lfo_step;
+  if (advance_modulation) {
+    if (state.mod_lfo_wait_ticks > 0) --state.mod_lfo_wait_ticks;
+    else state.mod_lfo_phase += r.mod_lfo_step;
+    if (state.vib_lfo_wait_ticks > 0) --state.vib_lfo_wait_ticks;
+    else state.vib_lfo_phase += r.vib_lfo_step;
+  }
 }
 
 void McuModel::release_voice(int voice) {
@@ -766,6 +875,7 @@ void McuModel::release_voice(int voice) {
   voices_[voice].sustain_held = false;
   const Region& region = regions_.at(voices_[voice].region);
   sink_.release_voice(voice, envelope_release_step(region));
+  record_emitted_commands();
 }
 
 void McuModel::note_off(int channel, int note, uint64_t note_instance) {
@@ -868,6 +978,7 @@ void McuModel::note_on(const NoteEvent& event) {
   // the policy envelope normalized so voice-steal scoring does not apply it twice.
   voices_[slot].target = kQ15Full;
   voices_[slot].sustain = r.sustain_level;
+  activate_voice(slot);
   if (r.mod_env_delay_ticks == 0 && r.mod_env_attack_sub_tick) {
     voices_[slot].mod_env_level = kQ15Full;
     voices_[slot].mod_env_ticks_remaining = r.mod_env_hold_ticks;
@@ -882,10 +993,19 @@ void McuModel::note_on(const NoteEvent& event) {
   r.gain_l = initial_gains.first;
   r.gain_r = initial_gains.second;
   sink_.start_voice(slot, phase_inc, r);
-  update_voice_controls(slot);
+  record_emitted_commands();
+  runtime_gain_valid_[slot] = true;
+  last_runtime_gain_l_[slot] = r.gain_l;
+  last_runtime_gain_r_[slot] = r.gain_r;
+  runtime_phase_valid_[slot] = true;
+  last_runtime_phase_inc_[slot] = phase_inc;
+  runtime_filter_valid_[slot] = true;
+  last_runtime_filter_[slot] = {r.filter_enable, r.filter_b0, r.filter_b1,
+                                r.filter_b2, r.filter_a1, r.filter_a2};
+  update_voice_modulation(slot, kDirtyAll, true);
 }
 
-int McuModel::first_free_or_steal_slot() const {
+int McuModel::first_free_or_steal_slot() {
   for (int v = 0; v < kNumVoices; ++v) {
     if (voices_[v].state == ENV_SILENT) return v;
   }
@@ -922,7 +1042,7 @@ std::pair<int, int> McuModel::runtime_gains(const Region& region, const VoiceSta
   double attenuation = modulator_sum(region, voice, channel, kGenInitialAttenuation, false, true);
   attenuation += channel.generator_offsets[kGenInitialAttenuation] + voice.tremolo_attenuation_cb;
   if (channel.soft) attenuation += 30.0;
-  double level = std::pow(10.0, -attenuation / 200.0);
+  double level = attenuation_gain(attenuation);
   int total_pan = std::max(-500, std::min(500, int(std::round(
       double(region.pan) + channel.generator_offsets[kGenPan] +
       modulator_sum(region, voice, channel, kGenPan, false, true)))));
@@ -998,12 +1118,13 @@ double McuModel::modulator_sum(const Region& region, const VoiceState& voice,
     double value = double(mod.amount) * map_source(mod.src) * map_source(mod.amount_src);
     if (mod.transform == kTransformAbsoluteValue) value = std::abs(value);
     sum += value;
+    if (diagnostics_) diagnostics_->control_modulator_evaluations += 1;
   }
   return sum;
 }
 
 uint32_t McuModel::modulated_phase_inc(uint32_t base_phase_inc, double cents) {
-  double raw = double(base_phase_inc) * std::pow(2.0, cents / 1200.0);
+  double raw = double(base_phase_inc) * pitch_ratio(cents);
   if (raw < 1.0) return 1;
   if (raw > double(UINT32_MAX)) return UINT32_MAX;
   return uint32_t(std::round(raw));
@@ -1016,7 +1137,7 @@ int q2_14(double value) {
   return int(raw);
 }
 
-FilterConfig McuModel::filter_for(int cutoff_cents, int resonance_cb, int sample_rate) {
+FilterConfig calculate_filter(int cutoff_cents, int resonance_cb, int sample_rate) {
   cutoff_cents = std::max(1500, std::min(13500, cutoff_cents));
   double cutoff_hz = 8.176 * std::pow(2.0, double(cutoff_cents) / 1200.0);
   double nyquist = double(sample_rate) * 0.5;
@@ -1036,6 +1157,76 @@ FilterConfig McuModel::filter_for(int cutoff_cents, int resonance_cb, int sample
   filter.a1 = q2_14((-2.0 * cos_w) / a0);
   filter.a2 = q2_14((1.0 - alpha) / a0);
   return filter;
+}
+
+FilterConfig McuModel::filter_for(int cutoff_cents, int resonance_cb, int sample_rate) {
+  cutoff_cents = std::max(1500, std::min(13500, cutoff_cents));
+  resonance_cb = std::max(0, std::min(960, resonance_cb));
+  const int quantized_cutoff = cutoff_cents;
+  const int quantized_resonance = ((resonance_cb + 1) / 2) * 2;
+  struct CacheEntry {
+    int cutoff = 0;
+    int resonance = 0;
+    int sample_rate = 0;
+    bool valid = false;
+    FilterConfig filter;
+  };
+  static thread_local std::array<CacheEntry, 4096> cache{};
+  const uint32_t hash = uint32_t(quantized_cutoff) * 2654435761u ^
+                        uint32_t(quantized_resonance) * 2246822519u ^
+                        uint32_t(sample_rate);
+  CacheEntry& entry = cache[hash & (cache.size() - 1)];
+  if (!entry.valid || entry.cutoff != quantized_cutoff ||
+      entry.resonance != quantized_resonance || entry.sample_rate != sample_rate) {
+    entry.cutoff = quantized_cutoff;
+    entry.resonance = quantized_resonance;
+    entry.sample_rate = sample_rate;
+    entry.filter = calculate_filter(quantized_cutoff, quantized_resonance, sample_rate);
+    entry.valid = true;
+  }
+  return entry.filter;
+}
+
+ControlMathValidation validate_control_math_approximations() {
+  ControlMathValidation result;
+  for (int quarter_cent = -96000; quarter_cent <= 96000; ++quarter_cent) {
+    const double cents = double(quarter_cent) * 0.25;
+    const double exact = std::pow(2.0, cents / 1200.0);
+    const double approximate = pitch_ratio(cents);
+    result.max_pitch_ratio_error = std::max(
+        result.max_pitch_ratio_error, std::abs(exact - approximate));
+    const uint32_t exact_phase = uint32_t(std::round(256.0 * exact));
+    const uint32_t approximate_phase = uint32_t(std::round(256.0 * approximate));
+    result.max_phase_increment_error = std::max(
+        result.max_phase_increment_error,
+        exact_phase > approximate_phase ? exact_phase - approximate_phase
+                                        : approximate_phase - exact_phase);
+  }
+  for (int eighth_cb = -16000; eighth_cb <= 32000; ++eighth_cb) {
+    const double cb = double(eighth_cb) * 0.125;
+    const double exact = std::pow(10.0, -cb / 200.0);
+    result.max_attenuation_gain_error = std::max(
+        result.max_attenuation_gain_error,
+        std::abs(exact - attenuation_gain(cb)) / exact);
+  }
+  for (int sample_rate : {44100, 48000, 96000}) {
+    for (int cutoff = 1500; cutoff <= 13500; cutoff += 7) {
+      for (int resonance = 0; resonance <= 960; resonance += 13) {
+        const FilterConfig exact = calculate_filter(cutoff, resonance, sample_rate);
+        const FilterConfig approximate = calculate_filter(
+            cutoff, ((resonance + 1) / 2) * 2, sample_rate);
+        const int differences[] = {
+            std::abs(exact.b0 - approximate.b0), std::abs(exact.b1 - approximate.b1),
+            std::abs(exact.b2 - approximate.b2), std::abs(exact.a1 - approximate.a1),
+            std::abs(exact.a2 - approximate.a2)};
+        for (int difference : differences) {
+          result.max_filter_coefficient_error = std::max(
+              result.max_filter_coefficient_error, uint32_t(difference));
+        }
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace render

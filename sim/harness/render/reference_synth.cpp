@@ -27,7 +27,7 @@ ReferenceSynth::ReferenceSynth(const std::vector<int16_t>& memory, RenderDiagnos
       envelopes_(kNumVoices),
       diagnostics_(diagnostics) {}
 
-void ReferenceSynth::write_command_words(const std::vector<uint32_t>& words) {
+void ReferenceSynth::write_command_words(CommandWordView words) {
   if (words.empty()) return;
   const uint8_t opcode = uint8_t(words[0] >> 24);
   const size_t payload_words = size_t(words[0] & 0xffu);

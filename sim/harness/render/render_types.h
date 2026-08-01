@@ -3,6 +3,7 @@
 #include "generated/register_map.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <map>
@@ -215,6 +216,14 @@ struct RenderDiagnostics {
   uint32_t max_audible_envelope_jump = 0;
   int max_audible_envelope_jump_voice = -1;
   uint64_t max_audible_envelope_jump_frame = 0;
+  uint64_t control_tick_count = 0;
+  uint64_t control_tick_total_ns = 0;
+  uint64_t control_tick_max_ns = 0;
+  uint64_t control_modulator_evaluations = 0;
+  uint64_t control_dirty_group_evaluations = 0;
+  uint64_t control_emitted_commands = 0;
+  uint32_t control_active_voices = 0;
+  uint32_t control_max_active_voices = 0;
 };
 
 class VoiceCommandSink {
@@ -275,13 +284,41 @@ inline int clamp_q15(int value) {
 
 inline std::pair<int, int> equal_power_pan_gains(int base_left, int base_right,
                                                  int pan, bool center_unity) {
-  constexpr double kPi = 3.14159265358979323846;
+  struct PanFactors { double left; double right; };
+  static const std::array<PanFactors, 1001> factors = [] {
+    std::array<PanFactors, 1001> values{};
+    for (int i = 0; i <= 1000; ++i) {
+      const int table_pan = i - 500;
+      values[i] = {
+          std::sin(double(500 - table_pan) * 3.14159265358979323846 / 2000.0),
+          std::sin(double(500 + table_pan) * 3.14159265358979323846 / 2000.0)};
+    }
+    return values;
+  }();
   pan = std::max(-500, std::min(500, pan));
   double normalization = center_unity ? std::sqrt(2.0) : 1.0;
-  double left_factor = normalization * std::sin(double(500 - pan) * kPi / 2000.0);
-  double right_factor = normalization * std::sin(double(500 + pan) * kPi / 2000.0);
+  double left_factor = normalization * factors[pan + 500].left;
+  double right_factor = normalization * factors[pan + 500].right;
   return {clamp_q15(int(std::round(double(base_left) * left_factor))),
           clamp_q15(int(std::round(double(base_right) * right_factor)))};
+}
+
+inline double attenuation_gain(double attenuation_cb) {
+  constexpr int kEighthCbOffset = 16000;
+  constexpr int kEighthCbCount = 48001;
+  static const std::array<double, kEighthCbCount> gain = [] {
+    std::array<double, kEighthCbCount> values{};
+    for (int i = 0; i < kEighthCbCount; ++i) {
+      values[i] = std::pow(10.0, -(double(i - kEighthCbOffset) * 0.125) / 200.0);
+    }
+    return values;
+  }();
+  double position = attenuation_cb * 8.0 + kEighthCbOffset;
+  if (position <= 0.0) return gain.front();
+  if (position >= kEighthCbCount - 1) return gain.back();
+  const int index = int(position);
+  const double fraction = position - index;
+  return gain[index] + (gain[index + 1] - gain[index]) * fraction;
 }
 
 inline int concave_attenuation_q15(int value) {

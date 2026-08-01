@@ -136,7 +136,7 @@ class DryRunTransport : public host::RegisterIo, public render::CommandWordSink 
     return 0;
   }
 
-  void write_command_words(const std::vector<uint32_t>& words) override {
+  void write_command_words(render::CommandWordView words) override {
     host::Ch347RegisterTransport::validate_command_transaction(words);
     std::cout << "command frame= a5";
     for (uint32_t word : words) {

@@ -31,7 +31,7 @@ class GlobalEffectsModel : public CommandWordSink {
   explicit GlobalEffectsModel(std::vector<std::size_t> reverb_line_lengths = {});
 
   void reset();
-  void write_command_words(const std::vector<uint32_t>& words) override;
+  void write_command_words(CommandWordView words) override;
   StereoFrame process_frame(int32_t dry_l, int32_t dry_r);
 
   const ChorusConfig& chorus_config() const { return chorus_config_; }

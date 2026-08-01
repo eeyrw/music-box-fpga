@@ -222,7 +222,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut check-generated check-register-map check-dsp-lut check-docs lint test test-cpp-unit benchmark-sf2-loader benchmark-mcu-control test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -498,6 +498,16 @@ benchmark-sf2-loader:
 		sim/harness/formats/sf2_loader.cpp sim/harness/apps/sf2_loader_benchmark_main.cpp \
 		-o $(BUILD_DIR)/sf2_loader_benchmark
 	$(BUILD_DIR)/sf2_loader_benchmark "$(SF2_BENCHMARK)"
+
+benchmark-mcu-control:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
+		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
+		sim/harness/formats/sf2_loader.cpp sim/harness/formats/midi_parser.cpp \
+		sim/harness/render/render_args.cpp sim/harness/render/render_report.cpp \
+		sim/harness/apps/mcu_control_benchmark_main.cpp \
+		-o $(BUILD_DIR)/mcu_control_benchmark
+	$(BUILD_DIR)/mcu_control_benchmark
 
 polyphony-stress-midi:
 	mkdir -p $(BUILD_DIR) $(dir $(POLYPHONY_STRESS_MIDI))

@@ -58,10 +58,14 @@ struct RecordingSink : public render::VoiceCommandSink {
     ++filter_count;
     last_filter = filter;
   }
-  void start_voice(int voice, uint32_t phase_inc, const render::Region&) override {
+  void start_voice(int voice, uint32_t phase_inc, const render::Region& region) override {
     ++commit_count;
     last_commit_voice = voice;
     last_phase_inc = phase_inc;
+    last_gain_l = region.gain_l;
+    last_gain_r = region.gain_r;
+    last_filter = {region.filter_enable, region.filter_b0, region.filter_b1,
+                   region.filter_b2, region.filter_a1, region.filter_a2};
   }
   void release_voice(int, uint32_t) override { ++release_count; }
   void stop_voice(int) override { ++disable_count; }
@@ -233,6 +237,52 @@ std::string write_percussion_sf2() {
 
 int main() {
   try {
+    const render::ControlMathValidation math =
+        render::validate_control_math_approximations();
+    if (math.max_pitch_ratio_error > 0.05 ||
+        math.max_attenuation_gain_error > 0.000001 ||
+        math.max_phase_increment_error > 1 ||
+        math.max_filter_coefficient_error > 96) {
+      throw std::runtime_error(
+          "control approximation error bounds exceeded: pitch=" +
+          std::to_string(math.max_pitch_ratio_error) + " attenuation=" +
+          std::to_string(math.max_attenuation_gain_error) + " phase=" +
+          std::to_string(math.max_phase_increment_error) + " filter=" +
+          std::to_string(math.max_filter_coefficient_error));
+    }
+    {
+      render::Region active_region;
+      active_region.length = 4;
+      active_region.loop_end = 4;
+      active_region.phase_inc = render::kPhaseFracScale;
+      active_region.release_ticks = 1;
+      std::vector<render::Region> active_regions{active_region};
+      RecordingSink active_sink;
+      render::RenderDiagnostics active_diagnostics;
+      render::McuModel active_mcu(active_sink, active_regions,
+                                  &active_diagnostics);
+      render::NoteEvent active_note;
+      active_note.on = true;
+      active_note.note = 60;
+      active_note.velocity = 100;
+      active_note.phase_inc = render::kPhaseFracScale;
+      active_mcu.handle_event(active_note);
+      active_mcu.control_tick();
+      active_note.on = false;
+      active_mcu.handle_event(active_note);
+      active_mcu.control_tick();
+      const uint64_t dirty_after_release =
+          active_diagnostics.control_dirty_group_evaluations;
+      active_mcu.control_tick();
+      if (active_diagnostics.control_active_voices != 0 ||
+          active_diagnostics.control_max_active_voices != 1 ||
+          active_diagnostics.control_tick_count != 3 ||
+          active_diagnostics.control_dirty_group_evaluations !=
+              dirty_after_release ||
+          active_diagnostics.control_emitted_commands < 2) {
+        throw std::runtime_error("bounded active-set control diagnostics mismatch");
+      }
+    }
     render::Sf2Data sf2 = render::load_sf2(write_percussion_sf2());
     render::Args args;
     args.sample_rate = 48000;
@@ -500,20 +550,21 @@ int main() {
     envelope_region.volume_envelope.attack_samples = 4;
     render::CommandVoiceControl envelope_control(envelope_synth);
     envelope_control.start_voice(0, envelope_region.phase_inc, envelope_region);
-    envelope_synth.write_command_words(
-        {0x13000007u, 1u, 0u, 0x80000000u, 0u, 0u, 0u,
-         render::envelope_release_step(envelope_region)});
+    envelope_synth.write_command_words(std::vector<uint32_t>{
+        0x13000007u, 1u, 0u, 0x80000000u, 0u, 0u, 0u,
+        render::envelope_release_step(envelope_region)});
     auto envelope_sample = envelope_synth.render_sample();
     if (envelope_sample.first < 16000 || envelope_sample.first > 17000)
       throw std::runtime_error("reference ENV_UPDATE did not replace attack step");
-    envelope_synth.write_command_words({0x14000002u, 1u, 0u});
+    envelope_synth.write_command_words(
+        std::vector<uint32_t>{0x14000002u, 1u, 0u});
     if (envelope_synth.render_sample().first != 0)
       throw std::runtime_error("reference zero-step RELEASE did not stop immediately");
 
     std::vector<int16_t> delay_memory{0, 1000, 3000, 6000};
     render::ReferenceSynth delay_synth(delay_memory);
-    delay_synth.write_command_words(
-        {0x10000d10u, 1u, 0u, 4u, 1u, 3u,
+    delay_synth.write_command_words(std::vector<uint32_t>{
+         0x10000d10u, 1u, 0u, 4u, 1u, 3u,
          0x00000180u, 0x7fff7fffu, 0x00002000u, 0x00002000u,
          0x00010000u, 2u, 0x80000000u, 0u, 0u, 0u, 0x01000000u});
     int delay_first = delay_synth.render_sample().first;
@@ -533,8 +584,8 @@ int main() {
     render::CommandVoiceControl reverse_decay_control(reverse_decay_synth);
     reverse_decay_control.start_voice(0, reverse_decay_region.phase_inc, reverse_decay_region);
     reverse_decay_synth.render_sample();
-    reverse_decay_synth.write_command_words(
-        {0x13000007u, 1u, 0u, 0xffffffffu, 0u, 10u << 20,
+    reverse_decay_synth.write_command_words(std::vector<uint32_t>{
+         0x13000007u, 1u, 0u, 0xffffffffu, 0u, 10u << 20,
          20u << 20, render::envelope_release_step(reverse_decay_region)});
     int reverse_decay_first = reverse_decay_synth.render_sample().first;
     int reverse_decay_second = reverse_decay_synth.render_sample().first;
