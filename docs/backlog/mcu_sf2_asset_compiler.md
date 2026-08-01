@@ -391,9 +391,10 @@ change.
 
 The compiler should support at least two policies. The implemented
 `direct-v1` policy keeps interval dispatch and materialized START commands for
-minimum Note On work. The planned `compact-v2` policy keeps bounded dispatch
-but replaces per-key START commands with shared candidate recipes and performs
-fixed, integer-only command construction at Note On.
+minimum Note On work. The planned `compact-v2` policy minimizes deployed bytes:
+it stores resolved normalized zones without per-key or per-velocity expansion,
+and performs bounded integer lookup, conversion, modulation, and command
+construction at Note On.
 
 Both policies must produce the same selected layers and command-visible
 quantized results. The build report compares their size and worst-case
@@ -857,6 +858,13 @@ into a descriptor and nearly complete START command. That is the correct
 tradeoff for establishing a simple bounded runtime, but it spends external
 flash to avoid work that occurs only at Note On rate.
 
+The compact objective is lexicographic: preserve exact behavior and bounded
+memory first, meet the selected target's event deadline second, then minimize
+total deployed asset plus format-specific firmware-table bytes. MCU arithmetic
+is not treated as a defect. A precomputed field, dispatch index, or cache is
+present only when the smallest representation without it misses the measured
+deadline.
+
 ### Measured Direct-V1 Size
 
 The production SGM bank-zero image has the following byte accounting. The
@@ -904,88 +912,88 @@ payloads, WTSF contents, and every RTL interface remain unchanged.
 Compact version 2 is a deployment image, not a serialization of the compiler's
 semantic IR. It should contain only these runtime classes:
 
-1. A sorted sparse preset directory and one compact key directory per preset.
-2. Preset-local velocity spans and ordered candidate references.
-3. Normalized candidate recipes containing the immutable values needed to
-   construct one mono START command.
-4. Interned sample-window, volume-envelope, initial-filter, runtime-config, and
-   modulation-program tables where measurements show net savings.
-5. Shared fixed-point conversion tables required by candidate materialization.
-6. Source/wave identity, section bounds, declared maxima, and CRC data.
+1. A sorted sparse preset directory containing the offset and bounds of each
+   independently readable preset chunk.
+2. Preset-local resolved zones with key/velocity ranges, sample identity,
+   non-default generator values, ordered modulation terms, and layer order.
+3. Deduplicated sample/window records and shared parameter groups only where
+   the reference plus table is smaller than storing the values inline.
+4. Small optional lookup tables that are not already fixed firmware data and
+   demonstrably reduce total asset plus firmware bytes.
+5. Source/wave identity, section bounds, declared maxima, and CRC data.
 
 The Phase 1 semantic preset, generator, raw modulator, and sample-header
 sections are compiler/verifier evidence and are omitted from `compact-v2`.
 Offline verification compares the compact result with the semantic IR before
-writing the deployment image. Runtime modulation retains only the already
-interned typed programs and terms; it never reconstructs an SF2 modulator map.
+writing the deployment image. Compact zones contain the final inherited SF2
+meaning, but not derived FPGA command words or key/velocity-specific numeric
+results. Runtime code never reconstructs preset/instrument inheritance or an
+SF2 bag/generator/modulator graph.
 
 ### Compact Dispatch Encoding
 
-The current eight-byte key and velocity records favor simple aligned reads.
-Version 2 may use preset-local 16-bit indices because the measured bank-zero
-closure is far below 65,536 candidates, spans, and layer references per preset.
-The compiler must reject an overflow; it must not truncate or silently switch
-record interpretation.
+The size-first baseline performs a sequential scan of only the resolved zones
+in the selected preset. The measured bank-zero closure has 3,658 candidates,
+an average of 28.6 candidates per preset. For each zone, the MCU performs two
+unsigned range checks for key and velocity and retains matching zones in source
+order. This is bounded by a per-preset `zone_count` declared in the header and
+does not scan generators, instruments, or another preset.
 
-The reference encoding should evaluate this representation:
+An index is optional, not mandatory. The compiler must compare total stored
+bytes and measured Note On time for:
 
-- each preset owns 129 cumulative key-boundary entries, allowing the count for
-  key `k` to be derived from boundaries `k` and `k + 1`;
-- each key boundary supplies preset-local span and layer cursors;
-- a velocity span stores only its inclusive upper velocity and layer count;
-  its lower velocity and first layer follow from the preceding span;
-- a layer reference is a 16-bit candidate-recipe ID in the reference closure;
-- empty keys retain a valid pair of equal boundaries and require no special
-  allocation or sentinel pointer.
+- no index and a sequential preset-local zone scan;
+- a 16-entry coarse key-bucket index, with each bucket covering eight keys;
+- merged key-interval candidate lists using checked preset-local 8- or 16-bit
+  references.
 
-This keeps lookup bounded by one preset search, two key-boundary reads, a small
-velocity-span search, and at most the declared four layers. It does not scan
-the 3,658 candidates or 49,229 generators.
+The smallest representation that meets the target's cold Note On deadline is
+selected explicitly in the layout flags. A 129-entry key table, velocity-span
+expansion, and per-key layer references are forbidden unless measurement proves
+they are required to meet that deadline. Index overflow or an excessive zone
+count rejects the build; it never changes encoding silently.
 
-### Candidate Recipe
+### Normalized Runtime Zones
 
-A recipe represents one fully resolved SF2 candidate before key-dependent
-output conversion. It contains fixed-width IDs and numeric fields only:
+A compact zone represents one fully inherited preset/instrument combination,
+not one key-specific command. It retains values in compact source-like integer
+units when converting them on the MCU costs less than storing their expanded
+form:
 
-- sample-window ID, loop mode, and stereo adjacency/routing policy;
-- root pitch, pitch correction, scale tuning, and base phase inputs;
-- base gain, pan, file attenuation policy, and effective-velocity override;
-- volume-envelope timecents, sustain, key scaling, and presence flags;
-- initial filter inputs and optional precomputed base coefficient ID;
-- modulation-envelope and LFO configuration ID;
-- gain, pitch, and filter program IDs and dependency masks;
-- exclusive class and preset-local allocation identity;
-- exact START optional-section flags.
+- key and velocity ranges, sample ID, loop mode, stereo routing, and source
+  order;
+- root key, pitch correction, scale tuning, attenuation, pan, and exclusive
+  class;
+- envelope, LFO, and initial-filter generator values in normalized SF2 units;
+- only non-default generator fields, selected by a presence bitmap;
+- ordered normalized modulation terms and their source dependency masks.
 
-At Note On, the runtime copies one recipe into a fixed local structure,
-computes key-dependent phase and FPGA envelope fields with generated integer
-tables, evaluates the same initial modulation policy, and packs at most 17
-command words into `FixedCommand`. Voice ID and generation are applied last.
-The runtime must not allocate, parse generators, call a transcendental
-function, or retain a pointer into an evictable metadata cache.
+The encoder must evaluate preset-base plus zone-delta records, inline records,
+and one-level shared records. Delta/varint coding, narrow signed fields, and
+preset-local IDs are allowed because the MCU already walks the record during
+Note On. Interning is used only when the table entry plus all references is
+smaller than repeated inline values. Reference chains and a runtime semantic
+object graph are forbidden.
 
-The compiler should compare three recipe representations before freezing the
-v2 record layout:
-
-- one fixed record per candidate;
-- a small fixed candidate record plus one-level interned sample/envelope/filter
-  records;
-- a fixed candidate base plus compact per-key patches only for values whose
-  integer reconstruction is slower or larger than a patch.
-
-The selected representation is the smallest one meeting the measured cold
-Note On budget. Reference depth is limited to one shared-record lookup beyond
-the candidate; chains of interned records are forbidden.
+No compact zone contains a START word array, a mono descriptor, a per-key
+phase increment, an expanded envelope configuration, or an initial FPGA filter
+coefficient. Once a zone matches, the MCU decodes it into a fixed local
+structure, computes the command-visible values, emits at most 17 words, and
+copies all continuing modulation state into the allocated voice. It performs
+no heap allocation and retains no pointer into asset or cache storage.
 
 ### Integer Materialization Kernel
 
-Space reduction moves a deliberately bounded set of calculations back to Note
-On. Generated fixed-point tables or integer interpolation must cover:
+Space reduction deliberately moves derived calculations back to Note On when
+they fit the event deadline and remove net deployed bytes. Generated firmware
+tables, fixed-point interpolation, multiply, divide, shifts, and saturating
+arithmetic may cover:
 
 - timecents to sample counts and envelope steps;
 - root-key, correction, scale-tuning, and output-rate phase conversion;
 - base attenuation and pan conversion;
-- initial filter selection or coefficient lookup;
+- initial filter coefficient construction or lookup;
+- initial evaluation of velocity, key, channel, and controller modulators;
 - patching the optional START payload layout.
 
 These calculations use the same rounding and saturation policy already checked
@@ -993,9 +1001,18 @@ against `McuModel`. A compact image is invalid if it requires an unsupported
 formula or an out-of-range intermediate. Direct and compact command streams
 must be bit exact; a size win does not authorize a new numeric tolerance.
 
+The firmware may spend CPU cycles where that removes asset records. It must not
+use floating point or general transcendental library calls: exponent-like SF2
+conversions use small shared firmware tables plus integer interpolation. Those
+tables are versioned by the numeric profile and are not duplicated in every
+MSF2 image. The build report lists worst-case zone comparisons, modulation
+terms, arithmetic operations, and table reads per Note On so the later target
+gate can set an evidence-based deadline.
+
 The added work belongs only to Note On and cold preset acquisition. Periodic
-gain, pitch, and filter evaluation continues to use the same interned programs
-and fixed active-voice state as `direct-v1`.
+gain, pitch, and filter evaluation continues to use the same fixed integer
+evaluator and active-voice state semantics as `direct-v1`; the needed normalized
+terms are copied from the matched zone when the voice starts.
 
 ### Optional Block Compression
 
@@ -1009,10 +1026,12 @@ The block design must satisfy all of the following:
   size, expanded size, and CRC;
 - no block requires a history window from another block;
 - maximum expanded block size is declared and checked before firmware starts;
-- runtime modulation programs/configurations and source identity remain in an
-  uncompressed directly accessible section;
+- source identity and the preset directory remain directly accessible;
+- modulation terms may remain inside the preset block because a started voice
+  copies every term and accumulator needed by later controller ticks into its
+  fixed active state;
 - a started voice copies every later-needed immutable ID/value into fixed voice
-  state, so a recipe block may be evicted immediately after Note On;
+  state, so a preset block may be evicted immediately after Note On;
 - program change may prefetch, but correctness cannot depend on prefetch
   completing before the first Note On;
 - the fixed cache has explicit entry count, replacement policy, hit/miss
@@ -1029,15 +1048,19 @@ raw compact data after indexes while meeting cold Note On and SRAM limits.
 
 For the exact SGM source, `gm_bank0.txt`, and reference output profile:
 
-- mandatory raw `compact-v2` acceptance ceiling: 1,500,000 bytes;
-- raw compact design target: 1,000,000 bytes or less;
-- optional block-compressed target: 768 KiB or less;
+- mandatory raw `compact-v2` acceptance ceiling: 1,000,000 bytes;
+- raw compact design target: 512 KiB or less;
+- optional block-compressed target: 384 KiB or less;
 - maximum selected layers remains four;
 - command buffer remains 17 words with no heap allocation;
 - the build report must list logical and stored bytes per section, record
   counts/strides, interning savings, index widths, and largest cold-read block;
 - the benchmark must report direct versus compact cold/warm Note On latency,
-  storage reads, bytes read, and commands emitted for the same trace.
+  zone comparisons, arithmetic operations, storage reads, bytes read, and
+  commands emitted for the same trace;
+- every optional index, interned table, cached result, or precomputed field must
+  report its added bytes and saved cold/warm cycles; the selected deployment is
+  the smallest measured point that passes the target timing gate.
 
 The size ceilings are portable compiler gates. Timing, cache size, and codec
 acceptance remain target-dependent until the MCU and flash interface are fixed.
@@ -1062,22 +1085,26 @@ behavior implicitly.
 Exit gate: byte-identical repeat builds, exact direct/compact selected layers,
 and a compact intermediate below 3,750,000 bytes for SGM bank zero.
 
-### Phase 7: Candidate Recipes And Compact Dispatch
+### Phase 7: Normalized Zones And Compute-First Runtime
 
-- [ ] Implement preset-local cumulative key boundaries, compact velocity spans,
-  and checked 16-bit candidate references.
-- [ ] Define and generate normalized candidate recipes with at most one level
-  of shared-record indirection.
+- [ ] Define normalized preset-base and zone-delta records with presence
+  bitmaps, compact integer fields, and at most one level of shared-record
+  indirection.
+- [ ] Implement preset-local sequential zone scanning as the zero-index
+  baseline; compare it with coarse key buckets and merged interval lists.
 - [ ] Implement the fixed-capacity integer materialization kernel and construct
   START commands without stored START word arrays.
-- [ ] Add a small optional immutable-recipe cache keyed by candidate/key; report
-  its SRAM cost separately and keep correctness independent of it.
+- [ ] Move phase, envelope, gain/pan, filter, and initial modulation conversion
+  to generated firmware LUTs and fixed-point arithmetic.
+- [ ] Measure inline versus interned fields, varint/delta encodings, optional
+  indexes, and immutable-result caches; keep only net wins required by timing.
 - [ ] Exhaust every selected preset/key/velocity against `direct-v1`, including
   layer order and START words before live channel patching.
 
-Exit gate: the SGM raw compact image is no larger than 1,500,000 bytes, targets
-1,000,000 bytes, performs no heap allocation or semantic-object scan, and emits
-bit-exact commands and reference PCM on checked and SGM traces.
+Exit gate: the SGM raw compact image is no larger than 1,000,000 bytes, targets
+512 KiB, performs no heap allocation or SF2 inheritance/object-graph walk, and
+emits bit-exact commands and reference PCM on checked and SGM traces. No larger
+indexed or precomputed variant is selected without a measured timing need.
 
 ### Phase 8: Optional Preset-Local Compression
 
