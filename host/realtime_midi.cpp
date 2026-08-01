@@ -1,6 +1,9 @@
 #include "host/realtime_midi.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 
 namespace host {
 
@@ -191,6 +194,52 @@ MidiEventQueueStats BoundedMidiEventQueue::stats() const {
   MidiEventQueueStats snapshot = stats_;
   snapshot.depth = uint32_t(count_);
   return snapshot;
+}
+
+MidiFilePlayback::MidiFilePlayback(std::vector<render::NoteEvent> events,
+                                   uint64_t start_timestamp_ns)
+    : end_timestamp_ns_(start_timestamp_ns) {
+  events_.reserve(events.size());
+  double previous_seconds = 0.0;
+  for (const render::NoteEvent& event : events) {
+    if (!std::isfinite(event.time_seconds) || event.time_seconds < 0.0) {
+      throw std::runtime_error("MIDI file event time must be finite and nonnegative");
+    }
+    if (!events_.empty() && event.time_seconds < previous_seconds) {
+      throw std::runtime_error("MIDI file events must be ordered by time");
+    }
+    const long double delay_ns =
+        static_cast<long double>(event.time_seconds) * 1000000000.0L;
+    const long double maximum_delay = std::min(
+        static_cast<long double>(std::numeric_limits<uint64_t>::max() -
+                                 start_timestamp_ns),
+        static_cast<long double>(std::numeric_limits<long long>::max()));
+    if (delay_ns > maximum_delay) {
+      throw std::runtime_error("MIDI file duration exceeds monotonic clock range");
+    }
+    const uint64_t timestamp_ns =
+        start_timestamp_ns + static_cast<uint64_t>(std::llround(delay_ns));
+    events_.push_back({timestamp_ns, event});
+    end_timestamp_ns_ = timestamp_ns;
+    previous_seconds = event.time_seconds;
+  }
+}
+
+std::size_t MidiFilePlayback::enqueue_due(
+    uint64_t now_ns, BoundedMidiEventQueue& queue) {
+  std::size_t count = 0;
+  while (next_event_ < events_.size() &&
+         events_[next_event_].timestamp_ns <= now_ns) {
+    const BoundedMidiEventQueue::PushResult result =
+        queue.push(events_[next_event_]);
+    if (result == BoundedMidiEventQueue::PushResult::kLifecycleOverflow) {
+      lifecycle_overflow_ = true;
+      break;
+    }
+    ++next_event_;
+    ++count;
+  }
+  return count;
 }
 
 }  // namespace host

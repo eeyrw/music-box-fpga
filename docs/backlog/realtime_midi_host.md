@@ -237,17 +237,20 @@ all CH347 calls on its worker thread. The MIDI queue separately reserves 256 of
 - [x] Report Note On command latency, scheduling jitter, queue depth, transport
   errors, active voices, and voice steals.
 
-The first application supports Linux raw-MIDI character devices and standard
-input byte streams. It timestamps each completed ingress message with the
-monotonic time captured at `read(2)`, then reports ingress-to-enqueue latency.
-Because commands do not contain a target frame, delivered state is visible at
-the next admitted FPGA render-block boundary. SoundFont loading and compilation
-finish before the MIDI descriptor opens; the bounded region registry refuses
-to recycle any region referenced by an active MCU voice.
+The application supports Linux raw-MIDI character devices, standard-input byte
+streams, and direct real-time playback of format 0/1 PPQ Standard MIDI Files.
+Raw input timestamps each completed message with the monotonic time captured at
+`read(2)`. File playback parses the complete tempo map before starting and maps
+each event time to the same monotonic clock. Because commands do not contain a
+target frame, delivered state is visible at the next admitted FPGA render-block
+boundary. SoundFont loading, compilation, and SMF parsing finish before the
+performance clock starts; the bounded region registry refuses to recycle any
+region referenced by an active MCU voice.
 
-ALSA Sequencer input, including direct `aplaymidi` routing, is not part of this
-first entry point. `aplaymidi` requires either a future Sequencer backend or a
-virtual raw-MIDI bridge that exposes a `/dev/snd/midiC*D*` path.
+ALSA Sequencer input, including direct `aplaymidi` routing, is still not part of
+this entry point. The application can play the same SMF itself with
+`--midi-file`; live Sequencer routing requires a future backend or a virtual
+raw-MIDI bridge that exposes a `/dev/snd/midiC*D*` path.
 
 ## Priority 8: Bandwidth And Protocol Follow-Up
 

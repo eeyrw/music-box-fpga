@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -89,10 +90,67 @@ void test_bounded_event_queue_overload_policy() {
   }
 }
 
+void test_midi_file_playback_timing_and_order() {
+  render::NoteEvent first;
+  first.time_seconds = 0.001;
+  first.note = 60;
+  first.on = true;
+  render::NoteEvent second = first;
+  second.note = 61;
+  render::NoteEvent third = first;
+  third.time_seconds = 0.002;
+  third.note = 62;
+
+  host::MidiFilePlayback playback({first, second, third}, 1000000);
+  host::BoundedMidiEventQueue queue;
+  if (playback.enqueue_due(1999999, queue) != 0 || queue.stats().depth != 0) {
+    throw std::runtime_error("MIDI file event was scheduled before its due time");
+  }
+  if (playback.enqueue_due(2000000, queue) != 2 ||
+      playback.scheduled_count() != 2 || playback.finished()) {
+    throw std::runtime_error("same-time MIDI file events were not scheduled together");
+  }
+  host::TimestampedMidiEvent event;
+  if (!queue.pop(event) || event.event.note != 60 ||
+      event.timestamp_ns != 2000000) {
+    throw std::runtime_error("first MIDI file event order/timestamp mismatch");
+  }
+  if (!queue.pop(event) || event.event.note != 61 ||
+      event.timestamp_ns != 2000000) {
+    throw std::runtime_error("second MIDI file event order/timestamp mismatch");
+  }
+  if (playback.enqueue_due(3000000, queue) != 1 || !playback.finished() ||
+      playback.end_timestamp_ns() != 3000000) {
+    throw std::runtime_error("MIDI file playback did not finish at the final event");
+  }
+}
+
+void test_midi_file_playback_lifecycle_overflow() {
+  host::BoundedMidiEventQueue queue;
+  host::TimestampedMidiEvent note_off;
+  note_off.event.type = render::NoteEvent::EVENT_NOTE;
+  note_off.event.on = false;
+  for (std::size_t index = 0; index < host::BoundedMidiEventQueue::kCapacity;
+       ++index) {
+    if (queue.push(note_off) !=
+        host::BoundedMidiEventQueue::PushResult::kQueued) {
+      throw std::runtime_error("could not prepare full lifecycle queue");
+    }
+  }
+  render::NoteEvent event = note_off.event;
+  host::MidiFilePlayback playback({event}, 100);
+  if (playback.enqueue_due(100, queue) != 0 ||
+      !playback.lifecycle_overflow() || playback.finished()) {
+    throw std::runtime_error("MIDI file lifecycle overflow was not retained");
+  }
+}
+
 }  // namespace
 
 int main() {
   test_decoder_running_status_and_timestamp();
   test_bounded_event_queue_overload_policy();
+  test_midi_file_playback_timing_and_order();
+  test_midi_file_playback_lifecycle_overflow();
   return 0;
 }

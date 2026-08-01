@@ -134,20 +134,29 @@ priorities, batching, retry, and transaction coalescer without opening CH347.
 
 ## Real-Time MIDI Host
 
-`realtime_midi_host` supports Linux raw-MIDI character devices such as
-`/dev/snd/midiC0D0`; `--midi-input -` reads a raw byte stream from standard
-input. A dedicated input thread decodes running status and channel messages and
-pushes them into a 2048-event queue with a 256-event lifecycle reserve. Note
-Off and MIDI mode recovery events can consume the reserve. Replaceable control
-events coalesce under pressure, Note On is explicitly rejected once the normal
-capacity is exhausted, and lifecycle exhaustion triggers controlled shutdown.
+`realtime_midi_host` supports two mutually exclusive sources. `--midi-input`
+opens a Linux raw-MIDI character device such as `/dev/snd/midiC0D0`, and
+`--midi-input -` reads a raw byte stream from standard input. `--midi-file`
+loads a Standard MIDI File (format 0 or 1 with PPQ timing) and plays its merged
+channel events against the monotonic wall clock using the file's tempo map.
+When neither option is present, the raw-MIDI default remains
+`/dev/snd/midiC0D0`.
 
-This first version does not open an ALSA Sequencer port. `aplay` plays PCM and
-cannot send MIDI; `aplaymidi` sends an SMF file to an ALSA Sequencer destination
-and therefore cannot target `--midi-input` directly. Use a physical or virtual
-raw-MIDI device that exposes `/dev/snd/midiC*D*`, or add a Sequencer input
-backend in a later change. A Sequencer-only `Midi Through` port is not a raw
-device path.
+Both sources feed the same 2048-event queue with a 256-event lifecycle reserve.
+The raw input thread decodes running status and channel messages. File parsing
+and tempo conversion finish before its playback clock starts; the main control
+loop releases all events due at each iteration while preserving source order
+for equal timestamps. Note Off and MIDI mode recovery events can consume the
+reserve. Replaceable control events coalesce under pressure, Note On is
+explicitly rejected once the normal capacity is exhausted, and lifecycle
+exhaustion triggers controlled shutdown.
+
+The host still does not open an ALSA Sequencer port. `aplay` plays PCM and cannot
+send MIDI; `aplaymidi` sends an SMF file to an ALSA Sequencer destination and
+therefore cannot target `--midi-input` directly. Pass that SMF directly through
+`--midi-file`, or use a physical or virtual raw-MIDI device that exposes
+`/dev/snd/midiC*D*`. A Sequencer-only `Midi Through` port is not a raw device
+path.
 
 Raw-MIDI supplies no event timestamp in this interface. The host captures a
 monotonic ingress timestamp immediately after each `read(2)` and preserves the
@@ -155,7 +164,8 @@ timestamp assigned when the message's final byte arrives through the event
 queue. Commands have no target-frame field: after the SPI worker delivers a
 transaction, its state becomes visible at the next command admission and FPGA
 render-block boundary. Reported `note_on_enqueue_*` is ingress-to-command-queue
-latency; `maximum_command_age_ns` includes scheduler and driver delay.
+latency for raw input and due-time-to-command-queue latency for file playback;
+`maximum_command_age_ns` includes scheduler and driver delay.
 
 The complete SF2 file is loaded and its compiled lookup is built before the
 MIDI device is opened. One process-lifetime `CommandVoiceControl` preserves
@@ -173,17 +183,23 @@ make host-realtime-midi
 build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
   --sf2 /path/to/soundfont.sf2
 
+# Play an SMF in real time, then leave one second for release tails.
+build/realtime_midi_host --dry-run --midi-file /path/to/song.mid \
+  --midi-tail-ms 1000 --sf2 /path/to/soundfont.sf2
+
 # Current SGM development workload.
 build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
   --sf2 '/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2'
 ```
 
+SMF playback exits automatically after its final event plus `--midi-tail-ms`
+(default 1000 ms); `--run-ms` remains an optional hard process-duration limit.
 SIGINT, SIGTERM, MIDI disconnect, lifecycle overflow, and persistent CH347
 failure all stop input first, issue All Sound Off on every channel, wait up to
 two seconds for the command queue, and report final JSON statistics. The report
-includes Note On latency, control scheduling jitter, MIDI and command queue
-high-water marks, transport failures, current/maximum active voices, voice
-steals, and region-cache activity.
+identifies the source and file completion counts in addition to Note On latency,
+control scheduling jitter, MIDI and command queue high-water marks, transport
+failures, current/maximum active voices, voice steals, and region-cache activity.
 
 On 2026-08-01, a dry-run C4 Note On/Off using the 324,800,670-byte SGM workload
 selected four layers, reached four active voices and a 63-word transaction,

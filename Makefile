@@ -509,6 +509,9 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 	$(BUILD_DIR)/realtime_region_bank_test "$(SF2)"
 	$(BUILD_DIR)/realtime_midi_host --dry-run --midi-input /dev/null \
 		--sf2 "$(SF2)" --run-ms 10
+	$(BUILD_DIR)/realtime_midi_host --dry-run \
+		--midi-file assets/midi/musicbox_two_programs.mid \
+		--sf2 "$(SF2)" --run-ms 10 --midi-tail-ms 0
 	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
 		--ddr-smoke --voice-smoke --base 0x100 --length 8
 	python3 tools/compare_reference_fluidsynth_test.py

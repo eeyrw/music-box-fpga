@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 namespace host {
 
@@ -69,6 +70,25 @@ class BoundedMidiEventQueue {
   std::size_t tail_ = 0;
   std::size_t count_ = 0;
   MidiEventQueueStats stats_;
+};
+
+class MidiFilePlayback {
+ public:
+  MidiFilePlayback(std::vector<render::NoteEvent> events,
+                   uint64_t start_timestamp_ns);
+
+  std::size_t enqueue_due(uint64_t now_ns, BoundedMidiEventQueue& queue);
+  bool finished() const { return next_event_ == events_.size(); }
+  bool lifecycle_overflow() const { return lifecycle_overflow_; }
+  std::size_t event_count() const { return events_.size(); }
+  std::size_t scheduled_count() const { return next_event_; }
+  uint64_t end_timestamp_ns() const { return end_timestamp_ns_; }
+
+ private:
+  std::vector<TimestampedMidiEvent> events_;
+  std::size_t next_event_ = 0;
+  uint64_t end_timestamp_ns_ = 0;
+  bool lifecycle_overflow_ = false;
 };
 
 }  // namespace host

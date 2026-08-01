@@ -3,6 +3,7 @@
 #include "host/realtime_midi.h"
 #include "host/realtime_region_bank.h"
 #include "sim/harness/control/command_control.h"
+#include "sim/harness/formats/midi_parser.h"
 #include "sim/harness/formats/sf2_loader.h"
 #include "sim/harness/render/render_support.h"
 
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <poll.h>
 #include <stdexcept>
@@ -32,10 +34,12 @@ using Clock = std::chrono::steady_clock;
 
 struct Args {
   std::string sf2 = "assets/soundfonts/MT6276.sf2";
-  std::string midi_input = "/dev/snd/midiC0D0";
+  std::string midi_input;
+  std::string midi_file;
   int sample_rate = 48000;
   double control_tick_ms = 5.0;
   int run_ms = 0;
+  int midi_tail_ms = 1000;
   bool dry_run = false;
   host::Ch347Options ch347;
 };
@@ -60,25 +64,36 @@ Args parse_args(int argc, char** argv) {
     const std::string option = argv[index];
     if (option == "--sf2") args.sf2 = require_value(argc, argv, index);
     else if (option == "--midi-input") args.midi_input = require_value(argc, argv, index);
+    else if (option == "--midi-file") args.midi_file = require_value(argc, argv, index);
     else if (option == "--sample-rate") args.sample_rate = std::stoi(require_value(argc, argv, index));
     else if (option == "--control-tick-ms") args.control_tick_ms = std::stod(require_value(argc, argv, index));
     else if (option == "--run-ms") args.run_ms = std::stoi(require_value(argc, argv, index));
+    else if (option == "--midi-tail-ms") args.midi_tail_ms = std::stoi(require_value(argc, argv, index));
     else if (option == "--dry-run") args.dry_run = true;
     else if (option == "--library") args.ch347.library_path = require_value(argc, argv, index);
     else if (option == "--device") args.ch347.device_path = require_value(argc, argv, index);
     else if (option == "--clock-hz") args.ch347.clock_hz = std::stoi(require_value(argc, argv, index));
     else if (option == "--help") {
       std::cout
-          << "usage: realtime_midi_host [--sf2 PATH] [--midi-input PATH|-] [--dry-run]\n"
-          << "       [--sample-rate HZ] [--control-tick-ms MS] [--run-ms MS]\n"
+          << "usage: realtime_midi_host [--sf2 PATH] [--midi-input PATH|- | --midi-file PATH]\n"
+          << "       [--dry-run] [--sample-rate HZ] [--control-tick-ms MS]\n"
+          << "       [--run-ms MS] [--midi-tail-ms MS]\n"
           << "       [--library PATH] [--device PATH] [--clock-hz HZ]\n";
       std::exit(0);
     } else {
       throw std::runtime_error("unknown option: " + option);
     }
   }
-  if (args.sample_rate <= 0 || args.control_tick_ms <= 0.0 || args.run_ms < 0) {
-    throw std::runtime_error("sample rate and control tick must be positive; run-ms must be nonnegative");
+  if (!args.midi_input.empty() && !args.midi_file.empty()) {
+    throw std::runtime_error("--midi-input and --midi-file are mutually exclusive");
+  }
+  if (args.midi_input.empty() && args.midi_file.empty()) {
+    args.midi_input = "/dev/snd/midiC0D0";
+  }
+  if (args.sample_rate <= 0 || args.control_tick_ms <= 0.0 ||
+      args.run_ms < 0 || args.midi_tail_ms < 0) {
+    throw std::runtime_error(
+        "sample rate and control tick must be positive; run-ms and midi-tail-ms must be nonnegative");
   }
   return args;
 }
@@ -231,7 +246,12 @@ int main(int argc, char** argv) {
     const auto tick_period = std::chrono::nanoseconds(
         std::max<int64_t>(1, int64_t(std::llround(args.control_tick_ms * 1000000.0))));
 
-    // Loading and compiled lookup construction finish before the MIDI device is opened.
+    // File parsing, SF2 loading, and compiled lookup construction all finish
+    // before the real-time clock starts or a raw MIDI device is opened.
+    std::vector<render::NoteEvent> midi_file_events;
+    if (!args.midi_file.empty()) {
+      midi_file_events = render::parse_midi(args.midi_file);
+    }
     render::Sf2Data sf2 = render::load_sf2(args.sf2);
     host::RealtimeRegionBank region_bank(sf2, args.sample_rate, tick_samples);
 
@@ -248,7 +268,6 @@ int main(int argc, char** argv) {
                          {1, 1, 4});
 
     host::BoundedMidiEventQueue midi_queue;
-    MidiInputWorker midi_input(open_midi_input(args.midi_input), midi_queue);
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
@@ -256,11 +275,30 @@ int main(int argc, char** argv) {
     uint64_t next_note_instance = 0;
     bool fatal = false;
     const auto start = Clock::now();
+    const uint64_t start_ns = uint64_t(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            start.time_since_epoch()).count());
+    std::unique_ptr<MidiInputWorker> midi_input;
+    std::unique_ptr<host::MidiFilePlayback> midi_file;
+    if (args.midi_file.empty()) {
+      midi_input = std::make_unique<MidiInputWorker>(
+          open_midi_input(args.midi_input), midi_queue);
+    } else {
+      midi_file = std::make_unique<host::MidiFilePlayback>(
+          std::move(midi_file_events), start_ns);
+    }
     auto next_tick = start + tick_period;
     while (stop_requested == 0) {
       const auto now = Clock::now();
+      const uint64_t now_ns = uint64_t(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              now.time_since_epoch()).count());
       if (args.run_ms != 0 && now - start >= std::chrono::milliseconds(args.run_ms)) break;
-      if (midi_input.lifecycle_overflow()) {
+      if (midi_file) midi_file->enqueue_due(now_ns, midi_queue);
+      const bool lifecycle_overflow =
+          midi_input ? midi_input->lifecycle_overflow()
+                     : midi_file->lifecycle_overflow();
+      if (lifecycle_overflow) {
         std::cerr << "error: lifecycle MIDI queue reserve exhausted\n";
         fatal = true;
         break;
@@ -305,11 +343,23 @@ int main(int argc, char** argv) {
         next_tick += tick_period;
         if (next_tick <= tick_now) next_tick = tick_now + tick_period;
       }
-      if (midi_input.disconnected() && midi_queue.stats().depth == 0) break;
+      const uint32_t midi_queue_depth = midi_queue.stats().depth;
+      if (midi_input && midi_input->disconnected() && midi_queue_depth == 0) {
+        break;
+      }
+      if (midi_file && midi_file->finished() && midi_queue_depth == 0) {
+        const uint64_t tail_ns = uint64_t(args.midi_tail_ms) * 1000000ull;
+        const uint64_t stop_ns =
+            midi_file->end_timestamp_ns() >
+                    std::numeric_limits<uint64_t>::max() - tail_ns
+                ? std::numeric_limits<uint64_t>::max()
+                : midi_file->end_timestamp_ns() + tail_ns;
+        if (now_ns >= stop_ns) break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    midi_input.stop();
+    if (midi_input) midi_input->stop();
     try {
       all_sound_off(mcu, scheduler);
     } catch (const std::exception& error) {
@@ -325,9 +375,20 @@ int main(int argc, char** argv) {
     const host::RealtimeRegionBankStats region_stats = region_bank.stats();
     const uint64_t average_note_on_ns = runtime.note_on_events == 0 ? 0 :
         runtime.note_on_enqueue_total_ns / runtime.note_on_events;
+    const bool midi_disconnected = midi_input && midi_input->disconnected();
+    const uint64_t midi_read_errors = midi_input ? midi_input->read_errors() : 0;
+    const bool midi_file_complete = midi_file && midi_file->finished();
+    const std::size_t midi_file_event_count =
+        midi_file ? midi_file->event_count() : 0;
+    const std::size_t midi_file_scheduled_count =
+        midi_file ? midi_file->scheduled_count() : 0;
     std::cout
-        << "{\"midi_disconnected\":" << (midi_input.disconnected() ? "true" : "false")
-        << ",\"midi_read_errors\":" << midi_input.read_errors()
+        << "{\"midi_source\":\"" << (midi_file ? "file" : "raw") << "\""
+        << ",\"midi_disconnected\":" << (midi_disconnected ? "true" : "false")
+        << ",\"midi_read_errors\":" << midi_read_errors
+        << ",\"midi_file_complete\":" << (midi_file_complete ? "true" : "false")
+        << ",\"midi_file_event_count\":" << midi_file_event_count
+        << ",\"midi_file_scheduled_count\":" << midi_file_scheduled_count
         << ",\"midi_queue_high_water\":" << midi_stats.high_water
         << ",\"midi_dropped_note_on\":" << midi_stats.dropped_note_on
         << ",\"midi_dropped_replaceable\":" << midi_stats.dropped_replaceable
