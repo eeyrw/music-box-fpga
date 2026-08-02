@@ -287,6 +287,16 @@ make render-rtl-ddr3 \
   RENDER_RTL_OUT_DIR=build/song_rtl_ddr3
 ```
 
+The default Smart Artix profile includes
+`DDR3_EXTRA_READ_CYCLES=80`, measured in 400 MHz DDR-model clocks. This adds the
+20-cycle 100 MHz MIG UI/controller/PHY completion pipeline that is not part of
+the DRAM `tRCD`/`tCL` device timing. Set it to zero only to reproduce the older
+device-only model, or override it explicitly for a sensitivity sweep:
+
+```bash
+make render-rtl-ddr3 DDR3_EXTRA_READ_CYCLES=0 ...
+```
+
 By default this target stops at the renderer mix-buffer output. To instantiate
 the production RTL chorus, reverb, compressor, and master-volume chain, drain
 each completed mix buffer through it, and write the processed PCM stream, use:

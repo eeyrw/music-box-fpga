@@ -66,6 +66,8 @@ SAMPLE_RATE ?= 48000
 CONTROL_TICK_MS ?= 5
 SAMPLE_ACCURATE_CONTROL ?= 0
 DETAILED_DIAGNOSTICS ?= 0
+# Smart Artix MIG 4:1 UI/controller/PHY completion delay, in 400 MHz PHY clocks.
+DDR3_EXTRA_READ_CYCLES ?= 80
 COMPRESSOR_ENABLE ?= 1
 COMPRESSOR_THRESHOLD_CB ?= 20
 COMPRESSOR_RATIO ?= 4
@@ -902,7 +904,7 @@ render-rtl-memory:
 			--reverb-enable $(REVERB_ENABLE) \
 			--effects-tail-seconds $(EFFECTS_TAIL_SECONDS),) \
 		--out-dir $(RENDER_RTL_OUT_DIR) \
-		$(if $(filter 1,$(RENDER_DIRECT_ENABLED)),+DIRECT_MEMORY_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2)))))
+		$(if $(filter 1,$(RENDER_DIRECT_ENABLED)),+DIRECT_MEMORY_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_PARALLEL_NOR_ENABLED)),+PARALLEL_NOR_IMAGE=$(abspath $(SF2)),$(if $(filter 1,$(RENDER_QSPI_ENABLED)),+QSPI_IMAGE=$(abspath $(SF2)),+DDR3_IMAGE=$(abspath $(SF2)) +DDR3_EXTRA_READ_CYCLES=$(DDR3_EXTRA_READ_CYCLES))))
 
 render-rtl-direct:
 	$(MAKE) render-rtl-memory RENDER_MEMORY=direct \

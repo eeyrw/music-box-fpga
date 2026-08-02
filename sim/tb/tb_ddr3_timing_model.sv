@@ -36,7 +36,8 @@ module tb_ddr3_timing_model;
     .T_RRD(2),
     .T_FAW(9),
     .T_RFC(4),
-    .T_REFI(120)
+    .T_REFI(120),
+    .EXTRA_READ_CYCLES(5)
   ) dut (
     .clk,
     .rst,
@@ -164,7 +165,7 @@ module tb_ddr3_timing_model;
     transact(32'h0000_0000, 16'h1000, cold_latency);
     transact(32'h0000_0008, 16'h2000, hit_latency);
     transact(32'h0000_0020, 16'h4000, conflict_latency);
-    check(cold_latency == 30 && hit_latency == 10 && conflict_latency == 32,
+    check(cold_latency == 35 && hit_latency == 15 && conflict_latency == 37,
           $sformatf("exact DDR burst latency mismatch: cold=%0d hit=%0d conflict=%0d",
                     cold_latency, hit_latency, conflict_latency));
     check(hit_latency < cold_latency,
@@ -198,8 +199,9 @@ module tb_ddr3_timing_model;
 
     refresh_count_before = stat_refreshes;
     while (stat_refreshes == refresh_count_before) @(negedge clk);
-    check(dut.next_refresh_cycle_q == 64'd243,
-          "delayed refresh shifted the fixed tREFI schedule");
+    check(((dut.next_refresh_cycle_q - 64'd3) % 64'd120) == 0,
+          $sformatf("delayed refresh left the fixed tREFI grid: next=%0d",
+                    dut.next_refresh_cycle_q));
     check(!req_ready, "request ready stayed high during refresh recovery");
     while (!req_ready) @(negedge clk);
     transact(32'h0000_0000, 16'h1000, cold_latency);

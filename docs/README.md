@@ -78,6 +78,9 @@ matching contract whenever its RTL or host implementation changes.
 - [`verification/global_sample_cache_evaluation.md`](verification/global_sample_cache_evaluation.md):
   one-second SGM A/B results for the per-voice window and experimental global
   line cache on DDR3 and QSPI timing models.
+- [`verification/smart_artix_mig_latency_calibration.md`](verification/smart_artix_mig_latency_calibration.md):
+  board/PC DDR3 discrepancy, MIG completion-latency calibration, root cause,
+  and renderer optimization priorities.
 - [`verification/vivado_synthesis_timing.md`](verification/vivado_synthesis_timing.md):
   source lists, RAM inference, timing case studies, and closure criteria.
 - [`verification/vivado_strategy_and_report_analysis.md`](verification/vivado_strategy_and_report_analysis.md):

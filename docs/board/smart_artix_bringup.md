@@ -612,15 +612,24 @@ to CH347 command corruption or an unusually long individual DDR response. This
 test currently documents an overload boundary; it is not a passing polyphony
 qualification.
 
-As a bounded PC comparison, the current cycle-accurate RTL and timed DDR3 model
-rendered the first 200 ms of the same MIDI/SF2 workload. It reached 512 voices
-and completed 9,600 frames in 600 blocks with zero deadline misses. Maximum
-render time was 29,966 clocks (89.898% of the 16-frame budget), with 827,937 DDR
-reads, 334,102 row misses, and 3,253,993 sample-window stall clocks. The PC model
-therefore does not reproduce the board's 43,040-clock maximum or underruns in
-this short interval. It is useful evidence that generic render RTL can meet the
-modeled budget, but it does not qualify the real MIG integration or later
-long-duration cache/churn behavior.
+As a bounded PC comparison, the original device-only timed DDR3 model rendered
+the first 200 ms of the same MIDI/SF2 workload. It reached 512 voices and
+completed 9,600 frames in 600 blocks with zero deadline misses. Maximum render
+time was only 29,966 clocks, exposing that the model did not include MIG
+controller/UI/PHY completion latency. The static 465-voice interval had almost
+the same cache traffic on the board and PC, but sample-window stalls were about
+17,512 clocks per block on hardware versus 2,877 in the device-only model.
+
+Adding 80 cycles at the model's 400 MHz DDR clock, equivalent to 20 cycles of
+the 100 MHz MIG UI clock, matched the static hardware maximum within 69 clocks:
+31,585 modeled versus 31,516 measured. With that calibration, the 200 ms PC run
+reached 512 voices, reported a 43,633-clock maximum and 525 deadline misses in
+600 blocks. This reproduces the board's 43,040-clock maximum and overload
+direction without simulating the complete 10-second MIDI. The calibrated delay
+is now the default `render-rtl-ddr3` Smart Artix profile; it can be overridden
+with `DDR3_EXTRA_READ_CYCLES` for sensitivity experiments. The complete
+methodology, sweep, MIG contract, and optimization implications are in
+[`../verification/smart_artix_mig_latency_calibration.md`](../verification/smart_artix_mig_latency_calibration.md).
 
 After loading a valid sample range, exercise the atomic command path separately:
 

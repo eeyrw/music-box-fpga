@@ -22,6 +22,7 @@ module ddr3_timing_model #(
   parameter int T_FAW = 20,
   parameter int T_RFC = 104,
   parameter int T_REFI = 3120,
+  parameter int EXTRA_READ_CYCLES = 0,
   parameter string IMAGE_PATH = ""
 ) (
   input  logic                         clk,
@@ -83,6 +84,7 @@ module ddr3_timing_model #(
   logic [63:0] next_refresh_cycle_q;
   logic [63:0] refresh_block_until_q;
   logic refresh_pending_q;
+  integer extra_read_cycles;
   int image_handle;
   string selected_image_path;
 
@@ -136,11 +138,16 @@ module ddr3_timing_model #(
 
     if (!$value$plusargs("DDR3_IMAGE=%s", selected_image_path))
       selected_image_path = IMAGE_PATH;
+    if (!$value$plusargs("DDR3_EXTRA_READ_CYCLES=%d", extra_read_cycles))
+      extra_read_cycles = EXTRA_READ_CYCLES;
+    if (extra_read_cycles < 0)
+      $fatal(1, "ddr3_timing_model extra read cycles must be nonnegative");
     image_handle = ddr3_bin_open(selected_image_path);
     if (image_handle < 0)
       $fatal(1, "ddr3_timing_model failed to load '%s'", selected_image_path);
-    $display("DDR3_MODEL image=%s words=%0d", selected_image_path,
-             ddr3_bin_word_count(image_handle));
+    $display("DDR3_MODEL image=%s words=%0d extra_read_cycles=%0d",
+             selected_image_path, ddr3_bin_word_count(image_handle),
+             extra_read_cycles);
   end
 
   final begin
@@ -311,7 +318,8 @@ module ddr3_timing_model #(
           // DDR transfers on both CK edges. Publish only after the complete
           // physical burst has been aggregated into one ordered line.
           request_complete_cycle[row_hit_index] <=
-              cycle_q + 64'(T_CL) + 64'(BURST_CYCLES);
+              cycle_q + 64'(T_CL) + 64'(BURST_CYCLES) +
+              64'(extra_read_cycles);
           data_bus_busy_until_q <=
               cycle_q + 64'(T_CL) + 64'(BURST_CYCLES);
           bank_next_read[request_bank[row_hit_index]] <=

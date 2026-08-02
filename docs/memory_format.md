@@ -192,6 +192,18 @@ and the timed DDR3 model. It deliberately does not instantiate the Smart Artix
 MIG reader and arbiter; those board wrappers use focused SV tests so long
 SF2/MIDI renders are not burdened with a second protocol model.
 
+The Smart Artix render profile adds 80 cycles at the model's 400 MHz DDR clock
+to each read completion, equivalent to 20 cycles of the 100 MHz MIG UI clock.
+This represents controller/UI/PHY pipeline delay beyond the DRAM-device timing
+parameters. It was calibrated against the 2026-08-02 board: the same 465-voice
+workload measured 31,585 maximum render clocks in the calibrated model and
+31,516 clocks in hardware. Override `DDR3_EXTRA_READ_CYCLES` only for an
+explicit sensitivity experiment. The underlying `ddr3_timing_model` parameter
+defaults to zero so its focused test can distinguish device timing from the
+board profile. See
+[`verification/smart_artix_mig_latency_calibration.md`](verification/smart_artix_mig_latency_calibration.md)
+for the complete sweep and hardware comparison.
+
 Every accepted refill must have exactly one returned response. Deadline checks
 must use accepted-request-to-publication renderer cycles, not command/request
 wait time or inferred memory bandwidth alone.
