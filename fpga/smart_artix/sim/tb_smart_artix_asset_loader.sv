@@ -33,7 +33,10 @@ module tb_smart_artix_asset_loader;
   int writer_bytes_seen;
   int expected_total_bytes;
 
-  smart_artix_asset_loader #(.LBA_WIDTH(LBA_WIDTH)) dut (
+  smart_artix_asset_loader #(
+    .LBA_WIDTH(LBA_WIDTH),
+    .MAX_SD_BURST_BLOCKS(2)
+  ) dut (
     .clk,
     .rst,
     .start,
@@ -193,15 +196,27 @@ module tb_smart_artix_asset_loader;
 
     ddr_init_calib_complete = 1'b1;
     send_header_sector();
-    accept_request(32'd7, 16'd3);
-    for (int sector = 0; sector < 3; sector++) begin
+    accept_request(32'd7, 16'd2);
+    for (int sector = 0; sector < 2; sector++) begin
       for (int i = 0; i < 512; i++) begin
         @(negedge clk);
         sd_byte_data = 8'(i);
-        sd_byte_last = (sector == 2) && (i == 511);
+        sd_byte_last = (sector == 1) && (i == 511);
         sd_byte_valid = 1'b1;
         wait (sd_byte_ready);
       end
+    end
+    @(negedge clk);
+    sd_byte_valid = 1'b0;
+    sd_byte_last = 1'b0;
+
+    accept_request(32'd9, 16'd1);
+    for (int i = 0; i < 512; i++) begin
+      @(negedge clk);
+      sd_byte_data = 8'(i);
+      sd_byte_last = i == 511;
+      sd_byte_valid = 1'b1;
+      wait (sd_byte_ready);
     end
     @(negedge clk);
     sd_byte_valid = 1'b0;

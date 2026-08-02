@@ -908,19 +908,20 @@ not as evidence that the architectural cone is robust.
 9. Record final utilization, timing, checksum, and critical-path identity beside
    the board flow.
 
-The current Smart Artix implementation uses synthesis checksum `997f4a67` and
+The 2026-08-03 Smart Artix implementation uses synthesis checksum `d06bc090` and
 closed the constrained MIG `ui_clk` (`clk_pll_i`) domain at 100 MHz with WNS
-`+0.165 ns`, TNS `0 ns`, WHS `+0.025 ns`, THS `0 ns`, zero setup/hold failing
-endpoints, all 46,033 nets routed, and zero DRC errors. Utilization is 24,933
-LUTs (76.48%), 25,911 registers (39.74%), 39 DSPs (32.50%), and 46.5 BRAM tiles
-(62.00%). The SPI bridge contributes 816 post-route LUTs, 585 registers, and
-one RAMB18. Its CRC and staging paths are not the worst setup or hold paths;
-the worst setup path is in the renderer DSP result path.
+`+0.058 ns`, TNS `0 ns`, WHS `+0.013 ns`, THS `0 ns`, zero setup/hold failing
+endpoints, all 47,919 nets routed, and zero DRC errors. Utilization is 25,909
+LUTs (79.48%), 26,467 registers (40.59%), 39 DSPs (32.50%), and 46.5 BRAM tiles
+(62.00%). The SD reader's two 512-byte banks map to one 1K-by-8 RAMB18. The
+worst setup path is in the effect-return mixer's reverb-dry saturation-count
+logic; the worst hold path crosses the DDR register-access master into MIG.
 
-The JSON summary records 123 DRC warnings. `vivado_report_summary.py analyze`
-also reports 9 inputs without delay, 1 false-pathed input without delay, 13
-outputs without delay, and methodology findings `LUTAR-1=1`, `PDRC-190=12`,
-`SYNTH-6=53`, `ULMTCS-1=1`, `XDCB-5=1`, and `REQP-1959=16`. It therefore
+The JSON summary records 126 DRC warnings. `vivado_report_summary.py analyze`
+reports no uncovered ordinary inputs and 10 uncovered outputs, while
+`check_timing` reports 3 `no_input_delay` and 11 `no_output_delay` objects. The
+methodology findings are `LUTAR-1=1`, `PDRC-190=12`, `SYNTH-6=53`,
+`TIMING-9=1`, `TIMING-18=1`, `ULMTCS-1=1`, `XDCB-5=1`, and `REQP-1959=16`. It therefore
 classifies the run as `REVIEW` even though internal setup, hold, route, and
 DRC-error acceptance all pass. Internal timing closure is not a waiver for
 external I/O coverage or the remaining warning classification.

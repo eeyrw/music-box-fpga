@@ -107,7 +107,7 @@ module sd_native_block_reader #(
     STATE_WAIT_RSP,
     STATE_READ_DATA,
     STATE_WAIT_DATA_TRANSACTION,
-    STATE_EMIT_BLOCK,
+    STATE_WAIT_OUTPUT,
     STATE_WAIT_RETRY_TRANSACTION,
     STATE_WAIT_CMD6_TRANSACTION,
     STATE_WAIT_SCR_TRANSACTION,
@@ -157,14 +157,20 @@ module sd_native_block_reader #(
   logic [15:0] blocks_remaining;
   logic [8:0] data_count;
   logic [8:0] emit_count;
-  (* ram_style = "block" *) logic [7:0] block_buffer [0:511];
+  (* ram_style = "block" *) logic [7:0] block_buffer [0:1023];
+  logic capture_bank;
+  logic emit_bank;
+  logic next_emit_bank;
+  logic emit_active;
+  logic [1:0] bank_full;
+  logic [1:0] bank_last;
+  logic pending_final_bank;
   logic cmd6_high_speed_supported;
   logic cmd6_high_speed_busy;
   logic [3:0] cmd6_selection;
   logic cmd6_is_switch;
   logic cmd23_supported;
   logic multi_used_cmd23;
-  logic emit_resume_multi;
   logic recovery_due_to_data;
   logic [7:0] current_retry_count;
 
@@ -173,7 +179,7 @@ module sd_native_block_reader #(
   logic [15:0] request_block_count;
   logic block_buffer_write_enable;
   logic block_buffer_read_enable;
-  logic [8:0] block_buffer_read_addr;
+  logic [9:0] block_buffer_read_addr;
 
   assign phy_cmd_valid = state == STATE_SEND;
   assign phy_cmd_index = pending_cmd_index;
@@ -183,7 +189,7 @@ module sd_native_block_reader #(
   assign phy_cmd_block_len = pending_block_len;
   assign phy_cmd_block_count = pending_block_count;
   assign cmd_accept = phy_cmd_valid && phy_cmd_ready;
-  assign phy_data_ready = state == STATE_READ_DATA;
+  assign phy_data_ready = (state == STATE_READ_DATA) && !bank_full[capture_bank];
   assign data_accept = phy_data_valid && phy_data_ready;
   assign block_req_ready = state == STATE_IDLE && initialized;
   assign busy = state != STATE_IDLE;
@@ -193,34 +199,19 @@ module sd_native_block_reader #(
       (op != OP_ACMD51) && (op != OP_CMD6_QUERY) &&
       (op != OP_CMD6_SWITCH);
 
-  always_comb begin
-    block_buffer_read_enable = 1'b0;
-    block_buffer_read_addr = '0;
-
-    if ((state == STATE_READ_DATA) && data_accept &&
-        (phy_data_status == SD_STATUS_OK) && (op == OP_CMD18) &&
-        phy_data_last && (data_count == 9'd511) &&
-        (blocks_remaining > 16'd1)) begin
-      block_buffer_read_enable = 1'b1;
-    end else if ((state == STATE_WAIT_MULTI_TRANSACTION) &&
-                 phy_transaction_done && multi_used_cmd23) begin
-      block_buffer_read_enable = 1'b1;
-    end else if ((state == STATE_WAIT_STOP_TRANSACTION) &&
-                 phy_transaction_done && (op == OP_CMD12_NORMAL)) begin
-      block_buffer_read_enable = 1'b1;
-    end else if ((state == STATE_WAIT_DATA_TRANSACTION) &&
-                 phy_transaction_done) begin
-      block_buffer_read_enable = 1'b1;
-    end else if ((state == STATE_EMIT_BLOCK) && block_byte_valid &&
-                 block_byte_ready && (emit_count != 9'd511)) begin
-      block_buffer_read_enable = 1'b1;
-      block_buffer_read_addr = emit_count + 9'd1;
-    end
-  end
+  assign block_buffer_read_enable =
+      (!emit_active && !block_byte_valid && bank_full[next_emit_bank])
+      || (emit_active && block_byte_valid && block_byte_ready
+          && (emit_count != 9'd511));
+  assign block_buffer_read_addr = !emit_active
+      ? {next_emit_bank, 9'd0}
+      : {emit_bank, emit_count + 9'd1};
+  assign block_byte_last = emit_active && bank_last[emit_bank]
+      && (emit_count == 9'd511);
 
   always_ff @(posedge clk) begin
     if (block_buffer_write_enable)
-      block_buffer[data_count] <= phy_data;
+      block_buffer[{capture_bank, data_count}] <= phy_data;
 
     if (rst)
       block_byte_data <= '0;
@@ -298,7 +289,6 @@ module sd_native_block_reader #(
         if (retry_count != 8'hff)
           retry_count <= retry_count + 8'd1;
         data_count <= '0;
-        emit_resume_multi <= 1'b0;
         start_command(CMD17, 32'(active_lba), SD_RESP_R1,
                       1'b1, 16'd512, 16'd1, OP_CMD17);
       end else begin
@@ -339,16 +329,21 @@ module sd_native_block_reader #(
       blocks_remaining <= '0;
       data_count <= '0;
       emit_count <= '0;
+      capture_bank <= 1'b0;
+      emit_bank <= 1'b0;
+      next_emit_bank <= 1'b0;
+      emit_active <= 1'b0;
+      bank_full <= '0;
+      bank_last <= '0;
+      pending_final_bank <= 1'b0;
       cmd6_high_speed_supported <= 1'b0;
       cmd6_high_speed_busy <= 1'b0;
       cmd6_selection <= '0;
       cmd6_is_switch <= 1'b0;
       cmd23_supported <= 1'b0;
       multi_used_cmd23 <= 1'b0;
-      emit_resume_multi <= 1'b0;
       recovery_due_to_data <= 1'b0;
       block_byte_valid <= 1'b0;
-      block_byte_last <= 1'b0;
       phy_rsp_data_proceed <= 1'b0;
       phy_rsp_data_cancel <= 1'b0;
       phy_abort_request <= 1'b0;
@@ -356,9 +351,22 @@ module sd_native_block_reader #(
       phy_rsp_data_proceed <= 1'b0;
       phy_rsp_data_cancel <= 1'b0;
       phy_abort_request <= 1'b0;
-      if (block_byte_valid && block_byte_ready) begin
-        block_byte_valid <= 1'b0;
-        block_byte_last <= 1'b0;
+      if (!emit_active && !block_byte_valid && bank_full[next_emit_bank]) begin
+        emit_bank <= next_emit_bank;
+        emit_count <= '0;
+        emit_active <= 1'b1;
+        block_byte_valid <= 1'b1;
+      end else if (emit_active && block_byte_valid && block_byte_ready) begin
+        if (emit_count == 9'd511) begin
+          bank_full[emit_bank] <= 1'b0;
+          bank_last[emit_bank] <= 1'b0;
+          next_emit_bank <= !next_emit_bank;
+          emit_active <= 1'b0;
+          block_byte_valid <= 1'b0;
+        end else begin
+          emit_count <= emit_count + 9'd1;
+          block_byte_valid <= 1'b1;
+        end
       end
 
       if (init_timer_active && state != STATE_IDLE && state != STATE_ERROR) begin
@@ -383,7 +391,7 @@ module sd_native_block_reader #(
             blocks_remaining <= request_block_count;
             current_retry_count <= '0;
             data_count <= '0;
-            emit_resume_multi <= 1'b0;
+            capture_bank <= next_emit_bank;
             if (request_block_count == 16'd1) begin
               start_command(CMD17, 32'(block_req_lba), SD_RESP_R1,
                             1'b1, 16'd512, 16'd1, OP_CMD17);
@@ -679,16 +687,19 @@ module sd_native_block_reader #(
               end else if (phy_data_last) begin
                 if (op == OP_CMD18) begin
                   if (blocks_remaining == 16'd1) begin
+                    pending_final_bank <= capture_bank;
                     state <= STATE_WAIT_MULTI_TRANSACTION;
                   end else begin
-                    emit_count <= '0;
-                    block_byte_last <= 1'b0;
-                    block_byte_valid <= 1'b1;
-                    emit_resume_multi <= 1'b1;
-                    state <= STATE_EMIT_BLOCK;
+                    bank_full[capture_bank] <= 1'b1;
+                    bank_last[capture_bank] <= 1'b0;
+                    capture_bank <= !capture_bank;
+                    active_lba <= active_lba + LBA_WIDTH'(1);
+                    blocks_remaining <= blocks_remaining - 16'd1;
+                    current_retry_count <= '0;
+                    data_count <= '0;
                   end
                 end else begin
-                  emit_resume_multi <= 1'b0;
+                  pending_final_bank <= capture_bank;
                   state <= STATE_WAIT_DATA_TRANSACTION;
                 end
               end else begin
@@ -739,11 +750,12 @@ module sd_native_block_reader #(
         STATE_WAIT_MULTI_TRANSACTION: begin
           if (phy_transaction_done) begin
             if (multi_used_cmd23) begin
-              emit_count <= '0;
-              block_byte_last <= 1'b0;
-              block_byte_valid <= 1'b1;
-              emit_resume_multi <= 1'b0;
-              state <= STATE_EMIT_BLOCK;
+              bank_full[pending_final_bank] <= 1'b1;
+              bank_last[pending_final_bank] <= 1'b1;
+              capture_bank <= !pending_final_bank;
+              blocks_remaining <= '0;
+              current_retry_count <= '0;
+              state <= STATE_WAIT_OUTPUT;
             end else begin
               start_command(CMD12, 32'h0, SD_RESP_R1B,
                             1'b0, 16'd0, 16'd0, OP_CMD12_NORMAL);
@@ -765,11 +777,12 @@ module sd_native_block_reader #(
         STATE_WAIT_STOP_TRANSACTION: begin
           if (phy_transaction_done) begin
             if (op == OP_CMD12_NORMAL) begin
-              emit_count <= '0;
-              block_byte_last <= 1'b0;
-              block_byte_valid <= 1'b1;
-              emit_resume_multi <= 1'b0;
-              state <= STATE_EMIT_BLOCK;
+              bank_full[pending_final_bank] <= 1'b1;
+              bank_last[pending_final_bank] <= 1'b1;
+              capture_bank <= !pending_final_bank;
+              blocks_remaining <= '0;
+              current_retry_count <= '0;
+              state <= STATE_WAIT_OUTPUT;
             end else begin
               start_single_block_retry(recovery_due_to_data);
             end
@@ -778,36 +791,26 @@ module sd_native_block_reader #(
 
         STATE_WAIT_DATA_TRANSACTION: begin
           if (phy_transaction_done) begin
-            emit_count <= '0;
-            block_byte_last <= blocks_remaining == 16'd1 && 9'd0 == 9'd511;
-            block_byte_valid <= 1'b1;
-            state <= STATE_EMIT_BLOCK;
+            bank_full[pending_final_bank] <= 1'b1;
+            bank_last[pending_final_bank] <= blocks_remaining == 16'd1;
+            capture_bank <= !pending_final_bank;
+            current_retry_count <= '0;
+            data_count <= '0;
+            if (blocks_remaining > 16'd1) begin
+              active_lba <= active_lba + LBA_WIDTH'(1);
+              blocks_remaining <= blocks_remaining - 16'd1;
+              start_command(CMD17, 32'(active_lba + LBA_WIDTH'(1)), SD_RESP_R1,
+                            1'b1, 16'd512, 16'd1, OP_CMD17);
+            end else begin
+              blocks_remaining <= '0;
+              state <= STATE_WAIT_OUTPUT;
+            end
           end
         end
 
-        STATE_EMIT_BLOCK: begin
-          if (block_byte_valid && block_byte_ready) begin
-            if (emit_count == 9'd511) begin
-              current_retry_count <= '0;
-              if (blocks_remaining > 16'd1) begin
-                active_lba <= active_lba + LBA_WIDTH'(1);
-                blocks_remaining <= blocks_remaining - 16'd1;
-                data_count <= '0;
-                if (emit_resume_multi) begin
-                  state <= STATE_READ_DATA;
-                end else begin
-                  start_command(CMD17, 32'(active_lba + LBA_WIDTH'(1)), SD_RESP_R1,
-                                1'b1, 16'd512, 16'd1, OP_CMD17);
-                end
-              end else begin
-                state <= STATE_IDLE;
-              end
-            end else begin
-              emit_count <= emit_count + 9'd1;
-              block_byte_last <= blocks_remaining == 16'd1 && emit_count == 9'd510;
-              block_byte_valid <= 1'b1;
-            end
-          end
+        STATE_WAIT_OUTPUT: begin
+          if ((bank_full == 2'b00) && !emit_active && !block_byte_valid)
+            state <= STATE_IDLE;
         end
 
         STATE_WAIT_RETRY_TRANSACTION: begin

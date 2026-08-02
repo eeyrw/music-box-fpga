@@ -148,23 +148,24 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The latest 2026-08-02 route met setup and hold timing with WNS `+0.213 ns` and
-WHS `+0.021 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
-because the hold margin is below `0.2 ns`, LUT utilization is `76.38%`, and the
-external I/O timing constraints are incomplete. Treat it as a useful baseline,
-not as proof that a changed XDC or IP configuration is hardware-safe.
+The latest 2026-08-03 forced-fresh route met setup and hold timing with WNS
+`+0.058 ns`, WHS `+0.013 ns`, and zero TNS/THS. All 47,919 routable nets were
+routed and DRC reported zero errors or critical warnings. Routed utilization was
+25,909 LUTs (79.48%), 26,467 registers, 46.5 BRAM tiles, and 39 DSPs. The margin
+and LUT headroom remain small, so every functional RTL change still requires a
+fresh post-route result.
 
 ### Current Bitstream and Programming Status
 
-`VIVADO_FORCE_REBUILD=1 make vivado-bitstream` completed successfully on
-2026-08-02 with Vivado 2025.2.
+`VIVADO_FORCE_REBUILD=1 make vivado-impl` followed by `make vivado-bitstream`
+completed successfully on 2026-08-03 with Vivado 2025.2.
 The write-bitstream precondition DRC reported zero errors, and the generated file
 was identified as an image for `7a50tfgg484`:
 
 ```text
 build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 size:   2,192,139 bytes
-sha256: 804e0fa9ac38df3ad9238416fa656a7ea76395954e50227311378451816f8e1c
+sha256: eabaefc2f40ed8170d277e2d9abc76312d71cec0bf03f56690790d889526ad7c
 ```
 
 Generated files under `build/` are intentionally not committed. Regenerate the
@@ -188,7 +189,7 @@ make vivado-program
 The programming script requires exactly one detected `xc7a50t` device instead
 of selecting the first device in an arbitrary JTAG chain. This command loads the
 `.bit` file into the FPGA's volatile configuration SRAM; it must be repeated
-after power is removed. The latest 2026-08-02 run programmed the current hash
+after power is removed. The latest 2026-08-03 run programmed the current hash
 above to `xc7a50t_0` and then required `DONE=1`, `DONE_PIN=1`, `EOS=1`,
 `CRC_ERROR=0`, and `IDCODE_ERROR=0` before succeeding.
 
@@ -242,8 +243,8 @@ make vivado-cfgmem-image
 
 This reuses or regenerates the current routed `.bit` and writes
 `build/fpga/smart_artix/vivado/flash/smart_artix_top_spi_x4.mcs`. The
-2026-08-02 image was generated successfully with SPIx4 interface and SHA-256
-`52a605f1f46b888dca0ee4f282ad79564622abfcf6b9d26e0ab7520131dc2439`.
+2026-08-03 image was generated successfully with SPIx4 interface and SHA-256
+`71c1c70f47aa70fc94ae0e176589e649c4bdd87e4f13085e143b894bf4139d2d`.
 Persistent
 programming is deliberately a separate, destructive target:
 
@@ -254,9 +255,11 @@ make vivado-flash-program CONFIRM_FLASH_PROGRAM=YES
 It requires exactly one `xc7a50t`, loads the indirect SPI core, erases the
 addressed configuration sectors, programs the MCS image, enables Vivado verify,
 then boots from Flash and checks configuration status. Back up the full Flash
-first when its existing contents must be retained. The target's erase/program
-path was added after readback qualification but has not yet been run on this
-board.
+first when its existing contents must be retained. On 2026-08-03 the target
+erased, programmed, and verified the image in 85 seconds, then booted it with
+`DONE=1`, `DONE_PIN=1`, `EOS=1`, `CRC_ERROR=0`, and `IDCODE_ERROR=0`. The
+post-boot register snapshot also showed DDR calibrated, SD High Speed active,
+and the complete SF2 loaded without SD, loader, retry, or recovery errors.
 
 ## First Power-On Checks
 
@@ -776,6 +779,37 @@ starts from 400 kHz initialization even if the previous card reached 50 MHz.
 
 Do not use SDSC cards for the first bring-up path. The RTL intentionally does not
 implement the byte-addressed SDSC fallback.
+
+### 2026-08-03 Full SF2 Load Throughput
+
+The physical 32 GB SDHC card carried the 324,800,670-byte
+`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2` WTSF payload. CH347 polling at 30 MHz
+measured `PLATFORM_BYTES_LOADED` from the first in-progress sample until it
+equaled `PLATFORM_SF2_SIZE`; this avoids assigning FPGA configuration, DDR
+calibration, or SD initialization time to the payload transfer.
+
+| Reader configuration | Maximum CMD18 extent | Measured load time | Effective payload rate |
+| --- | ---: | ---: | ---: |
+| Original one-bank path | 16 blocks / 8 KiB | approximately 35 s by LED timing | approximately 8.9 MiB/s |
+| Two-bank 1 KiB RAM, short extent | 16 blocks / 8 KiB | 33.559550 s | 9.230 MiB/s |
+| Two-bank 1 KiB RAM, production extent | 256 blocks / 128 KiB | 14.720993 s | 21.035 MiB/s |
+
+The small change from the first to second row shows that DDR draining was not the
+dominant 35-second cost. Increasing the CMD23/CMD18 extent reduced the number of
+command and first-data-token starts by approximately 16 times and produced the
+material gain. CMD23 helps the card plan and terminate the counted multi-block
+read, but does not change the 4-bit 50 MHz wire limit of 25 MB/s (23.84 MiB/s).
+The final measured payload rate is about 88% of that wire limit. Synthesis mapped
+the two 512-byte banks to one `1 K x 8` RAMB18, not a 128 KiB on-chip buffer.
+
+At completion, `PLATFORM_STATUS=0x00018035` and
+`PLATFORM_ERRORS=0x00050000`: loader state 5 (loaded), SD error 0, loader error
+0, retry count 0, and recovery error 0. Therefore CRC retries did not explain
+the original load time. A seeded CH347 comparison of 128 distributed 16-byte DDR
+beats against the source SF2 covered a 324,800,656-byte aligned span and reported
+zero mismatches. A second snapshot after booting the same image from configuration
+Flash again showed the complete size, High Speed active, and all error/retry
+fields clear.
 
 Generate and check the raw image on the host before inserting the card:
 

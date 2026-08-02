@@ -157,6 +157,13 @@ CONFIRM_FLASH_PROGRAM=YES`; build its persistent SPIx4 image separately with
 `compare`, and `analyze` commands; `make vivado-summary` and
 `make vivado-analyze` cover the normal current-run case.
 
+`make vivado-impl` owns the full post-route signoff report suite. A following
+`make vivado-bitstream`, including the invocation reached through cfgmem or Flash
+targets, reuses current signoff artifacts instead of regenerating the expensive
+QoR and timing reports. If bitstream generation has to launch implementation
+itself, or the summary/checkpoint is missing, it regenerates the reports so the
+standalone entry point remains complete.
+
 The required gate is defined by
 [`rtl_change_workflow.md`](rtl_change_workflow.md). Local script behavior and
 report filenames are documented in

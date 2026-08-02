@@ -42,6 +42,7 @@ module tb_sd_native_block_reader;
   int errors;
   int output_count;
   int abort_count;
+  int overlap_count;
 
   sd_native_block_reader #(
     .LBA_WIDTH(LBA_WIDTH),
@@ -233,14 +234,20 @@ module tb_sd_native_block_reader;
     if (rst) begin
       output_count <= 0;
       abort_count <= 0;
+      overlap_count <= 0;
     end else if (block_byte_valid && block_byte_ready) begin
       check(block_byte_data == 8'(output_count), "clean block output data mismatch");
-      check(block_byte_last == (output_count == 1535 || output_count == 2559),
+      check(block_byte_last == (output_count == 1535 || output_count == 2559
+                                || output_count == 4095),
             "block stream last mismatch");
       output_count <= output_count + 1;
     end else if (phy_abort_request) begin
       abort_count <= abort_count + 1;
     end
+
+    if (!rst && phy_data_valid && phy_data_ready
+        && block_byte_valid && block_byte_ready)
+      overlap_count <= overlap_count + 1;
   end
 
   initial begin
@@ -330,6 +337,34 @@ module tb_sd_native_block_reader;
     check(recovery_error_code == 0, "successful recovery left a recovery error");
     check(!phy_rsp_data_cancel, "successful final request was cancelled");
 
+    // Hold the consumer off until both banks fill, then verify that capture
+    // resumes and overlaps emission once a bank becomes available.
+    @(negedge clk);
+    block_req_lba = 32'h0000_5800;
+    block_req_block_count = 16'd3;
+    block_req_valid = 1'b1;
+    block_byte_ready = 1'b0;
+    @(posedge clk);
+    @(negedge clk);
+    block_req_valid = 1'b0;
+
+    issue_multi_read_response(32'h0000_5800, 16'd3);
+    for (int i = 0; i < 512; i++)
+      send_data_byte(8'(i + 2560), i == 511, SD_STATUS_OK);
+    for (int i = 0; i < 512; i++)
+      send_data_byte(8'(i + 3072), i == 511, SD_STATUS_OK);
+    check(!phy_data_ready, "reader accepted data with both block banks full");
+
+    block_byte_ready = 1'b1;
+    for (int i = 0; i < 512; i++)
+      send_data_byte(8'(i + 3584), i == 511, SD_STATUS_OK);
+    pulse_transaction_done();
+    finish_stop(32'h0000_0900);
+
+    wait (block_req_ready);
+    check(output_count == 4096, "double-buffer request stream length mismatch");
+    check(overlap_count > 0, "SD capture did not overlap block emission");
+
     @(negedge clk);
     block_req_lba = 32'h0000_6000;
     block_req_block_count = 16'd2;
@@ -349,7 +384,7 @@ module tb_sd_native_block_reader;
     check(error_code == 8'd9, "CMD12 failure did not preserve the data error");
     check(recovery_error_code == 4'd2, "CMD12 busy failure was not reported separately");
     check(!initialized, "reader stayed initialized after failed CMD18 recovery");
-    check(output_count == 2560, "failed recovery leaked a partial block");
+    check(output_count == 4096, "failed recovery leaked a partial block");
 
     if (errors != 0)
       $fatal(1, "FAIL: sd_native_block_reader errors=%0d", errors);

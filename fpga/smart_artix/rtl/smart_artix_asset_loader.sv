@@ -1,5 +1,6 @@
 module smart_artix_asset_loader #(
-  parameter int LBA_WIDTH = 32
+  parameter int LBA_WIDTH = 32,
+  parameter int unsigned MAX_SD_BURST_BLOCKS = 256
 ) (
   input  logic                clk,
   input  logic                rst,
@@ -51,8 +52,6 @@ module smart_artix_asset_loader #(
   localparam logic [7:0] ERROR_WRITER = 8'd4;
   localparam logic [7:0] ERROR_LBA_RANGE = 8'd5;
   localparam logic [7:0] ERROR_SIZE_RANGE = 8'd6;
-  localparam int MAX_SD_BURST_BLOCKS = 16;
-
   typedef enum logic [3:0] {
     STATE_IDLE,
     STATE_WAIT_DDR,

@@ -121,6 +121,12 @@ The first Smart Artix implementation provides the board-side middle of this path
   `CMD18`. Without CMD23 it terminates the requested extent using R1b-aware
   `CMD12`. A failed middle block is stopped with CMD12 and retried from its LBA
   using bounded `CMD17` recovery, without repeating clean output blocks.
+  The Smart Artix loader limits one request to 256 blocks (128 KiB), reducing
+  command and first-data-token latency compared with the original 16-block
+  extent. The reader stores incoming blocks in two 512-byte banks implemented
+  as one 1K-by-8 dual-port RAMB18, so one bank can drain to the DDR writer while
+  the pin PHY fills the other. Pin-level backpressure is asserted only when both
+  banks are occupied.
 - `smart_artix_sd_native_asset_loader` connects the native reader to the raw
   image loader and DDR3 writer at the command/data interface.
 - `sd_native_pin_phy` provides the direct FPGA-pin native SD layer for
@@ -252,6 +258,11 @@ This covers the raw-image header parser, DDR3 asset writer masks and byte order,
 DDR3 read/write arbitration, native SD command reader, native fake-card
 initialization and reads, native pin PHY command/data/CRC behavior, and the
 command-level native SD asset-loader path.
+The block-reader regression also fills both banks while its consumer is stalled,
+checks that pin input pauses without data loss, then proves input capture and
+output drain overlap after backpressure is released. The asset-loader regression
+forces a two-block request limit to verify correct splitting and LBA progression
+independently of the board's 256-block production limit.
 
 Use `make smart-artix-test` for the focused loader/DDR writer/arbiter checks and
 `make render-rtl-ddr3` for the current voice-major render path. A combined

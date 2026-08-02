@@ -31,8 +31,12 @@ make vivado-cfgmem-image
 make vivado-flash-program CONFIRM_FLASH_PROGRAM=YES
 ```
 
-`vivado-bitstream` is an offline build step and emits the same post-route reports
-and summary JSON used by the analysis targets. `vivado-program` opens the
+`vivado-bitstream` is an offline build step. When it must launch implementation
+it also emits the post-route reports and summary JSON used by the analysis
+targets. When an up-to-date implementation and its signoff artifacts already
+exist, it reuses them and only checks/copies the bitstream; this avoids repeating
+the expensive QoR, congestion, methodology, and timing report suite before
+`vivado-cfgmem-image` or `vivado-flash-program`. `vivado-program` opens the
 hardware manager and loads the `.bit` file into FPGA configuration SRAM over
 JTAG, so the configuration is lost when power is removed. `vivado-readback`
 checks configuration status before and after reading the current configuration
@@ -166,8 +170,11 @@ raw report facts, and the analysis output retains both.
 
 `impl.tcl` and `bitstream.tcl` also reuse an up-to-date completed
 `impl_smart_artix_top` run. If implementation inputs become stale, the scripts
-reset and relaunch that run before writing post-route reports or copying the
-bitstream.
+reset and relaunch that run. `impl.tcl` always refreshes the signoff report set;
+`bitstream.tcl` refreshes it only after launching implementation itself or when
+the summary/checkpoint artifacts are missing. A 2026-08-03 current-run check
+reduced the repeated `make vivado-bitstream` wall time from about 74 seconds to
+7.56 seconds; the remaining time is Vivado startup and freshness validation.
 
 Useful environment overrides:
 
