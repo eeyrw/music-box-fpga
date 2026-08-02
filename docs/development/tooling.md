@@ -42,6 +42,7 @@ interfaces:
 | --- | --- | --- |
 | GNU Make | `make <target>` | Orchestrates shared parameters, source lists, output directories, and tools. |
 | Documentation checker | `make check-docs` | Validates local links, path-like code spans, and index coverage. |
+| CH347 Python tests | `make test-ch347-python` | Checks mailbox/command framing and DDR debug sequencing without hardware. |
 | Verilator | `make lint`, `make test-*`, `make render-rtl-*` | Lints synthesizable RTL, builds self-checking SystemVerilog tests, and builds RTL memory-backend render harnesses. |
 | C++ compiler | `make test-cpp-unit`, `make render-reference`, host targets | Builds parser/model tests, the bit-exact reference synth, and CH347 utilities. |
 | Vivado 2025.2 | `make vivado-*` | Creates the Smart Artix project, synthesizes, implements, writes reports/bitstream, reads FPGA/Flash configuration, and programs SRAM or configuration Flash. |
@@ -80,6 +81,7 @@ source update, not a harmless check.
 | `tools/analyze_render_artifacts.py` | Finds PCM transients and correlates them with MIDI/control timing. |
 | `tools/analyze_sf2_access_span.py` | Models SF2/MIDI phase steps, loop wraps, and address locality; see [`../verification/sf2_access_span_analysis.md`](../verification/sf2_access_span_analysis.md). |
 | `make analyze-polyphony-stress` | Generates the deterministic stress MIDI and writes its complete SF2 access JSON/Markdown reports. |
+| `make test-sf2-slow SF2=/path/to/file.sf2` | Explicit slow gate for real-SF2 asset, runtime, equivalence, and realtime-host tests; excluded from `make test`. |
 | `tools/compare_reference_fluidsynth.py` | Builds a dry FluidSynth comparison and audio statistics report. |
 | `tools/sf2_extract.py` | Lists or extracts one SF2 instrument/sample for focused work. |
 | `tools/sf2_filter_report.py` | Audits SoundFont filter-generator use and can emit probe MIDI. |
@@ -122,6 +124,7 @@ sim/harness/apps      executable entry points
 | `make mcu-sf2-asset SF2=path/to/file.sf2` | Builds the target-neutral packed semantic metadata sidecar and JSON manifest under `build/assets/`. |
 | `make verify-mcu-sf2-asset SF2=path/to/file.sf2` | Validates the sidecar structure, profile, whole-image CRC, and source SF2 identity. |
 | `make flash-wtsf-sd SD_DEVICE=...` | Writes the verified image to an explicitly selected whole-card device. |
+| `tools/ch347_tool.py` | Direct official-SO Python CLI for named register access, decoded snapshots, diagnostic clear, DDR dump/verification, and raw command transactions. |
 | `make host-ch347` | Builds the generic CH347 register/command utility. |
 | `make host-ddr-read-benchmark` | Builds the CH347 DDR read-throughput and file-verification utility. |
 | `make host-smart-artix-bringup` | Builds the board snapshot and smoke-test runner. |

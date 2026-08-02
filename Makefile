@@ -237,7 +237,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -265,6 +265,9 @@ check-mcu-asset-profiles:
 
 check-docs:
 	python3 tools/check_docs.py
+
+test-ch347-python:
+	python3 tools/ch347_transport_test.py
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
@@ -294,7 +297,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: check-generated check-docs test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
+test: check-generated check-docs test-ch347-python test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)
@@ -438,7 +441,7 @@ measure-voice-compute-pipeline:
 		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
 	$(BUILD_DIR)/voice_compute_pipeline_model_test
 
-test-cpp-unit: host-smart-artix-bringup host-realtime-midi
+test-cpp-unit: host-smart-artix-bringup
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/voice_compute_pipeline_model.cpp \
@@ -496,34 +499,6 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		sim/harness/formats/sf2_loader.cpp sim/harness/formats/sf2_loader_test.cpp \
 		-o $(BUILD_DIR)/sf2_loader_test
 	$(BUILD_DIR)/sf2_loader_test
-	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
-		sim/harness/control/command_control.cpp \
-		sim/harness/formats/sf2_loader.cpp \
-		sim/harness/formats/mcu_sf2_modulation.cpp \
-		sim/harness/formats/mcu_sf2_asset.cpp \
-		sim/harness/formats/mcu_sf2_asset_test.cpp \
-		-o $(BUILD_DIR)/mcu_sf2_asset_test
-	$(BUILD_DIR)/mcu_sf2_asset_test "$(SF2)"
-	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
-		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_runtime_test.cpp \
-		sim/harness/formats/mcu_sf2_modulation.cpp \
-		sim/harness/formats/mcu_sf2_asset.cpp \
-		sim/harness/formats/sf2_loader.cpp \
-		sim/harness/control/command_control.cpp \
-		-o $(BUILD_DIR)/mcu_sf2_asset_runtime_test
-	$(BUILD_DIR)/mcu_sf2_asset_runtime_test "$(SF2)"
-	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
-		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_equivalence_test.cpp \
-		sim/harness/render/render_support.cpp \
-		sim/harness/formats/mcu_sf2_modulation.cpp \
-		sim/harness/formats/mcu_sf2_asset.cpp \
-		sim/harness/formats/sf2_loader.cpp \
-		sim/harness/control/command_control.cpp \
-		sim/harness/render/reference_synth.cpp \
-		sim/harness/formats/midi_parser.cpp sim/harness/render/render_args.cpp \
-		sim/harness/render/render_report.cpp sim/harness/render/render_session.cpp \
-		-o $(BUILD_DIR)/mcu_sf2_asset_equivalence_test
-	$(BUILD_DIR)/mcu_sf2_asset_equivalence_test "$(SF2)"
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/render_support.cpp sim/harness/control/command_control.cpp \
 		sim/harness/formats/mcu_sf2_modulation.cpp \
@@ -548,6 +523,45 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 		host/realtime_midi.cpp host/realtime_midi_test.cpp \
 		-o $(BUILD_DIR)/realtime_midi_test -pthread
 	$(BUILD_DIR)/realtime_midi_test
+	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
+		--ddr-smoke --voice-smoke --base 0x100 --length 8
+	python3 tools/compare_reference_fluidsynth_test.py
+	python3 tools/analyze_sf2_access_span_test.py
+	python3 tools/midi_events_test.py
+	python3 tools/vivado_report_summary_test.py
+
+# Real-SF2 asset compilation and policy equivalence are intentionally excluded
+# from `make test`; run this explicit slow gate when those paths change.
+test-sf2-slow: test-mcu-sf2-asset test-sf2-runtime test-sf2-equivalence test-realtime-sf2
+
+test-sf2-runtime:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
+		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_runtime_test.cpp \
+		sim/harness/formats/mcu_sf2_modulation.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/control/command_control.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset_runtime_test
+	$(BUILD_DIR)/mcu_sf2_asset_runtime_test "$(SF2)"
+
+test-sf2-equivalence:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
+		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_equivalence_test.cpp \
+		sim/harness/render/render_support.cpp \
+		sim/harness/formats/mcu_sf2_modulation.cpp \
+		sim/harness/formats/mcu_sf2_asset.cpp \
+		sim/harness/formats/sf2_loader.cpp \
+		sim/harness/control/command_control.cpp \
+		sim/harness/render/reference_synth.cpp \
+		sim/harness/formats/midi_parser.cpp sim/harness/render/render_args.cpp \
+		sim/harness/render/render_report.cpp sim/harness/render/render_session.cpp \
+		-o $(BUILD_DIR)/mcu_sf2_asset_equivalence_test
+	$(BUILD_DIR)/mcu_sf2_asset_equivalence_test "$(SF2)"
+
+test-realtime-sf2: host-realtime-midi
+	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) -I. \
 		host/realtime_region_bank.cpp host/realtime_region_bank_test.cpp \
 		sim/harness/render/render_support.cpp \
@@ -562,12 +576,6 @@ test-cpp-unit: host-smart-artix-bringup host-realtime-midi
 	$(BUILD_DIR)/realtime_midi_host --dry-run \
 		--midi-file assets/midi/musicbox_two_programs.mid \
 		--sf2 "$(SF2)" --run-ms 10 --midi-tail-ms 0
-	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
-		--ddr-smoke --voice-smoke --base 0x100 --length 8
-	python3 tools/compare_reference_fluidsynth_test.py
-	python3 tools/analyze_sf2_access_span_test.py
-	python3 tools/midi_events_test.py
-	python3 tools/vivado_report_summary_test.py
 
 benchmark-sf2-loader:
 	mkdir -p $(BUILD_DIR)

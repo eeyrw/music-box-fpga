@@ -250,6 +250,63 @@ release stage. The standalone low-level CLI keeps sequence state only for its
 own process lifetime; a real-time application must retain one
 `CommandVoiceControl` instance.
 
+## Python CH347 Test Tool
+
+`tools/ch347_tool.py` is the scripting-oriented board-debug entry point. It
+uses Python `ctypes` to call the vendor's official
+`third_party/ch347_linux/lib/x64/libch347.so` directly; it does not wrap or
+launch the C++ host. The reusable binding and protocol implementation lives in
+`tools/ch347_transport.py`. It mirrors the production CRC32 register mailbox,
+CRC16 command framing, CH347 clock-step selection, and 16-byte DDR debug
+aperture sequencing.
+
+The default device value `auto` accepts exactly one `/dev/ch34x_pis*` node.
+Select an index or path explicitly when more than one adapter is attached.
+The default SPI request is 30 MHz, mode 0, CS1 (`0x80`):
+
+```bash
+python3 tools/ch347_tool.py info
+python3 tools/ch347_tool.py read VERSION PLATFORM_STATUS EFFECT_STATUS
+python3 tools/ch347_tool.py snapshot --group all --json
+python3 tools/ch347_tool.py snapshot --group cache \
+  --output build/ch347/cache_snapshot.json
+python3 tools/ch347_tool.py clear-diagnostics --verify
+```
+
+Register operands accept names from `spec/register_map.json` or numeric
+addresses. Snapshot JSON includes raw address/value pairs and decoded named
+fields so test records remain machine-readable without duplicating the register
+map in Python.
+
+DDR reads operate in consecutive 16-byte MIG beats. With `--output`, raw bytes
+are written in DDR byte-address order and can be compared directly with an SF2
+or WTSF payload:
+
+```bash
+python3 tools/ch347_tool.py ddr-read 0x0 --beats 256 \
+  --output build/ch347/ddr_0_4k.bin
+python3 tools/ch347_tool.py ddr-verify /path/to/soundfont.sf2 \
+  --samples 128 --seed 1
+```
+
+The read command reports elapsed time and effective payload KiB/s. `ddr-verify`
+always includes the first and last complete beat in the selected span, then
+uses the supplied seed for reproducible pseudo-random samples. A mismatch exits
+with status 2 and prints up to eight expected/actual beats. Use `--ddr-address`,
+`--file-offset`, and `--length` when the file is not mapped at DDR byte zero.
+
+`ddr-write` changes live wave memory and is intentionally a separate,
+explicit command. It accepts four 32-bit lane words plus an optional 16-bit
+byte-enable mask. `command` is also low level: its arguments must contain one
+or more complete command records, because the tool validates but does not
+invent missing payload words.
+
+Run the protocol and DDR-sequencing unit tests without hardware using:
+
+```bash
+make test-ch347-python
+```
+
 ## Smart Artix Bring-Up
 
 Build the board runner with:

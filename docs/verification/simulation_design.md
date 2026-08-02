@@ -29,6 +29,19 @@ test-rtl-peripheral SPI command transport, credit/FIFO, I2S, and common status
 
 All RTL tests are self-checking and return a nonzero result on failure.
 
+The normal `make test` gate uses only small checked-in fixtures. Tests that
+compile or repeatedly parse the configured real `SF2`, including MCU asset
+runtime and policy equivalence, are deliberately separate:
+
+```bash
+make test-sf2-slow SF2=/path/to/file.sf2
+```
+
+Its individual targets are `test-mcu-sf2-asset`, `test-sf2-runtime`,
+`test-sf2-equivalence`, and `test-realtime-sf2`. Run the aggregate when SF2
+parsing, asset compilation, MCU runtime policy, or reference equivalence changes;
+it is not required for unrelated RTL and board-debug iterations.
+
 ## RTL Test Ownership
 
 | Test | Main coverage |
