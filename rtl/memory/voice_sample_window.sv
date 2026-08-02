@@ -5,6 +5,7 @@ module voice_sample_window #(
 ) (
   input  logic                                     clk,
   input  logic                                     rst,
+  input  logic                                     diagnostics_clear,
 
   input  logic                                     client_req_valid,
   output logic                                     client_req_ready,
@@ -251,6 +252,16 @@ module voice_sample_window #(
         if ((response_count_q + 1'b1) >= transaction_line_count) begin
           state_q <= STATE_IDLE;
         end
+      end
+
+      if (diagnostics_clear) begin
+        stat_client_requests <= '0;
+        stat_window_hits <= '0;
+        stat_window_refills <= '0;
+        stat_fallback_reads <= '0;
+        stat_memory_reads <= '0;
+        stat_evictions <= '0;
+        stat_stall_cycles <= '0;
       end
     end
   end

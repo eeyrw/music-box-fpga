@@ -26,6 +26,7 @@ module tb_voice_major_output_scheduler;
   logic effects_busy;
   logic render_inflight;
   logic render_deadline_miss_pulse;
+  logic render_latency_valid;
   logic [15:0] render_latency_cycles;
 
   always #5 clk <= ~clk;
@@ -108,7 +109,13 @@ module tb_voice_major_output_scheduler;
       $fatal(1, "first completion was not accepted while output was idle");
     @(posedge clk);
     @(negedge clk);
+    if (!render_latency_valid)
+      $fatal(1, "accepted completion did not publish render latency");
     block_complete_valid = 1'b0;
+    @(posedge clk);
+    #1;
+    if (render_latency_valid)
+      $fatal(1, "render latency valid lasted more than one cycle");
 
     // The second render starts before any sample from the first bank is read.
     accept_request(MAX_BLOCK_FRAMES);

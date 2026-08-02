@@ -1,9 +1,10 @@
 # Mono Voice-Major Control And Render Contract
 
 This document defines the version-10 command encoding retained by interface
-version 13 (`0x000d0000`). Version 12 added the aligned SPI length/CRC16
-transaction envelope; version 13 replaces only the register wire protocol with
-a split-phase mailbox. The old
+version 14 (`0x000e0000`). Version 12 added the aligned SPI length/CRC16
+transaction envelope; version 13 replaced only the register wire protocol with
+a split-phase mailbox, and version 14 removes register-based debug command
+injection. The old
 DEFINE_MONO/DEFINE_STEREO plus prepared/active START protocol is not part of
 this interface.
 
@@ -31,8 +32,7 @@ host MIDI/SF2 policy
 There is one control plane in simulation and hardware. Test harnesses and the
 production host send the same command words through the dedicated command
 stream; hardware maps that stream to SPI opcode `0xa5`. They do not install
-typed voice records through private simulation ports. `CMD_FIFO_DATA` remains a
-debug-only word injection register and is not used by the production host.
+typed voice records through private simulation ports or register writes.
 
 ## Framing
 
@@ -181,9 +181,8 @@ drained. Consequently every voice in a rendered block observes one coherent
 control boundary. Commands arriving after rendering starts apply to a later
 block.
 
-The production command stream exposes ready/valid backpressure. The debug-only
-`CMD_FIFO_DATA` ingress shares the FIFO; a simultaneous direct-stream word has
-priority and the register write returns an error.
+The production command stream exposes ready/valid backpressure and is the only
+command ingress in version 14.
 
 ## SPI Transport
 

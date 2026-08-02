@@ -34,6 +34,7 @@ module voice_major_output_scheduler #(
   input  logic                                      effects_busy,
   output logic                                      render_inflight,
   output logic                                      render_deadline_miss_pulse,
+  output logic                                      render_latency_valid,
   output logic [15:0]                               render_latency_cycles
 );
   import synth_pkg::*;
@@ -89,6 +90,7 @@ module voice_major_output_scheduler #(
     .block_pipeline_busy(),
     .render_inflight,
     .render_deadline_miss_pulse,
+    .render_latency_valid,
     .render_latency_cycles
   );
   /* verilator lint_on PINCONNECTEMPTY */

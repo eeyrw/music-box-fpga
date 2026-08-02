@@ -20,6 +20,7 @@ module tb_voice_major_throughput;
 
   logic clk = 1'b0;
   logic rst = 1'b1;
+  logic diagnostics_clear = 1'b0;
   reg_bus_req_t bus_req;
 /* verilator lint_off UNUSEDSIGNAL */
   reg_bus_rsp_t bus_rsp;

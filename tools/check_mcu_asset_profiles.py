@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = ROOT / "spec" / "mcu_asset_profiles.json"
 REGISTER_PATH = ROOT / "spec" / "register_map.json"
 GENERATED_HEADER_PATH = ROOT / "sim" / "harness" / "generated" / "mcu_asset_profile.h"
-REFERENCE_ID = "generic-le32-48k-tick48-v13"
+REFERENCE_ID = "generic-le32-48k-tick48-v14"
 
 
 def load_json(path: Path) -> dict:

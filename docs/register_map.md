@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000d0000`. This register remains readable while the renderer core is held in reset. Version 13 replaces direct/burst SPI register frames with the CRC32-protected request/fetch mailbox; the version-12 command transaction remains unchanged. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000e0000`. This register remains readable while the renderer core is held in reset. Version 14 replaces debug command injection with coherent diagnostic interval controls; the command transaction is unchanged. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
@@ -24,7 +24,12 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9030` | `CURRENT_SAMPLE` | RO | Accepted renderer-output timeline. |
 | `0x9034` | `CMD_FIFO_STATUS` | RO | Command-word FIFO, parser state, and error flags. |
 | `0x9038` | `MEM_RESPONSE_COUNT` | platform | Saturating memory response counter. |
-| `0x903c` | `CMD_FIFO_DATA` | WO | Debug-only injection of one 32-bit command word. |
+| `0x9080` | `DIAGNOSTIC_CONTROL` | WO | Bit 0 clears the diagnostic interval without resetting voices, caches, or playback. Reads return zero. |
+| `0x9084` | `PIPELINE_LATENCY_MAX` | RO | Maximum completed-render and memory-response latencies. |
+| `0x9088` | `AUDIO_FIFO_DIAGNOSTICS` | RO | Current/minimum FIFO occupancy and playback-started state. |
+| `0x908c` | `AUDIO_LEAD` | RO | Live rendered-minus-played stereo-frame lead. |
+| `0x9090` | `COMMAND_ERROR_COUNT` | RO | Exact saturating malformed/unsupported command count. |
+| `0x9094` | `STALE_GENERATION_COUNT` | RO | Exact saturating stale-generation rejection count. |
 | `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
 | `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
 | `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
@@ -54,13 +59,13 @@ updates, release, and stop use the transactional command stream documented in
 | `0x9174` | `SAMPLE_WINDOW_EVICTION_COUNT` | RO | Valid windows replaced. |
 | `0x9178` | `SAMPLE_WINDOW_STALL_CYCLE_COUNT` | RO | Blocked client-request cycles. |
 
-The command-plane block accepts writes only at `CMD_FIFO_DATA`; writes to its
-read-only registers return `bus_error`. The common-status and Smart Artix
-platform-status blocks acknowledge writes to their recognized read-only
-addresses and ignore the data. `COMMON_EVENT_FLAGS` is the exception in the
-common block because it implements write-one-to-clear. The DDR debug aperture
-also has the explicitly writable registers listed below. Unknown addresses
-return `bus_error`.
+Writes to command-plane read-only registers return `bus_error`. The
+common-status and Smart Artix platform-status blocks acknowledge writes to
+their recognized read-only addresses and ignore the data.
+`COMMON_EVENT_FLAGS` implements write-one-to-clear and
+`DIAGNOSTIC_CONTROL.CLEAR` has the interval-reset side effect described below.
+The DDR debug aperture also has the explicitly writable registers listed below.
+Unknown addresses return `bus_error`.
 
 ### Common Status Fields
 
@@ -83,10 +88,30 @@ return `bus_error`.
 bits `31:16` are the most recently traced external-memory response latency.
 Both values count system clocks.
 
-The four event flags clear on `core_reset` or by
-writing ones to `COMMON_EVENT_FLAGS`; a new event in the same clock as a clear
-wins. The four saturating event counters clear only on the enclosing system
-reset, not on `core_reset`.
+The four event flags clear on reset, by writing ones to
+`COMMON_EVENT_FLAGS`, or through `DIAGNOSTIC_CONTROL.CLEAR`; a new event in the
+same clock as either clear is retained. The four saturating event counters clear
+on reset or diagnostic clear.
+
+`PIPELINE_LATENCY_MAX[15:0]` records the maximum latency of a completed render
+request; bits `31:16` record the maximum traced external-memory response
+latency. Both are 16-bit system-clock counts. The render value is sampled once,
+when completion is first observed, even when ownership of the completed block
+is backpressured by an older block.
+
+`AUDIO_FIFO_DIAGNOSTICS[7:0]` is current FIFO occupancy, bits `15:8` are the
+minimum occupancy since reset or diagnostic clear, and bit 16 says playback has
+started. `AUDIO_LEAD` is the live unsigned difference between accepted rendered
+frames and frames consumed by I2S. Diagnostic clear re-bases the minimum to the
+current level; it does not stop playback or empty the FIFO.
+
+Writing bit 0 of `DIAGNOSTIC_CONTROL` clears common event flags and counters,
+pipeline maxima, exact command error/stale counts, all seven sample-window
+counters, and the FIFO minimum level. It deliberately preserves command FIFO
+contents and parser state, voices, render state, sample-window tags/data,
+effect state, FIFO contents, playback-started state, and all live values. Effect
+and compressor counters retain their existing effect-clear/core-reset
+contracts. A zero write has no effect.
 
 ### CMD_FIFO_STATUS
 
@@ -107,10 +132,14 @@ exact aliases of `CMD_FIFO_STATUS[31:30]` and `[17:16]`.
 Version 12 retains those register semantics and changes the external SPI
 command-transaction envelope as documented under Command Ingress.
 
-Version 13 also retains the register meanings, but replaces the external SPI
+Version 13 retains the earlier register meanings, but replaces the external SPI
 direct/burst register frames with the single-register request/fetch mailbox
 documented in
 [`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md).
+
+Version 14 removes `CMD_FIFO_DATA`; all command submission now uses the
+transactional command stream. It adds the diagnostic interval control and exact
+status registers at `0x9080` through `0x9094`.
 
 ### Compressor Diagnostics
 
@@ -163,7 +192,8 @@ including these counters and maxima; compressor diagnostics are unchanged.
 ### Sample-Window Diagnostics
 
 All seven sample-window registers are 32-bit saturating counters and clear on
-`core_reset`. A request eventually contributes to exactly one hit, refill, or
+`core_reset` or diagnostic clear. Diagnostic clear preserves valid window data
+and tags. A request eventually contributes to exactly one hit, refill, or
 fallback count. A refill issues one external read per line in the window, so
 `MEMORY_READ_COUNT` is intentionally not a duplicate of `REFILL_COUNT`.
 `EVICTION_COUNT` increments only when a refill replaces a previously valid
@@ -180,13 +210,10 @@ and payload bytes; FPGA builds may disable CRC comparison without changing the
 wire layout. `CMD_FIFO_STATUS` is the diagnostic observation of the downstream
 command path.
 
-`CMD_FIFO_DATA` is retained only for controlled debug injection into the same
-FIFO and parser. It is not a production command-submit interface: individual
-register writes have no complete-command transaction boundary, no acceptance
-response on the SPI wire, and no reliable recovery if injection stops between
-header and payload. No production host code writes commands through this
-register. Debug injection must occur with normal `0xa5` traffic quiescent; the
-direct stream has priority and a simultaneous register write is rejected.
+Version 14 has no register-based command injection. This removes the partial
+command and mixed-ingress failure modes of the former `CMD_FIFO_DATA` debug
+path. Hardware, simulation harnesses, and production hosts all submit complete
+command transactions through the dedicated command stream.
 
 ### Voice-Major Mono Commands (Version 10)
 

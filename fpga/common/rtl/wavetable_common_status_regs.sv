@@ -10,6 +10,7 @@ module wavetable_common_status_regs #(
   input  logic                     core_busy,
   input  logic                     render_inflight,
   input  logic                     render_deadline_miss_pulse,
+  input  logic                     render_latency_valid,
   input  logic [15:0]              render_latency_cycles,
   input  logic                     ext_req_valid,
   input  logic                     ext_req_ready,
@@ -21,8 +22,14 @@ module wavetable_common_status_regs #(
   input  logic                     mem_response_trace_pulse,
   input  logic [15:0]              mem_response_trace_latency,
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] output_fifo_level,
+  input  logic                     playback_started,
+  input  logic [31:0]              audio_lead,
+  input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] minimum_fifo_level,
+  input  logic [31:0]              command_error_count,
+  input  logic [31:0]              stale_generation_count,
   input  synth_pkg::audio_diagnostics_t audio_diagnostics,
-  input  synth_pkg::sample_window_diagnostics_t sample_window_diagnostics
+  input  synth_pkg::sample_window_diagnostics_t sample_window_diagnostics,
+  output logic                     diagnostics_clear_pulse
 );
   import synth_register_pkg::*;
 
@@ -34,6 +41,14 @@ module wavetable_common_status_regs #(
   localparam logic [15:0] ADDR_SAMPLE_DROP_COUNT = REG_SAMPLE_DROP_COUNT;
   localparam logic [15:0] ADDR_RENDER_DEADLINE_MISS_COUNT = REG_RENDER_DEADLINE_MISS_COUNT;
   localparam logic [15:0] ADDR_MEM_RESPONSE_COUNT = REG_MEM_RESPONSE_COUNT;
+  localparam logic [15:0] ADDR_DIAGNOSTIC_CONTROL = REG_DIAGNOSTIC_CONTROL;
+  localparam logic [15:0] ADDR_PIPELINE_LATENCY_MAX = REG_PIPELINE_LATENCY_MAX;
+  localparam logic [15:0] ADDR_AUDIO_FIFO_DIAGNOSTICS =
+      REG_AUDIO_FIFO_DIAGNOSTICS;
+  localparam logic [15:0] ADDR_AUDIO_LEAD = REG_AUDIO_LEAD;
+  localparam logic [15:0] ADDR_COMMAND_ERROR_COUNT = REG_COMMAND_ERROR_COUNT;
+  localparam logic [15:0] ADDR_STALE_GENERATION_COUNT =
+      REG_STALE_GENERATION_COUNT;
   localparam logic [15:0] ADDR_COMPRESSOR_STATUS = REG_COMPRESSOR_STATUS;
   localparam logic [15:0] ADDR_COMPRESSOR_GAIN_REDUCTION = REG_COMPRESSOR_GAIN_REDUCTION;
   localparam logic [15:0] ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION =
@@ -85,13 +100,19 @@ module wavetable_common_status_regs #(
   logic [31:0] render_deadline_miss_count;
   logic [31:0] mem_response_count;
   logic [31:0] common_event_set_mask;
+  logic [15:0] max_render_latency_cycles;
+  logic [15:0] max_mem_response_latency;
+  logic diagnostic_clear_write;
 
   function automatic logic is_common_status_address(input logic [15:0] address);
     unique case (address)
       ADDR_SYSTEM_STATUS, ADDR_COMMON_EVENT_FLAGS, ADDR_PIPELINE_LATENCY_STATUS,
       ADDR_UNDERRUN_COUNT,
       ADDR_SAMPLE_DROP_COUNT, ADDR_RENDER_DEADLINE_MISS_COUNT,
-      ADDR_MEM_RESPONSE_COUNT, ADDR_COMPRESSOR_STATUS,
+      ADDR_MEM_RESPONSE_COUNT, ADDR_DIAGNOSTIC_CONTROL,
+      ADDR_PIPELINE_LATENCY_MAX, ADDR_AUDIO_FIFO_DIAGNOSTICS,
+      ADDR_AUDIO_LEAD, ADDR_COMMAND_ERROR_COUNT,
+      ADDR_STALE_GENERATION_COUNT, ADDR_COMPRESSOR_STATUS,
       ADDR_COMPRESSOR_GAIN_REDUCTION, ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION,
       ADDR_COMPRESSOR_DETECTOR_PEAK, ADDR_COMPRESSOR_MAX_GAIN_REDUCTION,
       ADDR_COMPRESSOR_MAX_DETECTOR_PEAK, ADDR_COMPRESSOR_INPUT_FRAME_COUNT,
@@ -119,6 +140,9 @@ module wavetable_common_status_regs #(
   logic regs_access;
 
   assign regs_access = bus_req.valid && is_common_status_address(bus_req.address);
+  assign diagnostic_clear_write = regs_access && bus_req.write &&
+      (bus_req.address == ADDR_DIAGNOSTIC_CONTROL) &&
+      ((bus_req.wdata & REG_DIAGNOSTIC_CONTROL_CLEAR_MASK) != '0);
   assign bus_rsp.ready = bus_req.valid;
   assign bus_rsp.error = bus_req.valid && !is_common_status_address(bus_req.address);
   assign common_event_set_mask = {
@@ -153,6 +177,20 @@ module wavetable_common_status_regs #(
       ADDR_SAMPLE_DROP_COUNT: bus_rsp.rdata = sample_drop_count;
       ADDR_RENDER_DEADLINE_MISS_COUNT: bus_rsp.rdata = render_deadline_miss_count;
       ADDR_MEM_RESPONSE_COUNT: bus_rsp.rdata = mem_response_count;
+      ADDR_DIAGNOSTIC_CONTROL: bus_rsp.rdata = 32'd0;
+      ADDR_PIPELINE_LATENCY_MAX:
+          bus_rsp.rdata = {max_mem_response_latency, max_render_latency_cycles};
+      ADDR_AUDIO_FIFO_DIAGNOSTICS: begin
+        bus_rsp.rdata = {
+          15'd0,
+          playback_started,
+          8'(minimum_fifo_level),
+          8'(output_fifo_level)
+        };
+      end
+      ADDR_AUDIO_LEAD: bus_rsp.rdata = audio_lead;
+      ADDR_COMMAND_ERROR_COUNT: bus_rsp.rdata = command_error_count;
+      ADDR_STALE_GENERATION_COUNT: bus_rsp.rdata = stale_generation_count;
       ADDR_COMPRESSOR_STATUS: begin
         bus_rsp.rdata = {8'd0, audio_diagnostics.compressor.delay_level_frames,
                      5'd0, |audio_diagnostics.compressor.gain_reduction_cb_q12_20,
@@ -231,30 +269,52 @@ module wavetable_common_status_regs #(
   end
 
   always_ff @(posedge clk) begin
-    if (rst) begin
+    if (rst || core_reset) begin
       common_event_flags <= 32'd0;
       underrun_count <= 32'd0;
       sample_drop_count <= 32'd0;
       render_deadline_miss_count <= 32'd0;
       mem_response_count <= 32'd0;
+      max_render_latency_cycles <= 16'd0;
+      max_mem_response_latency <= 16'd0;
+      diagnostics_clear_pulse <= 1'b0;
     end else begin
-      if (regs_access && bus_req.write && (bus_req.address == ADDR_COMMON_EVENT_FLAGS)) begin
+      diagnostics_clear_pulse <= diagnostic_clear_write;
+      if (diagnostic_clear_write) begin
+        common_event_flags <= common_event_set_mask;
+      end else if (regs_access && bus_req.write &&
+                   (bus_req.address == ADDR_COMMON_EVENT_FLAGS)) begin
         common_event_flags <= (common_event_flags & ~bus_req.wdata) | common_event_set_mask;
       end else begin
         common_event_flags <= common_event_flags | common_event_set_mask;
       end
 
-      if (underrun_pulse)
-        underrun_count <= sat_inc(underrun_count);
-      if (sample_drop_pulse)
-        sample_drop_count <= sat_inc(sample_drop_count);
-      if (render_deadline_miss_pulse)
-        render_deadline_miss_count <= sat_inc(render_deadline_miss_count);
-      if (mem_response_trace_pulse)
-        mem_response_count <= sat_inc(mem_response_count);
-
-      if (core_reset)
-        common_event_flags <= 32'd0;
+      if (diagnostic_clear_write) begin
+        underrun_count <= underrun_pulse ? 32'd1 : 32'd0;
+        sample_drop_count <= sample_drop_pulse ? 32'd1 : 32'd0;
+        render_deadline_miss_count <=
+            render_deadline_miss_pulse ? 32'd1 : 32'd0;
+        mem_response_count <= mem_response_trace_pulse ? 32'd1 : 32'd0;
+        max_render_latency_cycles <=
+            render_latency_valid ? render_latency_cycles : 16'd0;
+        max_mem_response_latency <=
+            mem_response_trace_pulse ? mem_response_trace_latency : 16'd0;
+      end else begin
+        if (underrun_pulse)
+          underrun_count <= sat_inc(underrun_count);
+        if (sample_drop_pulse)
+          sample_drop_count <= sat_inc(sample_drop_count);
+        if (render_deadline_miss_pulse)
+          render_deadline_miss_count <= sat_inc(render_deadline_miss_count);
+        if (mem_response_trace_pulse)
+          mem_response_count <= sat_inc(mem_response_count);
+        if (render_latency_valid &&
+            (render_latency_cycles > max_render_latency_cycles))
+          max_render_latency_cycles <= render_latency_cycles;
+        if (mem_response_trace_pulse &&
+            (mem_response_trace_latency > max_mem_response_latency))
+          max_mem_response_latency <= mem_response_trace_latency;
+      end
     end
   end
 endmodule

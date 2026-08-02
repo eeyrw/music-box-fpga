@@ -5,6 +5,7 @@ module tb_voice_major_render_core;
 
   logic clk = 1'b0;
   logic rst = 1'b1;
+  logic diagnostics_clear = 1'b0;
   reg_bus_req_t bus_req;
 /* verilator lint_off UNUSEDSIGNAL */
   // This focused render test drives no register reads and observes only the
@@ -195,6 +196,20 @@ module tb_voice_major_render_core;
     render_and_read(32'd21, mix_t'(100), 1'b0);
     if (command_error_count != 0 || stale_generation_count != 0)
       $fatal(1, "replacement core reported a false stale write");
+
+    send_command_word(32'hee00_0000);
+    do @(posedge clk); while (command_error_count == 0);
+    if (command_error_count != 1)
+      $fatal(1, "malformed command count mismatch");
+    @(negedge clk);
+    diagnostics_clear = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    diagnostics_clear = 1'b0;
+    if (command_error_count != 0 || stale_generation_count != 0)
+      $fatal(1, "diagnostic clear did not clear command counters");
+    if (audio_config.master_volume != 16'sh4000)
+      $fatal(1, "diagnostic clear changed active audio configuration");
 
     $display("PASS: replacement voice-major render core state continuity");
     $finish;

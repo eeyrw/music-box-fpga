@@ -90,6 +90,8 @@ module voice_major_system #(
   ordered_line_rsp_t line_rsp;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+  logic diagnostics_clear_pulse;
+  logic render_latency_valid;
   sample_window_diagnostics_t sample_window_diagnostics;
   global_audio_config_t audio_config;
   logic [1:0] effect_clear;
@@ -184,6 +186,7 @@ module voice_major_system #(
     .core_busy(renderer_busy),
     .render_inflight,
     .render_deadline_miss_pulse,
+    .render_latency_valid,
     .render_latency_cycles,
     .ext_req_valid,
     .ext_req_ready,
@@ -195,13 +198,20 @@ module voice_major_system #(
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
+    .playback_started,
+    .audio_lead,
+    .minimum_fifo_level,
+    .command_error_count,
+    .stale_generation_count,
     .audio_diagnostics,
-    .sample_window_diagnostics
+    .sample_window_diagnostics,
+    .diagnostics_clear_pulse
   );
 
   voice_major_render_core core (
     .clk,
     .rst(core_reset),
+    .diagnostics_clear(diagnostics_clear_pulse),
     .bus_req(core_bus_req),
     .bus_rsp(core_bus_rsp),
     .cmd_stream_valid(spi_cmd_valid),
@@ -263,6 +273,7 @@ module voice_major_system #(
     .effects_busy,
     .render_inflight,
     .render_deadline_miss_pulse,
+    .render_latency_valid,
     .render_latency_cycles
   );
 
@@ -291,6 +302,7 @@ module voice_major_system #(
   ) audio_output (
     .clk,
     .rst(core_reset),
+    .diagnostics_clear(diagnostics_clear_pulse),
     .sample_valid(core_sample_valid),
     .sample_ready(core_sample_ready),
     .sample_l(core_sample_l),

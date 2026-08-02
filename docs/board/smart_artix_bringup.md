@@ -342,7 +342,7 @@ used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
 `build/smart_artix_bringup` reads the current mailbox-backed common status as a
 staged checklist and exits nonzero when a required stage fails. It requires
-`VERSION == 0x000d0000`; an older direct-register bitstream is rejected instead
+`VERSION == 0x000e0000`; an older bitstream is rejected instead
 of being diagnosed with current semantics. If CH347 is connected to the host
 but not to a valid FPGA SPI target, MISO may read back as all ones. The runner
 detects `0xffff_ffff` and reports that no FPGA target responded.
@@ -499,6 +499,129 @@ commands and increment the address by `0x10` each time. The address must be
 16-byte aligned; an unaligned command or a write with `--ddr-byte-enable 0`
 reports an error and does not access DDR.
 
+For a sequential read-throughput measurement or an exact comparison with a
+source byte image, build and run the dedicated host utility:
+
+```bash
+make host-ddr-read-benchmark
+build/ddr_read_benchmark --device /dev/ch34x_pis0 --clock-hz 30000000 \
+  --address 0 --bytes 65536 --verify path/to/source.sf2
+```
+
+The benchmark reports end-to-end payload throughput through the single-beat
+DDR register window. `--verify` compares DDR bytes with the same byte offset in
+the source file; `--output` writes the captured range to a file. Both the start
+address and byte count must be multiples of 16.
+
+On the 2026-08-02 bench, sequential reads at both the 15 MHz and 30 MHz CH347
+steps delivered approximately 12.2 KiB/s of SF2 payload. The similar result at
+both clock steps shows that this utility is dominated by the mailbox request,
+DDR command, and polling round trips for each 16-byte beat, rather than raw SPI
+shift time. An exact sampled-range comparison against
+`SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2` passed. This path is intended for
+inspection and integrity checks, not bulk sample transport.
+
+### Diagnostic Interval And Pressure Test
+
+Interface version 14 replaces the old command-FIFO debug write register with
+interval-oriented diagnostics. Define a measurement interval by clearing the
+counters immediately before the workload, then read the diagnostic registers
+after it stops:
+
+```bash
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --write 0x9080 0x1
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --read 0x9084
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --read 0x9088
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --read 0x908c
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --read 0x9090
+build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
+  --read 0x9094
+```
+
+`DIAGNOSTIC_CONTROL.CLEAR` clears sticky event flags, event counters, latency
+maxima, command/stale-generation counters, sample-window statistics, and the
+audio FIFO minimum. It deliberately preserves voices, parser state, FIFO
+contents, cache contents, and playback. Each CH347 read is a separate mailbox
+transaction, so a group of live values is not an atomic snapshot. Stop or
+quiesce the workload when exact cross-register identities matter. See
+[`../register_map.md`](../register_map.md) for field definitions.
+
+The v14 image with SHA-256
+`fed441cc14e63d01d7e522ef2b99d1f37a41731ed0e46e7b7af031a9b43e5b5f`
+was loaded into volatile FPGA configuration SRAM and checked through CH347 at
+30 MHz. `VERSION` returned `0x000e0000`; access to removed address `0x903c`
+returned a bus error. One deliberately invalid zero-length START command
+produced exactly one command error, and the diagnostic clear returned the count
+and flag to zero without resetting runtime state.
+
+A static 320-note pressure workload reached 465 active hardware voices and ran
+for three seconds before a deliberate hard stop. It reported no transport
+errors, underruns, drops, or render deadlines. Maximum render latency was
+31,516 system clocks (315.16 us at 100 MHz), maximum traced DDR response latency
+was 59 clocks, and the minimum audio FIFO occupancy after playback start was 19
+frames. The sample-window counters closed exactly:
+
+```text
+15,212,453 requests = 10,760,291 hits
+                    + 1,505,533 refills
+                    + 2,946,629 fallbacks
+8,968,761 external-memory reads
+1,505,068 cache evictions
+157,611,913 cache-stall clocks
+```
+
+The hard stop left 34 stale-generation commands while queued work from stopped
+voices drained; this is expected cleanup behavior for that stop method, not an
+SPI transport error. A final diagnostic clear returned all interval statistics
+to their idle values. This image was programmed only into volatile FPGA SRAM;
+the configuration Flash still contains the earlier persistent image.
+
+The repository's default 10-second `build/polyphony_stress_512.mid` was then
+played in full with a one-second tail against the same SF2 and 30 MHz CH347
+link. Unlike the static workload above, this MIDI continuously changes programs,
+controllers, pitch bend, and notes. The host scheduled all 13,279 MIDI events,
+dropped no note-on or replaceable MIDI events, drained normally, and reported
+zero transport errors. It reached all 512 hardware voices, performed 4,716
+voice steals, and accumulated 19,040 stale-generation rejections as superseded
+voice work drained.
+
+This dynamic workload exceeded the current render budget: it recorded 6,427
+I2S underruns and 6,874 render deadline misses, with no sample drops. FIFO
+occupancy reached zero. Maximum render latency was 43,040 clocks (430.4 us at
+100 MHz), while maximum traced DDR response latency remained 59 clocks. The
+sample-window accounting still closed exactly, and its external-memory read
+count matched `MEM_RESPONSE_COUNT`:
+
+```text
+59,463,068 requests = 41,413,399 hits
+                    + 5,311,818 refills
+                    + 12,737,851 fallbacks
+33,985,123 external-memory reads = 33,985,123 memory responses
+5,311,771 cache evictions
+625,946,375 cache-stall clocks
+```
+
+The contrast with the passing 320-note static interval isolates the severe
+underrun to sustained full-allocation churn and renderer/cache scheduling, not
+to CH347 command corruption or an unusually long individual DDR response. This
+test currently documents an overload boundary; it is not a passing polyphony
+qualification.
+
+As a bounded PC comparison, the current cycle-accurate RTL and timed DDR3 model
+rendered the first 200 ms of the same MIDI/SF2 workload. It reached 512 voices
+and completed 9,600 frames in 600 blocks with zero deadline misses. Maximum
+render time was 29,966 clocks (89.898% of the 16-frame budget), with 827,937 DDR
+reads, 334,102 row misses, and 3,253,993 sample-window stall clocks. The PC model
+therefore does not reproduce the board's 43,040-clock maximum or underruns in
+this short interval. It is useful evidence that generic render RTL can meet the
+modeled budget, but it does not qualify the real MIG integration or later
+long-duration cache/churn behavior.
+
 After loading a valid sample range, exercise the atomic command path separately:
 
 ```bash
@@ -624,6 +747,24 @@ If loading fails:
 
 Do not connect a power amplifier for the first I2S test. Use a scope, logic
 analyzer, or codec input with safe gain first.
+
+The current bitstream routes the three 3.3 V `LVCMOS33` outputs to adjacent
+BANK15 expansion-header pins:
+
+| Signal | FPGA pin | BANK15 header pin |
+| --- | --- | ---: |
+| `i2s_bclk` | `G16` | 5 |
+| `i2s_lrclk` | `G15` | 6 |
+| `i2s_sdata` | `H15` | 7 |
+
+The header pin table does not identify a ground pin on this connector. Provide
+a verified common board ground from a power connector or test point; do not use
+header pins 37/38 (`VCC3V3`) or 39/40 (`5V_DC`) as ground.
+
+The stream is Philips I2S, 48 kHz stereo with two 16-bit slots and a 3.072 MHz
+BCLK. LRCLK changes one BCLK before the next word MSB. SDATA and LRCLK change on
+BCLK falling edges and are intended to be sampled on rising edges. The current
+top exports no MCLK, codec configuration, reset, or mute signal.
 
 Check these signals:
 

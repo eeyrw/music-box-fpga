@@ -149,6 +149,7 @@ module voice_major_render_harness (
   voice_major_render_core core (
     .clk(core_clk),
     .rst,
+    .diagnostics_clear(1'b0),
     .bus_req,
     .bus_rsp,
     .cmd_stream_valid,

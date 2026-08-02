@@ -1,6 +1,7 @@
 module voice_major_render_core (
   input  logic                                      clk,
   input  logic                                      rst,
+  input  logic                                      diagnostics_clear,
 
   input  synth_pkg::reg_bus_req_t                   bus_req,
   output synth_pkg::reg_bus_rsp_t                   bus_rsp,
@@ -71,6 +72,7 @@ module voice_major_render_core (
   voice_major_command_plane command_plane (
     .clk,
     .rst,
+    .diagnostics_clear,
     .bus_req,
     .bus_rsp,
     .cmd_stream_valid,
@@ -131,6 +133,7 @@ module voice_major_render_core (
   voice_major_block_controller controller (
     .clk,
     .rst,
+    .diagnostics_clear,
     .block_req_valid(block_req_valid && !command_action_pending),
     .block_req_ready(controller_block_req_ready),
     .block_req,

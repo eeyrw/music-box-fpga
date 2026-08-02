@@ -3,7 +3,11 @@ module voice_major_command_plane #(
 ) (
   input  logic                                      clk,
   input  logic                                      rst,
+  input  logic                                      diagnostics_clear,
+/* verilator lint_off UNUSEDSIGNAL */
+  // The remaining core registers are read-only, so request write data is unused.
   input  synth_pkg::reg_bus_req_t                   bus_req,
+/* verilator lint_on UNUSEDSIGNAL */
   output synth_pkg::reg_bus_rsp_t                   bus_rsp,
   input  logic                                      cmd_stream_valid,
   input  logic [31:0]                               cmd_stream_data,
@@ -71,7 +75,6 @@ module voice_major_command_plane #(
   logic fifo_empty;
   logic fifo_full;
   logic fifo_flush;
-  logic bus_cmd_write;
   logic action_valid_format;
   logic action_fire;
   logic [15:0] command_voice;
@@ -122,11 +125,7 @@ module voice_major_command_plane #(
     endcase
   endfunction
 
-  // Retain register writes for controlled debug injection. Production command
-  // traffic uses cmd_stream_valid and must not be serialized through this port.
-  assign bus_cmd_write = bus_req.valid && bus_req.write &&
-                         (bus_req.address == REG_CMD_FIFO_DATA);
-  assign fifo_push = cmd_stream_valid || bus_cmd_write;
+  assign fifo_push = cmd_stream_valid;
   assign cmd_stream_ready = fifo_push_ready;
   assign action_pending = (parser_state_q != READ_HEADER) || !fifo_empty;
   assign command_voice = {6'd0, command_voice_q};
@@ -275,9 +274,6 @@ module voice_major_command_plane #(
           bus_rsp.rdata[31] = stale_generation_count != '0;
           bus_rsp.error = bus_req.write;
         end
-        REG_CMD_FIFO_DATA: begin
-          bus_rsp.error = !bus_req.write || cmd_stream_valid || !fifo_push_ready;
-        end
         default: bus_rsp.error = 1'b1;
       endcase
     end
@@ -383,7 +379,7 @@ module voice_major_command_plane #(
     .rst,
     .flush(fifo_flush),
     .push(fifo_push),
-    .push_word(cmd_stream_valid ? cmd_stream_data : bus_req.wdata),
+    .push_word(cmd_stream_data),
     .push_ready(fifo_push_ready),
     .pop(fifo_pop),
     .head_valid(fifo_head_valid),
@@ -497,6 +493,10 @@ module voice_major_command_plane #(
         end
         default: parser_state_q <= READ_HEADER;
       endcase
+      if (diagnostics_clear) begin
+        command_error_count <= '0;
+        stale_generation_count <= '0;
+      end
     end
   end
 endmodule

@@ -41,8 +41,8 @@ replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identi
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
 Global status and board control remain separate behind `host::RegisterIo`.
-This interface is not used for voice configuration. In particular, the host
-does not submit command words through the debug-only `CMD_FIFO_DATA` register.
+This interface is not used for voice configuration; version 14 has no
+register-based command submission path.
 
 ## SPI Transactions
 
@@ -258,7 +258,7 @@ Build the board runner with:
 make host-smart-artix-bringup
 ```
 
-It requires the exact current interface value `0x000d0000`, reads
+It requires the exact current interface value `0x000e0000`, reads
 platform/global and command-parser status through the CRC32 mailbox, exercises
 the DDR debug aperture as acknowledged single-register operations, and sends
 its voice smoke test through the same atomic `0xa5` command path as simulation.

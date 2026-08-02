@@ -1,6 +1,7 @@
 module block_interleaved_voice_renderer (
   input  logic                                      clk,
   input  logic                                      rst,
+  input  logic                                      diagnostics_clear,
 
   input  logic                                      start_valid,
   output logic                                      start_ready,
@@ -352,6 +353,7 @@ module block_interleaved_voice_renderer (
   ) line_cache (
     .clk,
     .rst,
+    .diagnostics_clear,
     .client_req_valid(cache_req_valid),
     .client_req_ready(cache_req_ready),
     .client_req_addr(cache_req_addr),

@@ -5,6 +5,7 @@ module tb_block_mono_voice_engine;
 
   logic clk = 1'b0;
   logic rst = 1'b1;
+  logic diagnostics_clear = 1'b0;
   logic start_valid;
   logic start_ready;
   logic [VOICE_ID_WIDTH-1:0] start_voice_index;

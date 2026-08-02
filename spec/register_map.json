@@ -14,8 +14,8 @@
           {
             "name": "VERSION",
             "addressOffset": "0x0000",
-            "resetValue": "0x000d0000",
-            "description": "Read-only register and command interface version; current value 0x000d0000 identifies version 13."
+            "resetValue": "0x000e0000",
+            "description": "Read-only register and command interface version; current value 0x000e0000 identifies version 14."
           },
           {
             "name": "SYSTEM_STATUS",
@@ -56,17 +56,17 @@
           {
             "name": "UNDERRUN_COUNT",
             "addressOffset": "0x0024",
-            "description": "Read-only saturating count of audio underrun pulses since system reset."
+            "description": "Read-only saturating count of audio underrun pulses since reset or diagnostic clear."
           },
           {
             "name": "SAMPLE_DROP_COUNT",
             "addressOffset": "0x0028",
-            "description": "Read-only saturating count of rendered samples dropped by the output path since system reset."
+            "description": "Read-only saturating count of rendered samples dropped by the output path since reset or diagnostic clear."
           },
           {
             "name": "RENDER_DEADLINE_MISS_COUNT",
             "addressOffset": "0x002c",
-            "description": "Read-only saturating count of render deadline miss pulses since system reset."
+            "description": "Read-only saturating count of render deadline miss pulses since reset or diagnostic clear."
           },
           {
             "name": "CURRENT_SAMPLE",
@@ -90,12 +90,49 @@
           {
             "name": "MEM_RESPONSE_COUNT",
             "addressOffset": "0x0038",
-            "description": "Read-only saturating count of traced external-memory response pulses since system reset."
+            "description": "Read-only saturating count of traced external-memory response pulses since reset or diagnostic clear."
           },
           {
-            "name": "CMD_FIFO_DATA",
-            "addressOffset": "0x003c",
-            "description": "Debug-only injection of one command word; production commands use SPI opcode 0xa5."
+            "name": "DIAGNOSTIC_CONTROL",
+            "addressOffset": "0x0080",
+            "description": "Renderer diagnostic control. Writing CLEAR resets common event/counter/maximum state, command error/stale counts, sample-window counters, and the I2S FIFO minimum level without resetting voices or playback state; reads return zero.",
+            "fields": [
+              {"name": "CLEAR", "bitOffset": 0, "bitWidth": 1, "mask": "0x00000001"}
+            ]
+          },
+          {
+            "name": "PIPELINE_LATENCY_MAX",
+            "addressOffset": "0x0084",
+            "description": "Maximum completed render latency and traced external-memory response latency since reset or DIAGNOSTIC_CONTROL.CLEAR, both in clocks.",
+            "fields": [
+              {"name": "RENDER_CYCLES", "bitOffset": 0, "bitWidth": 16},
+              {"name": "MEM_RESPONSE_CYCLES", "bitOffset": 16, "bitWidth": 16}
+            ]
+          },
+          {
+            "name": "AUDIO_FIFO_DIAGNOSTICS",
+            "addressOffset": "0x0088",
+            "description": "Live output FIFO level, minimum level since reset or diagnostic clear, and playback-started state.",
+            "fields": [
+              {"name": "CURRENT_LEVEL", "bitOffset": 0, "bitWidth": 8},
+              {"name": "MINIMUM_LEVEL", "bitOffset": 8, "bitWidth": 8},
+              {"name": "PLAYBACK_STARTED", "bitOffset": 16, "bitWidth": 1, "mask": "0x00010000"}
+            ]
+          },
+          {
+            "name": "AUDIO_LEAD",
+            "addressOffset": "0x008c",
+            "description": "Live rendered-minus-played stereo-frame lead of the I2S output path."
+          },
+          {
+            "name": "COMMAND_ERROR_COUNT",
+            "addressOffset": "0x0090",
+            "description": "Saturating count of malformed or unsupported parsed commands since reset or diagnostic clear."
+          },
+          {
+            "name": "STALE_GENERATION_COUNT",
+            "addressOffset": "0x0094",
+            "description": "Saturating count of rejected stale-generation command/state updates since reset or diagnostic clear."
           },
           {
             "name": "COMPRESSOR_STATUS",

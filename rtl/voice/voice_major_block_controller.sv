@@ -1,6 +1,7 @@
 module voice_major_block_controller (
   input  logic                                      clk,
   input  logic                                      rst,
+  input  logic                                      diagnostics_clear,
 
   input  logic                                      block_req_valid,
   output logic                                      block_req_ready,
@@ -116,6 +117,7 @@ module voice_major_block_controller (
   block_mono_voice_engine engine (
     .clk,
     .rst,
+    .diagnostics_clear,
     .start_valid(engine_start_valid),
     .start_ready(engine_start_ready),
     .start_voice_index(pending_state_voice_q),

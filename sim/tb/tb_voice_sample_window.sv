@@ -8,6 +8,7 @@ module tb_voice_sample_window;
 
   logic clk = 1'b0;
   logic rst = 1'b1;
+  logic diagnostics_clear;
   logic client_req_valid;
   logic client_req_ready;
   logic [ADDR_WIDTH-1:0] client_req_addr;
@@ -110,6 +111,7 @@ module tb_voice_sample_window;
   endtask
 
   initial begin
+    diagnostics_clear = 1'b0;
     client_req_valid = 1'b0;
     client_req_addr = '0;
     client_req_tag = '0;
@@ -154,6 +156,24 @@ module tb_voice_sample_window;
         stat_memory_reads != 13 || stat_evictions != 1 ||
         stat_stall_cycles != 0)
       $fatal(1, "voice sample window statistics mismatch");
+
+    @(negedge clk);
+    diagnostics_clear = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    diagnostics_clear = 1'b0;
+    if (stat_client_requests != 0 || stat_window_hits != 0 ||
+        stat_window_refills != 0 || stat_fallback_reads != 0 ||
+        stat_memory_reads != 0 || stat_evictions != 0 ||
+        stat_stall_cycles != 0)
+      $fatal(1, "diagnostic clear did not reset sample-window statistics");
+
+    // Clearing counters must not invalidate the cached window.
+    request_line(32'd64, 2'd3, VOICE_ID_WIDTH'(0), 1'b0);
+    expect_response(32'd64, 2'd3, 16'h6000);
+    if (stat_client_requests != 1 || stat_window_hits != 1 ||
+        stat_window_refills != 0 || stat_memory_reads != 0)
+      $fatal(1, "diagnostic clear changed sample-window cache state");
 
     $display("PASS: persistent voice sample window refill, hit, fallback, and isolation");
     $finish;

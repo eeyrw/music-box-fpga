@@ -89,6 +89,17 @@ source update, not a harmless check.
 | `tools/make_filter_probe_assets.py` | Generates a tiny filtered SF2/MIDI regression fixture under `build/`. |
 | `make polyphony-stress-midi` | Builds the deterministic high-polyphony stress MIDI generator and writes its fixture under `build/`. |
 
+`make polyphony-stress-midi` regenerates the default 10-second fixture with 20
+initial notes per MIDI channel and 8 churn notes per step. The output is a
+deterministic generated artifact under `build/` and is not committed. For a
+focused hardware experiment, invoke the built generator directly with optional
+initial and churn counts in the range 0 through 64; a zero churn count produces
+a static sustained-note workload:
+
+```bash
+build/generate_polyphony_stress_midi build/polyphony_static_320.mid 20 0
+```
+
 See [`../verification/render_commands.md`](../verification/render_commands.md)
 for reproducible command lines and output-directory conventions. The C++ source
 layers are:
@@ -112,6 +123,7 @@ sim/harness/apps      executable entry points
 | `make verify-mcu-sf2-asset SF2=path/to/file.sf2` | Validates the sidecar structure, profile, whole-image CRC, and source SF2 identity. |
 | `make flash-wtsf-sd SD_DEVICE=...` | Writes the verified image to an explicitly selected whole-card device. |
 | `make host-ch347` | Builds the generic CH347 register/command utility. |
+| `make host-ddr-read-benchmark` | Builds the CH347 DDR read-throughput and file-verification utility. |
 | `make host-smart-artix-bringup` | Builds the board snapshot and smoke-test runner. |
 
 `tools/flash_wtsf_sd.sh` is intentionally behind a Make target and requires an

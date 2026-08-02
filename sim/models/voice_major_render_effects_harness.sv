@@ -262,6 +262,7 @@ module voice_major_render_effects_harness (
     .block_pipeline_busy(manager_block_pipeline_busy),
     .render_inflight(),
     .render_deadline_miss_pulse(manager_render_deadline_miss_pulse),
+    .render_latency_valid(),
     .render_latency_cycles(manager_render_latency_cycles)
   );
   /* verilator lint_on PINCONNECTEMPTY */

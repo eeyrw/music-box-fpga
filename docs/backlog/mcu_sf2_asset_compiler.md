@@ -173,7 +173,7 @@ one exact output profile:
 - enabled SoundFont feature subset.
 
 The initial target-neutral reference profile is
-`generic-le32-48k-tick48-v13`, defined in
+`generic-le32-48k-tick48-v14`, defined in
 [`../../spec/mcu_asset_profiles.json`](../../spec/mcu_asset_profiles.json). It
 fixes 48 kHz output, a 48-sample/1 ms control tick, little-endian 32-bit words,
 command interface 13, and the current numeric policies. It deliberately leaves
@@ -674,7 +674,7 @@ evidence only and cannot qualify MCU timing.
 
 ### Phase 0: Baseline And Target Selection
 
-- [x] Define the target-neutral `generic-le32-48k-tick48-v13` reference profile
+- [x] Define the target-neutral `generic-le32-48k-tick48-v14` reference profile
   with the current sample rate, control tick, SoundFont subset, numeric policy,
   and command interface version.
 - [x] Add a reproducible SF2 baseline that reports compiled size, exhaustive
@@ -891,7 +891,7 @@ not acceptable for an RP2040-class design.
 ### Layout Selection And Compatibility
 
 Layout is separate from the numeric output profile. Both layouts use
-`generic-le32-48k-tick48-v13` and must emit identical command words:
+`generic-le32-48k-tick48-v14` and must emit identical command words:
 
 - `direct-v1` remains readable and is the latency/reference baseline;
 - `compact-v2` uses a new format version because its required sections and

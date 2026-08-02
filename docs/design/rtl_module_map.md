@@ -79,10 +79,10 @@ smart_artix_top
 ## Control Layer
 
 `voice_major_command_plane` is the only production voice/global command decoder.
-It accepts the dedicated command stream into one FIFO and also retains
-`CMD_FIFO_DATA` as a debug-only injection path. It parses the compact version-10
+It accepts the dedicated command stream into one FIFO as its only ingress. It
+parses the compact version-10
 header, validates complete commands, and dispatches only while the renderer is
-idle. Production software submits commands only through the dedicated stream.
+idle.
 
 `block_voice_state_store` owns active mono state and arbitrates renderer
 snapshots, START installs, runtime events, and renderer writeback. Generation is

@@ -43,6 +43,7 @@ module voice_major_block_output_manager #(
   output logic                                      block_pipeline_busy,
   output logic                                      render_inflight,
   output logic                                      render_deadline_miss_pulse,
+  output logic                                      render_latency_valid,
   output logic [15:0]                               render_latency_cycles
 );
   import synth_pkg::*;
@@ -100,6 +101,7 @@ module voice_major_block_output_manager #(
       completion_accepted_pulse <= 1'b0;
       release_accepted_pulse <= 1'b0;
       render_deadline_miss_pulse <= 1'b0;
+      render_latency_valid <= 1'b0;
       render_latency_cycles <= '0;
     end else begin
       request_accepted_pulse <= 1'b0;
@@ -107,6 +109,7 @@ module voice_major_block_output_manager #(
       completion_accepted_pulse <= 1'b0;
       release_accepted_pulse <= 1'b0;
       render_deadline_miss_pulse <= 1'b0;
+      render_latency_valid <= 1'b0;
 
       if (render_request_active_q && !render_completion_seen_q &&
           render_cycle_count_q != 32'hffff_ffff)
@@ -124,6 +127,7 @@ module voice_major_block_output_manager #(
           block_complete_valid) begin
         render_completion_seen_q <= 1'b1;
         renderer_complete_pulse <= 1'b1;
+        render_latency_valid <= 1'b1;
         render_latency_cycles <= render_cycle_count_q[15:0];
         if (render_cycle_count_q >
             (SYS_CLK_HZ * 32'(request_frame_count_q)) / SAMPLE_RATE_HZ)

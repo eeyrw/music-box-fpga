@@ -6,6 +6,7 @@ module tb_wavetable_i2s_output;
 
   logic clk = 1'b0;
   logic rst;
+  logic diagnostics_clear;
   logic sample_valid;
   logic sample_ready;
   pcm_t sample_l;
@@ -25,6 +26,8 @@ module tb_wavetable_i2s_output;
   logic i2s_sdata;
   int startup_underruns = 0;
   int errors = 0;
+  logic [$clog2(FIFO_DEPTH+1)-1:0] clear_level;
+  logic [31:0] played_before_underrun;
 
   always #5 clk <= ~clk;
 
@@ -54,6 +57,7 @@ module tb_wavetable_i2s_output;
 
   initial begin
     rst = 1'b1;
+    diagnostics_clear = 1'b0;
     sample_valid = 1'b0;
     sample_l = '0;
     sample_r = '0;
@@ -93,6 +97,28 @@ module tb_wavetable_i2s_output;
     end
     if (sample_drop_pulse || startup_underruns != 0) begin
       $error("unexpected drop/startup underrun");
+      errors++;
+    end
+
+    @(negedge clk);
+    clear_level = output_fifo_level;
+    diagnostics_clear = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    diagnostics_clear = 1'b0;
+    if (minimum_fifo_level != clear_level || !playback_started) begin
+      $error("diagnostic clear got minimum/started=%0d/%0b expected %0d/1",
+             minimum_fifo_level, playback_started, clear_level);
+      errors++;
+    end
+
+    do @(posedge clk); while (output_fifo_level != 0);
+    played_before_underrun = played_sample_counter;
+    do @(posedge clk); while (!underrun_pulse);
+    #1;
+    if (played_sample_counter != played_before_underrun || audio_lead != 0) begin
+      $error("underrun changed played count or wrapped audio lead: played=%0d lead=%0d",
+             played_sample_counter, audio_lead);
       errors++;
     end
 

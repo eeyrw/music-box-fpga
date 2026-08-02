@@ -40,9 +40,9 @@ SPI mode 0, CS low, aligned {0xa5, word_count, CRC16} header
   -> next admitted render block
 ```
 
-`CMD_FIFO_DATA` is a debug-only word injection register into the same FIFO. It
-is not used to submit production commands. Simulation and hardware use the same
-command parser; there is no typed state-install bypass.
+Version 14 removes the former debug register injection path. All command words
+enter through complete `0xa5` transactions. Simulation and hardware use the
+same command parser; there is no typed state-install bypass.
 
 The bridge cannot backpressure SPI after CS is asserted, so it receives the
 complete declared transaction into a 63-word synchronous block RAM. A valid

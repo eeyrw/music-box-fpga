@@ -7,6 +7,7 @@ module tb_voice_major_block_controller;
 
   logic clk = 1'b0;
   logic rst = 1'b1;
+  logic diagnostics_clear = 1'b0;
   logic block_req_valid;
   logic block_req_ready;
   render_block_req_t block_req;

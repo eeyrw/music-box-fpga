@@ -1,6 +1,7 @@
 module block_mono_voice_engine (
   input  logic                                      clk,
   input  logic                                      rst,
+  input  logic                                      diagnostics_clear,
   input  logic                                      start_valid,
   output logic                                      start_ready,
   input  logic [synth_pkg::VOICE_ID_WIDTH-1:0]      start_voice_index,
@@ -73,6 +74,7 @@ module block_mono_voice_engine (
   block_interleaved_voice_renderer renderer (
     .clk,
     .rst,
+    .diagnostics_clear,
     .start_valid(envelope_result_valid),
     .start_ready(renderer_start_ready),
     .start_voice_index(envelope_result_voice_index),

@@ -18,6 +18,8 @@ three links below; follow the topic indexes only when working in that area.
   definitions and command opcode quick reference.
 - [`development/rtl_change_workflow.md`](development/rtl_change_workflow.md):
   mandatory RTL change, verification, and Vivado signoff workflow.
+- [`development/register_change_workflow.md`](development/register_change_workflow.md):
+  practical workflow for adding, changing, or removing global registers.
 - [`development/tooling.md`](development/tooling.md): build graph, generators,
   render/analyzer tools, board utilities, and Vivado entry points.
 

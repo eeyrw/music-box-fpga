@@ -13,6 +13,7 @@ module tb_wavetable_common_status_regs;
   logic core_busy;
   logic render_inflight;
   logic render_deadline_miss_pulse;
+  logic render_latency_valid;
   logic [15:0] render_latency_cycles;
   logic ext_req_valid;
   logic ext_req_ready;
@@ -24,8 +25,14 @@ module tb_wavetable_common_status_regs;
   logic mem_response_trace_pulse;
   logic [15:0] mem_response_trace_latency;
   logic [3:0] output_fifo_level;
+  logic playback_started;
+  logic [31:0] audio_lead;
+  logic [3:0] minimum_fifo_level;
+  logic [31:0] command_error_count;
+  logic [31:0] stale_generation_count;
   audio_diagnostics_t audio_diagnostics;
   sample_window_diagnostics_t sample_window_diagnostics;
+  logic diagnostics_clear_pulse;
 
   always #5 clk <= ~clk;
 
@@ -41,6 +48,7 @@ module tb_wavetable_common_status_regs;
     .core_busy,
     .render_inflight,
     .render_deadline_miss_pulse,
+    .render_latency_valid,
     .render_latency_cycles,
     .ext_req_valid,
     .ext_req_ready,
@@ -52,8 +60,14 @@ module tb_wavetable_common_status_regs;
     .mem_response_trace_pulse,
     .mem_response_trace_latency,
     .output_fifo_level,
+    .playback_started,
+    .audio_lead,
+    .minimum_fifo_level,
+    .command_error_count,
+    .stale_generation_count,
     .audio_diagnostics,
-    .sample_window_diagnostics
+    .sample_window_diagnostics,
+    .diagnostics_clear_pulse
   );
 
   task automatic expect_read(input logic [15:0] address,
@@ -79,12 +93,31 @@ module tb_wavetable_common_status_regs;
     end
   endtask
 
+  task automatic clear_diagnostics;
+    begin
+      @(negedge clk);
+      bus_req = '{valid: 1'b1, write: 1'b1,
+                  address: REG_DIAGNOSTIC_CONTROL,
+                  wdata: REG_DIAGNOSTIC_CONTROL_CLEAR_MASK};
+      @(posedge clk);
+      #1;
+      bus_req = '0;
+      if (!diagnostics_clear_pulse)
+        $fatal(1, "diagnostic clear did not produce a pulse");
+      @(posedge clk);
+      #1;
+      if (diagnostics_clear_pulse)
+        $fatal(1, "diagnostic clear pulse lasted more than one cycle");
+    end
+  endtask
+
   initial begin
     bus_req = '0;
     core_sample_valid = 1'b0;
     core_busy = 1'b0;
     render_inflight = 1'b0;
     render_deadline_miss_pulse = 1'b0;
+    render_latency_valid = 1'b0;
     render_latency_cycles = '0;
     ext_req_valid = 1'b0;
     ext_req_ready = 1'b0;
@@ -96,6 +129,11 @@ module tb_wavetable_common_status_regs;
     mem_response_trace_pulse = 1'b0;
     mem_response_trace_latency = '0;
     output_fifo_level = '0;
+    playback_started = 1'b0;
+    audio_lead = '0;
+    minimum_fifo_level = '0;
+    command_error_count = '0;
+    stale_generation_count = '0;
     audio_diagnostics = '0;
     sample_window_diagnostics = '0;
 
@@ -109,6 +147,40 @@ module tb_wavetable_common_status_regs;
     output_fifo_level = 4'd5;
     expect_read(REG_SYSTEM_STATUS, 32'h0000_0502);
     expect_read(REG_PIPELINE_LATENCY_STATUS, 32'h5678_1234);
+
+    playback_started = 1'b1;
+    minimum_fifo_level = 4'd2;
+    audio_lead = 32'd47;
+    command_error_count = 32'd3;
+    stale_generation_count = 32'd9;
+    expect_read(REG_AUDIO_FIFO_DIAGNOSTICS, 32'h0001_0205);
+    expect_read(REG_AUDIO_LEAD, 32'd47);
+    expect_read(REG_COMMAND_ERROR_COUNT, 32'd3);
+    expect_read(REG_STALE_GENERATION_COUNT, 32'd9);
+
+    @(negedge clk);
+    render_latency_valid = 1'b1;
+    mem_response_trace_pulse = 1'b1;
+    @(posedge clk);
+    #1;
+    render_latency_valid = 1'b0;
+    mem_response_trace_pulse = 1'b0;
+    expect_read(REG_PIPELINE_LATENCY_MAX, 32'h5678_1234);
+    write_flags(REG_COMMON_EVENT_FLAGS_MEM_RESPONSE_MASK);
+    expect_read(REG_COMMON_EVENT_FLAGS, 32'd0);
+
+    @(negedge clk);
+    render_latency_cycles = 16'h0100;
+    mem_response_trace_latency = 16'h0200;
+    render_latency_valid = 1'b1;
+    mem_response_trace_pulse = 1'b1;
+    @(posedge clk);
+    #1;
+    render_latency_valid = 1'b0;
+    mem_response_trace_pulse = 1'b0;
+    expect_read(REG_PIPELINE_LATENCY_MAX, 32'h5678_1234);
+    write_flags(REG_COMMON_EVENT_FLAGS_MEM_RESPONSE_MASK);
+    expect_read(REG_COMMON_EVENT_FLAGS, 32'd0);
 
     @(negedge clk);
     render_deadline_miss_pulse = 1'b1;
@@ -134,6 +206,12 @@ module tb_wavetable_common_status_regs;
     expect_read(REG_COMMON_EVENT_FLAGS,
                 REG_COMMON_EVENT_FLAGS_RENDER_DEADLINE_MISS_MASK);
     expect_read(REG_RENDER_DEADLINE_MISS_COUNT, 32'd2);
+
+    clear_diagnostics();
+    expect_read(REG_COMMON_EVENT_FLAGS, 32'd0);
+    expect_read(REG_RENDER_DEADLINE_MISS_COUNT, 32'd0);
+    expect_read(REG_MEM_RESPONSE_COUNT, 32'd0);
+    expect_read(REG_PIPELINE_LATENCY_MAX, 32'd0);
 
     @(negedge clk);
     core_reset = 1'b1;

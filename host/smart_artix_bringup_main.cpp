@@ -390,7 +390,7 @@ void validate_identity(const Snapshot& snapshot) {
     throw std::runtime_error(
         "platform register window is absent; check bitstream, reset, and MIG UI clock");
   }
-  result("PASS", "SPI mailbox and interface version 13 are responding");
+  result("PASS", "SPI mailbox and current interface version are responding");
   if ((snapshot.platform_status & regs::kPlatformStatusErrorPresentMask) != 0) {
     result("WARN", "platform reports an SD or asset-loader error");
   }

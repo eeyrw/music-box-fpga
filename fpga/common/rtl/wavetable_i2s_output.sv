@@ -6,6 +6,7 @@ module wavetable_i2s_output #(
 ) (
   input  logic            clk,
   input  logic            rst,
+  input  logic            diagnostics_clear,
   input  logic            sample_valid,
   output logic            sample_ready,
   input  synth_pkg::pcm_t sample_l,
@@ -80,7 +81,7 @@ module wavetable_i2s_output #(
       played_sample_counter <= 32'd0;
       minimum_fifo_level <= START_LEVEL[$clog2(OUTPUT_FIFO_DEPTH+1)-1:0];
     end else begin
-      if (sample_valid && sample_ready && render_sample_counter != 32'hffff_ffff)
+      if (sample_valid && sample_ready)
         render_sample_counter <= render_sample_counter + 32'd1;
 
       if (!playback_started &&
@@ -89,12 +90,15 @@ module wavetable_i2s_output #(
         minimum_fifo_level <= output_fifo_level;
       end
 
+      if (fifo_sample_ready)
+        played_sample_counter <= played_sample_counter + 32'd1;
+
       if (playback_started && i2s_frame_pulse) begin
-        if (played_sample_counter != 32'hffff_ffff)
-          played_sample_counter <= played_sample_counter + 32'd1;
         if (output_fifo_level < minimum_fifo_level)
           minimum_fifo_level <= output_fifo_level;
       end
+      if (diagnostics_clear)
+        minimum_fifo_level <= output_fifo_level;
     end
   end
 endmodule

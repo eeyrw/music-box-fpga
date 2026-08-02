@@ -235,7 +235,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -773,6 +773,13 @@ host-ch347:
 		host/ch347_control_main.cpp host/ch347_transport.cpp \
 		sim/harness/control/command_control.cpp \
 		-o $(BUILD_DIR)/ch347_control -ldl
+
+host-ddr-read-benchmark:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXX_STD_FLAGS) -I. \
+		host/ddr_read_benchmark_main.cpp host/ch347_transport.cpp \
+		sim/harness/control/command_control.cpp \
+		-o $(BUILD_DIR)/ddr_read_benchmark -ldl
 
 host-realtime-midi:
 	mkdir -p $(BUILD_DIR)

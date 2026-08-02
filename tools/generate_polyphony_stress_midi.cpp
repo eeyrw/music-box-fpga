@@ -53,9 +53,17 @@ void add_pitch_bend(std::vector<Event>& events, uint32_t tick, uint32_t& order,
 
 int main(int argc, char** argv) {
   try {
-    if (argc != 2) {
-      std::cerr << "usage: generate_polyphony_stress_midi OUTPUT.mid\n";
+    if (argc < 2 || argc > 4) {
+      std::cerr << "usage: generate_polyphony_stress_midi OUTPUT.mid "
+                   "[initial-notes-per-channel] [churn-notes-per-step]\n";
       return 2;
+    }
+
+    const int initial_notes_per_channel = argc >= 3 ? std::stoi(argv[2]) : 20;
+    const int churn_notes_per_step = argc >= 4 ? std::stoi(argv[3]) : 8;
+    if (initial_notes_per_channel < 0 || initial_notes_per_channel > 64 ||
+        churn_notes_per_step < 0 || churn_notes_per_step > 64) {
+      throw std::runtime_error("stress note counts must be in range 0..64");
     }
 
     constexpr uint16_t kPpq = 480;
@@ -102,10 +110,10 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Stereo-region expansion lets these 320 simultaneous MIDI notes fill the
-    // 512 mono-voice allocator while spanning many banks and programs.
+    // Stereo-region expansion lets the default 320 simultaneous MIDI notes
+    // fill the 512 mono-voice allocator while spanning many banks and programs.
     for (int channel = 0; channel < 16; ++channel) {
-      for (int index = 0; index < 20; ++index) {
+      for (int index = 0; index < initial_notes_per_channel; ++index) {
         const int note = channel == 9 ? 35 + (index % 47) : note_dist(rng);
         add_event(events, 0, order,
                   {uint8_t(0x90 | channel), uint8_t(note),
@@ -115,7 +123,9 @@ int main(int argc, char** argv) {
 
     // Churn voices and programs at 25 ms intervals. Sustain keeps released
     // melodic notes resident until allocation pressure steals them.
-    for (uint32_t tick = 24, step = 1; tick < kEndTick; tick += 24, ++step) {
+    for (uint32_t tick = 24, step = 1;
+         churn_notes_per_step != 0 && tick < kEndTick;
+         tick += 24, ++step) {
       for (int channel = 0; channel < 16; ++channel) {
         const int phase = int((step + uint32_t(channel * 7)) & 63u);
         int bend = 0;
@@ -147,7 +157,7 @@ int main(int argc, char** argv) {
                     {uint8_t(0xc0 | channel), uint8_t(program_dist(rng))});
         }
       }
-      for (int burst = 0; burst < 8; ++burst) {
+      for (int burst = 0; burst < churn_notes_per_step; ++burst) {
         const int channel = channel_dist(rng);
         const int note = channel == 9 ? 35 + (rng() % 47) : note_dist(rng);
         add_event(events, tick, order,

@@ -2,6 +2,9 @@
 
 - [`rtl_change_workflow.md`](rtl_change_workflow.md): required workflow and
   evidence for RTL changes, from contract review through routed signoff.
+- [`register_change_workflow.md`](register_change_workflow.md): practical source,
+  decode, routing, consumer, testing, and versioning checklist for register-map
+  changes.
 - [`tooling.md`](tooling.md): toolchain architecture, generators, render and
   analysis utilities, asset/host tools, and Vivado flow ownership.
 
