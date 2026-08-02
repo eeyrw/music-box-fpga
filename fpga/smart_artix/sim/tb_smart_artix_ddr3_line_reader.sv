@@ -12,9 +12,7 @@ module tb_smart_artix_ddr3_line_reader;
   int command_count;
   int response_count;
 
-  smart_artix_ddr3_line_reader #(
-    .WORD_ADDR_SHIFT(1)
-  ) dut (
+  smart_artix_ddr3_line_reader dut (
     .clk,
     .rst,
     .line_req,
@@ -57,7 +55,7 @@ module tb_smart_artix_ddr3_line_reader;
         check(mig_app_command.cmd == 3'b001,
               "line reader used wrong MIG read command");
         check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(
-                  (32'h0000_0040 + 32'(command_count * 8)) << 1),
+                  32'h0000_0040 + 32'(command_count * 8)),
               "queued line reader changed request order or address");
         command_count <= command_count + 1;
       end

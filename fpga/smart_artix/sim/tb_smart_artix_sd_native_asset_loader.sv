@@ -154,7 +154,7 @@ module tb_smart_artix_sd_native_asset_loader;
       byte_index <= 0;
     end else if (mig_app_command.en && mig_app_response.rdy) begin
       check(mig_app_command.cmd == 3'b000, "native asset loader emitted non-write MIG command");
-      check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(byte_index),
+      check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(byte_index / 2),
             "native asset loader MIG address mismatch");
       check(mig_app_write_data.wren && mig_app_write_data.end_,
             "native asset loader missing write-data beat");
@@ -174,7 +174,7 @@ module tb_smart_artix_sd_native_asset_loader;
   initial begin
     clk = 1'b0;
     rst = 1'b1;
-    start = 1'b0;
+    start = 1'b1;
     ddr_init_calib_complete = 1'b0;
     mig_app_response = '0;
     mig_app_response.rdy = 1'b1;
@@ -182,12 +182,9 @@ module tb_smart_artix_sd_native_asset_loader;
     errors = 0;
 
     repeat (3) @(posedge clk);
+    check(!busy, "native asset loader reported busy while session reset was active");
     rst = 1'b0;
-    @(negedge clk);
-    start = 1'b1;
     ddr_init_calib_complete = 1'b1;
-    @(negedge clk);
-    start = 1'b0;
 
     wait (asset_loaded || loader_error_code != 8'd0 || sd_error_code != 8'd0);
     repeat (2) @(posedge clk);
@@ -207,6 +204,19 @@ module tb_smart_artix_sd_native_asset_loader;
     check(current_lba == 32'd7, "native asset loader current_lba mismatch");
     check(byte_index == 32, "native asset loader did not emit expected MIG beats");
     check(!busy, "native asset loader stayed busy after load");
+
+    @(negedge clk);
+    rst = 1'b1;
+    repeat (2) @(posedge clk);
+    check(!busy, "native asset loader reported busy after card removal reset");
+    check(!asset_loaded, "native asset loader retained asset-valid state after card removal");
+    rst = 1'b0;
+
+    wait (asset_loaded || loader_error_code != 8'd0 || sd_error_code != 8'd0);
+    repeat (2) @(posedge clk);
+    check(asset_loaded, "native asset loader did not reload after reinsertion");
+    check(byte_index == 32, "reinsertion did not emit a fresh set of MIG beats");
+    check(!busy, "native asset loader stayed busy after reinsertion load");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_sd_native_asset_loader errors=%0d", errors);

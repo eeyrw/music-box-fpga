@@ -58,10 +58,10 @@ module tb_smart_artix_ddr3_asset_writer;
         cmd_seen <= cmd_seen + 1;
         check(mig_app_command.cmd == 3'b000, "asset writer used wrong MIG write command");
         if (cmd_seen == 0)
-          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0020),
+          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0010),
                 "first write address mismatch");
         else if (cmd_seen == 1)
-          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0030),
+          check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0018),
                 "second write address mismatch");
         else
           check(1'b0, "asset writer emitted too many write commands");
@@ -136,6 +136,15 @@ module tb_smart_artix_ddr3_asset_writer;
     @(negedge clk);
     start = 1'b0;
     check(error_pulse, "asset writer did not reject unaligned base address");
+
+    @(negedge clk);
+    base_byte_addr = 64'h0000_0000_2000_0000;
+    total_bytes = 32'd16;
+    start = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    start = 1'b0;
+    check(error_pulse, "asset writer did not reject an address beyond 512 MiB");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_asset_writer errors=%0d", errors);

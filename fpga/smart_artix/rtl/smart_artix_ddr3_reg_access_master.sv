@@ -44,7 +44,7 @@ module smart_artix_ddr3_reg_access_master (
   assign ready = state == STATE_IDLE;
   assign busy = state != STATE_IDLE;
   assign addr_aligned = byte_addr[ALIGN_BITS-1:0] == '0;
-  assign addr_in_range = (byte_addr >> smart_artix_pkg::MIG_ADDR_WIDTH) == 32'd0;
+  assign addr_in_range = 64'(byte_addr) < smart_artix_pkg::DDR_SIZE_BYTES;
   assign write_has_enabled_byte = |byte_enable;
   assign write_accepted = (cmd_sent || (mig_app_command.en && mig_app_response.rdy))
       && (wdf_sent || (write_data_wren && mig_app_response.wdf_rdy));
@@ -79,7 +79,8 @@ module smart_artix_ddr3_reg_access_master (
             if (!addr_aligned || !addr_in_range || (write && !write_has_enabled_byte)) begin
               error_pulse <= 1'b1;
             end else begin
-              addr_latched <= smart_artix_pkg::MIG_ADDR_WIDTH'(byte_addr);
+              addr_latched <= smart_artix_pkg::MIG_ADDR_WIDTH'(
+                  byte_addr >> smart_artix_pkg::MIG_ADDR_UNIT_SHIFT);
               wdata_latched <= wdata;
               mask_latched <= ~byte_enable;
               cmd_sent <= 1'b0;

@@ -3,6 +3,9 @@ package smart_artix_pkg;
   localparam int LINE_BITS = LINE_WORDS * 16;
   localparam int LINE_BYTES = LINE_WORDS * 2;
   localparam int MIG_ADDR_WIDTH = 29;
+  localparam int MIG_ADDR_UNIT_BYTES = 2;
+  localparam int MIG_ADDR_UNIT_SHIFT = $clog2(MIG_ADDR_UNIT_BYTES);
+  localparam longint unsigned DDR_SIZE_BYTES = 512 * 1024 * 1024;
   localparam int MIG_DATA_WIDTH = LINE_BITS;
   localparam int MIG_MASK_WIDTH = MIG_DATA_WIDTH / 8;
 

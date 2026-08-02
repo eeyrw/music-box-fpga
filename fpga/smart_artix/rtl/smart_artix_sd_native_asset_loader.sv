@@ -71,7 +71,8 @@ module smart_artix_sd_native_asset_loader #(
   logic start_pulse;
 
   assign start_pulse = start && !start_d;
-  assign busy = sd_busy || loader_busy || load_pending || (start && !asset_loaded);
+  assign busy = !rst &&
+      (sd_busy || loader_busy || load_pending || (start && !asset_loaded));
   assign sd_start_pulse = start_pulse && !sd_initialized;
   assign loader_start_pulse = (start_pulse && sd_initialized)
       || (load_pending && sd_initialized && !loader_busy && !asset_loaded);

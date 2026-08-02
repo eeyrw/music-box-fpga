@@ -1,5 +1,4 @@
 module smart_artix_ddr3_line_reader #(
-  parameter int WORD_ADDR_SHIFT = 1,
   parameter int QUEUE_DEPTH = 8
 ) (
   input  logic                     clk,
@@ -45,7 +44,7 @@ module smart_artix_ddr3_line_reader #(
   assign mig_app_command.en = mig_init_calib_complete &&
                               (request_count_q != '0);
   assign mig_app_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(
-      {request_fifo[request_read_ptr_q], {WORD_ADDR_SHIFT{1'b0}}});
+      request_fifo[request_read_ptr_q]);
   assign command_fire = mig_app_command.en && mig_app_response.rdy;
   assign response_push = mig_app_response.rd_data_valid &&
                          mig_app_response.rd_data_end;

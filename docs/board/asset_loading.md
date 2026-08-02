@@ -17,6 +17,13 @@ The existing wave-memory contract is preserved: word address zero is the first
 include the `smpl` chunk payload offset. Software sends voice commands using
 metadata produced by a host-side SF2 parser or preprocessing tool.
 
+The Smart Artix MT41K256M16 device has 512 MiB of byte-addressed capacity. Its
+native MIG application address is expressed in 16-bit DRAM words, so board RTL
+converts loader and debug byte addresses by dividing by two. Renderer sample
+addresses are already 16-bit word addresses and pass to the native MIG address
+unchanged. A 128-bit MIG beat therefore advances the native application address
+by eight while covering 16 consecutive bytes.
+
 ```text
 SD raw image
   -> FPGA SD block reader
@@ -128,6 +135,9 @@ The first Smart Artix implementation provides the board-side middle of this path
   socket switch on U17. A stable insertion waits at least 1 ms before releasing
   the SD session reset. Removal clears SD initialization, High Speed, loader,
   and asset-valid state; reinsertion starts a fresh power-up-clock sequence.
+  While the session reset is asserted, including the no-card state,
+  `loader_busy` remains low. Releasing the reset after one stable insertion
+  produces one load-start edge, so the card is reloaded once per insertion.
 - `smart_artix_ddr3_subsystem` wires the native pin layer through the native
   command/data asset loader and arbitrates the resulting DDR3 writes with runtime
   wavetable reads.

@@ -37,6 +37,8 @@ module smart_artix_ddr3_asset_writer (
   logic accepted_byte;
   logic send_accepted;
   logic base_aligned;
+  logic extent_in_range;
+  logic [64:0] end_byte_addr;
 
   assign busy = state != STATE_IDLE;
   assign byte_ready = (state == STATE_FILL) && (remaining_bytes != 32'd0)
@@ -45,8 +47,11 @@ module smart_artix_ddr3_asset_writer (
   assign send_accepted = (cmd_sent || (mig_app_command.en && mig_app_response.rdy))
       && (wdf_sent || (mig_app_write_data.wren && mig_app_response.wdf_rdy));
   assign base_aligned = base_byte_addr[$clog2(BEAT_BYTES)-1:0] == '0;
+  assign end_byte_addr = {1'b0, base_byte_addr} + 65'(total_bytes);
+  assign extent_in_range = end_byte_addr <= 65'(smart_artix_pkg::DDR_SIZE_BYTES);
 
-  assign mig_app_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(current_addr);
+  assign mig_app_command.addr = smart_artix_pkg::MIG_ADDR_WIDTH'(
+      current_addr >> smart_artix_pkg::MIG_ADDR_UNIT_SHIFT);
   assign mig_app_command.cmd = MIG_CMD_WRITE;
   assign mig_app_command.en = (state == STATE_SEND) && !cmd_sent;
   assign mig_app_write_data.data = data_buffer;
@@ -79,7 +84,7 @@ module smart_artix_ddr3_asset_writer (
       unique case (state)
         STATE_IDLE: begin
           if (start) begin
-            if (!base_aligned) begin
+            if (!base_aligned || !extent_in_range) begin
               error_pulse <= 1'b1;
             end else if (total_bytes == 32'd0) begin
               done_pulse <= 1'b1;

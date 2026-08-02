@@ -94,7 +94,7 @@ module tb_smart_artix_ddr3_reg_access_master;
     check(busy && !ready, "reg write did not enter busy state");
     check(mig_app_command.en && mig_app_command.cmd == 3'b000,
           "reg write command not driven");
-    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0100),
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0080),
           "reg write address mismatch");
     check(mig_app_write_data.wren && mig_app_write_data.end_,
           "reg write data strobe not driven");
@@ -114,7 +114,7 @@ module tb_smart_artix_ddr3_reg_access_master;
     #1;
     check(mig_app_command.en && mig_app_command.cmd == 3'b001,
           "reg read command not driven");
-    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0200),
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h000_0100),
           "reg read address mismatch");
     @(negedge clk);
     mig_app_response.rd_data_valid = 1'b1;
@@ -126,6 +126,29 @@ module tb_smart_artix_ddr3_reg_access_master;
     check(done_pulse, "reg read did not complete on read data end");
     check(rdata == 128'haaaa_bbbb_cccc_dddd_eeee_ffff_1111_2222, "reg read data mismatch");
     check(ready && !busy, "reg read did not return to idle");
+
+    @(negedge clk);
+    byte_addr = 32'h1000_0000;
+    start = 1'b1;
+    @(negedge clk);
+    start = 1'b0;
+    #1;
+    check(mig_app_command.addr == smart_artix_pkg::MIG_ADDR_WIDTH'(29'h0800_0000),
+          "256 MiB byte address did not retain a distinct MIG address");
+    @(negedge clk);
+    mig_app_response.rd_data_valid = 1'b1;
+    mig_app_response.rd_data_end = 1'b1;
+    @(negedge clk);
+    mig_app_response.rd_data_valid = 1'b0;
+    mig_app_response.rd_data_end = 1'b0;
+
+    @(negedge clk);
+    byte_addr = 32'h2000_0000;
+    start = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    start = 1'b0;
+    check(error_pulse, "reg access did not reject an address beyond 512 MiB");
 
     if (errors != 0)
       $fatal(1, "FAIL: smart_artix_ddr3_reg_access_master errors=%0d", errors);

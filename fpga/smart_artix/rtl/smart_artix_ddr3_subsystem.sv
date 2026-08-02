@@ -245,7 +245,7 @@ module smart_artix_ddr3_subsystem #(
   );
 
   smart_artix_ddr3_line_reader #(
-    .WORD_ADDR_SHIFT(1)
+    .QUEUE_DEPTH(8)
   ) line_reader (
     .clk,
     .rst(core_rst),
