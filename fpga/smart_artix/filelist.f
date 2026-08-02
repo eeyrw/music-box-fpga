@@ -22,6 +22,7 @@ rtl/smart_artix_ddr3_line_reader.sv
 rtl/smart_artix_ddr3_rw_arbiter.sv
 rtl/smart_artix_ddr3_subsystem.sv
 rtl/smart_artix_platform_regs.sv
+rtl/smart_artix_status_leds.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
 rtl/smart_artix_sd_native_asset_loader.sv

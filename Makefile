@@ -207,7 +207,8 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_ddr3_line_reader.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_subsystem.sv \
-	fpga/smart_artix/rtl/smart_artix_platform_regs.sv
+	fpga/smart_artix/rtl/smart_artix_platform_regs.sv \
+	fpga/smart_artix/rtl/smart_artix_status_leds.sv
 
 SMART_ARTIX_SIM_MODELS := \
 	fpga/common/sim/fake_sd_native_phy_model.sv \
@@ -223,12 +224,13 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_platform_regs \
 	tb_smart_artix_sd_card_detect \
 	tb_smart_artix_sd_native_asset_loader \
+	tb_smart_artix_status_leds \
 	tb_sd_native_block_reader \
 	tb_sd_native_block_reader_fake \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-cpp-unit test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
 
 all: test
 
@@ -929,6 +931,38 @@ vivado-program:
 	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/program.tcl \
 		-journal logs/program.jou -log logs/program.log
+
+vivado-readback:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/readback.tcl \
+		-journal logs/readback.jou -log logs/readback.log
+	sha256sum $(VIVADO_BUILD_DIR)/readback/smart_artix_top_readback.bin
+
+vivado-cfgmem-image: vivado-bitstream
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/cfgmem_image.tcl \
+		-journal logs/cfgmem_image.jou -log logs/cfgmem_image.log
+	sha256sum $(VIVADO_BUILD_DIR)/flash/smart_artix_top_spi_x4.mcs
+
+vivado-flash-readback:
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+		-source $(VIVADO_SCRIPT_DIR)/flash_readback.tcl \
+		-journal logs/flash_readback.jou -log logs/flash_readback.log
+	sha256sum $(VIVADO_BUILD_DIR)/flash/w25q128jv_full_readback.bin
+
+vivado-flash-program:
+	@if [ "$(CONFIRM_FLASH_PROGRAM)" != "YES" ]; then \
+		echo "ERROR: Flash programming requires CONFIRM_FLASH_PROGRAM=YES"; \
+		exit 1; \
+	fi
+	$(MAKE) vivado-cfgmem-image
+	mkdir -p $(VIVADO_BUILD_DIR)/logs
+	cd $(VIVADO_BUILD_DIR) && SMART_ARTIX_FLASH_PROGRAM_CONFIRM=$(CONFIRM_FLASH_PROGRAM) \
+		$(VIVADO) -mode batch -source $(VIVADO_SCRIPT_DIR)/flash_program.tcl \
+		-journal logs/flash_program.jou -log logs/flash_program.log
 
 vivado-summary:
 	python3 tools/vivado_report_summary.py show

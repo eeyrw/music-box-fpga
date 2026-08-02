@@ -258,6 +258,47 @@ CMD12 DAT0 busy timeout. When a failed CMD18 block is followed by a CMD12 failur
 the primary SD error remains the original data error while this field records the
 stop failure.
 
+The SD error codes are:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | no error |
+| `1` | CMD8 failure |
+| `2` | ACMD41 failure |
+| `3` | card is not SDHC/SDXC |
+| `4` | CMD2 failure |
+| `5` | CMD3 failure |
+| `6` | CMD7 failure |
+| `7` | ACMD6 failure |
+| `8` | CMD17/CMD18 read-command failure |
+| `9` | data-transfer or recovery-data failure |
+| `10` | CMD6 query failure |
+| `13` | card-status error bits set |
+| `14` | unexpected card state |
+| `15` | DAT0 busy timeout |
+| `16` | initialization timeout |
+| `17` | ACMD42 failure |
+| `18` | CMD6 High Speed selection failure |
+| `19` | card requires a power cycle after failed mode selection |
+| `20` | ACMD51 failure |
+| `21` | CMD12 failure |
+
+The asset-loader error codes are:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | no error |
+| `1` | invalid WTSF magic |
+| `2` | unsupported WTSF version |
+| `3` | empty image |
+| `4` | DDR writer failure |
+| `5` | LBA range overflow |
+| `6` | image-size range error |
+
+The loader-state field uses `0` for idle, `1` for DDR calibration, `2` for
+header reading, `3` for SF2 loading, `4` for verification, `5` for loaded, and
+`15` for error. Values not listed in the error-code tables are reserved.
+
 `PLATFORM_DDR_STATUS` separates the same live MIG signals from the loader
 summary:
 

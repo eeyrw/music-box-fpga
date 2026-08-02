@@ -4,6 +4,10 @@
 # header pins because the pin table does not list dedicated board connectors for
 # those signals.
 
+# The board's W25Q128JV connects DQ[3:0] to the dedicated Bank14 configuration
+# pins. Start in serial mode, then let the configuration bitstream switch to x4.
+set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
+
 # Primary input clock. The generated clock wizard XDC already creates the
 # 50 MHz input clock on clk_in, so do not duplicate create_clock here.
 set_property PACKAGE_PIN Y18 [get_ports clk_in]
@@ -54,14 +58,19 @@ set_property PULLUP true [get_ports sd_cd_n]
 set_false_path -from [get_ports sd_cd_n] \
   -to [get_pins -hier -quiet -regexp {.*card_detect/detect_sync_reg\[0\]/D}]
 
-# Status outputs on BANK15 header pins.
+# Detailed status outputs on BANK15 header pins.
 set_property PACKAGE_PIN J15 [get_ports led_spi_error]
 set_property PACKAGE_PIN G20 [get_ports led_underrun]
 set_property PACKAGE_PIN H20 [get_ports led_sample_drop]
 set_property PACKAGE_PIN H18 [get_ports led_deadline_miss]
-set_property PACKAGE_PIN H17 [get_ports led_asset_loaded]
-set_property PACKAGE_PIN J21 [get_ports led_loader_error]
-set_property IOSTANDARD LVCMOS33 [get_ports {led_spi_error led_underrun led_sample_drop led_deadline_miss led_asset_loaded led_loader_error}]
+
+# On-board green LEDs. LED1 shows DDR calibration. LED2 blinks slowly while the
+# SD loader is busy, blinks quickly on an error, and stays on after completion.
+set_property PACKAGE_PIN R17 [get_ports led_ddr_ready]
+set_property PACKAGE_PIN P16 [get_ports led_asset_loaded]
+set_property IOSTANDARD LVCMOS33 [get_ports {led_spi_error led_underrun led_sample_drop led_deadline_miss led_ddr_ready led_asset_loaded}]
+set_property DRIVE 8 [get_ports {led_ddr_ready led_asset_loaded}]
+set_property SLEW SLOW [get_ports {led_ddr_ready led_asset_loaded}]
 
 # DDR3 pins belong to the Vivado MIG-generated XDC once the MT41K256M16TW
 # controller is generated for BANK34. Do not hand-write incomplete DDR timing here.

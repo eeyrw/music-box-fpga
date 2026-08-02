@@ -9,6 +9,7 @@ wavetable reads, and I2S output around `voice_major_system`.
 | Item | Current value |
 | --- | --- |
 | FPGA | `xc7a50tfgg484-2` (`XC7A50T-2FGG484I` board device) |
+| Configuration flash | Winbond `W25Q128JVSIQTR`, 128 Mbit (16 MiB), SPIx1/x2/x4 |
 | Oscillator | 50 MHz |
 | DDR3 | Micron `MT41K256M16TW`, 512 MB, x16 |
 | Core/application clock | MIG `ui_clk`, 100 MHz |
@@ -16,6 +17,7 @@ wavetable reads, and I2S output around `voice_major_system`.
 | Control | SPI mode 0, register mailbox plus opcode `0xa5` commands |
 | Asset source | native 4-bit SDHC/SDXC WTSF image |
 | Audio | I2S data/BCLK/LRCLK; no codec initialization in this target |
+| On-board LEDs | LED1 `R17` = DDR ready; LED2 `P16` = SD busy/error/loaded status |
 
 BANK15 voltage, external SPI/I2S timing, physical wiring, signal integrity, and
 codec requirements still need hardware confirmation. These are not waived by
@@ -62,13 +64,13 @@ The latest recorded forced implementation uses Vivado 2025.2,
 `Flow_PerfOptimized_high`, and `Performance_ExplorePostRoutePhysOpt`:
 
 ```text
-LUTs       24,933 / 32,600 (76.48%)
-Registers  25,911 / 65,200 (39.74%)
+LUTs       24,965 / 32,600 (76.58%)
+Registers  25,959 / 65,200 (39.81%)
 DSPs       39 / 120
 BRAM       46.5 / 75 tiles
-WNS/WHS    +0.165 ns / +0.025 ns
-Routing    46,033 / 46,033 nets, 0 route errors
-DRC        0 errors; warnings remain for review
+WNS/WHS    +0.162 ns / +0.045 ns
+Routing    46,117 / 46,117 nets, 0 route errors
+DRC        0 errors, 0 critical warnings; 124 warnings remain for review
 ```
 
 This is a recorded baseline, not evidence for a later RTL revision. Re-run the

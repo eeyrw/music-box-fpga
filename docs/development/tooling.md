@@ -23,7 +23,7 @@ SF2 -----------------------> mcu_sf2_asset ----------> packed MCU metadata
 WTSF image ----------------> flash_wtsf_sd.sh -------> physical SD card
 CH347 host tools ----------> SPI mailbox/commands ---> Smart Artix board
 
-RTL filelists + XDC + IP --> Vivado Tcl flow --------> DCP/reports/bitstream
+RTL filelists + XDC + IP --> Vivado Tcl flow --------> DCP/reports/bitstream/cfgmem
 Vivado reports ------------> vivado_report_summary.py -> signoff summary/analysis
 ```
 
@@ -44,7 +44,7 @@ interfaces:
 | Documentation checker | `make check-docs` | Validates local links, path-like code spans, and index coverage. |
 | Verilator | `make lint`, `make test-*`, `make render-rtl-*` | Lints synthesizable RTL, builds self-checking SystemVerilog tests, and builds RTL memory-backend render harnesses. |
 | C++ compiler | `make test-cpp-unit`, `make render-reference`, host targets | Builds parser/model tests, the bit-exact reference synth, and CH347 utilities. |
-| Vivado 2025.2 | `make vivado-*` | Creates the Smart Artix project, synthesizes, implements, writes reports/bitstream, and programs SRAM. |
+| Vivado 2025.2 | `make vivado-*` | Creates the Smart Artix project, synthesizes, implements, writes reports/bitstream, reads FPGA/Flash configuration, and programs SRAM or configuration Flash. |
 | FluidSynth and FFmpeg | `tools/compare_reference_fluidsynth.py` | Optional external listening/numeric comparison; not an RTL golden model. |
 
 The project parameters `NUM_VOICES`, `BLOCK_WORK_ENTRIES`,
@@ -134,7 +134,11 @@ build/fpga/smart_artix/vivado/
 ```
 
 Use `make vivado-project`, `make vivado-synth`, `make vivado-impl`, and
-`make vivado-bitstream`. `tools/vivado_report_summary.py` provides `show`,
+`make vivado-bitstream` for offline implementation. Hardware targets are
+`make vivado-program`, `make vivado-readback`, `make vivado-flash-readback`,
+and the explicitly confirmed `make vivado-flash-program
+CONFIRM_FLASH_PROGRAM=YES`; build its persistent SPIx4 image separately with
+`make vivado-cfgmem-image`. `tools/vivado_report_summary.py` provides `show`,
 `compare`, and `analyze` commands; `make vivado-summary` and
 `make vivado-analyze` cover the normal current-run case.
 

@@ -32,8 +32,9 @@ host, MCU, or later soft-processor responsibilities.
 - DDR3 read/write arbitration between asset-loader writes and wavetable reads.
 - SPI global-register access, transactional voice commands, and common status.
 - fixed-rate 48 kHz I2S transmit output.
-- status LED outputs for SPI errors, audio underrun/drop/deadline events, asset
-  load completion, and loader errors.
+- two onboard milestone LEDs: DDR3 calibration complete on `R17`, and SD loader
+  status on `P16`; four detailed diagnostic LED outputs remain on the expansion
+  header.
 
 The generic core and the MIG application interface intentionally stay in the
 same `100 MHz` `ui_clk` domain. This avoids a CDC bridge in the memory request
@@ -94,8 +95,10 @@ actual board wiring:
   control.
 - `sd_cmd` and every `sd_dat` line need pull-ups unless the board already provides
   suitable external pull-ups.
-- `led_asset_loaded` and `led_loader_error` are assigned to spare BANK15 expansion
-  pins in the current XDC; move them if those pins are needed for lab wiring.
+- The two on-board green LEDs are `LED1` on `R17` and `LED2` on `P16`. The
+  current XDC maps `led_ddr_ready` to LED1 and `led_asset_loaded` to LED2;
+  LED2 is a status pattern despite retaining the stable top-level port name.
+  The four detailed SPI/audio diagnostic LEDs remain on BANK15 expansion pins.
 - SPI and I2S external input/output delays are not final until the selected host
   adapter and codec timing are known.
 
@@ -142,34 +145,38 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The 2026-07-30 route met setup and hold timing with WNS `+0.047 ns` and WHS
-`+0.053 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
-because both margins are below `0.2 ns`, LUT utilization is `78.63%`, and the
+The latest 2026-08-02 route met setup and hold timing with WNS `+0.162 ns` and
+WHS `+0.045 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
+because both margins are below `0.2 ns`, LUT utilization is `76.58%`, and the
 external I/O timing constraints are incomplete. Treat it as a useful baseline,
 not as proof that a changed XDC or IP configuration is hardware-safe.
 
 ### Current Bitstream and Programming Status
 
-`make vivado-bitstream` completed successfully on 2026-07-30 with Vivado 2025.2.
+`VIVADO_FORCE_REBUILD=1 make vivado-bitstream` completed successfully on
+2026-08-02 with Vivado 2025.2.
 The write-bitstream precondition DRC reported zero errors, and the generated file
 was identified as an image for `7a50tfgg484`:
 
 ```text
 build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 size:   2,192,139 bytes
-sha256: a496184e268ed4df473598ec418a4bca2ff2b2c3d4265ce5615c95b36461c522
+sha256: 7a569902223b3b55471061165ef5bec04cf198da8a9f166d38c17882adbdcf58
 ```
 
 Generated files under `build/` are intentionally not committed. Regenerate the
 image from the checked-in sources and record a new checksum whenever RTL, XDC,
 IP configuration, Vivado version, or run strategy changes.
 
-No board is currently available. Therefore JTAG device discovery, FPGA
-programming, post-program status, and power-cycle behavior have **not** been
-tested. Do not describe the current state as hardware-programmed or burned.
+On 2026-08-02, Vivado 2025.2 opened Xilinx Adapt cable `26SH012`, detected one
+`xc7a50t` with IDCODE `0x0362c093`, and read the already-running FPGA
+configuration SRAM. The 2,190,084-byte raw readback had SHA-256
+`2b7d7350e3e041adae00c47d27e8ffddb0ef0d15c556be0843d0c4d24badcd3e`.
+`DONE`, `EOS`, PLL lock, and DCI match were set; CRC and IDCODE errors were
+clear. This proves JTAG enumeration and readback for that board and cable. It
+does not prove that the locally generated `.bit` is the image that was running.
 
-When the board is available and its pins, I/O bank voltages, power rails, FPGA
-part, and JTAG connection have been checked, load the image with:
+Load the local image into volatile configuration SRAM with:
 
 ```bash
 make vivado-program
@@ -178,14 +185,75 @@ make vivado-program
 The programming script requires exactly one detected `xc7a50t` device instead
 of selecting the first device in an arbitrary JTAG chain. This command loads the
 `.bit` file into the FPGA's volatile configuration SRAM; it must be repeated
-after power is removed.
+after power is removed. The 2026-08-02 run programmed the current hash above to
+`xc7a50t_0` and then required `DONE=1`, `DONE_PIN=1`, `EOS=1`,
+`CRC_ERROR=0`, and `IDCODE_ERROR=0` before succeeding.
 
-Persistent boot-image programming is a separate operation. No configuration
-flash part, wiring, Vivado `cfgmem` device, or FPGA boot mode has been confirmed
-in this repository, so an `.mcs`/`.bin` generation and configuration-memory
-programming flow is deliberately not provided yet. Add that flow only after the
-schematic identifies the exact flash device and configuration mode; then verify
-program, readback/verify, and cold boot on the physical board.
+Read the currently running FPGA configuration without programming it:
+
+```bash
+make vivado-readback
+```
+
+The output is raw programming data under
+`build/fpga/smart_artix/vivado/readback/`, not the original `.bit` container.
+The diagnostic-image post-program read on 2026-08-02 returned 2,190,084 bytes
+with SHA-256
+`e436ba68fb988d479bee11f4cd41cc268a09dffd17dc691bfc4c1b4c75c10a8f`.
+The raw readback can include changing state such as BRAM contents, so its hash
+is a per-run audit value, not a deterministic identity for the source `.bit`.
+
+### Configuration Flash
+
+Schematic revision 1.3 identifies the configuration device as Winbond
+`W25Q128JVSIQTR`, 128 Mbit (16 MiB), connected to the FPGA's dedicated QSPI
+pins. The mode resistors select Master SPI. Vivado 2025.2 matches this device
+with cfgmem part `w25q128jvq-spi-x1_x2_x4`. The project XDC sets
+`BITSTREAM.CONFIG.SPI_BUSWIDTH` to `4`, matching the four connected data pins
+and the `SPIx4` persistent-image format.
+
+Read the complete Flash with:
+
+```bash
+make vivado-flash-readback
+```
+
+Vivado must first load its indirect SPI access core into FPGA configuration
+SRAM, so this interrupts the running design. The target reads all 16 MiB to
+`build/fpga/smart_artix/vivado/flash/w25q128jv_full_readback.bin`, then issues
+`boot_hw_device` and requires a clean `DONE/EOS/CRC/IDCODE` status before it
+succeeds. It does not erase or write the Flash.
+
+The 2026-08-02 hardware run read JEDEC ID `ef 40 18`, completed in 44 seconds,
+and produced SHA-256
+`c71e9d450d816b5986dca43c93a31d5b876820ce24a386acf1d9385e2ac30f10`.
+The image contains the Xilinx synchronization word `aa995566` at offset
+`0x30`. JTAG-triggered Flash boot then completed with `DONE=1`, `EOS=1`, and no
+CRC or IDCODE error. A cold power-cycle boot is still unqualified.
+
+Build the persistent SPIx4 configuration image without accessing hardware:
+
+```bash
+make vivado-cfgmem-image
+```
+
+This reuses or regenerates the current routed `.bit` and writes
+`build/fpga/smart_artix/vivado/flash/smart_artix_top_spi_x4.mcs`. The
+2026-08-02 image was generated successfully with SPIx4 interface and SHA-256
+`52a605f1f46b888dca0ee4f282ad79564622abfcf6b9d26e0ab7520131dc2439`.
+Persistent
+programming is deliberately a separate, destructive target:
+
+```bash
+make vivado-flash-program CONFIRM_FLASH_PROGRAM=YES
+```
+
+It requires exactly one `xc7a50t`, loads the indirect SPI core, erases the
+addressed configuration sectors, programs the MCS image, enables Vivado verify,
+then boots from Flash and checks configuration status. Back up the full Flash
+first when its existing contents must be retained. The target's erase/program
+path was added after readback qualification but has not yet been run on this
+board.
 
 ## First Power-On Checks
 
@@ -196,7 +264,23 @@ Keep the first power-on observation simple:
   not behave as expected.
 - Confirm the Clocking Wizard and MIG are not held in reset.
 - Confirm DDR3 calibration eventually completes.
-- Watch `led_loader_error` and `led_asset_loaded` if those outputs are pinned.
+- Watch on-board LED1 (`led_ddr_ready`, R17) and LED2
+  (`led_asset_loaded`, P16). LED1 stays on after MIG calibration. LED2 is off
+  when the loader is idle, blinks slowly while SD initialization/loading is
+  active, blinks quickly when any SD, recovery, or asset-loader error code is
+  nonzero, and stays on after the asset is in DDR. At the 100 MHz system clock,
+  slow means 0.5 s on plus 0.5 s off (1 Hz), while fast means 0.1 s on plus
+  0.1 s off (5 Hz). Success overrides error and error overrides busy.
+- The first 2026-08-02 image used steady LED2-only completion indication. The
+  observed LED1-on/LED2-off state qualified DDR3 calibration but showed that the
+  SD-to-DDR load had not completed; it motivated the diagnostic blink pattern.
+- With the diagnostic image programmed later that day, LED1 stayed on and LED2
+  blinked at the fast 5 Hz rate. This qualifies MIG calibration and proves that
+  at least one of the SD, SD-recovery, or asset-loader error fields became
+  nonzero. It does not distinguish those fields. After the SPI bridge is
+  connected, read `PLATFORM_STATUS` (`0x9040`) and `PLATFORM_ERRORS` (`0x9044`)
+  before resetting the SD session, then decode the fields using
+  `docs/register_map.md`.
 
 The current SPI platform register window is clocked from MIG `ui_clk`. It is
 available only after the MIG UI clock exists and the system reset is released.

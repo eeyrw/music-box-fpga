@@ -2,29 +2,56 @@
                Smart Artix (XC7A50T-FGG484) 引脚分配表
 ====================================================================
 
-一、系统时钟与复位 (Clock & Reset)
+资料来源与适用范围
+--------------------------------------------------------------------
+- 原始连接依据：Schematic_Smart_Artix_260307.pdf 全10页；第2页为FPGA
+  Bank/配置连接，第3页为DDR3，第4-6页为外设，第7页为下载器/电源，
+  第9页为扩展排针，第10页为接口汇总。
+- 原理图版本：Rev 1.3，日期 2026-03-07。
+- 本表中的3.3V表示板级供电/常用I/O电平；HDMI、DDR3等专用接口仍须
+  使用对应接口标准和厂商IP约束，不能仅凭本表生成完整XDC。
+- DDR3完整引脚、时序和电气约束由Vivado MIG工程负责。
+
+一、系统时钟、复位、按键与板载LED (Clock/Reset/Key/LED)
 --------------------------------------------------------------------
 信号名称         FPGA引脚    方向      电压标准    描述
 CLK_50M          Y18         输入      3.3V        50MHz 系统主时钟
 KEY1             E22         输入      3.3V        按键1
 KEY2             G22         输入      3.3V        按键2
-RESET_N          T20         输入      3.3V        复位按键 (KEY3)
+RESET_N          T20         输入      3.3V        低有效复位按键 (KEY3)
+LED1             R17         输出      3.3V        高电平点亮；led_ddr_ready
+LED2             P16         输出      3.3V        高电平点亮；led_asset_loaded状态灯
+
+KEY1/KEY2/RESET_N均由10k电阻上拉到3.3V，按下接地，因此低电平有效。
+RESET_N另有4.7uF对地电容。LED1/LED2各经330欧姆串联绿色LED到地，
+因此FPGA输出高电平时点亮。
+
+当前工程用LED显示无SPI控制链路时的板级启动状态：LED1常亮表示DDR MIG
+校准完成；LED2慢闪（亮0.5秒、灭0.5秒）表示SD初始化/加载中，快闪
+（亮0.1秒、灭0.1秒）表示SD、恢复或资产加载错误，
+常亮表示SD资产已写入DDR，熄灭表示loader空闲。
 
 二、UART 串口接口 (FT2232HL / FT4232HL)
 --------------------------------------------------------------------
 信号名称         FPGA引脚    方向      电压标准    描述
-UART1_TX         R14         输出      3.3V        串口1 发送 (FT_UART1_TX)
-UART1_RX         P14         输入      3.3V        串口1 接收 (FT_UART1_RX)
-UART2_TX         P15         输出      3.3V        串口2 发送 (FT_UART2_TX)
-UART2_RX         R16         输入      3.3V        串口2 接收 (FT_UART2_RX)
+UART1_TX         R14         输出      3.3V        串口1发送，仅FT4232HL
+UART1_RX         P14         输入      3.3V        串口1接收，仅FT4232HL
+UART2_TX         P15         输出      3.3V        串口2发送，FT4232HL/FT2232HL
+UART2_RX         R16         输入      3.3V        串口2接收，FT4232HL/FT2232HL
 UART3_TX         U21         输出      3.3V        串口3 发送 (FT_UART3_TX, 仅FT4232)
 UART3_RX         T21         输入      3.3V        串口3 接收 (FT_UART3_RX, 仅FT4232)
 
-三、I2C EEPROM (2Kbits)
+板载USB-C下载器使用FT4232HL或FT2232HL。FTDI通道A连接FPGA JTAG
+(TCK/TDI/TDO/TMS)，不作为普通用户I/O列入上表。FT4232HL提供3路UART，
+FT2232HL提供1路UART；共同可用的一路对应UART2。
+
+三、应用侧I2C EEPROM (24C02, 2Kbits)
 --------------------------------------------------------------------
 信号名称         FPGA引脚    方向      电压标准    描述
 EEPROM_SCL       U18         输出      3.3V        I2C 时钟
 EEPROM_SDA       T18         双向      3.3V        I2C 数据
+
+注意：该24C02与第7页FTDI使用的93LC66B/93LC56B配置EEPROM不是同一器件。
 
 四、TF 卡接口 (TF Card / SD Mode)
 --------------------------------------------------------------------
@@ -37,7 +64,7 @@ SD_CMD           Y22         双向      3.3V        SD命令
 SD_CLK           V20         输出      3.3V        SD时钟
 SD_CD            U17         输入      3.3V        SD卡检测
 
-五、千兆以太网接口 (1G GIGE PHY RTL8211E)
+五、千兆以太网接口 (RTL8211E-VB-CG, RGMII)
 --------------------------------------------------------------------
 信号名称         FPGA引脚    方向      电压标准    描述
 ETH_TD0          AB20        输出      3.3V        发送数据0
@@ -57,16 +84,24 @@ ETH_MDC          W17         输出      3.3V        SMI时钟
 ETH_INT          AB22        输入      3.3V        中断信号
 ETH_RST          V19         输出      3.3V        PHY芯片复位
 
+PHY使用25MHz晶振，RJ45为HR911130A并带链路/活动LED。PHY侧还包含
+1.0V/3.3V电源域；上表3.3V只描述FPGA Bank14侧电平，最终XDC仍须按
+RTL8211E数据手册确认RGMII电气与时序。
+
 六、HDMI 接口 (RX / TX)
 --------------------------------------------------------------------
-信号名称         FPGA引脚(RX)  FPGA引脚(TX)  电压标准   描述
-HDMI_CLK         C18           D17           3.3V       HDMI时钟通道
-HDMI_D0          B21           C14           3.3V       HDMI数据通道0
-HDMI_D1          B20           C13           3.3V       HDMI数据通道1
-HDMI_D2          A18           E13           3.3V       HDMI数据通道2
-HDMI_SDA         D15           N14           3.3V       DDC数据
-HDMI_SCL         E16           N13           3.3V       DDC时钟
-HDMI_HPD         D16           N15           3.3V       热插拔检测
+信号名称         FPGA引脚(RX)  FPGA引脚(TX)  接口类型   描述
+HDMI_CLK         C18           D17           TMDS差分   时钟通道P端
+HDMI_D0          B21           C14           TMDS差分   数据通道0 P端
+HDMI_D1          B20           C13           TMDS差分   数据通道1 P端
+HDMI_D2          A18           E13           TMDS差分   数据通道2 P端
+HDMI_SDA         D15           N14           DDC/I2C    数据
+HDMI_SCL         E16           N13           DDC/I2C    时钟
+HDMI_HPD         D16           N15           3.3V逻辑   热插拔检测
+
+TMDS负端使用同一Bank16差分对的互补封装脚，详见原理图第2/4页。
+HDMI连接器侧有49.9欧姆上拉、ESD器件、5V/DDC电平转换和HPD外围；
+不能把TMDS通道按普通LVCMOS33单端GPIO约束。
 
 七、RGB LCD (RGB888 接口)
 --------------------------------------------------------------------
@@ -113,12 +148,49 @@ DDR3_D11         Y1          DDR3_A11         U6
 DDR3_D12         T1          DDR3_A12         T5
 DDR3_D13         V2          DDR3_A13         W9
 DDR3_D14         Y2          DDR3_A14         U7
-DDR3_D15         W2          DDR3_CKE         R4
+DDR3_D15         W2          -                -
 DDR3_DQS0_P      Y3          DDR3_DQS0_N      AA3
 DDR3_DQS1_P      R3          DDR3_DQS1_N      R2
 DDR3_DM0         AB2         DDR3_DM1         U3
+DDR3_BA0         Y6          DDR3_BA1         U5
+DDR3_BA2         AB8         DDR3_RAS_N       W5
+DDR3_CAS_N       AB6         DDR3_WE_N        Y7
+DDR3_CLK_P       V9          DDR3_CLK_N       V8
+DDR3_CKE         R4          DDR3_ODT         AB7
+DDR3_RESET_N     T3          DDR3_VREF        Bank34参考电压
 
-九、扩展排针接口 (HEADER 20x2)
+器件为MT41K256M16TW-107，x16、512MB，VDD/VDDQ为1.5V。DDR3片选CS0_N
+在板上经100欧姆接地，并非FPGA用户I/O。以上连接来自第3页，但完整时序、
+内部参考电压和I/O属性仍必须由Vivado MIG工程生成，禁止手写替代。
+
+九、FPGA配置、JTAG与QSPI启动接口
+--------------------------------------------------------------------
+信号名称         FPGA引脚    方向      描述
+FPGA_TMS         T13         输入      板载FTDI JTAG
+FPGA_TCK         V12         输入      板载FTDI JTAG时钟
+FPGA_TDI         R13         输入      板载FTDI JTAG数据输入
+FPGA_TDO         U13         输出      板载FTDI JTAG数据输出
+INIT_B           U12         双向      配置初始化状态
+PROGRAM_B        N12         输入      低有效配置复位
+CFGBVS           U8          输入      配置Bank电压选择
+DONE             G11         输出      配置完成；另驱动板载红色LED5
+M0               U11         输入      配置模式选择
+M1               U10         输入      配置模式选择
+M2               U9          输入      配置模式选择；板上选择Master SPI
+QSPI_CLK/CCLK    L12         输出      配置Flash时钟
+QSPI_CS          R19         输出      W25Q128JV片选
+QSPI_DQ0         P22         双向      W25Q128JV IO0/DI
+QSPI_DQ1         R22         双向      W25Q128JV IO1/DO
+QSPI_DQ2         P21         双向      W25Q128JV IO2/WP_N
+QSPI_DQ3         R21         双向      W25Q128JV IO3/HOLD_N
+
+配置Flash为W25Q128JVSIQTR，3.3V、128Mbit (16MiB)。QSPI_CS、DQ2/WP_N
+和DQ3/HOLD_N各有4.7k上拉；DQ0和DQ1没有图示外部上拉。配置/JTAG专用脚
+由Vivado配置流程管理，不应作为普通顶层GPIO重复约束。
+当前Smart Artix XDC将BITSTREAM.CONFIG.SPI_BUSWIDTH设为4；FPGA先以串行
+方式读取启动头，再切换到x4配置传输。生成持久镜像时必须使用SPIx4。
+
+十、扩展排针接口 (HEADER 20x2)
 --------------------------------------------------------------------
 【BANK 15 扩展口 - 默认3.3V (Vadj可调)】
 排针引脚  FPGA引脚    |  排针引脚  FPGA引脚
@@ -132,37 +204,46 @@ DDR3_DM0         AB2         DDR3_DM1         U3
 15        H22         |  16        J22
 17        L20         |  18        L19
 19        K22         |  20        K21
-21        M22         |  22        M22 (N22)
+21        M22         |  22        N22
 23        M20         |  24        N20
 25        H19         |  26        J19
-27        L18         |  28        L16
+27        L18         |  28        M18
 29        K19         |  30        K18
 31        K16         |  32        L16
 33        J17         |  34        K17
-35        VCC3V3      |  36        VCC3V3
-37        GND         |  38        GND
+35        NC          |  36        NC
+37        VCC3V3      |  38        VCC3V3
 39        5V_DC       |  40        5V_DC
 
 【BANK 35 扩展口 - 固定3.3V】
 排针引脚  FPGA引脚    |  排针引脚  FPGA引脚
-1         -           |  2         5V_DC
-3         VCC3V3      |  4         5V_DC
-5         VCC3V3      |  6         -
-7         B1          |  8         B2
-9         A1          |  10        C2
-11        E1          |  12        B2 (D1)
-13        D1          |  14        H4
-15        G4          |  16        E2
-17        D2          |  18        G1
-19        F1          |  20        H3
-22        G3          |  21        K1
-23        J1          |  24        L1
-25        M1          |  26        K2
-27        J2          |  28        K4
-29        J4          |  30        M3
-31        M2          |  32        P2
-33        N2          |  34        R1
-35        P1          |  36        L3
-37        K3          |  38        P5
+1         5V_DC       |  2         5V_DC
+3         VCC3V3      |  4         VCC3V3
+5         NC          |  6         NC
+7         NC          |  8         NC
+9         B1          |  10        A1
+11        C2          |  12        B2
+13        E1          |  14        D1
+15        H4          |  16        G4
+17        E2          |  18        D2
+19        G1          |  20        F1
+21        H3          |  22        G3
+23        K1          |  24        J1
+25        M1          |  26        L1
+27        K2          |  28        J2
+29        K4          |  30        J4
+31        M3          |  32        M2
+33        P2          |  34        N2
+35        R1          |  36        P1
+37        P5          |  38        P4
 39        N4          |  40        N3
+
+十一、板载下载器与电源事实（原理图第7页）
+--------------------------------------------------------------------
+- USB接口：USB-C，经板载FT4232HL/FT2232HL连接JTAG和UART。
+- JTAG：FTDI通道A连接FPGA_TCK、FPGA_TDI、FPGA_TDO、FPGA_TMS。
+- FTDI配置EEPROM：93LC66B或93LC56B。
+- 主电源输入：5V_DC；板上生成VCC3V3、VCC1V8、VCC1V5和VCC1V0。
+- BANK15电源VCCIO_ADJ由可更换SPX3819M5 LDO设定，默认3.3V，且不得超过3.3V。
+- 第7页LED4为3.3V电源指示灯，不受FPGA控制；不要与LED1/LED2混淆。
 ====================================================================

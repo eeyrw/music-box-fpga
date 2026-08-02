@@ -35,8 +35,8 @@ module smart_artix_top (
   output logic led_underrun,
   output logic led_sample_drop,
   output logic led_deadline_miss,
-  output logic led_asset_loaded,
-  output logic led_loader_error
+  output logic led_ddr_ready,
+  output logic led_asset_loaded
 );
   localparam int LINE_WORDS = 8;
   localparam int OUTPUT_FIFO_DEPTH = 64;
@@ -234,9 +234,19 @@ module smart_artix_top (
   assign led_underrun = underrun_pulse;
   assign led_sample_drop = sample_drop_pulse;
   assign led_deadline_miss = render_deadline_miss_pulse;
-  assign led_asset_loaded = platform_status.asset_loaded;
-  assign led_loader_error = (platform_status.sd_error_code != 8'd0) ||
-                            (platform_status.loader_error_code != 8'd0);
+
+  smart_artix_status_leds status_leds (
+    .clk(clk_sys),
+    .rst(rst_sys),
+    .ddr_ready(mig_init_calib_complete),
+    .asset_loader_busy(platform_status.asset_loader_busy),
+    .error_present((|platform_status.sd_error_code)
+        || (|platform_status.sd_recovery_error_code)
+        || (|platform_status.loader_error_code)),
+    .asset_loaded(platform_status.asset_loaded),
+    .led_ddr_ready,
+    .led_asset_loaded
+  );
 
 /* verilator lint_off UNUSEDSIGNAL */
   logic unused_status;
@@ -246,7 +256,7 @@ module smart_artix_top (
       ^ mem_response_trace_pulse ^ (^mem_response_trace_latency) ^ (^mig_app_command.addr)
       ^ (^mig_app_command.cmd) ^ mig_app_command.en ^ mig_app_response.wdf_rdy ^ mig_app_sr_active
       ^ mig_app_ref_ack ^ mig_app_zq_ack ^ (^mig_device_temp)
-      ^ platform_status.asset_loader_busy ^ platform_status.sd_initialized
+      ^ platform_status.sd_initialized
       ^ (^platform_status.asset_loader_state) ^ (^platform_status.bytes_loaded)
       ^ (^platform_status.sf2_size_bytes) ^ (^platform_status.current_lba);
 endmodule

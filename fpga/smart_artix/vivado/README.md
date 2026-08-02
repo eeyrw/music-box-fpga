@@ -24,13 +24,36 @@ make vivado-impl
 make vivado-bitstream
 # Run only when one xc7a50t board is attached and its pins have been verified.
 make vivado-program
+make vivado-readback
+make vivado-flash-readback
+make vivado-cfgmem-image
+# Destructive: erases and replaces the addressed configuration-flash contents.
+make vivado-flash-program CONFIRM_FLASH_PROGRAM=YES
 ```
 
-`vivado-bitstream` is an offline build step. `vivado-program` opens the hardware
-manager and loads the `.bit` file into FPGA configuration SRAM over JTAG, so the
-configuration is lost when power is removed. Persistent configuration-memory
-programming is not implemented because the board's configuration flash part and
-boot mode have not yet been verified from the schematic.
+`vivado-bitstream` is an offline build step and emits the same post-route reports
+and summary JSON used by the analysis targets. `vivado-program` opens the
+hardware manager and loads the `.bit` file into FPGA configuration SRAM over
+JTAG, so the configuration is lost when power is removed. `vivado-readback`
+checks configuration status before and after reading the current configuration
+SRAM to `readback/smart_artix_top_readback.bin` without replacing the running
+image.
+
+The board schematic identifies the boot device as a Winbond
+`W25Q128JVSIQTR`, and the mode pins select Master SPI. The project therefore
+uses Vivado cfgmem part `w25q128jvq-spi-x1_x2_x4`, a 16 MiB image, and SPIx4
+formatting. `vivado-flash-readback` temporarily replaces the running design with
+Vivado's indirect SPI access core, reads all 16 MiB to
+`flash/w25q128jv_full_readback.bin`, then boots the FPGA from flash and checks
+`DONE`, `EOS`, CRC, and IDCODE status. `vivado-cfgmem-image` creates the MCS
+image without opening hardware. `vivado-flash-program` erases addressed flash
+sectors, programs the MCS file, verifies it, and reboots from flash; it refuses
+to run unless `CONFIRM_FLASH_PROGRAM=YES` is supplied explicitly.
+
+Configuration SRAM readback does not produce the original `.bit` container;
+it produces raw programming data. Flash readback is likewise a raw, complete
+device image. Generated images, logs, readbacks, and hashes remain build
+artifacts and must not be committed.
 
 The default Vivado 2025.2 run configuration is timing-oriented:
 

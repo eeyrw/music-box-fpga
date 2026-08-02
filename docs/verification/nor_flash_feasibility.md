@@ -172,15 +172,16 @@ about 1.5 MB and fits easily, but the documented approximately 310 MB SGM stress
 SoundFont does not fit one such device. That workload needs sample extraction,
 multiple flash devices, or a denser/different memory technology.
 
-The Smart Artix documentation does not identify the board's configuration-flash
-part, wiring, voltage, or whether its data pins are available after
-configuration. AMD documents post-configuration access to dedicated 7-series
-configuration signals through
+The Smart Artix schematic identifies a 3.3 V Winbond `W25Q128JVSIQTR` on the
+dedicated x4 configuration pins. Vivado indirect-SPI readback was qualified at
+JTAG speed on 2026-08-02, but this does not establish application ownership or
+100 MHz operation after configuration. AMD documents post-configuration access
+to dedicated 7-series configuration signals through
 [`STARTUPE2`](https://docs.amd.com/r/2025.2-English/ug953-vivado-7series-libraries/STARTUPE2),
-but that capability does not prove this board exposes a suitable x4 device or
-meets 100 MHz I/O timing. Before production work, obtain the schematic and exact
-flash part, then qualify configuration ownership, voltage, signal integrity,
-CDC, XDC timing, reset/QE/4-byte-mode setup, and hardware readback.
+but that capability does not prove the application path meets 100 MHz I/O
+timing. Before production use as wavetable storage, qualify configuration
+ownership, signal integrity, CDC, XDC timing, reset/QE setup, and contention
+with FPGA boot behavior.
 
 QSPI NOR is read-only during rendering in this proposal. It does not replace
 DDR3 storage needed by writable delay lines, asset loading, or other mutable

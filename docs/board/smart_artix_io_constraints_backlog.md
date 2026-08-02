@@ -58,6 +58,10 @@ assumptions.
 - SPI and I2S use project-selected BANK15 expansion-header pins. The current
   package locations match the board header table; external wiring must follow
   the selected signal order.
+- The two on-board green LEDs are LED1 on `R17` and LED2 on `P16`; the XDC maps
+  them to `led_ddr_ready` and `led_asset_loaded`, respectively. LED2 uses slow
+  blink for loader busy, fast blink for error, and steady on for success. The remaining
+  four diagnostic LED outputs use BANK15 expansion-header pins.
 - BANK15 uses adjustable `VCCIO_ADJ`, documented as 3.3 V by default. Confirm
   the actual rail before using `LVCMOS33` hardware.
 - The board-facing logic runs from the MIG 100 MHz `ui_clk`. SD and I2S are
