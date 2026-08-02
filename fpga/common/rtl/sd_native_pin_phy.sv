@@ -114,14 +114,14 @@ module sd_native_pin_phy #(
   logic [4:0] crc_bit_count;
   logic [7:0] pending_final_data;
   logic end_token_ok;
-  logic data_start_seen;
-  logic data_start_malformed;
   logic power_clocks_done;
   logic half_tick;
+  logic [135:0] completed_response;
 
   assign cmd_ready = state == STATE_IDLE && power_clocks_done;
   assign half_tick = div_count == active_clk_div;
   assign response_bits = active_resp_type == SD_RESP_R2 ? 8'd136 : 8'd48;
+  assign completed_response = {rsp_shift[134:0], sd_cmd_i};
 
   function automatic logic [6:0] crc7_next(input logic [6:0] crc, input logic bit_in);
     logic feedback;
@@ -248,8 +248,6 @@ module sd_native_pin_phy #(
       crc_bit_count <= '0;
       pending_final_data <= '0;
       end_token_ok <= 1'b0;
-      data_start_seen <= 1'b0;
-      data_start_malformed <= 1'b0;
       power_clocks_done <= 1'b0;
       rsp_valid <= 1'b0;
       rsp_status <= SD_STATUS_OK;
@@ -373,10 +371,6 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
-              if (!sd_cmd_i) begin
-                rsp_shift <= '0;
-                rsp_bit_count <= 8'd1;
-              end
               state <= STATE_RESP_WAIT_HIGH;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
@@ -387,7 +381,9 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b0;
-              if (rsp_bit_count != 0) begin
+              if (!sd_cmd_i) begin
+                rsp_shift <= '0;
+                rsp_bit_count <= 8'd1;
                 state <= STATE_RESP_CAPTURE_LOW;
               end else if (timeout_count == TIMEOUT_WIDTH'(RESPONSE_TIMEOUT_CYCLES - 1)) begin
                 rsp_status <= SD_STATUS_TIMEOUT;
@@ -410,8 +406,6 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
-              rsp_shift <= {rsp_shift[134:0], sd_cmd_i};
-              rsp_bit_count <= rsp_bit_count + 8'd1;
               state <= STATE_RESP_CAPTURE_HIGH;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
@@ -422,14 +416,18 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b0;
-              if (rsp_bit_count == response_bits) begin
+              rsp_shift <= completed_response;
+              rsp_bit_count <= rsp_bit_count + 8'd1;
+              if (rsp_bit_count == response_bits - 8'd1) begin
                 rsp_status <= active_resp_type == SD_RESP_R2
-                    ? classify_long_response(rsp_shift)
-                    : classify_short_response(rsp_shift[47:0], active_cmd_index, active_resp_type);
+                    ? classify_long_response(completed_response)
+                    : classify_short_response(completed_response[47:0], active_cmd_index,
+                                              active_resp_type);
                 rsp_data <= active_resp_type == SD_RESP_R2
-                    ? rsp_shift[127:8] : {88'd0, rsp_shift[39:8]};
+                    ? completed_response[127:8]
+                    : {88'd0, completed_response[39:8]};
                 if (active_resp_type == SD_RESP_R1B
-                    && classify_short_response(rsp_shift[47:0], active_cmd_index,
+                    && classify_short_response(completed_response[47:0], active_cmd_index,
                                                active_resp_type) == SD_STATUS_OK) begin
                   timeout_count <= '0;
                   state <= STATE_BUSY_WAIT_LOW;
@@ -491,19 +489,6 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
-              data_start_seen <= sd_dat_i == 4'h0;
-              data_start_malformed <= sd_dat_i != 4'h0 && sd_dat_i != 4'hf;
-              if (sd_dat_i == 4'h0) begin
-                data_byte_count <= '0;
-                data_half <= 1'b0;
-                for (int line = 0; line < 4; line++) begin
-                  crc_dat[line] <= '0;
-                  crc_rx[line] <= '0;
-                end
-                crc_bit_count <= '0;
-                end_token_ok <= 1'b0;
-                data_status <= SD_STATUS_OK;
-              end
               state <= STATE_DATA_WAIT_HIGH;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
@@ -514,9 +499,18 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b0;
-              if (data_start_seen) begin
+              if (sd_dat_i == 4'h0) begin
+                data_byte_count <= '0;
+                data_half <= 1'b0;
+                for (int line = 0; line < 4; line++) begin
+                  crc_dat[line] <= '0;
+                  crc_rx[line] <= '0;
+                end
+                crc_bit_count <= '0;
+                end_token_ok <= 1'b0;
+                data_status <= SD_STATUS_OK;
                 state <= STATE_DATA_CAPTURE_LOW;
-              end else if (data_start_malformed) begin
+              end else if (sd_dat_i != 4'hf) begin
                 emit_data_error(SD_STATUS_FRAMING_ERROR);
               end else if (timeout_count >= TIMEOUT_WIDTH'(DATA_TIMEOUT_CYCLES - 1)) begin
                 emit_data_error(SD_STATUS_TIMEOUT);
@@ -529,14 +523,27 @@ module sd_native_pin_phy #(
           end
 
           STATE_DATA_CAPTURE_LOW: begin
-            if (half_tick) begin
+            if (data_valid && !data_ready) begin
+              state <= STATE_DATA_HOLD;
+            end else if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
+              state <= STATE_DATA_CAPTURE_HIGH;
+            end else begin
+              div_count <= div_count + DIV_WIDTH'(1);
+            end
+          end
+
+          STATE_DATA_CAPTURE_HIGH: begin
+            if (half_tick) begin
+              div_count <= '0;
+              sd_clk <= 1'b0;
               for (int line = 0; line < 4; line++)
                 crc_dat[line] <= crc16_next(crc_dat[line], sd_dat_i[line]);
               if (!data_half) begin
                 data_high_nibble <= sd_dat_i;
                 data_half <= 1'b1;
+                state <= STATE_DATA_CAPTURE_LOW;
               end else begin
                 if (data_byte_count == active_block_len - 16'd1)
                   pending_final_data <= {data_high_nibble, sd_dat_i};
@@ -548,24 +555,9 @@ module sd_native_pin_phy #(
                 end
                 data_half <= 1'b0;
                 data_byte_count <= data_byte_count + 16'd1;
+                state <= data_byte_count == active_block_len - 16'd1
+                    ? STATE_DATA_CRC_LOW : STATE_DATA_CAPTURE_LOW;
               end
-              state <= STATE_DATA_CAPTURE_HIGH;
-            end else begin
-              div_count <= div_count + DIV_WIDTH'(1);
-            end
-          end
-
-          STATE_DATA_CAPTURE_HIGH: begin
-            if (half_tick) begin
-              div_count <= '0;
-              sd_clk <= 1'b0;
-              if (data_valid && !data_ready)
-                state <= STATE_DATA_HOLD;
-              else if (data_byte_count == active_block_len && !data_valid) begin
-                crc_bit_count <= '0;
-                state <= STATE_DATA_CRC_LOW;
-              end else
-                state <= STATE_DATA_CAPTURE_LOW;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
             end
@@ -581,9 +573,6 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
-              for (int line = 0; line < 4; line++)
-                crc_rx[line] <= {crc_rx[line][14:0], sd_dat_i[line]};
-              crc_bit_count <= crc_bit_count + 5'd1;
               state <= STATE_DATA_CRC_HIGH;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
@@ -594,7 +583,10 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b0;
-              state <= crc_bit_count == 5'd16 ? STATE_DATA_END_LOW : STATE_DATA_CRC_LOW;
+              for (int line = 0; line < 4; line++)
+                crc_rx[line] <= {crc_rx[line][14:0], sd_dat_i[line]};
+              crc_bit_count <= crc_bit_count + 5'd1;
+              state <= crc_bit_count == 5'd15 ? STATE_DATA_END_LOW : STATE_DATA_CRC_LOW;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
             end
@@ -604,7 +596,6 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b1;
-              end_token_ok <= sd_dat_i == 4'hf;
               state <= STATE_DATA_END_HIGH;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);
@@ -615,6 +606,7 @@ module sd_native_pin_phy #(
             if (half_tick) begin
               div_count <= '0;
               sd_clk <= 1'b0;
+              end_token_ok <= sd_dat_i == 4'hf;
               state <= STATE_DATA_EMIT_FINAL;
             end else begin
               div_count <= div_count + DIV_WIDTH'(1);

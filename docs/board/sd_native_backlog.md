@@ -343,21 +343,25 @@ Required tests:
 - change the requested divider near transaction completion and prove no runt or
   stretched edge is emitted.
 
-### SD-010: Divider-Zero Command Launch Has No Logical Setup Margin
+### SD-010: Divider-Zero Pin Timing Closure
 
-Status: RTL phase defect fixed; XDC and physical closure remain owned by
+Status: implemented and hardware-qualified for the documented board/card bench;
+the remaining waveform and production-card margin work is owned by
 [`smart_artix_io_constraints_backlog.md`](smart_artix_io_constraints_backlog.md).
+The complete experiment record is
+[`smart_artix_sd_50mhz_debug.md`](smart_artix_sd_50mhz_debug.md).
 
-At `clk_div == 0`, `STATE_CMD_LOW` changes `sd_cmd_o` and raises `sd_clk` on the
-same 100 MHz system edge. Except for the preloaded first start bit, command bits
-therefore have approximately zero logical setup at the card. The public Version
-9.10 simplified specification omits the numeric Default/High Speed timing
-tables, so final numbers also require the selected card data sheet, but a
-same-edge launch cannot meet a positive setup requirement.
+The original divider-zero implementation changed CMD on the same system edge
+that raised SD_CLK. It now changes CMD while SD_CLK falls, captures card inputs
+through single-edge input IOB registers one complete SD period after card launch,
+and consumes the registered value in the following PHY high state. A generated
+SD clock, explicit external delays, output IOB FFs, and narrowly resolved timing
+exceptions close the implemented 50 MHz paths.
 
-Required behavior and tests are the P0 Native SD Timing items in the I/O backlog.
-Until those gates close, use a divider that provides a full system-clock setup
-phase and do not claim a timing-qualified 50 MHz pin interface.
+Focused pin-PHY tests cover dividers zero and one. Fresh post-route timing and
+two hardware programming cycles both passed; the 32 GB card reached High Speed
+and read sector 0 at 50 MHz. The I/O backlog records the failed IDDR experiments,
+constraint-selection method, exact slacks, and remaining electrical measurements.
 
 ### SD-012: Accepted Command Control Fields Are Not Latched
 

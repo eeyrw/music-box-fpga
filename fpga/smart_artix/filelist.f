@@ -26,4 +26,5 @@ rtl/smart_artix_status_leds.sv
 rtl/smart_artix_ddr3_asset_writer.sv
 rtl/smart_artix_asset_loader.sv
 rtl/smart_artix_sd_native_asset_loader.sv
+rtl/smart_artix_sd_io.sv
 rtl/smart_artix_top.sv

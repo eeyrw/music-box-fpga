@@ -46,7 +46,7 @@ module smart_artix_top (
   localparam int SAMPLE_RATE_HZ = 48_000;
   localparam logic [SD_DIV_WIDTH-1:0] SD_INIT_CLK_DIV = SD_DIV_WIDTH'(124);
   localparam logic [SD_DIV_WIDTH-1:0] SD_DEFAULT_CLK_DIV = SD_DIV_WIDTH'(1);
-  localparam logic [SD_DIV_WIDTH-1:0] SD_TRANSFER_CLK_DIV = SD_DIV_WIDTH'(1);
+  localparam logic [SD_DIV_WIDTH-1:0] SD_TRANSFER_CLK_DIV = SD_DIV_WIDTH'(0);
 
   logic clk_sys;
   logic rst_sys;
@@ -83,6 +83,8 @@ module smart_artix_top (
   logic                     sd_cmd_o;
   logic                     sd_cmd_oe;
   logic                     sd_cmd_i;
+  logic [3:0]               sd_dat_i;
+  logic                     sd_clk_o;
   logic                     platform_regs_bus_valid;
   logic                     platform_regs_bus_write;
   logic [15:0]              platform_regs_bus_address;
@@ -97,8 +99,18 @@ module smart_artix_top (
   assign clk_sys = mig_ui_clk;
   assign rst_sys = mig_ui_clk_sync_rst || !mig_init_calib_complete;
   assign core_rst_sys = rst_sys || !platform_status.asset_loaded;
-  assign sd_cmd = sd_cmd_oe ? sd_cmd_o : 1'bz;
-  assign sd_cmd_i = sd_cmd;
+  smart_artix_sd_io sd_io (
+    .clk(clk_sys),
+    .rst(rst_sys),
+    .sd_clk_o,
+    .sd_cmd_o,
+    .sd_cmd_oe,
+    .sd_cmd_i,
+    .sd_dat_i,
+    .sd_clk,
+    .sd_cmd,
+    .sd_dat
+  );
 
   smart_artix_ddr3_mig ddr3_memory_controller (
     .ddr3_dq(ddr3_dq),
@@ -156,11 +168,11 @@ module smart_artix_top (
     .ddr_init_calib_complete(mig_init_calib_complete),
     .ddr_ui_rst(mig_ui_clk_sync_rst),
     .ddr_device_temp(mig_device_temp),
-    .sd_clk,
+    .sd_clk(sd_clk_o),
     .sd_cmd_o,
     .sd_cmd_oe,
     .sd_cmd_i,
-    .sd_dat_i(sd_dat),
+    .sd_dat_i,
     .sd_card_detect_n(sd_cd_n),
     .line_req(core_line_req),
     .line_req_ready(core_line_req_ready),

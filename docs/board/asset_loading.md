@@ -203,7 +203,10 @@ adopted:
 - The reader does not switch pin clocks internally. The subsystem selects 400 kHz
   during initialization, 25 MHz after Default Speed initialization, and 50 MHz
   only after a successful CMD6 mode-1 result and the PHY's eight old-rate guard
-  clocks have completed.
+  clocks have completed. The Smart Artix 50 MHz pin path is post-route closed and
+  hardware-qualified for the board/card combination recorded in
+  `smart_artix_bringup.md`; production-card and waveform margin remain separate
+  electrical qualification work.
 - Pin-level pull-up behavior on `CMD` and `DAT[3:0]` is handled in the Smart Artix
   XDC skeleton with conditional `PULLUP` constraints that become active when the
   board top exposes native SD ports.

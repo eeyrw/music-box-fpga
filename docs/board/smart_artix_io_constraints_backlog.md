@@ -110,32 +110,91 @@ specification:
 | CMD/DAT output delay, `tODLY` | 14 ns maximum |
 | CMD/DAT output hold, `tOH` | 2.5 ns minimum |
 
-### RTL Phase Fix And Remaining Physical Closure
+### RTL Phase And Physical Closure
 
 `sd_native_pin_phy` now installs the next command bit when SD_CLK falls, including
 at `SD_TRANSFER_CLK_DIV = 0`. The following rising edge is one 100 MHz system
-period later, removing the former same-edge launch defect. Focused simulation
-checks positive logical setup at dividers zero and one. Post-route I/O delay,
-PCB skew, and physical-card timing are still not qualified.
+period later, removing the former same-edge launch defect. Card CMD/DAT inputs
+are captured by single-edge registers in the input IOBs one complete 20 ns SD
+period after the card launch edge and consumed by the PHY in the following high
+state. SD_CLK and CMD data launch registers are also packed into output IOBs.
+
+The 2026-08-02 post-route image uses a generated 50 MHz clock on `sd_clk`, the
+explicit assumptions above as input/output delays, and a two-cycle setup/one-cycle
+hold exception scoped only to the five input-IOB D pins. CMD data and output
+enable change only while SD_CLK is low or falling. A hold false path is therefore
+scoped only from those two sequential launch registers to `sd_cmd`; the maximum
+delay to the following SD_CLK rising edge remains checked.
+
+The resulting dedicated paths met timing:
+
+| Path | Post-route slack | Required edge relationship |
+| --- | ---: | --- |
+| card CMD/DAT to input IOB FF, setup | +0.965 ns | SD rise to system rise at +20 ns |
+| card CMD/DAT to input IOB FF, hold | +13.902 ns | scoped two-cycle capture window |
+| FPGA CMD to card, setup | +1.545 ns | system launch to next SD rise at +10 ns |
+
+The complete design met timing with WNS `+0.175 ns` and WHS `+0.045 ns`.
+Bitstream `bdcfda91c30921cf336c7cf104d36e58ce22399f192a405ea018bce1a2098c13`
+then completed sector-0 reads at 50 MHz on the board-level socket and the genuine
+32 GB SDHC card described in `smart_artix_bringup.md`. These numbers qualify that
+bench combination. Socket waveform, PCB skew, voltage, and temperature margins
+remain unmeasured.
+
+### Investigation Method
+
+The full chronological record and reproduction commands are in
+[`smart_artix_sd_50mhz_debug.md`](smart_artix_sd_50mhz_debug.md). The summary
+below captures the reusable method.
+
+The useful sequence for future source-synchronous board-I/O failures is:
+
+1. Hold protocol, card, and image constant and make a frequency A/B comparison.
+   Here 50 MHz failed CMD17 while 25 MHz read sector 0, which localized the issue
+   to the high-rate pin path rather than card initialization or WTSF parsing.
+2. Confirm fixed package pins and clock capability before changing RTL. The
+   archived Xilinx package CSV confirms V20 is `IO_L11N_T1_SRCC_14`; the other
+   board-level SD pins are fixed and cannot be moved.
+3. Split timing reports into card-to-FPGA input setup/hold, FPGA-to-card CMD
+   setup/hold, and clock-forwarding delay. Do not infer I/O closure from global
+   WNS alone.
+4. Inspect the complete expanded clock path and the actual capture edge. An
+   initial falling-edge IDDR scheme had a `6.819 ns` fabric-to-pin SD clock delay
+   and failed input timing by `15.995 ns`. Selecting IDDR Q1 did not solve the
+   modeling problem: the IDDR D pin still has a real falling-edge capture check,
+   producing a `-4.035 ns` path even though Q2 was unused.
+5. Match the primitive to the required behavior. Replacing IDDR with a
+   single-edge input IOB FF removed the irrelevant falling-edge check and made
+   the intended full-period capture explicit. Query the synthesized cell names,
+   then derive D pins with `get_pins -of_objects`; a hierarchical pin-name glob
+   silently selected no endpoints in the first constraint draft.
+6. Keep exceptions narrow and verify their resolved objects after synthesis.
+   Filtering CMD launch objects with `IS_SEQUENTIAL` avoided accidentally
+   selecting same-prefix LUTs. The clean implementation `link_design` result was
+   zero warnings, critical warnings, and errors.
+7. Finish with a fresh post-route run and repeated hardware reset/program tests.
+   For a card without WTSF, `PLATFORM_STATUS=0x00018057` and
+   `PLATFORM_ERRORS=0x000f0100` prove High Speed initialization plus a successful
+   sector-0 transfer; invalid magic is the expected loader endpoint.
 
 Required work:
 
-- [ ] For initial hardware bring-up, set `SD_TRANSFER_CLK_DIV = 1` for a
+- [x] For initial hardware bring-up, set `SD_TRANSFER_CLK_DIV = 1` for a
   25 MHz transfer clock and confirm the resulting CMD margin after routing.
 - [x] Before claiming 50 MHz support, update CMD on the falling SD phase and
   sample CMD/DAT on the rising phase through an explicit I/O-register boundary.
-- [ ] Evaluate ODDR for forwarded SD_CLK and CMD output, plus IOB input
-  registers or IDDR where appropriate. Keep vendor primitives in the Smart
-  Artix board layer.
+- [x] Evaluate ODDR/IDDR and IOB registers. The implemented board layer uses
+  output IOB FFs and single-edge input IOB FFs; IDDR was rejected because its
+  unused falling capture still created a physical timing check.
 - [x] Add a self-checking pin-PHY regression that checks CMD setup relative to
   every SD_CLK rising edge at divider 1 and divider 0.
-- [ ] Model the fastest transfer clock with a generated clock on the SD_CLK
+- [x] Model the fastest transfer clock with a generated clock on the SD_CLK
   output only after confirming the post-synthesis clock source object.
-- [ ] Apply CMD output delays from `tISU`, `tIH`, and estimated PCB skew. The
+- [x] Apply CMD output delays from `tISU`, `tIH`, and estimated PCB skew. The
   usual sign convention is maximum `tISU + skew` and minimum `-tIH + skew`.
-- [ ] Apply CMD/DAT input delays from `tODLY`, `tOH`, and PCB skew. Confirm the
+- [x] Apply CMD/DAT input delays from `tODLY`, `tOH`, and PCB skew. Confirm the
   detailed report selects the intended SD launch/capture edges.
-- [ ] If state-gated 100 MHz capture needs broad or fragile multicycle
+- [x] If state-gated 100 MHz capture needs broad or fragile multicycle
   exceptions, refactor to an explicit SD capture boundary instead of masking
   paths.
 - [ ] Start with `LVCMOS33`, `DRIVE 8`, and `SLEW FAST` on driven SD pins, then

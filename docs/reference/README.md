@@ -11,3 +11,8 @@ protocol, and numeric behavior. They are not project-authored contracts.
   MIDI File format reference.
 - [`sd-physical-layer-simplified-spec-v9.10.pdf`](sd-physical-layer-simplified-spec-v9.10.pdf):
   SD Physical Layer Simplified Specification 9.10.
+- [`xilinx-7-series-package-files-v1.10.zip`](xilinx-7-series-package-files-v1.10.zip):
+  AMD/Xilinx 7 Series FPGA package-files archive version 1.10, dated 2017-12-05.
+- [`xc7a50tfgg484pkg.csv`](xc7a50tfgg484pkg.csv): the Smart Artix device's
+  `XC7A50T-FGG484` package table extracted from that archive for direct pin and
+  clock-capability checks.

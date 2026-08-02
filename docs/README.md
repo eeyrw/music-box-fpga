@@ -90,6 +90,9 @@ matching contract whenever its RTL or host implementation changes.
   Artix top and build status.
 - [`board/smart_artix_bringup.md`](board/smart_artix_bringup.md): practical
   hardware bring-up sequence.
+- [`board/smart_artix_sd_50mhz_debug.md`](board/smart_artix_sd_50mhz_debug.md):
+  complete 25/50 MHz A/B investigation, failed I/O approaches, final timing
+  closure, and hardware evidence.
 - [`board/asset_loading.md`](board/asset_loading.md): current SD-to-DDR3 asset
   loading contract.
 - [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):

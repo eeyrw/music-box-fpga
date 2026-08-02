@@ -211,7 +211,8 @@ SMART_ARTIX_RTL_SOURCES := \
 	fpga/smart_artix/rtl/smart_artix_ddr3_rw_arbiter.sv \
 	fpga/smart_artix/rtl/smart_artix_ddr3_subsystem.sv \
 	fpga/smart_artix/rtl/smart_artix_platform_regs.sv \
-	fpga/smart_artix/rtl/smart_artix_status_leds.sv
+	fpga/smart_artix/rtl/smart_artix_status_leds.sv \
+	fpga/smart_artix/rtl/smart_artix_sd_io.sv
 
 SMART_ARTIX_SIM_MODELS := \
 	fpga/common/sim/fake_sd_native_phy_model.sv \
@@ -227,6 +228,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_smart_artix_platform_regs \
 	tb_smart_artix_sd_card_detect \
 	tb_smart_artix_sd_native_asset_loader \
+	tb_smart_artix_sd_io \
 	tb_smart_artix_status_leds \
 	tb_sd_native_block_reader \
 	tb_sd_native_block_reader_fake \
@@ -759,7 +761,7 @@ smart-artix-test: $(SMART_ARTIX_TESTBENCHES)
 
 $(SMART_ARTIX_TESTBENCHES):
 	mkdir -p $(BUILD_DIR)
-	$(VERILATOR) $(RTL_DEFINES) --binary -j 1 --timing --Wall -Wno-fatal \
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/$@_obj_dir --top-module $@ \
 		$(SMART_ARTIX_RTL_SOURCES) $(SMART_ARTIX_SIM_MODELS) \
 		$(if $(wildcard fpga/smart_artix/sim/$@.sv),fpga/smart_artix/sim/$@.sv,fpga/common/sim/$@.sv)

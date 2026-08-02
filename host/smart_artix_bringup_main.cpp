@@ -56,6 +56,7 @@ struct Args {
 
 struct Snapshot {
   uint32_t version = 0;
+  bool core_regs_available = false;
   uint32_t system_status = 0;
   uint32_t event_flags = 0;
   uint32_t pipeline_latency = 0;
@@ -298,10 +299,6 @@ class SyntheticBoard final : public host::RegisterIo,
 Snapshot read_snapshot(host::RegisterIo& io) {
   Snapshot snapshot;
   snapshot.version = io.read_register(regs::kVersion);
-  snapshot.system_status = io.read_register(regs::kSystemStatus);
-  snapshot.event_flags = io.read_register(regs::kCommonEventFlags);
-  snapshot.pipeline_latency = io.read_register(regs::kPipelineLatencyStatus);
-  snapshot.command_status = io.read_register(regs::kCmdFifoStatus);
   snapshot.platform_status = io.read_register(regs::kPlatformStatus);
   snapshot.platform_errors = io.read_register(regs::kPlatformErrors);
   snapshot.bytes_loaded = io.read_register(regs::kPlatformBytesLoaded);
@@ -309,22 +306,25 @@ Snapshot read_snapshot(host::RegisterIo& io) {
   snapshot.current_lba = io.read_register(regs::kPlatformCurrentLba);
   snapshot.platform_ddr_status = io.read_register(regs::kPlatformDdrStatus);
   snapshot.ddr_access_status = io.read_register(regs::kDdrAccessStatus);
-  snapshot.underrun_count = io.read_register(regs::kUnderrunCount);
-  snapshot.sample_drop_count = io.read_register(regs::kSampleDropCount);
-  snapshot.deadline_miss_count =
-      io.read_register(regs::kRenderDeadlineMissCount);
-  snapshot.memory_response_count = io.read_register(regs::kMemResponseCount);
+  snapshot.core_regs_available =
+      (snapshot.platform_status & regs::kPlatformStatusAssetLoadedMask) != 0;
+  if (snapshot.core_regs_available) {
+    snapshot.system_status = io.read_register(regs::kSystemStatus);
+    snapshot.event_flags = io.read_register(regs::kCommonEventFlags);
+    snapshot.pipeline_latency = io.read_register(regs::kPipelineLatencyStatus);
+    snapshot.command_status = io.read_register(regs::kCmdFifoStatus);
+    snapshot.underrun_count = io.read_register(regs::kUnderrunCount);
+    snapshot.sample_drop_count = io.read_register(regs::kSampleDropCount);
+    snapshot.deadline_miss_count =
+        io.read_register(regs::kRenderDeadlineMissCount);
+    snapshot.memory_response_count = io.read_register(regs::kMemResponseCount);
+  }
   return snapshot;
 }
 
 void print_snapshot(const Snapshot& s) {
   std::cout << "\n== Board Snapshot ==\n";
   print_register("VERSION", regs::kVersion, s.version);
-  print_register("SYSTEM_STATUS", regs::kSystemStatus, s.system_status);
-  print_register("COMMON_EVENT_FLAGS", regs::kCommonEventFlags, s.event_flags);
-  print_register("PIPELINE_LATENCY_STATUS", regs::kPipelineLatencyStatus,
-                 s.pipeline_latency);
-  print_register("CMD_FIFO_STATUS", regs::kCmdFifoStatus, s.command_status);
   print_register("PLATFORM_STATUS", regs::kPlatformStatus, s.platform_status);
   print_register("PLATFORM_ERRORS", regs::kPlatformErrors, s.platform_errors);
   print_register("PLATFORM_BYTES_LOADED", regs::kPlatformBytesLoaded,
@@ -336,13 +336,22 @@ void print_snapshot(const Snapshot& s) {
                  s.platform_ddr_status);
   print_register("DDR_ACCESS_STATUS", regs::kDdrAccessStatus,
                  s.ddr_access_status);
-  print_register("UNDERRUN_COUNT", regs::kUnderrunCount, s.underrun_count);
-  print_register("SAMPLE_DROP_COUNT", regs::kSampleDropCount,
-                 s.sample_drop_count);
-  print_register("RENDER_DEADLINE_MISS_COUNT", regs::kRenderDeadlineMissCount,
-                 s.deadline_miss_count);
-  print_register("MEM_RESPONSE_COUNT", regs::kMemResponseCount,
-                 s.memory_response_count);
+  if (s.core_regs_available) {
+    print_register("SYSTEM_STATUS", regs::kSystemStatus, s.system_status);
+    print_register("COMMON_EVENT_FLAGS", regs::kCommonEventFlags, s.event_flags);
+    print_register("PIPELINE_LATENCY_STATUS", regs::kPipelineLatencyStatus,
+                   s.pipeline_latency);
+    print_register("CMD_FIFO_STATUS", regs::kCmdFifoStatus, s.command_status);
+    print_register("UNDERRUN_COUNT", regs::kUnderrunCount, s.underrun_count);
+    print_register("SAMPLE_DROP_COUNT", regs::kSampleDropCount,
+                   s.sample_drop_count);
+    print_register("RENDER_DEADLINE_MISS_COUNT",
+                   regs::kRenderDeadlineMissCount, s.deadline_miss_count);
+    print_register("MEM_RESPONSE_COUNT", regs::kMemResponseCount,
+                   s.memory_response_count);
+  } else {
+    std::cout << "  core register window unavailable while asset reset is asserted\n";
+  }
 
   const uint32_t word_level =
       (s.command_status >> regs::kCmdFifoStatusWordLevelLsb) & 0x3fffu;
@@ -358,7 +367,12 @@ void print_snapshot(const Snapshot& s) {
             << " loader_busy="
             << ((s.platform_status &
                  regs::kPlatformStatusAssetLoaderBusyMask) != 0)
-            << " command_words=" << word_level << '\n';
+            << " command_words=";
+  if (s.core_regs_available)
+    std::cout << word_level;
+  else
+    std::cout << "unavailable";
+  std::cout << '\n';
 }
 
 void validate_identity(const Snapshot& snapshot) {
@@ -380,7 +394,8 @@ void validate_identity(const Snapshot& snapshot) {
   if ((snapshot.platform_status & regs::kPlatformStatusErrorPresentMask) != 0) {
     result("WARN", "platform reports an SD or asset-loader error");
   }
-  if ((snapshot.command_status & kCommandErrorMask) != 0) {
+  if (snapshot.core_regs_available &&
+      (snapshot.command_status & kCommandErrorMask) != 0) {
     result("WARN", "command parser reports an existing error summary");
   }
 }
@@ -412,7 +427,8 @@ void wait_platform(host::RegisterIo& io, const Args& args, bool require_asset) {
     const uint32_t ddr_access = io.read_register(regs::kDdrAccessStatus);
     const uint32_t loaded = io.read_register(regs::kPlatformBytesLoaded);
     const uint32_t size = io.read_register(regs::kPlatformSf2Size);
-    if ((status & regs::kPlatformStatusErrorPresentMask) != 0) {
+    if (require_asset &&
+        (status & regs::kPlatformStatusErrorPresentMask) != 0) {
       throw std::runtime_error("platform error while waiting: " + hex32(errors));
     }
     const bool ddr_ready =

@@ -530,15 +530,21 @@ The loader currently targets SDHC and SDXC cards:
 - card-side DAT3 detect-pull-up removal through `CMD55/ACMD42`, followed by
   4-bit data mode through `CMD55/ACMD6`.
 - CMD6 mode-0 capability discovery and validated mode-1 High Speed selection,
-  currently clocked conservatively at 25 MHz after selection, with 25 MHz
-  Default Speed fallback. The 50 MHz High Speed electrical path remains a
-  separate board qualification step.
+  clocked at 50 MHz after selection, with 25 MHz Default Speed fallback. The
+  implemented 50 MHz path is post-route closed and demonstrated on the recorded
+  board/card bench; production electrical margins remain to be measured.
 - SCR capability discovery through `CMD55/ACMD51`; multi-block `CMD18` reads use
   optional `CMD23` only when advertised, otherwise terminate with `CMD12`.
 - bounded `CMD17` recovery from a failed CMD18 block without repeating previously
   committed blocks.
 
 ### 2026-08-02 SD Hardware Diagnosis
+
+The complete chronological investigation, including failed IDDR approaches,
+constraint-query pitfalls, detailed post-route paths, and reproduction commands,
+is preserved in
+[`smart_artix_sd_50mhz_debug.md`](smart_artix_sd_50mhz_debug.md). This section is
+the concise bring-up result.
 
 The SD socket and all SD signal traces in this experiment are board-level
 routing, not flywires. The card was a genuine 32 GB SDHC card without a WTSF
@@ -555,6 +561,7 @@ measured:
 | --- | --- | ---: | --- |
 | `5b19ae16680112528a789d351237009a3edf3edd5e564619523de4302893d5ec` | High Speed | 50 MHz | `PLATFORM_ERRORS=0x00220008`: CMD17 failed after two retries |
 | `e425a2882fbe821bf1ffbdda337e81c772291d92e0ba226994537052a61f3ef5` | High Speed | 25 MHz | `PLATFORM_ERRORS=0x000f0100`: SD error 0, loader error 1 (invalid WTSF magic) |
+| `bdcfda91c30921cf336c7cf104d36e58ce22399f192a405ea018bce1a2098c13` | High Speed | 50 MHz | post-route IOB capture fix; two FPGA starts both returned `PLATFORM_STATUS=0x00018057`, `PLATFORM_ERRORS=0x000f0100` |
 
 The 25 MHz image reported `PLATFORM_STATUS=0x00018057`: DDR calibrated, card
 present, SD initialized, and High Speed mode selected. The asset loader stopped
@@ -562,13 +569,13 @@ in its error state because sector 0 did not contain WTSF magic, as expected.
 Direct DDR access in the same run wrote and exactly read back
 `fedcba98_76543210_89abcdef_01234567` at byte address `0x100`.
 
-This A/B result qualifies native SD initialization and a single-block sector-0
-read at 25 MHz on this board/card combination. It does not yet qualify 50 MHz.
-The current 100 MHz fabric and direct input sampling provide only a 10 ns
-half-cycle at 50 MHz, while the external return path is not fully constrained;
-the failed 50 MHz CMD17 is therefore consistent with insufficient read-capture
-margin, but that cause remains an inference until the board signals are measured
-or the input timing is fully constrained and analyzed.
+The original A/B result localized the problem to the 50 MHz pin path. The final
+image adds single-edge input IOB capture over a complete 20 ns SD period, output
+IOB registers, a generated SD clock, and scoped external timing constraints.
+Post-route input setup/hold were `+0.965 ns`/`+13.902 ns`; CMD setup was
+`+1.545 ns`. Two programming cycles then qualified native SD initialization and
+a single-block sector-0 read at 50 MHz on this board/card combination. Electrical
+waveform and multi-card production margin remain unmeasured.
 
 The socket's `SD_CD` switch is active low on U17. Insertion is synchronized and
 debounced, followed by a 1 ms stable-power wait and at least 80 startup clocks.

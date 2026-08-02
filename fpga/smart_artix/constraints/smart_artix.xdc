@@ -72,15 +72,58 @@ set_property IOSTANDARD LVCMOS33 [get_ports {i2s_bclk i2s_lrclk i2s_sdata}]
 # power-up; otherwise a card can enter the wrong mode or fail native-SD bring-up.
 set_property PACKAGE_PIN V20 [get_ports sd_clk]
 set_property IOSTANDARD LVCMOS33 [get_ports sd_clk]
+set_property DRIVE 8 [get_ports sd_clk]
+set_property SLEW FAST [get_ports sd_clk]
 set_property PACKAGE_PIN Y22 [get_ports sd_cmd]
 set_property IOSTANDARD LVCMOS33 [get_ports sd_cmd]
 set_property PULLUP true [get_ports sd_cmd]
+set_property DRIVE 8 [get_ports sd_cmd]
+set_property SLEW FAST [get_ports sd_cmd]
 set_property PACKAGE_PIN U20 [get_ports {sd_dat[0]}]
 set_property PACKAGE_PIN V18 [get_ports {sd_dat[1]}]
 set_property PACKAGE_PIN V22 [get_ports {sd_dat[2]}]
 set_property PACKAGE_PIN Y21 [get_ports {sd_dat[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {sd_dat[*]}]
 set_property PULLUP true [get_ports {sd_dat[*]}]
+
+# Keep the generated clock and command launch registers in the output IOB. This
+# bounds clock/data skew and avoids a fabric route consuming the 10 ns low phase.
+set_property IOB TRUE [get_cells ddr3_subsystem/sd_phy/sd_clk_reg]
+set_property IOB TRUE [get_cells ddr3_subsystem/sd_phy/sd_cmd_o_reg]
+
+# High Speed SD_CLK is a divide-by-two output of the 100 MHz MIG UI clock. The
+# PHY uses slower transaction-latched dividers during initialization and Default
+# Speed operation; the 50 MHz waveform is the fastest timing case. CMD/DAT from
+# the card are captured in input IOBs one complete SD period after launch, then
+# consumed by the PHY during the following high phase. These numeric values are
+# explicit generic 3.3 V High Speed assumptions pending a selected card data
+# sheet and socket measurement.
+create_generated_clock -name sd_clk_50m \
+  -source [get_pins ddr3_subsystem/sd_phy/sd_clk_reg/C] \
+  -divide_by 2 [get_ports sd_clk]
+set_input_delay -clock sd_clk_50m -max 14.000 [get_ports {sd_cmd sd_dat[*]}]
+set_input_delay -clock sd_clk_50m -min 2.500 [get_ports {sd_cmd sd_dat[*]}]
+set_output_delay -clock sd_clk_50m -max 6.000 [get_ports sd_cmd]
+set_output_delay -clock sd_clk_50m -min -2.000 [get_ports sd_cmd]
+# CMD data and output-enable transitions are state-qualified to SD_CLK falling
+# edges or the low phase. Static timing cannot infer that mutual exclusion from
+# the shared 100 MHz clock and otherwise checks an impossible same-rising-edge
+# transition. Keep the max-delay check to the following SD_CLK rising edge.
+set sd_cmd_launch_regs [get_cells -hier -filter \
+  {IS_SEQUENTIAL && (NAME =~ "ddr3_subsystem/sd_phy/sd_cmd_o_reg*" || \
+   NAME =~ "ddr3_subsystem/sd_phy/sd_cmd_oe_reg*")}]
+set_false_path -hold -from $sd_cmd_launch_regs -to [get_ports sd_cmd]
+set sd_input_iob_regs [get_cells -hier -filter \
+  {NAME =~ "sd_io/sd_*_i_q_reg*"}]
+set sd_input_iob_d_pins [get_pins -of_objects $sd_input_iob_regs -filter \
+  {REF_PIN_NAME == D}]
+set_multicycle_path -setup 2 \
+  -from [get_ports {sd_cmd sd_dat[*]}] \
+  -to $sd_input_iob_d_pins
+set_multicycle_path -hold 1 \
+  -from [get_ports {sd_cmd sd_dat[*]}] \
+  -to $sd_input_iob_d_pins
+
 set_property PACKAGE_PIN U17 [get_ports sd_cd_n]
 set_property IOSTANDARD LVCMOS33 [get_ports sd_cd_n]
 set_property PULLUP true [get_ports sd_cd_n]
