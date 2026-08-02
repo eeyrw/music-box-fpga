@@ -97,6 +97,7 @@ module sd_native_block_reader #(
   localparam logic [31:0] CMD6_SWITCH_HIGH_SPEED_ARG = 32'h80ff_fff1;
   localparam logic [31:0] R1_ERROR_MASK = 32'hffff_e008;
   localparam logic [3:0] CARD_STATE_IDLE = 4'd0;
+  localparam logic [3:0] CARD_STATE_IDENTIFICATION = 4'd2;
   localparam logic [3:0] CARD_STATE_STANDBY = 4'd3;
   localparam logic [3:0] CARD_STATE_TRANSFER = 4'd4;
 
@@ -465,7 +466,7 @@ module sd_native_block_reader #(
                   fail(ERROR_CMD3);
                 else if (r6_has_error(phy_rsp_data[15:13]))
                   fail(ERROR_CARD_STATUS);
-                else if (!r1_state_is(phy_rsp_data[12:9], CARD_STATE_STANDBY))
+                else if (!r1_state_is(phy_rsp_data[12:9], CARD_STATE_IDENTIFICATION))
                   fail(ERROR_CARD_STATE);
                 else begin
                   rca <= phy_rsp_data[31:16];

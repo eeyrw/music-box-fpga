@@ -312,6 +312,22 @@ module tb_sd_native_pin_phy;
     check(observed_rsp_data == 32'h1aa, "R7 payload mismatch");
 
     before_rsp = rsp_count;
+    launch_command(6'd41, 32'h4030_0000, SD_RESP_R3, 1'b0, 16'd0);
+    drive_short_response(6'h3f, 32'h40ff_8000, 1, 1'b0, 1'b1);
+    wait (rsp_count == before_rsp + 1);
+    check(observed_rsp_status == SD_STATUS_OK, "busy R3 response rejected");
+    check(observed_rsp_data == 32'h40ff_8000,
+          "busy R3 OCR payload was shifted");
+
+    before_rsp = rsp_count;
+    launch_command(6'd41, 32'h4030_0000, SD_RESP_R3, 1'b0, 16'd0);
+    drive_short_response(6'h3f, 32'hc0ff_8000, 1, 1'b0, 1'b1);
+    wait (rsp_count == before_rsp + 1);
+    check(observed_rsp_status == SD_STATUS_OK, "ready SDHC R3 response rejected");
+    check(observed_rsp_data == 32'hc0ff_8000,
+          "ready SDHC R3 OCR payload was shifted");
+
+    before_rsp = rsp_count;
     launch_command(6'd17, 32'h4, SD_RESP_R1, 1'b0, 16'd0);
     drive_short_response(6'd18, 32'h900, 1, 1'b0, 1'b0);
     wait (rsp_count == before_rsp + 1);

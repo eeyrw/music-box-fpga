@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000d0000`. Version 13 replaces direct/burst SPI register frames with the CRC32-protected request/fetch mailbox; the version-12 command transaction remains unchanged. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000d0000`. This register remains readable while the renderer core is held in reset. Version 13 replaces direct/burst SPI register frames with the CRC32-protected request/fetch mailbox; the version-12 command transaction remains unchanged. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |

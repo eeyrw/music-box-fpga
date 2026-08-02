@@ -128,6 +128,9 @@ I2S_OUTPUT_SIM_SOURCES := \
 COMMON_STATUS_SIM_SOURCES := \
 	sim/tb/tb_wavetable_common_status_regs.sv
 
+REGISTER_FABRIC_SIM_SOURCES := \
+	sim/tb/tb_wavetable_register_fabric.sv
+
 COMPRESSOR_SIM_SOURCES := \
 	sim/tb/tb_lookahead_compressor.sv
 
@@ -690,6 +693,12 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/register_fabric_obj_dir \
+		--top-module tb_wavetable_register_fabric \
+		rtl/pkg/synth_pkg.sv rtl/pkg/synth_register_pkg.sv \
+		fpga/common/rtl/wavetable_register_fabric.sv $(REGISTER_FABRIC_SIM_SOURCES)
+	$(BUILD_DIR)/register_fabric_obj_dir/Vtb_wavetable_register_fabric
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/common_status_obj_dir \
 		--top-module tb_wavetable_common_status_regs \

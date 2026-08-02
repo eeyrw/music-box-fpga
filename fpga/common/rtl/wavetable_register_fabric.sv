@@ -54,14 +54,18 @@ module wavetable_register_fabric #(
   logic select_common_status;
   logic select_platform_regs;
   logic select_core;
+  logic select_reset_safe_core;
 
   assign select_common_status = is_common_status_address(master_req.address);
   assign select_platform_regs = is_platform_regs_address(master_req.address);
   assign select_core = !select_common_status && !select_platform_regs;
+  assign select_reset_safe_core = select_core &&
+                                  master_req.address == REG_VERSION;
 
   always_comb begin
     core_req = master_req;
-    core_req.valid = master_req.valid && select_core && !core_reset;
+    core_req.valid = master_req.valid && select_core &&
+                     (!core_reset || select_reset_safe_core);
     common_status_req = master_req;
     common_status_req.valid = master_req.valid && select_common_status;
     platform_regs_req = master_req;
@@ -82,7 +86,7 @@ module wavetable_register_fabric #(
           master_rsp.ready = 1'b1;
           master_rsp.error = 1'b1;
         end
-      end else if (core_reset) begin
+      end else if (core_reset && !select_reset_safe_core) begin
         master_rsp.ready = 1'b1;
         master_rsp.error = 1'b1;
       end else begin

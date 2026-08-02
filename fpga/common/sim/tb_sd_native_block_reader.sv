@@ -177,7 +177,7 @@ module tb_sd_native_block_reader;
       command_rsp(6'd55, 32'h0, SD_RESP_R1, 32'h0000_0020);
       command_rsp(6'd41, 32'h4030_0000, SD_RESP_R3, 32'hc000_0000);
       command_rsp(6'd2, 32'h0, SD_RESP_R2, 32'h0);
-      command_rsp(6'd3, 32'h0, SD_RESP_R6, 32'h1234_0700);
+      command_rsp(6'd3, 32'h0, SD_RESP_R6, 32'h1234_0500);
       command_rsp(6'd7, 32'h1234_0000, SD_RESP_R1B, 32'h0000_0700);
       command_rsp(6'd55, 32'h1234_0000, SD_RESP_R1, 32'h0000_0920);
       command_rsp(6'd42, 32'h0, SD_RESP_R1, 32'h0000_0900);

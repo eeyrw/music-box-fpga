@@ -283,7 +283,7 @@ module fake_sd_native_phy_model #(
             app_cmd <= 1'b0;
             if (card_state == CARD_IDENT) begin
               card_state <= CARD_STANDBY;
-              respond_ok({88'd0, RCA, 16'h0700});
+              respond_ok({88'd0, RCA, 16'h0500});
             end else
               respond_illegal();
           end

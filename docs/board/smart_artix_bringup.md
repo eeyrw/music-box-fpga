@@ -145,9 +145,9 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The latest 2026-08-02 route met setup and hold timing with WNS `+0.162 ns` and
-WHS `+0.045 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
-because both margins are below `0.2 ns`, LUT utilization is `76.58%`, and the
+The latest 2026-08-02 route met setup and hold timing with WNS `+0.282 ns` and
+WHS `+0.051 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
+because the hold margin is below `0.2 ns`, LUT utilization is `76.43%`, and the
 external I/O timing constraints are incomplete. Treat it as a useful baseline,
 not as proof that a changed XDC or IP configuration is hardware-safe.
 
@@ -161,7 +161,7 @@ was identified as an image for `7a50tfgg484`:
 ```text
 build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 size:   2,192,139 bytes
-sha256: 7a569902223b3b55471061165ef5bec04cf198da8a9f166d38c17882adbdcf58
+sha256: e425a2882fbe821bf1ffbdda337e81c772291d92e0ba226994537052a61f3ef5
 ```
 
 Generated files under `build/` are intentionally not committed. Regenerate the
@@ -185,8 +185,8 @@ make vivado-program
 The programming script requires exactly one detected `xc7a50t` device instead
 of selecting the first device in an arbitrary JTAG chain. This command loads the
 `.bit` file into the FPGA's volatile configuration SRAM; it must be repeated
-after power is removed. The 2026-08-02 run programmed the current hash above to
-`xc7a50t_0` and then required `DONE=1`, `DONE_PIN=1`, `EOS=1`,
+after power is removed. The latest 2026-08-02 run programmed the current hash
+above to `xc7a50t_0` and then required `DONE=1`, `DONE_PIN=1`, `EOS=1`,
 `CRC_ERROR=0`, and `IDCODE_ERROR=0` before succeeding.
 
 Read the currently running FPGA configuration without programming it:
@@ -368,6 +368,44 @@ The useful first reads are:
 | `0x905c` | `PLATFORM_DDR_STATUS` | MIG calibration, ready flags, and device temperature. |
 | `0x9060`..`0x907c` | `DDR_ACCESS_*` | Single-beat DDR read/write platform register window. |
 
+### 2026-08-02 CH347 SPI Clock Sweep
+
+The rewired board was measured with SPI mode 0, CH347 device
+`/dev/ch34x_pis2`, chip-select mask `0x80`, the 100 MHz FPGA system clock, and
+bitstream SHA-256
+`7a569902223b3b55471061165ef5bec04cf198da8a9f166d38c17882adbdcf58`.
+DDR calibration was complete. A 16-byte pattern was first written at DDR byte
+address `0x100`, then every clock step repeatedly read `PLATFORM_STATUS`,
+`PLATFORM_ERRORS`, and that DDR beat. Each passing step completed 100 exact
+reads of each target, or 300 mailbox transactions:
+
+| Requested SCLK | Selected SCLK | Exact transactions | Result |
+| ---: | ---: | ---: | --- |
+| 468.75 kHz | 468.75 kHz | 300/300 | pass |
+| 1 MHz | 937.5 kHz | 300/300 | pass |
+| 2 MHz | 1.875 MHz | 300/300 | pass |
+| 5 MHz | 3.75 MHz | 300/300 | pass |
+| 10 MHz | 7.5 MHz | 300/300 | pass |
+| 15 MHz | 15 MHz | 300/300 | pass |
+| 30 MHz | 30 MHz | 0/300 | first mailbox request timed out |
+| 60 MHz | 60 MHz | 0/300 | first mailbox request timed out |
+
+The highest demonstrated stable CH347 step is therefore 15 MHz, and the first
+failing step is 30 MHz. Because this adapter offers no intermediate step, this
+experiment bounds the failure threshold to the interval above 15 MHz and at or
+below 30 MHz; it does not identify a more precise maximum. Cable geometry,
+signal voltage at the FPGA pins, waveform margins, load, and temperature were
+not instrumented, and external SPI timing constraints remain incomplete. Treat
+15 MHz as a result for this exact bench wiring, not as a portable board rating.
+
+After the SD fixes and 25 MHz SD transfer-clock change, bitstream
+`e425a2882fbe821bf1ffbdda337e81c772291d92e0ba226994537052a61f3ef5`
+was rechecked at the demonstrated 15 MHz SPI step. It completed another 100
+exact reads each of `PLATFORM_STATUS`, `PLATFORM_ERRORS`, and the DDR beat at
+`0x100` (300/300 transactions). This confirms that the final image retained the
+15 MHz SPI result. The CH347 connection used for this test is external test
+wiring; the SD socket and SD signals are board-level routing.
+
 `PLATFORM_STATUS` bit meanings:
 
 ```text
@@ -460,11 +498,45 @@ The loader currently targets SDHC and SDXC cards:
 - card-side DAT3 detect-pull-up removal through `CMD55/ACMD42`, followed by
   4-bit data mode through `CMD55/ACMD6`.
 - CMD6 mode-0 capability discovery and validated mode-1 High Speed selection,
-  with 25 MHz Default Speed fallback.
+  currently clocked conservatively at 25 MHz after selection, with 25 MHz
+  Default Speed fallback. The 50 MHz High Speed electrical path remains a
+  separate board qualification step.
 - SCR capability discovery through `CMD55/ACMD51`; multi-block `CMD18` reads use
   optional `CMD23` only when advertised, otherwise terminate with `CMD12`.
 - bounded `CMD17` recovery from a failed CMD18 block without repeating previously
   committed blocks.
+
+### 2026-08-02 SD Hardware Diagnosis
+
+The SD socket and all SD signal traces in this experiment are board-level
+routing, not flywires. The card was a genuine 32 GB SDHC card without a WTSF
+image, which makes an invalid-magic loader result the expected end condition
+after a successful sector-0 read.
+
+The native reader initially rejected the real card's CMD3 R6 response with SD
+error `14`. R6 reports the card state when CMD3 is received, so the expected
+state is Identification (`2`), not the post-command Standby state (`3`). After
+correcting that check, the following two otherwise equivalent fresh images were
+measured:
+
+| Image SHA-256 | Selected SD mode | SD line clock | Hardware result |
+| --- | --- | ---: | --- |
+| `5b19ae16680112528a789d351237009a3edf3edd5e564619523de4302893d5ec` | High Speed | 50 MHz | `PLATFORM_ERRORS=0x00220008`: CMD17 failed after two retries |
+| `e425a2882fbe821bf1ffbdda337e81c772291d92e0ba226994537052a61f3ef5` | High Speed | 25 MHz | `PLATFORM_ERRORS=0x000f0100`: SD error 0, loader error 1 (invalid WTSF magic) |
+
+The 25 MHz image reported `PLATFORM_STATUS=0x00018057`: DDR calibrated, card
+present, SD initialized, and High Speed mode selected. The asset loader stopped
+in its error state because sector 0 did not contain WTSF magic, as expected.
+Direct DDR access in the same run wrote and exactly read back
+`fedcba98_76543210_89abcdef_01234567` at byte address `0x100`.
+
+This A/B result qualifies native SD initialization and a single-block sector-0
+read at 25 MHz on this board/card combination. It does not yet qualify 50 MHz.
+The current 100 MHz fabric and direct input sampling provide only a 10 ns
+half-cycle at 50 MHz, while the external return path is not fully constrained;
+the failed 50 MHz CMD17 is therefore consistent with insufficient read-capture
+margin, but that cause remains an inference until the board signals are measured
+or the input timing is fully constrained and analyzed.
 
 The socket's `SD_CD` switch is active low on U17. Insertion is synchronized and
 debounced, followed by a 1 ms stable-power wait and at least 80 startup clocks.
