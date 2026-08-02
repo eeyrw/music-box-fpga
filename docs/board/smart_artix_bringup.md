@@ -631,6 +631,66 @@ with `DDR3_EXTRA_READ_CYCLES` for sensitivity experiments. The complete
 methodology, sweep, MIG contract, and optimization implications are in
 [`../verification/smart_artix_mig_latency_calibration.md`](../verification/smart_artix_mig_latency_calibration.md).
 
+### 2026-08-02 Hedwig's Theme Long-Form MIDI Run
+
+The format-1, 37-track `Hedwigs_Themefinished.mid` file was played from its
+mounted source through `realtime_midi_host`, using the same SGM v2.01 SF2,
+30 MHz CH347 link, v14 volatile bitstream, and a one-second tail. The diagnostic
+interval was cleared and verified before playback. The host reached the MIDI's
+natural end after approximately 222 seconds, shorter than the initial 272-second
+estimate, then sent all-sound-off and drained normally.
+
+The host scheduled all 27,850 MIDI events with no MIDI queue drops, transport
+errors, abandoned commands, or read errors. It processed 13,855 note-on events,
+of which 183 did not map to an SF2 region. The host allocator reached 512 active
+mono voices, performed 592 voice steals, and returned to zero active voices.
+Command-queue high water was 412 words; maximum command age was 12.384 ms and
+maximum CH347 driver time was 0.713 ms.
+
+Unlike the synthetic churn workload, this real composition remained inside the
+hardware render budget despite its instantaneous 512-voice allocator peak:
+
+| Metric | Result |
+| --- | ---: |
+| I2S underruns | 0 |
+| Sample drops | 0 |
+| Render deadline misses | 0 |
+| Maximum render latency | 21,368 clocks, 64.1% of the 16-frame budget |
+| Maximum traced DDR response latency | 59 clocks |
+| Minimum audio FIFO occupancy after playback start | 23 frames |
+| Command errors | 0 |
+| Stale-generation rejections | 3,984 |
+
+The stale-generation count is consistent with queued parameter work superseded
+by voice steals and generation changes; it did not accompany a command or SPI
+transport error. A 512-voice allocator peak is therefore not by itself an
+overload qualification. Duration at high concurrency, region expansion,
+phase increments, and cache locality determine the sustained render cost.
+
+The long interval also closed both sample-window identities exactly:
+
+```text
+313,960,644 requests = 208,533,542 hits
+                     + 37,606,708 refills
+                     + 67,820,394 fallbacks
+218,247,226 memory reads = 4 * 37,606,708 refills
+                         + 67,820,394 fallbacks
+37,606,708 cache evictions
+3,581,076,657 cache-stall clocks
+```
+
+The hit, refill, and fallback shares were 66.42%, 11.98%, and 21.60%.
+Sample-window stall averaged 11.41 clocks per accepted client request. The
+effect and compressor frame/saturation counters were excluded from this song's
+interval because `DIAGNOSTIC_CONTROL.CLEAR` intentionally does not clear them;
+they remain cumulative from core reset.
+
+After recording the snapshot, the diagnostic interval was cleared again.
+Event, command/stale, and sample-window counters returned to zero. The render
+latency maximum immediately began accumulating silent playback blocks, so a
+small nonzero post-clear latency value is expected while the renderer remains
+running.
+
 After loading a valid sample range, exercise the atomic command path separately:
 
 ```bash
