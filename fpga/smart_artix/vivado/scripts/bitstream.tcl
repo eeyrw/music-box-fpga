@@ -90,6 +90,9 @@ if {$need_signoff_reports} {
 
 set output_bit $bitstream_dir/${top_name}.bit
 file copy -force $run_bit $output_bit
+# file copy preserves the run artifact's old timestamp. Mark the public output
+# with this successful validation time so Make can cache the checked input set.
+file mtime $output_bit [clock seconds]
 set run_ltx $build_dir/$board_name.runs/$impl_run_name/${top_name}.ltx
 if {[file exists $run_ltx]} {
   file copy -force $run_ltx $bitstream_dir/${top_name}.ltx

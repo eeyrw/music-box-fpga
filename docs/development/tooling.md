@@ -164,6 +164,19 @@ QoR and timing reports. If bitstream generation has to launch implementation
 itself, or the summary/checkpoint is missing, it regenerates the reports so the
 standalone entry point remains complete.
 
+The public `.bit` and `.mcs` paths are real Make targets rather than unconditional
+recipes. Their dependencies include expanded RTL filelists, XDC, DDR pin input,
+source IP configuration, relevant Tcl, and a generated configuration stamp.
+Consequently, an unchanged `make vivado-cfgmem-image` only hashes the existing
+MCS; source, parameter, strategy, forced-rebuild, or IP-regeneration changes still
+invalidate the chain. `vivado-flash-program` reuses this check, but its physical
+erase/program/verify operation is intentionally never cached.
+
+Smart Artix hardware targets accept `VIVADO_HW_FREQUENCY`; the default remains
+15 MHz, while 30 MHz is available as an explicitly verified override.
+`hardware_common.tcl` checks the requested value against the opened target's
+advertised frequency list before any device operation.
+
 The required gate is defined by
 [`rtl_change_workflow.md`](rtl_change_workflow.md). Local script behavior and
 report filenames are documented in

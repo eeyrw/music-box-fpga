@@ -1,6 +1,7 @@
 VERILATOR ?= verilator
 VIVADO ?= /opt/Xilinx2051.1/2025.2/Vivado/bin/vivado
 VIVADO_JOBS ?= 4
+VIVADO_HW_FREQUENCY ?= 15000000
 # Timing-oriented 2025.2 strategies for the routed Smart Artix image. Override
 # these on the make command line when comparing QoR against another strategy.
 VIVADO_SYNTH_STRATEGY ?= Flow_PerfOptimized_high
@@ -30,6 +31,9 @@ RTL_DEFINES := -DSYNTH_NUM_VOICES=$(NUM_VOICES) \
 CXX_DEFINES := -DRENDER_NUM_VOICES=$(NUM_VOICES)
 VIVADO_BUILD_DIR := $(BUILD_DIR)/fpga/smart_artix/vivado
 VIVADO_SCRIPT_DIR := $(abspath fpga/smart_artix/vivado/scripts)
+VIVADO_CONFIG_STAMP := $(VIVADO_BUILD_DIR)/.bitstream-config
+VIVADO_BITSTREAM_FILE := $(VIVADO_BUILD_DIR)/bitstream/smart_artix_top.bit
+VIVADO_CFGMEM_IMAGE_FILE := $(VIVADO_BUILD_DIR)/flash/smart_artix_top_spi_x4.mcs
 VIVADO_CONFIG_ENV := SYNTH_NUM_VOICES=$(NUM_VOICES) \
 	SYNTH_BLOCK_WORK_ENTRY_COUNT=$(BLOCK_WORK_ENTRIES) \
 	SYNTH_BLOCK_JOB_ENTRY_COUNT=$(BLOCK_JOB_ENTRIES) \
@@ -103,6 +107,18 @@ RENDER_OPT_GLOBAL ?= $(RENDER_OPT_FAST)
 
 RTL_FILELIST := rtl/filelist.f
 RTL_SOURCES := $(addprefix rtl/,$(shell sed -e '/^[[:space:]]*\#/d' -e '/^[[:space:]]*$$/d' $(RTL_FILELIST)))
+SMART_ARTIX_FILELIST := fpga/smart_artix/filelist.f
+SMART_ARTIX_SYNTH_SOURCES := $(addprefix fpga/smart_artix/,$(shell sed -e '/^[[:space:]]*\#/d' -e '/^[[:space:]]*$$/d' $(SMART_ARTIX_FILELIST)))
+VIVADO_DESIGN_INPUTS := \
+	$(RTL_FILELIST) $(RTL_SOURCES) \
+	$(SMART_ARTIX_FILELIST) $(SMART_ARTIX_SYNTH_SOURCES) \
+	fpga/smart_artix/DDRPIN.ucf \
+	$(wildcard fpga/smart_artix/constraints/*.xdc) \
+	$(wildcard fpga/smart_artix/vivado/ip/*/*.xci) \
+	$(wildcard fpga/smart_artix/vivado/ip/*/*.prj) \
+	fpga/smart_artix/vivado/scripts/project.tcl \
+	fpga/smart_artix/vivado/scripts/report_summary.tcl \
+	fpga/smart_artix/vivado/scripts/bitstream.tcl
 
 FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/fractional_tick_gen.sv \
@@ -237,7 +253,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean FORCE
 
 all: test
 
@@ -948,35 +964,61 @@ vivado-impl:
 		-source $(VIVADO_SCRIPT_DIR)/impl.tcl \
 		-journal logs/impl.jou -log logs/impl.log
 
-vivado-bitstream:
+FORCE:
+
+$(VIVADO_CONFIG_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@config_tmp=$@.tmp.$$$$; \
+	printf '%s\n' \
+		'NUM_VOICES=$(NUM_VOICES)' \
+		'BLOCK_WORK_ENTRIES=$(BLOCK_WORK_ENTRIES)' \
+		'BLOCK_JOB_ENTRIES=$(BLOCK_JOB_ENTRIES)' \
+		'MAX_BLOCK_FRAMES=$(MAX_BLOCK_FRAMES)' \
+		'VIVADO=$(VIVADO)' \
+		'VIVADO_SYNTH_STRATEGY=$(VIVADO_SYNTH_STRATEGY)' \
+		'VIVADO_IMPL_STRATEGY=$(VIVADO_IMPL_STRATEGY)' \
+		'VIVADO_FORCE_REBUILD=$(VIVADO_FORCE_REBUILD)' \
+		'VIVADO_REGENERATE_IP=$(VIVADO_REGENERATE_IP)' > $$config_tmp; \
+	if ! cmp -s $$config_tmp $@; then mv $$config_tmp $@; else rm -f $$config_tmp; fi
+
+$(VIVADO_BITSTREAM_FILE): $(VIVADO_DESIGN_INPUTS) $(VIVADO_CONFIG_STAMP)
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
 	cd $(VIVADO_BUILD_DIR) && $(VIVADO_CONFIG_ENV) $(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/bitstream.tcl \
 		-journal logs/bitstream.jou -log logs/bitstream.log
 
+vivado-bitstream: $(VIVADO_BITSTREAM_FILE)
+
 vivado-program:
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
-	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+	cd $(VIVADO_BUILD_DIR) && SMART_ARTIX_HW_FREQUENCY=$(VIVADO_HW_FREQUENCY) \
+		$(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/program.tcl \
 		-journal logs/program.jou -log logs/program.log
 
 vivado-readback:
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
-	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+	cd $(VIVADO_BUILD_DIR) && SMART_ARTIX_HW_FREQUENCY=$(VIVADO_HW_FREQUENCY) \
+		$(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/readback.tcl \
 		-journal logs/readback.jou -log logs/readback.log
 	sha256sum $(VIVADO_BUILD_DIR)/readback/smart_artix_top_readback.bin
 
-vivado-cfgmem-image: vivado-bitstream
+$(VIVADO_CFGMEM_IMAGE_FILE): $(VIVADO_BITSTREAM_FILE) \
+		fpga/smart_artix/vivado/scripts/cfgmem_image.tcl \
+		fpga/smart_artix/vivado/scripts/hardware_common.tcl
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
 	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/cfgmem_image.tcl \
 		-journal logs/cfgmem_image.jou -log logs/cfgmem_image.log
+
+vivado-cfgmem-image: $(VIVADO_CFGMEM_IMAGE_FILE)
 	sha256sum $(VIVADO_BUILD_DIR)/flash/smart_artix_top_spi_x4.mcs
 
 vivado-flash-readback:
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
-	cd $(VIVADO_BUILD_DIR) && $(VIVADO) -mode batch \
+	cd $(VIVADO_BUILD_DIR) && SMART_ARTIX_HW_FREQUENCY=$(VIVADO_HW_FREQUENCY) \
+		$(VIVADO) -mode batch \
 		-source $(VIVADO_SCRIPT_DIR)/flash_readback.tcl \
 		-journal logs/flash_readback.jou -log logs/flash_readback.log
 	sha256sum $(VIVADO_BUILD_DIR)/flash/w25q128jv_full_readback.bin
@@ -989,6 +1031,7 @@ vivado-flash-program:
 	$(MAKE) vivado-cfgmem-image
 	mkdir -p $(VIVADO_BUILD_DIR)/logs
 	cd $(VIVADO_BUILD_DIR) && SMART_ARTIX_FLASH_PROGRAM_CONFIRM=$(CONFIRM_FLASH_PROGRAM) \
+		SMART_ARTIX_HW_FREQUENCY=$(VIVADO_HW_FREQUENCY) \
 		$(VIVADO) -mode batch -source $(VIVADO_SCRIPT_DIR)/flash_program.tcl \
 		-journal logs/flash_program.jou -log logs/flash_program.log
 

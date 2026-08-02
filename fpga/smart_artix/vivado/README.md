@@ -31,6 +31,12 @@ make vivado-cfgmem-image
 make vivado-flash-program CONFIRM_FLASH_PROGRAM=YES
 ```
 
+Hardware targets use the conservative 15 MHz JTAG default. The board has also
+been verified at 30 MHz; select it explicitly with
+`VIVADO_HW_FREQUENCY=30000000` when the small programming-time reduction is
+useful. The common hardware script rejects frequencies not advertised by the
+opened Vivado target before accessing the FPGA.
+
 `vivado-bitstream` is an offline build step. When it must launch implementation
 it also emits the post-route reports and summary JSON used by the analysis
 targets. When an up-to-date implementation and its signoff artifacts already
@@ -175,6 +181,15 @@ reset and relaunch that run. `impl.tcl` always refreshes the signoff report set;
 the summary/checkpoint artifacts are missing. A 2026-08-03 current-run check
 reduced the repeated `make vivado-bitstream` wall time from about 74 seconds to
 7.56 seconds; the remaining time is Vivado startup and freshness validation.
+
+The Makefile adds a faster layer above that Vivado check. The public bitstream is
+a real target depending on both filelists and their expanded sources, DDR pin
+map, XDC, source IP configuration, relevant Tcl, and a content-stable stamp of
+the synthesis parameters and strategies. The MCS target depends on that `.bit`.
+With unchanged inputs, `make vivado-cfgmem-image` therefore does not start Vivado
+and measured 0.03 seconds on 2026-08-03; an input change still reaches Vivado's
+authoritative project/run freshness check. The Flash programming target uses the
+same cached MCS dependency before opening hardware.
 
 Useful environment overrides:
 

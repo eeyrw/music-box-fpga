@@ -3,6 +3,15 @@
 set smart_artix_top_name smart_artix_top
 set smart_artix_device_pattern xc7a50t*
 set smart_artix_cfgmem_part_name w25q128jvq-spi-x1_x2_x4
+set smart_artix_hw_frequency 15000000
+if {[info exists ::env(SMART_ARTIX_HW_FREQUENCY)] &&
+    $::env(SMART_ARTIX_HW_FREQUENCY) ne ""} {
+  if {![string is integer -strict $::env(SMART_ARTIX_HW_FREQUENCY)] ||
+      $::env(SMART_ARTIX_HW_FREQUENCY) <= 0} {
+    error "SMART_ARTIX_HW_FREQUENCY must be a positive integer"
+  }
+  set smart_artix_hw_frequency $::env(SMART_ARTIX_HW_FREQUENCY)
+}
 
 set smart_artix_script_dir [file dirname [file normalize [info script]]]
 set smart_artix_board_dir [file normalize [file join $smart_artix_script_dir ../..]]
@@ -11,11 +20,19 @@ set smart_artix_build_dir [file normalize \
   [file join $smart_artix_repo_root build/fpga/smart_artix/vivado]]
 
 proc smart_artix_open_device {} {
-  global smart_artix_device_pattern
+  global smart_artix_device_pattern smart_artix_hw_frequency
 
   open_hw_manager
   connect_hw_server
   open_hw_target
+
+  set target [current_hw_target]
+  set supported_frequencies [list_property_value PARAM.FREQUENCY $target]
+  if {[lsearch -exact $supported_frequencies $smart_artix_hw_frequency] < 0} {
+    error "JTAG frequency $smart_artix_hw_frequency is unsupported; available: $supported_frequencies"
+  }
+  set_property PARAM.FREQUENCY $smart_artix_hw_frequency $target
+  puts "INFO: Smart Artix JTAG frequency: [get_property PARAM.FREQUENCY $target] Hz"
 
   set all_devices [get_hw_devices -quiet]
   set devices [get_hw_devices -quiet $smart_artix_device_pattern]

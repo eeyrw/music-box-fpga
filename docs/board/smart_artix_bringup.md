@@ -261,6 +261,31 @@ erased, programmed, and verified the image in 85 seconds, then booted it with
 post-boot register snapshot also showed DDR calibrated, SD High Speed active,
 and the complete SF2 loaded without SD, loader, retry, or recovery errors.
 
+The same run exposed avoidable host-build overhead before hardware access.
+After converting the `.bit` and `.mcs` outputs to real dependency-tracked Make
+targets, a repeated unchanged `make vivado-cfgmem-image` fell from the earlier
+Vivado/report path to 0.03 seconds and did not start Vivado. A changed input still
+runs the bitstream freshness check and rebuilds the MCS; the measured combined
+refresh was 12.79 seconds. These changes remove pre-program duplication from
+`vivado-flash-program`, but not the required 85-second physical Flash erase,
+program, and verify operation.
+
+The Xilinx Adapt target advertised 30 MHz as its highest supported JTAG setting.
+A same-image A/B reduced `program_hw_cfgmem` from 85 seconds at 15 MHz to 81
+seconds at 30 MHz. The 30 MHz run completed erase, program, verify, Flash boot,
+and the following full SD load without configuration or asset errors. The small
+4.7% gain confirms that Flash erase and Vivado's indirect SPI operations
+dominate; doubling JTAG frequency cannot make this path twice as fast. The
+default therefore remains the conservative 15 MHz; use
+`VIVADO_HW_FREQUENCY=30000000` explicitly when the minor gain is useful.
+
+Volatile SRAM programming showed a somewhat larger but still modest end-to-end
+benefit. Programming the same bitstream with `make vivado-program` took 11.61
+seconds at 15 MHz and 10.34 seconds at 30 MHz, a 1.27-second (10.9%) reduction.
+The direct bitstream transfer benefits from the faster JTAG clock, but Vivado
+startup, hardware-server connection, device refresh, and status checks remain
+fixed costs. This result also does not justify changing the 15 MHz default.
+
 ## First Power-On Checks
 
 Keep the first power-on observation simple:
