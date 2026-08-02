@@ -18,11 +18,42 @@ set_property PACKAGE_PIN T20 [get_ports rst_n]
 set_property IOSTANDARD LVCMOS33 [get_ports rst_n]
 
 # SPI control from external MCU or PC USB-to-SPI adapter on BANK15 header pins.
-set_property PACKAGE_PIN G13 [get_ports spi_sclk]
+# SCLK uses header pin 14 / J20, the P side of an SRCC pair. Header pin 1 / G13
+# is ordinary I/O and must not be used as a source-synchronous clock.
+set_property PACKAGE_PIN J20 [get_ports spi_sclk]
 set_property PACKAGE_PIN H13 [get_ports spi_cs_n]
 set_property PACKAGE_PIN G18 [get_ports spi_mosi]
 set_property PACKAGE_PIN G17 [get_ports spi_miso]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_sclk spi_cs_n spi_mosi spi_miso}]
+set_property DRIVE 8 [get_ports spi_miso]
+set_property SLEW SLOW [get_ports spi_miso]
+
+# SPI mode 0 is qualified against the CH347 30 MHz step. MOSI changes after the
+# falling edge and is sampled on the next rising edge; MISO is launched directly
+# from the falling-edge output register and is sampled on the next rising edge.
+# The 5 ns setup budgets are board assumptions pending oscilloscope measurement.
+create_clock -name spi_sclk_ext -period 33.333 [get_ports spi_sclk]
+set_input_delay -clock spi_sclk_ext -clock_fall -max 5.000 [get_ports spi_mosi]
+set_input_delay -clock spi_sclk_ext -clock_fall -min 0.000 [get_ports spi_mosi]
+set_output_delay -clock spi_sclk_ext -max 5.000 [get_ports spi_miso]
+set_output_delay -clock spi_sclk_ext -min -2.000 [get_ports spi_miso]
+
+# The adapter clock has no phase relationship to the board oscillator or any
+# clock derived from it. Keep SCLK-relative I/O paths timed, but do not time the
+# response synchronizer or the legacy oversampling receiver between domains.
+set_clock_groups -name spi_system_async -asynchronous \
+  -group [get_clocks spi_sclk_ext] \
+  -group [get_clocks -filter {NAME != spi_sclk_ext}]
+
+# The legacy request receiver oversamples these asynchronous pins in the 100 MHz
+# system domain. Exempt only the port-to-metastability-stage paths; all logic
+# after the first synchronizer stage remains timed.
+set_false_path -from [get_ports spi_sclk] \
+  -to [get_pins -hier -quiet -regexp {.*sclk_sync_reg\[0\]/D}]
+set_false_path -from [get_ports spi_cs_n] \
+  -to [get_pins -hier -quiet -regexp {.*cs_sync_reg\[0\]/D}]
+set_false_path -from [get_ports spi_mosi] \
+  -to [get_pins -hier -quiet -regexp {.*mosi_sync_reg\[0\]/D}]
 
 # I2S output to an external simple codec on BANK15 header pins. No MCLK or codec
 # configuration pins are assumed.
@@ -95,5 +126,4 @@ set_false_path -hold \
   -to [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/ddr_byte_group_io/slave_ts\.oserdes_slave_ts/RST}]
 
 # TODO: Add generated clock constraints after selecting the MMCM/PLL clocking.
-# TODO: Add SPI external timing or CDC constraints after the SPI timing contract is fixed.
 # TODO: Add I2S output timing constraints if required by the codec datasheet.

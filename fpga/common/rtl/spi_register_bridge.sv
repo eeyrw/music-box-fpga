@@ -1,3 +1,4 @@
+/* verilator lint_off SYNCASYNCNET */
 module spi_register_bridge #(
   parameter bit CHECK_COMMAND_CRC = 1'b1,
   parameter bit CHECK_REGISTER_CRC = 1'b1,
@@ -8,7 +9,7 @@ module spi_register_bridge #(
   input  logic        spi_sclk,
   input  logic        spi_cs_n,
   input  logic        spi_mosi,
-  output logic        spi_miso,
+  (* IOB = "TRUE" *) output logic spi_miso,
   output logic        spi_error,
   output logic        bus_valid,
   output logic        bus_write,
@@ -46,14 +47,13 @@ module spi_register_bridge #(
   } state_t;
 
   state_t state;
-  logic [1:0] sclk_sync;
-  logic [1:0] cs_sync;
-  logic [1:0] mosi_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [1:0] sclk_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [1:0] cs_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [1:0] mosi_sync;
   logic [6:0] command_shift;
   logic [6:0] bit_count;
   logic [30:0] data_shift;
   logic [86:0] mailbox_request_shift;
-  logic [62:0] mailbox_tx_shift;
   logic read_sample_seen;
   logic sclk_rise;
   logic sclk_fall;
@@ -76,10 +76,15 @@ module spi_register_bridge #(
   logic [15:0] fetch_address;
   logic [31:0] fetch_data;
   logic [63:0] fetch_payload;
-  logic [7:0] fetch_byte_shift;
-  logic [31:0] fetch_crc_work;
-  logic [31:0] fetch_crc_final;
-  logic [30:0] fetch_crc_shift;
+  logic [6:0] spi_tx_bit_count;
+  logic [30:0] spi_tx_header_shift;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [63:0] fetch_payload_meta;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [63:0] fetch_payload_sync;
+  logic [63:0] fetch_payload_snapshot;
+  logic [31:0] spi_tx_crc_work;
+  logic [95:0] fetch_frame_snapshot;
+  logic [94:0] spi_tx_shift;
+  logic spi_tx_fetch_valid;
 
   (* ram_style = "block" *) logic [31:0]
       command_staging [0:MAX_COMMAND_WORDS-1];
@@ -158,6 +163,65 @@ module spi_register_bridge #(
     staging_read_data <= command_staging[staging_read_address];
   end
 
+  // A fetch response is already complete before its data phase. Synchronize
+  // and freeze it during the 32-bit MOSI header, then launch each MISO bit from
+  // the real SCLK falling edge so mode-0 setup does not include oversampling
+  // latency from the system-clock domain.
+  always_ff @(posedge spi_sclk or posedge spi_cs_n) begin
+    if (spi_cs_n) begin
+      spi_tx_bit_count <= '0;
+      spi_tx_header_shift <= '0;
+      fetch_payload_meta <= '0;
+      fetch_payload_sync <= '0;
+      fetch_payload_snapshot <= '0;
+      spi_tx_crc_work <= '0;
+      fetch_frame_snapshot <= '0;
+      spi_tx_fetch_valid <= 1'b0;
+    end else begin
+      fetch_payload_meta <= fetch_payload;
+      fetch_payload_sync <= fetch_payload_meta;
+
+      if (spi_tx_bit_count < 7'd32) begin
+        spi_tx_header_shift <= {spi_tx_header_shift[29:0], spi_mosi};
+        spi_tx_bit_count <= spi_tx_bit_count + 7'd1;
+        if (spi_tx_bit_count == 7'd7) begin
+          fetch_payload_snapshot <= fetch_payload_sync;
+          spi_tx_crc_work <= crc32_byte(
+              32'hffff_ffff, fetch_payload_sync[63:56]);
+        end else if (spi_tx_bit_count >= 7'd8 &&
+                     spi_tx_bit_count <= 7'd14) begin
+          spi_tx_crc_work <= crc32_byte(
+              spi_tx_crc_work,
+              fetch_payload_snapshot[(14 - spi_tx_bit_count)*8 +: 8]);
+        end else if (spi_tx_bit_count == 7'd15) begin
+          fetch_frame_snapshot <= {
+            fetch_payload_snapshot, spi_tx_crc_work ^ 32'hffff_ffff
+          };
+        end
+        if (spi_tx_bit_count == 7'd31)
+          spi_tx_fetch_valid <=
+              {spi_tx_header_shift[30:0], spi_mosi} == 32'h5b00_0000;
+      end else if (spi_tx_bit_count < 7'd127) begin
+        spi_tx_bit_count <= spi_tx_bit_count + 7'd1;
+      end
+    end
+  end
+
+  always_ff @(negedge spi_sclk or posedge spi_cs_n) begin
+    if (spi_cs_n) begin
+      spi_miso <= 1'b0;
+      spi_tx_shift <= '0;
+    end else if (spi_tx_fetch_valid && spi_tx_bit_count == 7'd32) begin
+      spi_miso <= fetch_frame_snapshot[95];
+      spi_tx_shift <= fetch_frame_snapshot[94:0];
+    end else if (spi_tx_fetch_valid && spi_tx_bit_count > 7'd32) begin
+      spi_miso <= spi_tx_shift[94];
+      spi_tx_shift <= {spi_tx_shift[93:0], 1'b0};
+    end else begin
+      spi_miso <= 1'b0;
+    end
+  end
+
   always_comb begin
     if (bus_valid) begin
       fetch_status = RESPONSE_BUSY;
@@ -178,8 +242,6 @@ module spi_register_bridge #(
     fetch_payload = {
       fetch_status, fetch_operation, fetch_address, fetch_data
     };
-    fetch_crc_final = crc32_byte(
-        fetch_crc_work, fetch_byte_shift) ^ 32'hffff_ffff;
   end
 
   always_ff @(posedge clk) begin
@@ -201,7 +263,6 @@ module spi_register_bridge #(
       bit_count <= '0;
       data_shift <= '0;
       mailbox_request_shift <= '0;
-      mailbox_tx_shift <= '0;
       read_sample_seen <= 1'b0;
       request_operation <= '0;
       request_address <= '0;
@@ -213,7 +274,6 @@ module spi_register_bridge #(
       response_operation <= '0;
       response_address <= '0;
       response_data <= '0;
-      spi_miso <= 1'b0;
       spi_error <= 1'b0;
       bus_valid <= 1'b0;
       bus_write <= 1'b0;
@@ -230,9 +290,6 @@ module spi_register_bridge #(
       commit_index <= '0;
       commit_words <= '0;
       commit_start_pending <= 1'b0;
-      fetch_byte_shift <= '0;
-      fetch_crc_work <= '0;
-      fetch_crc_shift <= '0;
     end else begin
       if (bus_valid && bus_ready) begin
         bus_valid <= 1'b0;
@@ -299,11 +356,9 @@ module spi_register_bridge #(
         end
         state <= STATE_IDLE;
         bit_count <= '0;
-        spi_miso <= 1'b0;
       end else if (!cs_active) begin
         state <= STATE_IDLE;
         bit_count <= '0;
-        spi_miso <= 1'b0;
       end else if (cs_start) begin
         state <= STATE_COMMAND;
         command_shift <= '0;
@@ -311,7 +366,6 @@ module spi_register_bridge #(
         data_shift <= '0;
         mailbox_request_shift <= '0;
         read_sample_seen <= 1'b0;
-        spi_miso <= 1'b0;
         spi_error <= 1'b0;
         stream_declared_words <= '0;
         stream_received_words <= '0;
@@ -320,9 +374,6 @@ module spi_register_bridge #(
         stream_crc <= '0;
         stream_reject <= 1'b0;
         request_crc <= '0;
-        fetch_byte_shift <= '0;
-        fetch_crc_work <= '0;
-        fetch_crc_shift <= '0;
       end else begin
         unique case (state)
           STATE_IDLE: begin
@@ -393,12 +444,7 @@ module spi_register_bridge #(
               if (bit_count == 7'd23) begin
                 if ({data_shift[22:0], mosi_sync[1]} != 24'd0)
                   spi_error <= 1'b1;
-                spi_miso <= fetch_payload[63];
-                mailbox_tx_shift <= fetch_payload[62:0];
                 read_sample_seen <= 1'b0;
-                fetch_byte_shift <= '0;
-                fetch_crc_work <= 32'hffff_ffff;
-                fetch_crc_shift <= '0;
                 bit_count <= '0;
                 state <= STATE_FETCH_DATA;
               end else begin
@@ -410,28 +456,12 @@ module spi_register_bridge #(
           STATE_FETCH_DATA: begin
             if (sclk_rise) begin
               read_sample_seen <= 1'b1;
-              if (bit_count < 7'd64)
-                fetch_byte_shift <= {fetch_byte_shift[6:0], spi_miso};
             end else if (sclk_fall && read_sample_seen) begin
               read_sample_seen <= 1'b0;
-              if ((bit_count < 7'd64) && (bit_count[2:0] == 3'd7))
-                fetch_crc_work <= crc32_byte(
-                    fetch_crc_work, fetch_byte_shift);
               if (bit_count == 7'd95) begin
                 bit_count <= '0;
-                spi_miso <= 1'b0;
                 state <= STATE_FETCH_WAIT;
-              end else if (bit_count == 7'd63) begin
-                spi_miso <= fetch_crc_final[31];
-                fetch_crc_shift <= fetch_crc_final[30:0];
-                bit_count <= bit_count + 7'd1;
-              end else if (bit_count < 7'd63) begin
-                spi_miso <= mailbox_tx_shift[62];
-                mailbox_tx_shift <= {mailbox_tx_shift[61:0], 1'b0};
-                bit_count <= bit_count + 7'd1;
               end else begin
-                spi_miso <= fetch_crc_shift[30];
-                fetch_crc_shift <= {fetch_crc_shift[29:0], 1'b0};
                 bit_count <= bit_count + 7'd1;
               end
             end
@@ -506,3 +536,4 @@ module spi_register_bridge #(
     end
   end
 endmodule
+/* verilator lint_on SYNCASYNCNET */

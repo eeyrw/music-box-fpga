@@ -14,7 +14,7 @@ and CH347 host implementation on 2026-07-31.
 
 | Item | Value |
 | --- | ---: |
-| System clock | 100 MHz MIG UI clock |
+| Request-receiver clock | 100 MHz MIG UI clock |
 | Audio sample rate | 48 kHz |
 | Maximum render block | 16 frames |
 | Default voice slots | 512 mono voices |
@@ -137,8 +137,11 @@ C++ policy suppresses unchanged groups. Envelope advancement runs in RTL and
 does not require per-frame SPI updates.
 
 The 512-voice, 50 Hz all-groups row already requires 11.469 Mbps before USB call
-gaps or CS idle time. It cannot fit a 7.5 MHz link. A 15 MHz link has enough raw
-bits but is not a qualified rating for the current 100 MHz oversampling bridge.
+gaps or CS idle time. It cannot fit a 7.5 MHz link. The mailbox/DDR path has
+passed at 30 MHz with SCLK on `J20`, but opcode-`0xa5` command streaming still
+requires a separate hardware stress run before that rate is claimed for command
+traffic. Request reception remains a 100 MHz oversampling path, so the 60 MHz
+CH347 step is structurally unsupported.
 Therefore this table identifies workloads that require either lower update
 density, command ramps/aggregation, or a future timing-closed transport; it
 does not establish a board SCLK.
@@ -173,20 +176,21 @@ not qualify SPI pins, physical SCLK, or the board-equivalent DDR path.
 
 - The host requests 1 MHz by default; the CH347 discrete table selects
   937.5 kHz for that request.
-- Board bring-up should then measure requests of 2 MHz and 5 MHz, which select
-  1.875 MHz and 3.75 MHz on the current CH347 mapping.
-- A 10 MHz request selects 7.5 MHz and is an upper stress target for the current
-  oversampling implementation, not a released rating.
-- The old 15 MHz command-write target remains a throughput data point only. Do
-  not use it until CDC, external timing, and physical measurements justify it.
+- With SCLK on clock-capable header pin 14 / `J20`, the mailbox/DDR path passed
+  300/300 exact hardware rounds at the actual 30 MHz CH347 step.
+- The 60 MHz CH347 step is structurally unsupported by the remaining 100 MHz
+  oversampling request receiver; the available adapter steps do not locate a
+  finer threshold between 30 MHz and the receiver's limit below 50 MHz.
+- Opcode `0xa5` command traffic still requires a separate 30 MHz hardware stress
+  run before 30 MHz is claimed for command streaming.
 
 ## Hardware Qualification
 
 Before increasing SCLK:
 
-1. add the scoped synchronizer attributes/exceptions and physical MISO delay
-   described in the board I/O backlog;
-2. validate command writes separately from register reads;
+1. retain the scoped synchronizer attributes/exceptions, constrained SCLK, and
+   falling-edge MISO OLOGIC placement described in the board I/O backlog;
+2. validate command writes separately from the qualified register/DDR path;
 3. exercise every command size, FIFO wrap, and near-full behavior;
 4. inject partial words and CS termination and observe `spi_error` plus parser
    recovery;

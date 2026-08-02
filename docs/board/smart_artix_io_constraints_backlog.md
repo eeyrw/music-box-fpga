@@ -55,9 +55,10 @@ assumptions.
   10 kohm pull-up and 100 ohm series resistor on this mechanical switch input.
 - The schematic provides external 10 kohm pull-ups on CMD and DAT[3:0]. FPGA
   `PULLUP` properties are optional redundancy, not a board requirement.
-- SPI and I2S use project-selected BANK15 expansion-header pins. The current
-  package locations match the board header table; external wiring must follow
-  the selected signal order.
+- SPI and I2S use project-selected BANK15 expansion-header pins. SPI SCLK uses
+  header pin 14 / package pin `J20` (`IO_L11P_T1_SRCC_15`); CS, MOSI, and MISO
+  use header pins 2 / `H13`, 3 / `G18`, and 4 / `G17`. The former SCLK choice,
+  header pin 1 / `G13`, is ordinary I/O and cannot feed a BUFG legally.
 - The two on-board green LEDs are LED1 on `R17` and LED2 on `P16`; the XDC maps
   them to `led_ddr_ready` and `led_asset_loaded`, respectively. LED2 uses slow
   blink for loader busy, fast blink for error, and steady on for success. The remaining
@@ -143,32 +144,39 @@ Required work:
 
 ## P0: SPI CDC And External Timing
 
-`spi_register_bridge` does not use `spi_sclk` as an FPGA clock. It samples
-SCLK, CS, and MOSI through two-register vectors in the 100 MHz system domain and
-detects synchronized SCLK edges. Conventional SPI input/output delays referenced
-to an internal SCLK domain would therefore misrepresent the current RTL.
+`spi_register_bridge` samples SCLK, CS, and MOSI through two-register vectors in
+the 100 MHz system domain for request reception. Fetch transmission separately
+uses `spi_sclk` as a real clock: it freezes a synchronized response during the
+header and changes MISO on falling edges. SCLK-relative constraints therefore
+apply to the fetch TX and header-check paths, while scoped CDC exceptions apply
+to the oversampling receiver.
 
 Required work for the present oversampling implementation:
 
-- [ ] Add `ASYNC_REG = "TRUE"` to SCLK, CS, and MOSI synchronizers and prevent
+- [x] Add `ASYNC_REG = "TRUE"` to SCLK, CS, and MOSI synchronizers and prevent
   shift-register extraction where necessary.
-- [ ] Constrain or false-path only each asynchronous port-to-first-stage path.
+- [x] Constrain or false-path only each asynchronous port-to-first-stage path.
   Do not apply a broad false path through the complete SPI bridge.
-- [ ] Prefer an output IOB for `spi_miso` and apply a small system-clock-to-port
-  physical maximum delay, initially 5 ns.
+- [x] Declare the external SCLK clock group asynchronous to the board-derived
+  clocks while retaining SCLK-relative MOSI and MISO I/O timing checks.
+- [x] Launch `spi_miso` from a falling-SCLK register, request output-IOB packing,
+  and apply explicit 30 MHz setup/hold assumptions.
+- [x] Move external SCLK to the clock-capable BANK15 expansion-header pin 14 /
+  `J20`; keep CS, MOSI, and MISO on header pins 2, 3, and 4.
 - [ ] Start with `LVCMOS33`, `DRIVE 8`, and `SLEW SLOW`; reconsider slew or add
   source termination if header/cable measurements show ringing.
-- [ ] Smoke-test at 1 MHz, then qualify 2 MHz and 5 MHz. Treat 10 MHz as a
-  measured upper target, not a constraint-proven rating.
+- [x] Sweep the CH347 discrete steps through 15 MHz on hardware.
+- [x] Re-run the exact register/DDR stress at 30 MHz with the updated image;
+  300/300 rounds passed on the 2026-08-02 bench wiring.
 - [ ] Measure SCLK high/low widths, CS setup/hold, MOSI setup/hold at the FPGA,
   and MISO delay at the controller for the selected adapter and cable.
-- [ ] Record SPI mode, maximum SCLK, wiring, voltage, load, and temperature
-  assumptions.
+- [x] Record SPI mode, demonstrated SCLK, wiring, image hash, and unmeasured
+  voltage/load/temperature assumptions in `smart_artix_bringup.md`.
 
 Required work for a future timing-closed high-speed implementation:
 
-- [ ] Move shifting into the SCLK domain and create a real primary clock on
-  `spi_sclk`.
+- [ ] Move request receive shifting into the SCLK domain; fetch transmit already
+  uses the constrained external `spi_sclk` primary clock.
 - [ ] Cross complete packets through asynchronous request/response FIFOs.
 - [ ] Add controller-data-sheet input and output delays relative to SCLK.
 - [ ] Preserve the packet atomicity and DMA flow-control work in

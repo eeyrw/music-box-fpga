@@ -1,4 +1,9 @@
 module tb_spi_register_bridge;
+  timeunit 1ns;
+  timeprecision 1ps;
+
+  localparam time SPI_HALF_PERIOD = 16ns;
+
   logic clk = 1'b0;
   logic rst;
   logic spi_sclk;
@@ -33,6 +38,8 @@ module tb_spi_register_bridge;
   int received_count_no_crc = 0;
   int bus_access_count_no_crc = 0;
   int errors = 0;
+  time last_spi_fall;
+  time max_miso_delay;
   logic unused_address_alignment;
   logic unused_no_crc_outputs;
 
@@ -41,6 +48,20 @@ module tb_spi_register_bridge;
       bus_write_no_crc ^ (^bus_address_no_crc) ^ (^bus_wdata_no_crc);
 
   always #5 clk <= ~clk;
+
+  /* verilator lint_off BLKSEQ */
+  always @(negedge spi_sclk)
+    last_spi_fall = $time;
+
+  always @(spi_miso) begin
+    time miso_delay;
+    if (last_spi_fall != 0) begin
+      miso_delay = $time - last_spi_fall;
+      if (miso_delay > max_miso_delay)
+        max_miso_delay = miso_delay;
+    end
+  end
+  /* verilator lint_on BLKSEQ */
 
   spi_register_bridge dut (.*);
 
@@ -151,11 +172,10 @@ module tb_spi_register_bridge;
   task automatic spi_clock_bit(input logic bit_value);
     begin
       spi_mosi = bit_value;
-      repeat (2) @(negedge clk);
+      #(SPI_HALF_PERIOD);
       spi_sclk = 1'b1;
-      repeat (2) @(negedge clk);
+      #(SPI_HALF_PERIOD);
       spi_sclk = 1'b0;
-      repeat (2) @(negedge clk);
     end
   endtask
 
@@ -177,12 +197,11 @@ module tb_spi_register_bridge;
     begin
       value = '0;
       for (int bit_index = 31; bit_index >= 0; bit_index--) begin
-        repeat (2) @(negedge clk);
+        #(SPI_HALF_PERIOD);
         spi_sclk = 1'b1;
-        repeat (2) @(negedge clk);
+        #(SPI_HALF_PERIOD);
         value[bit_index] = spi_miso;
         spi_sclk = 1'b0;
-        repeat (2) @(negedge clk);
       end
     end
   endtask
@@ -190,7 +209,7 @@ module tb_spi_register_bridge;
   task automatic begin_transaction(input logic [7:0] opcode);
     begin
       spi_cs_n = 1'b0;
-      repeat (3) @(negedge clk);
+      #(SPI_HALF_PERIOD);
       spi_send_byte(opcode);
     end
   endtask
@@ -209,9 +228,10 @@ module tb_spi_register_bridge;
 
   task automatic end_transaction;
     begin
-      repeat (4) @(negedge clk);
+      #(SPI_HALF_PERIOD);
+      last_spi_fall = 0;
       spi_cs_n = 1'b1;
-      repeat (4) @(negedge clk);
+      #(SPI_HALF_PERIOD * 2);
     end
   endtask
 
@@ -301,6 +321,8 @@ module tb_spi_register_bridge;
     spi_mosi = 1'b0;
     bus_allow = 1'b1;
     cmd_ready = 1'b1;
+    last_spi_fall = 0;
+    max_miso_delay = 0;
     repeat (5) @(negedge clk);
     rst = 1'b0;
     repeat (5) @(negedge clk);
@@ -517,6 +539,11 @@ module tb_spi_register_bridge;
     if (spi_error || received_count != 69 || received_count_no_crc != 72) begin
       $error("maximum command transaction failed: checked=%0d unchecked=%0d",
              received_count, received_count_no_crc);
+      errors++;
+    end
+
+    if (max_miso_delay > 5ns) begin
+      $error("SPI falling-edge-to-MISO delay exceeded 5 ns: %0t", max_miso_delay);
       errors++;
     end
 

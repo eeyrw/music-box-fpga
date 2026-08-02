@@ -4,9 +4,12 @@ This document covers the split-phase single-register protocol implemented by
 `spi_register_bridge`. Opcode `0xa5` command traffic is documented separately
 in [`spi_command_stream.md`](spi_command_stream.md).
 
-No physical SCLK rate has been qualified. The bridge oversamples synchronized
-SPI mode-0 pins in the 100 MHz system-clock domain. Bring-up therefore remains
-at the 937.5 kHz CH347 default before testing 1.875, 3.75, and 7.5 MHz.
+The request receiver oversamples synchronized SPI mode-0 pins in the 100 MHz
+system-clock domain. Fetch responses are frozen during their 32-bit header and
+shifted directly from the external SCLK falling edge, removing system-clock
+edge-detection latency from the MISO setup path. With SCLK on the clock-capable
+BANK15 header pin 14 / `J20`, hardware has completed 300/300 exact register and
+DDR rounds at an actual 30 MHz CH347 clock.
 
 ## Wire Protocol
 
@@ -89,6 +92,8 @@ latency and CS gaps.
 | 1.875 MHz | 8,371 |
 | 3.75 MHz | 16,741 |
 | 7.5 MHz | 33,482 |
+| 15 MHz | 66,964 |
+| 30 MHz | 133,929 |
 
 This overhead is intentional: register traffic is sparse, while integrity,
 explicit completion, retained responses, and arbitrary `bus_ready` latency are
@@ -98,13 +103,16 @@ part of the contract.
 
 Mailbox execution removes register response latency from the active request
 transaction. MISO timing is required only during fetch, when the complete
-response is already available or the bridge returns `BUSY`. The synchronized
-falling-edge-to-MISO path must still satisfy the next external rising-edge
-sample, so the existing CDC and board-I/O work remains:
+response is already available or the bridge returns `BUSY`. The response
+crosses through a two-stage SCLK-domain snapshot, its CRC is calculated
+byte-serially during the header, and each output bit is launched on SCLK's
+falling edge for the next rising-edge sample. Remaining board-I/O work is:
 
-- add and preserve synchronizer attributes;
-- constrain the physical MISO path;
-- measure SCLK duty cycle and SPI pin timing;
-- qualify actual CH347 clock steps on hardware.
+- retain the scoped synchronizer exceptions and verified MISO OLOGIC placement;
+- measure SCLK duty cycle, CS setup/hold, MOSI timing, and MISO timing;
+- repeat 30 MHz qualification if adapter, cable, pin assignment, voltage, or
+  image changes.
 
-No analytical number in this document is a released board rating.
+The 60 MHz CH347 step is outside the remaining 100 MHz dual-edge oversampling
+receiver's supported range: its 8.33 ns half-period is shorter than one system
+clock. No analytical number in this document is a released board rating.

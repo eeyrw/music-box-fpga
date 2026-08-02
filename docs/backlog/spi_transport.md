@@ -12,9 +12,12 @@ The status was refreshed against `spi_register_bridge`, the command plane, and
 
 ## Implemented Baseline
 
-- `spi_register_bridge` runs entirely in the 100 MHz MIG UI clock domain.
-- SCLK, CS, and MOSI pass through two-register vectors and are edge-detected in
-  that domain; SCLK is not an FPGA clock.
+- SPI request decoding and command reception run in the 100 MHz MIG UI clock
+  domain. Fetch response shifting runs in the external SCLK domain.
+- SCLK, CS, and MOSI pass through attributed two-register vectors and are
+  edge-detected for receive traffic. SCLK also clocks the dedicated fetch TX
+  registers: the response is synchronized and frozen during the header, then
+  MISO changes directly on falling edges.
 - Register access uses the single-outstanding `0x5a` request and `0x5b` fetch
   mailbox. The former direct and burst opcodes are rejected.
 - Opcode `0xa5` begins an aligned four-byte header containing an 8-bit word
@@ -181,16 +184,22 @@ reservation problem.
 
 ## Clock-Domain And Physical Timing
 
-The present oversampling bridge still needs:
+The present hybrid bridge has completed:
 
-- [ ] `ASYNC_REG` attributes and scoped asynchronous input exceptions for the
+- [x] `ASYNC_REG` attributes and scoped asynchronous input exceptions for the
   SCLK, CS, and MOSI synchronizers;
-- [ ] protection against unintended shift-register extraction;
-- [ ] an output-IOB or otherwise bounded system-clock-to-MISO path;
+- [x] protection against unintended shift-register extraction;
+- [x] a falling-SCLK MISO output register with an IOB placement request and
+  explicit 30 MHz output timing assumptions.
+
+It still needs:
+
+- [x] post-route confirmation that the synchronizer exceptions resolve and the
+  MISO register is packed into `OLOGIC_X0Y92`;
 - [ ] measurements of SCLK duty cycle, CS setup/hold, MOSI timing, and MISO
   timing for the selected adapter and cable;
-- [ ] qualification beginning at the 1 MHz host default, then the actual CH347
-  1.875 MHz, 3.75 MHz, and 7.5 MHz steps.
+- [x] repeated register and DDR qualification at the 30 MHz CH347 step: 300/300
+  exact rounds passed with SCLK on `J20`.
 
 If higher rates or formal SCLK-relative I/O timing are required, move shifting
 into the SCLK domain and cross complete staged transactions through explicit

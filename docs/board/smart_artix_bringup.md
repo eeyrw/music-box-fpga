@@ -77,6 +77,9 @@ Required checks:
 - Confirm `rst_n` source and polarity. The board top expects active-low reset.
 - Confirm SPI, I2S, SD, and status LED pins against the schematic and connector
   pinout.
+- Wire the BANK15 SPI header as SCLK pin 14 (`J20`), CS pin 2 (`H13`), MOSI pin
+  3 (`G18`), and MISO pin 4 (`G17`). `J20` is an SRCC input; do not return SCLK
+  to ordinary-I/O header pin 1 (`G13`) when testing the source-synchronous image.
 - Confirm I/O standards and bank voltages. The skeleton uses `LVCMOS33` for
   non-DDR I/O.
 - Keep DDR3 pins and DDR3 timing constraints owned by the MIG-generated XDC.
@@ -145,9 +148,9 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The latest 2026-08-02 route met setup and hold timing with WNS `+0.282 ns` and
-WHS `+0.051 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
-because the hold margin is below `0.2 ns`, LUT utilization is `76.43%`, and the
+The latest 2026-08-02 route met setup and hold timing with WNS `+0.213 ns` and
+WHS `+0.021 ns`. The analyzer classifies this as `REVIEW`, rather than signoff,
+because the hold margin is below `0.2 ns`, LUT utilization is `76.38%`, and the
 external I/O timing constraints are incomplete. Treat it as a useful baseline,
 not as proof that a changed XDC or IP configuration is hardware-safe.
 
@@ -161,7 +164,7 @@ was identified as an image for `7a50tfgg484`:
 ```text
 build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 size:   2,192,139 bytes
-sha256: e425a2882fbe821bf1ffbdda337e81c772291d92e0ba226994537052a61f3ef5
+sha256: 804e0fa9ac38df3ad9238416fa656a7ea76395954e50227311378451816f8e1c
 ```
 
 Generated files under `build/` are intentionally not committed. Regenerate the
@@ -306,16 +309,13 @@ build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
 ```
 
 Then use the selected CH347 library and conservative SPI speed. Start around
-`1 MHz` until the board-level SPI timing contract is measured. The common SPI
-register bridge samples SCLK into the FPGA system clock. Register execution is
-split from the SPI request and reported by a later fetch, so a stalled internal
-register target no longer requires the SPI master to pause in one transaction.
-After the `1 MHz` request smoke test passes, try requests of `2 MHz` and
-`5 MHz`; the current CH347 mapping selects actual rates of `937.5 kHz`,
-`1.875 MHz`, and `3.75 MHz` respectively. A `10 MHz` request selects
-`7.5 MHz`; treat that as an upper stress point rather than a guaranteed setting.
-Do not use the old `15 MHz` write target until CDC, I/O constraints, duty cycle,
-and physical MISO timing are qualified. See
+`1 MHz` when checking new wiring. The common SPI register bridge receives
+requests by sampling SCLK into the 100 MHz FPGA system clock, while fetch MISO
+is launched directly from SCLK falling edges. Register execution is split from
+the SPI request and reported by a later fetch, so a stalled internal register
+target no longer requires the SPI master to pause in one transaction. The
+current `J20` SCLK image has passed exact mailbox and DDR testing at the CH347
+30 MHz step; do not extrapolate that result to another adapter or wiring. See
 [`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
 
 That sequence applies to bidirectional register transactions. Dedicated
@@ -405,6 +405,38 @@ exact reads each of `PLATFORM_STATUS`, `PLATFORM_ERRORS`, and the DDR beat at
 `0x100` (300/300 transactions). This confirms that the final image retained the
 15 MHz SPI result. The CH347 connection used for this test is external test
 wiring; the SD socket and SD signals are board-level routing.
+
+### 2026-08-02 Clock-Capable SCLK And 30 MHz Retest
+
+The SPI Bridge fetch transmitter was changed to launch MISO directly from the
+external SCLK falling edge. SCLK moved from ordinary-I/O BANK15 header pin 1 /
+`G13` to clock-capable header pin 14 / `J20` (`IO_L11P_T1_SRCC_15`). CS, MOSI,
+and MISO remained on header pins 2 / `H13`, 3 / `G18`, and 4 / `G17`.
+
+Forced implementation of bitstream
+`804e0fa9ac38df3ad9238416fa656a7ea76395954e50227311378451816f8e1c`
+met timing with WNS `+0.213 ns`, WHS `+0.021 ns`, zero failing endpoints, zero
+route errors, and zero DRC errors. The SCLK clock is asynchronous to the board
+clock group. The falling-edge MISO register is packed in `OLOGIC_X0Y92`; its
+30 MHz SCLK-to-MISO setup path has `+2.845 ns` slack under the documented 5 ns
+external setup budget.
+
+After volatile programming, a 937.5 kHz smoke test read `VERSION =
+0x000d0000`, `PLATFORM_STATUS = 0x00018057`, and `PLATFORM_ERRORS =
+0x000f0100`, then wrote and read back DDR byte address `0x100` as
+`fedcba98_76543210_89abcdef_01234567`. At an actual 30 MHz SCLK, one initial
+read passed and 300/300 subsequent rounds returned those same three registers
+and DDR data exactly.
+
+The CH347 60 MHz step timed out on its first mailbox request, as expected for
+the remaining 100 MHz dual-edge oversampling receiver: a 60 MHz half-period is
+only 8.33 ns, shorter than one 10 ns system-clock sample interval. This is an
+architecture limit, not evidence of a new wiring or MISO failure. The available
+CH347 steps therefore establish 30 MHz as the highest demonstrated mailbox/DDR
+rate and 60 MHz as unsupported; they do not locate a finer threshold below
+50 MHz. No oscilloscope measurements of voltage, duty cycle, or temperature
+margin were made, so 30 MHz remains a qualification result for this exact
+adapter, wiring, board, and image rather than a general electrical rating.
 
 `PLATFORM_STATUS` bit meanings:
 
