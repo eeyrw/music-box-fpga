@@ -52,7 +52,7 @@ uint64_t AsyncCommandScheduler::monotonic_ns() {
 }
 
 bool AsyncCommandScheduler::lifecycle_opcode(uint8_t opcode) {
-  return opcode == 0x10 || opcode == 0x14 || opcode == 0x15 || opcode == 0x7f;
+  return opcode == 0x10 || opcode == 0x14 || opcode == 0x15;
 }
 
 int AsyncCommandScheduler::replaceable_kind(uint8_t opcode) {
@@ -162,10 +162,6 @@ void AsyncCommandScheduler::enqueue_one(render::CommandWordView command) {
   const PendingCommand pending = copy_command(command);
   if (opcode == 0x10) invalidate_updates(voice, generation, false);
   if (opcode == 0x15) invalidate_updates(voice, generation, true);
-  if (opcode == 0x7f) {
-    normal_ = {};
-    clear_replaceable_updates();
-  }
 
   const int kind = replaceable_kind(opcode);
   if (kind >= 0 && voice >= 0 && voice < render::kNumVoices) {

@@ -41,7 +41,7 @@ replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identi
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
 Global status and board control remain separate behind `host::RegisterIo`.
-This interface is not used for voice configuration; version 14 has no
+This interface is not used for voice configuration; version 15 has no
 register-based command submission path.
 
 ## SPI Transactions
@@ -51,7 +51,9 @@ register-based command submission path.
 - single-register mailbox requests and retained responses for status, DDR
   diagnostics, and board control;
 - an aligned four-byte command-transaction header `{0xa5, word_count, CRC16}`
-  followed by consecutive big-endian command words for voice control.
+  followed by consecutive big-endian command words for voice control;
+- a fixed four-byte `a6 00 aa d7` FLUSH transaction for cancelling pending FPGA
+  command work and recovering parser alignment.
 
 The CH347 command API accepts one or more complete commands in a CS assertion,
 up to the adapter buffer's 63-word transfer limit. `AsyncCommandScheduler`
@@ -62,7 +64,8 @@ byte update over the word-count byte and all big-endian payload bytes. A
 retained bit-at-a-time implementation is the independent unit-test oracle.
 Command transactions are encoded directly into a fixed 256-byte buffer. The
 FPGA wire layout always includes the CRC field; its `CHECK_COMMAND_CRC` build
-parameter may disable comparison.
+parameter may disable comparison. `flush_command_stream()` sends only the FPGA
+recovery transaction; callers must first stop or clear any local scheduler queue.
 
 Each register API call first writes a fixed 12-byte request, then issues fixed
 16-byte fetch transactions until the FPGA returns a completed response. Both
@@ -333,7 +336,7 @@ Build the board runner with:
 make host-smart-artix-bringup
 ```
 
-It requires the exact current interface value `0x000e0000`, reads
+It requires the exact current interface value `0x000f0000`, reads
 platform/global and command-parser status through the CRC32 mailbox, exercises
 the DDR debug aperture as acknowledged single-register operations, and sends
 its voice smoke test through the same atomic `0xa5` command path as simulation.

@@ -1,14 +1,15 @@
 # SPI Command-Stream Throughput
 
-This document sizes Smart Artix SPI opcode `0xa5` traffic for interface version
-12, which retains the version-10 command encoding behind a new aligned
-length/CRC16 transaction header. Register timing and
+This document defines Smart Artix SPI opcode `0xa5` command traffic and opcode
+`0xa6` command recovery for interface version 15. It retains the version-10
+command encoding behind the version-12 aligned length/CRC16 transaction header.
+Register timing and
 transport correctness are documented separately in
 [`spi_register_mailbox.md`](spi_register_mailbox.md) and
 [`../../backlog/spi_transport.md`](../../backlog/spi_transport.md).
 
 The status and workload assumptions were refreshed against the production RTL
-and CH347 host implementation on 2026-07-31.
+and CH347 host implementation on 2026-08-03.
 
 ## Current Configuration
 
@@ -43,6 +44,26 @@ SPI mode 0, CS low, aligned {0xa5, word_count, CRC16} header
 Version 14 removes the former debug register injection path. All command words
 enter through complete `0xa5` transactions. Simulation and hardware use the
 same command parser; there is no typed state-install bypass.
+
+Version 15 adds a separate `0xa6` FLUSH transaction. It does not enter the
+63-word staging RAM as a command word:
+
+```text
+SPI mode 0, CS low, {0xa6, 0x00, CRC16}, CS high
+  -> cancel any unpublished staging commit
+  -> held request/ack sideband into the command plane
+  -> clear the 1024-word FIFO and reset the parser to READ_HEADER
+```
+
+CRC-16/CCITT-FALSE covers both bytes `0xa6, 0x00`; the fixed valid frame is
+`a6 00 aa d7`. Reserved flags must be zero. When CRC checking is enabled, a
+corrupt frame is rejected without cancellation. A pending flush also causes a
+new `0xa5` transaction to be rejected as a whole.
+
+FLUSH preserves active voice state, already accepted state-store actions,
+global audio configuration, effect history, and diagnostics. It cannot recall
+commands still queued by the host, so software must quiesce or clear its local
+producer before calling `flush_command_stream()`.
 
 The bridge cannot backpressure SPI after CS is asserted, so it receives the
 complete declared transaction into a 63-word synchronous block RAM. A valid
@@ -88,6 +109,10 @@ The aligned header is `{8'ha5, word_count[7:0], payload_crc16[15:0]}`.
 CRC-16/CCITT-FALSE covers the count byte followed by all payload bytes in
 big-endian order. The wire field is always present; FPGA parameter
 `CHECK_COMMAND_CRC` may disable comparison.
+
+The same parameter controls FLUSH CRC comparison without changing the `0xa6`
+wire format. The Python transport exposes `flush_command_stream()`, and
+`tools/ch347_tool.py flush` sends this operation directly.
 
 ## Command Sizes
 

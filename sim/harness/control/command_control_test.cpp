@@ -68,7 +68,7 @@ void test_command_construction_does_not_allocate() {
   audio_control.set_master_volume(0x4000);
   audio_control.clear_effects(3);
   FixedCommand queued;
-  queued.push_back(0x7f000000u);
+  queued.push_back(0x99000000u);
   batched.write_command_words(queued.view());
   batched.apply_frame();
   track_allocations = false;
@@ -237,15 +237,6 @@ void test_frame_batched_command_sink() {
     throw std::runtime_error("deferred action batch diagnostics mismatch");
   }
 
-  CaptureSink flush_sink;
-  FrameBatchedCommandSink flush_batch(flush_sink);
-  flush_batch.write_command_words(std::vector<uint32_t>{0x15000000u});
-  flush_batch.write_command_words(std::vector<uint32_t>{0x7f000000u});
-  flush_batch.write_command_words(std::vector<uint32_t>{0x15000000u});
-  if (flush_batch.apply_frame() != 2 || flush_batch.pending_actions() != 0 ||
-      flush_sink.commands.size() != 2 || opcode(flush_sink.commands.back()) != 0x7f) {
-    throw std::runtime_error("STREAM_FLUSH did not discard deferred actions");
-  }
 }
 
 void test_global_audio_commands() {

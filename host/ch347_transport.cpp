@@ -120,6 +120,11 @@ void Ch347RegisterTransport::write_command_words(render::CommandWordView words) 
   }
 }
 
+void Ch347RegisterTransport::flush_command_stream() {
+  const FlushTransaction transaction = encode_flush_transaction();
+  send_transaction(transaction.data(), transaction.size());
+}
+
 int Ch347RegisterTransport::selected_clock_hz(int requested_hz) {
   return clock_choice_for_hz(requested_hz).hz;
 }
@@ -216,6 +221,21 @@ Ch347RegisterTransport::encode_command_transaction(render::CommandWordView words
     push(uint8_t(word));
   }
   return transaction;
+}
+
+Ch347RegisterTransport::FlushTransaction
+Ch347RegisterTransport::encode_flush_transaction() {
+  auto update = [](uint16_t crc, uint8_t byte) {
+    crc ^= uint16_t(byte) << 8;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x8000u) ? uint16_t((crc << 1) ^ 0x1021u)
+                            : uint16_t(crc << 1);
+    }
+    return crc;
+  };
+  uint16_t crc = update(0xffffu, 0xa6u);
+  crc = update(crc, 0x00u);
+  return {0xa6u, 0x00u, uint8_t(crc >> 8), uint8_t(crc)};
 }
 
 uint32_t Ch347RegisterTransport::register_frame_crc32(

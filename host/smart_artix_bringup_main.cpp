@@ -602,7 +602,7 @@ int main(int argc, char** argv) {
         host::Ch347RegisterTransport::selected_clock_hz(args.ch347.clock_hz);
     std::cout << "CH347 SPI requested=" << args.ch347.clock_hz
               << " Hz selected=" << selected_clock
-              << " Hz mode=0 protocol=v13-mailbox/v12-command\n";
+              << " Hz mode=0 protocol=v13-mailbox/v15-command-flush\n";
 
     std::unique_ptr<host::Ch347RegisterTransport> hardware;
     std::unique_ptr<SyntheticBoard> synthetic;

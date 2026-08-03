@@ -73,32 +73,38 @@ int main() {
       },
       "CH347 accepted a corrupt register response CRC");
 
-  Ch347RegisterTransport::validate_command_transaction({0x7f000000u});
+  Ch347RegisterTransport::validate_command_transaction({0x99000000u});
   Ch347RegisterTransport::validate_command_transaction(
       {0x15000001u, 0x00000001u});
   std::vector<uint32_t> maximum_command(17, 0u);
   maximum_command[0] = 0x10000010u;
   Ch347RegisterTransport::validate_command_transaction(maximum_command);
   Ch347RegisterTransport::validate_command_transaction(
-      {0x7f000000u, 0x15000001u, 0x00000001u});
+      {0x99000000u, 0x15000001u, 0x00000001u});
   const std::vector<uint32_t> encoded_words = {
-      0x7f000000u, 0x15000001u, 0x00000001u};
+      0x99000000u, 0x15000001u, 0x00000001u};
   const Ch347RegisterTransport::CommandTransaction encoded =
       Ch347RegisterTransport::encode_command_transaction(encoded_words);
-  if (Ch347RegisterTransport::command_transaction_crc16(encoded_words) != 0xbf80u ||
-      Ch347RegisterTransport::command_transaction_crc16_oracle(encoded_words) != 0xbf80u ||
+  if (Ch347RegisterTransport::command_transaction_crc16(encoded_words) != 0xadffu ||
+      Ch347RegisterTransport::command_transaction_crc16_oracle(encoded_words) != 0xadffu ||
       encoded.size() != 16 ||
       !std::equal(encoded.data(), encoded.data() + encoded.size(), std::vector<uint8_t>({
-          0xa5, 0x03, 0xbf, 0x80,
-          0x7f, 0x00, 0x00, 0x00,
+          0xa5, 0x03, 0xad, 0xff,
+          0x99, 0x00, 0x00, 0x00,
           0x15, 0x00, 0x00, 0x01,
           0x00, 0x00, 0x00, 0x01}).begin())) {
     throw std::runtime_error("CH347 command transaction encoding mismatch");
   }
-  std::vector<uint32_t> maximum_transaction(63, 0x7f000000u);
+  const Ch347RegisterTransport::FlushTransaction flush =
+      Ch347RegisterTransport::encode_flush_transaction();
+  if (flush != Ch347RegisterTransport::FlushTransaction({0xa6, 0x00, 0xaa, 0xd7})) {
+    throw std::runtime_error("CH347 flush transaction encoding mismatch");
+  }
+
+  std::vector<uint32_t> maximum_transaction(63, 0x99000000u);
   Ch347RegisterTransport::validate_command_transaction(maximum_transaction);
   for (uint32_t seed = 0; seed < 4096; ++seed) {
-    std::vector<uint32_t> words(1 + seed % 63, 0x7f000000u);
+    std::vector<uint32_t> words(1 + seed % 63, 0x99000000u);
     if (Ch347RegisterTransport::command_transaction_crc16(words) !=
         Ch347RegisterTransport::command_transaction_crc16_oracle(words)) {
       throw std::runtime_error("table-driven CRC16 differs from bit oracle");
@@ -116,7 +122,7 @@ int main() {
       "CH347 accepted a truncated command transaction");
   expect_throw(
       [] {
-        std::vector<uint32_t> oversized(64, 0x7f000000u);
+        std::vector<uint32_t> oversized(64, 0x99000000u);
         Ch347RegisterTransport::validate_command_transaction(oversized);
       },
       "CH347 accepted a transaction above its transfer limit");

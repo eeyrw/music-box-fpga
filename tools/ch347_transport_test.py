@@ -18,6 +18,7 @@ from ch347_transport import (
     command_crc16,
     decode_register_response,
     encode_command_transaction,
+    encode_flush_transaction,
     encode_register_request,
     register_crc32,
     selected_clock,
@@ -57,10 +58,10 @@ class Ch347TransportTest(unittest.TestCase):
         self.assertEqual(request[:8], bytes.fromhex("5a00900000000000"))
         self.assertEqual(int.from_bytes(request[8:], "big"), register_crc32(0x5A, 0, 0x9000, 0))
 
-        body = bytes.fromhex("00009000000e0000")
-        transfer = bytes(4) + body + register_crc32(0, 0, 0x9000, 0x000E0000).to_bytes(4, "big")
+        body = bytes.fromhex("00009000000f0000")
+        transfer = bytes(4) + body + register_crc32(0, 0, 0x9000, 0x000F0000).to_bytes(4, "big")
         response = decode_register_response(transfer)
-        self.assertEqual((response.address, response.data), (0x9000, 0x000E0000))
+        self.assertEqual((response.address, response.data), (0x9000, 0x000F0000))
         with self.assertRaises(MailboxCrcError):
             decode_register_response(transfer[:-1] + bytes((transfer[-1] ^ 1,)))
 
@@ -72,6 +73,9 @@ class Ch347TransportTest(unittest.TestCase):
         self.assertEqual(encoded[4:], b"".join(word.to_bytes(4, "big") for word in words))
         with self.assertRaises(ValueError):
             encode_command_transaction([0x21000004, 0])
+
+    def test_flush_transaction(self) -> None:
+        self.assertEqual(encode_flush_transaction(), bytes.fromhex("a600aad7"))
 
     def test_ddr_read_sequence_and_byte_order(self) -> None:
         registers = FakeRegisters()

@@ -12,6 +12,8 @@ module voice_major_command_plane #(
   input  logic                                      cmd_stream_valid,
   input  logic [31:0]                               cmd_stream_data,
   output logic                                      cmd_stream_ready,
+  input  logic                                      cmd_stream_flush_req,
+  output logic                                      cmd_stream_flush_ack,
   input  logic                                      render_busy,
   input  logic [31:0]                               current_frame,
 
@@ -49,7 +51,6 @@ module voice_major_command_plane #(
   localparam logic [7:0] CMD_CHORUS_CONFIG = 8'h22;
   localparam logic [7:0] CMD_REVERB_CONFIG = 8'h23;
   localparam logic [7:0] CMD_EFFECT_CLEAR = 8'h24;
-  localparam logic [7:0] CMD_STREAM_FLUSH = 8'h7f;
   localparam int MAX_PAYLOAD_WORDS = 16;
 
   typedef enum logic [2:0] {
@@ -120,13 +121,13 @@ module voice_major_command_plane #(
       CMD_CHORUS_CONFIG:     payload_length_valid = count == 8'd6;
       CMD_REVERB_CONFIG:     payload_length_valid = count == 8'd9;
       CMD_EFFECT_CLEAR:      payload_length_valid = count == 8'd1;
-      CMD_STREAM_FLUSH:     payload_length_valid = count == 8'd0;
       default:              payload_length_valid = 1'b0;
     endcase
   endfunction
 
-  assign fifo_push = cmd_stream_valid;
-  assign cmd_stream_ready = fifo_push_ready;
+  assign fifo_push = cmd_stream_valid && !cmd_stream_flush_req;
+  assign cmd_stream_ready = fifo_push_ready && !cmd_stream_flush_req;
+  assign cmd_stream_flush_ack = cmd_stream_flush_req;
   assign action_pending = (parser_state_q != READ_HEADER) || !fifo_empty;
   assign command_voice = {6'd0, command_voice_q};
   assign voice_action = (opcode_q == CMD_VOICE_START_MONO) ||
@@ -234,22 +235,21 @@ module voice_major_command_plane #(
   end
   assign action_valid_format = payload_length_valid(
       opcode_q, payload_count_q, command_flags_q) &&
-      (((opcode_q == CMD_STREAM_FLUSH) && (command_voice_q == '0) &&
-        (command_flags_q == '0)) ||
-       (audio_action && (command_voice_q == '0) &&
+      ((audio_action && (command_voice_q == '0) &&
         (command_flags_q == '0) && audio_action_valid_format) ||
        (voice_action && (int'(command_voice) < NUM_VOICES) &&
         ((opcode_q == CMD_VOICE_START_MONO) || (command_flags_q == '0)) &&
         voice_action_valid_format));
-  assign install_valid = parser_state_q == DISPATCH_INSTALL;
+  assign install_valid = (parser_state_q == DISPATCH_INSTALL) &&
+      !cmd_stream_flush_req;
   assign install_voice = install_voice_q;
   assign install_state = install_state_q;
   assign control_event_valid = (parser_state_q == DISPATCH_ACTION) &&
       action_valid_format && voice_action &&
-      (opcode_q != CMD_VOICE_START_MONO);
+      (opcode_q != CMD_VOICE_START_MONO) && !cmd_stream_flush_req;
   assign action_fire = (install_valid && install_ready) ||
                        (control_event_valid && control_event_ready) ||
-                       (audio_action && !render_busy);
+                       (audio_action && !render_busy && !cmd_stream_flush_req);
 
   always_comb begin
     bus_rsp = '0;
@@ -369,10 +369,9 @@ module voice_major_command_plane #(
     endcase
   end
 
-  assign fifo_pop = fifo_head_valid &&
+  assign fifo_pop = fifo_head_valid && !cmd_stream_flush_req &&
       ((parser_state_q == READ_HEADER) || (parser_state_q == READ_PAYLOAD));
-  assign fifo_flush = (parser_state_q == DISPATCH_ACTION) &&
-                      (opcode_q == CMD_STREAM_FLUSH) && action_valid_format;
+  assign fifo_flush = cmd_stream_flush_req;
 
   control_word_fifo #(.DEPTH(WORD_FIFO_DEPTH), .WIDTH(32)) word_fifo (
     .clk,
@@ -404,6 +403,14 @@ module voice_major_command_plane #(
       effect_clear <= '0;
       install_voice_q <= '0;
       install_state_q <= '0;
+    end else if (cmd_stream_flush_req) begin
+      parser_state_q <= READ_HEADER;
+      opcode_q <= '0;
+      command_voice_q <= '0;
+      command_flags_q <= '0;
+      payload_count_q <= '0;
+      payload_index_q <= '0;
+      effect_clear <= '0;
     end else begin
       effect_clear <= '0;
       unique case (parser_state_q)
@@ -431,8 +438,6 @@ module voice_major_command_plane #(
           if (!action_valid_format) begin
             if (command_error_count != 32'hffff_ffff)
               command_error_count <= command_error_count + 1'b1;
-            parser_state_q <= READ_HEADER;
-          end else if (opcode_q == CMD_STREAM_FLUSH) begin
             parser_state_q <= READ_HEADER;
           end else if (opcode_q == CMD_VOICE_START_MONO) begin
             install_voice_q <= install_voice_decode;

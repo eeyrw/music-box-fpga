@@ -1,10 +1,11 @@
 # Mono Voice-Major Control And Render Contract
 
 This document defines the version-10 command encoding retained by interface
-version 14 (`0x000e0000`). Version 12 added the aligned SPI length/CRC16
+version 15 (`0x000f0000`). Version 12 added the aligned SPI length/CRC16
 transaction envelope; version 13 replaced only the register wire protocol with
 a split-phase mailbox, and version 14 removes register-based debug command
-injection. The old
+injection. Version 15 replaces the former in-band flush command with a dedicated
+SPI transport operation. The old
 DEFINE_MONO/DEFINE_STEREO plus prepared/active START protocol is not part of
 this interface.
 
@@ -31,7 +32,8 @@ host MIDI/SF2 policy
 
 There is one control plane in simulation and hardware. Test harnesses and the
 production host send the same command words through the dedicated command
-stream; hardware maps that stream to SPI opcode `0xa5`. They do not install
+stream; hardware maps command words to SPI opcode `0xa5` and recovery to SPI
+opcode `0xa6`. They do not install
 typed voice records through private simulation ports or register writes.
 
 ## Framing
@@ -58,12 +60,9 @@ late runtime commands after a slot has been reused. Invalid commands are fully
 consumed, make no state change, and set `CMD_FIFO_STATUS[30]`; stale generations
 set bit 31.
 
-The parser waits for a complete command before executing it. An aligned
-`STREAM_FLUSH` command discards later buffered FIFO words without changing voice
-or effect state. It cannot recover a parser already waiting for missing payload,
-because its header would be consumed as that payload; transport recovery must
-clear both the FIFO and parser state through reset or a future out-of-band
-control.
+The parser waits for a complete command before executing it. There is no command
+word opcode for stream flush. Transport recovery uses the dedicated SPI `0xa6`
+operation described below, so it can reset a parser waiting for missing payload.
 
 ## Voice Commands
 
@@ -76,7 +75,6 @@ control.
 | `0x16` | `VOICE_GAIN` | 2 |
 | `0x17` | `VOICE_FILTER` | 4 |
 | `0x18` | `VOICE_PITCH` | 2 |
-| `0x7f` | `STREAM_FLUSH` | 0 |
 
 All voice commands begin with the generation word. Runtime-command flags must
 be zero. START flags are:
@@ -182,7 +180,7 @@ control boundary. Commands arriving after rendering starts apply to a later
 block.
 
 The production command stream exposes ready/valid backpressure and is the only
-command ingress in version 14.
+command ingress in version 15.
 
 ## SPI Transport
 
@@ -204,6 +202,24 @@ The bridge stages the complete CS-delimited transaction, checks its declared
 length and command-record boundaries, and publishes it only after CS rises on a
 legal word boundary. Downstream backpressure pauses the staged commit without
 dropping words.
+
+FLUSH is a separate four-byte CS-delimited transport transaction:
+
+```text
+CS low -> 0xa6 -> 0x00 -> CRC16 -> CS high
+```
+
+CRC-16/CCITT-FALSE covers the bytes `0xa6, 0x00`, producing the fixed frame
+`a6 00 aa d7`. A valid FLUSH cancels any unpublished bridge staging commit,
+clears the downstream command FIFO, and resets the parser to expect a new
+header. It preserves active voices, accepted control actions, global audio
+configuration, effect history, and diagnostics. It is cancellation of pending
+FPGA command work, not rollback of already executed work.
+
+The host must stop or clear its own command producer before issuing FLUSH;
+FLUSH cannot remove commands still queued in host memory. While the internal
+flush request awaits acknowledgement, new `0xa5` command transactions are
+rejected. Reserved byte values other than zero and CRC mismatches are rejected.
 
 `CMD_FIFO_STATUS[15:2]` exposes capacity for software preflight, but the current
 CH347 transport sends each complete command without reading it first. Register

@@ -14,7 +14,7 @@ wavetable reads, and I2S output around `voice_major_system`.
 | DDR3 | Micron `MT41K256M16TW`, 512 MB, x16 |
 | Core/application clock | MIG `ui_clk`, 100 MHz |
 | MIG application width | 128 bits, one 8-word wavetable line |
-| Control | SPI mode 0, register mailbox plus opcode `0xa5` commands |
+| Control | SPI mode 0, register mailbox, opcode `0xa5` commands, and opcode `0xa6` FLUSH |
 | Asset source | native 4-bit SDHC/SDXC WTSF image |
 | Audio | I2S data/BCLK/LRCLK; no codec initialization in this target |
 | On-board LEDs | LED1 `R17` = DDR ready; LED2 `P16` = SD busy/error/loaded status |

@@ -20,11 +20,14 @@ module spi_register_bridge #(
   input  logic        bus_error,
   output logic        cmd_valid,
   output logic [31:0] cmd_data,
-  input  logic        cmd_ready
+  input  logic        cmd_ready,
+  output logic        cmd_flush_req,
+  input  logic        cmd_flush_ack
 );
   localparam logic [7:0] MAILBOX_REQUEST_OPCODE = 8'h5a;
   localparam logic [7:0] MAILBOX_FETCH_OPCODE = 8'h5b;
   localparam logic [7:0] COMMAND_STREAM_OPCODE = 8'ha5;
+  localparam logic [7:0] COMMAND_FLUSH_OPCODE = 8'ha6;
   localparam logic [7:0] REGISTER_READ = 8'h00;
   localparam logic [7:0] REGISTER_WRITE = 8'h01;
   localparam logic [7:0] RESPONSE_OK = 8'h00;
@@ -43,6 +46,8 @@ module spi_register_bridge #(
     STATE_FETCH_WAIT,
     STATE_STREAM_HEADER,
     STATE_STREAM_DATA,
+    STATE_FLUSH_HEADER,
+    STATE_FLUSH_WAIT,
     STATE_REJECT
   } state_t;
 
@@ -281,6 +286,7 @@ module spi_register_bridge #(
       bus_wdata <= '0;
       cmd_valid <= 1'b0;
       cmd_data <= '0;
+      cmd_flush_req <= 1'b0;
       stream_declared_words <= '0;
       stream_received_words <= '0;
       stream_command_words_remaining <= '0;
@@ -291,6 +297,9 @@ module spi_register_bridge #(
       commit_words <= '0;
       commit_start_pending <= 1'b0;
     end else begin
+      if (cmd_flush_req && cmd_flush_ack)
+        cmd_flush_req <= 1'b0;
+
       if (bus_valid && bus_ready) begin
         bus_valid <= 1'b0;
         response_valid <= 1'b1;
@@ -347,6 +356,21 @@ module spi_register_bridge #(
           end else begin
             spi_error <= 1'b1;
           end
+        end else if (state == STATE_FLUSH_WAIT) begin
+          if ((data_shift[23:16] == 8'h00) &&
+              (!CHECK_COMMAND_CRC ||
+               (data_shift[15:0] ==
+                crc16_ccitt_byte(
+                    crc16_ccitt_byte(16'hffff, COMMAND_FLUSH_OPCODE),
+                    8'h00))) && !cmd_flush_req) begin
+            cmd_flush_req <= 1'b1;
+            cmd_valid <= 1'b0;
+            commit_start_pending <= 1'b0;
+            commit_index <= '0;
+            commit_words <= '0;
+          end else begin
+            spi_error <= 1'b1;
+          end
         end else if ((state != STATE_FETCH_WAIT) &&
                      !((state == STATE_COMMAND) && (bit_count == 0))) begin
           if (!bus_valid && ((state == STATE_MAILBOX_REQUEST) ||
@@ -360,13 +384,13 @@ module spi_register_bridge #(
         state <= STATE_IDLE;
         bit_count <= '0;
       end else if (cs_start) begin
-        state <= STATE_COMMAND;
+        state <= cmd_flush_req ? STATE_REJECT : STATE_COMMAND;
         command_shift <= '0;
         bit_count <= '0;
         data_shift <= '0;
         mailbox_request_shift <= '0;
         read_sample_seen <= 1'b0;
-        spi_error <= 1'b0;
+        spi_error <= cmd_flush_req;
         stream_declared_words <= '0;
         stream_received_words <= '0;
         stream_command_words_remaining <= '0;
@@ -395,6 +419,10 @@ module spi_register_bridge #(
                   COMMAND_STREAM_OPCODE: begin
                     state <= STATE_STREAM_HEADER;
                     commit_index <= '0;
+                  end
+                  COMMAND_FLUSH_OPCODE: begin
+                    state <= STATE_FLUSH_HEADER;
+                    data_shift <= '0;
                   end
                   default: begin
                     state <= STATE_REJECT;
@@ -483,9 +511,10 @@ module spi_register_bridge #(
                 stream_crc <= crc16_ccitt_byte(
                     16'hffff, data_shift[22:15]);
                 stream_reject <= cmd_valid || commit_start_pending ||
+                    cmd_flush_req ||
                     (data_shift[22:15] == 0) ||
                     (data_shift[22:15] > 8'(MAX_COMMAND_WORDS));
-                if (cmd_valid || commit_start_pending ||
+                if (cmd_valid || commit_start_pending || cmd_flush_req ||
                     (data_shift[22:15] == 0) ||
                     (data_shift[22:15] > 8'(MAX_COMMAND_WORDS)))
                   spi_error <= 1'b1;
@@ -524,6 +553,25 @@ module spi_register_bridge #(
               end else begin
                 bit_count <= bit_count + 7'd1;
               end
+            end
+          end
+
+          STATE_FLUSH_HEADER: begin
+            if (sclk_rise) begin
+              data_shift <= {data_shift[29:0], mosi_sync[1]};
+              if (bit_count == 7'd23) begin
+                bit_count <= '0;
+                state <= STATE_FLUSH_WAIT;
+              end else begin
+                bit_count <= bit_count + 7'd1;
+              end
+            end
+          end
+
+          STATE_FLUSH_WAIT: begin
+            if (sclk_rise) begin
+              state <= STATE_REJECT;
+              spi_error <= 1'b1;
             end
           end
 

@@ -28,6 +28,8 @@ module tb_voice_major_throughput;
   logic cmd_stream_valid;
   logic [31:0] cmd_stream_data;
   logic cmd_stream_ready;
+  logic cmd_stream_flush_req;
+  logic cmd_stream_flush_ack;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
 /* verilator lint_off UNUSEDSIGNAL */
@@ -206,6 +208,7 @@ module tb_voice_major_throughput;
     bus_req = '0;
     cmd_stream_valid = 1'b0;
     cmd_stream_data = '0;
+    cmd_stream_flush_req = 1'b0;
     block_req_valid = 1'b0;
     block_req = '0;
     line_req_ready = 1'b1;

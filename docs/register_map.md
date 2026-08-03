@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000e0000`. This register remains readable while the renderer core is held in reset. Version 14 replaces debug command injection with coherent diagnostic interval controls; the command transaction is unchanged. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x000f0000`. This register remains readable while the renderer core is held in reset. Version 15 replaces in-band command flush with the dedicated SPI `0xa6` recovery transaction. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
@@ -141,6 +141,10 @@ Version 14 removes `CMD_FIFO_DATA`; all command submission now uses the
 transactional command stream. It adds the diagnostic interval control and exact
 status registers at `0x9080` through `0x9094`.
 
+Version 15 removes the `0x7f` command-word FLUSH and adds the dedicated SPI
+`0xa6` FLUSH transaction. Register addresses and field meanings are otherwise
+unchanged.
+
 ### Compressor Diagnostics
 
 `COMPRESSOR_STATUS` fields are:
@@ -215,6 +219,10 @@ command and mixed-ingress failure modes of the former `CMD_FIFO_DATA` debug
 path. Hardware, simulation harnesses, and production hosts all submit complete
 command transactions through the dedicated command stream.
 
+Version 15 recovery uses the independent four-byte frame `a6 00 aa d7`.
+It cancels unpublished SPI staging, clears `CMD_FIFO_STATUS` occupancy, and
+resets the parser without changing active voices or audio/effect configuration.
+
 ### Voice-Major Mono Commands (Version 10)
 
 The production voice-major renderer accepts one complete mono sample lane per
@@ -244,7 +252,6 @@ three-word filter group, bit 3 includes the six-word envelope group, and bits
 | `0x16` | `VOICE_GAIN` | 2 | `{gain_r,gain_l}` |
 | `0x17` | `VOICE_FILTER` | 4 | B0/B1, B2/A1, A2/control |
 | `0x18` | `VOICE_PITCH` | 2 | Q24.8 phase increment |
-| `0x7f` | `STREAM_FLUSH` | 0 | none |
 
 There is no stereo-definition opcode in version 10 and `START` is not split
 from definition. Linked SF2 stereo samples and compatible hard-panned pairs are

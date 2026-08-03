@@ -72,7 +72,8 @@ register window and no compatibility register bank.
 The control plane contains a 1024-word FIFO, a length/semantic-checking parser,
 the block state store, generation validation, and command/stale-generation
 counters. Commands enter only through the dedicated SPI `0xa5` stream; version
-14 removed register-based command injection. A render block is admitted only after pending commands
+15 adds an `0xa6` transport FLUSH that cancels unpublished bridge words, clears
+the command FIFO, and resets the parser. A render block is admitted only after pending commands
 have drained, so state changes occur at an output-block boundary.
 
 `VOICE_START_MONO` installs a complete descriptor, runtime parameters, and fresh

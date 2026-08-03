@@ -370,7 +370,7 @@ used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
 `build/smart_artix_bringup` reads the current mailbox-backed common status as a
 staged checklist and exits nonzero when a required stage fails. It requires
-`VERSION == 0x000e0000`; an older bitstream is rejected instead
+`VERSION == 0x000f0000`; an older bitstream is rejected instead
 of being diagnosed with current semantics. If CH347 is connected to the host
 but not to a valid FPGA SPI target, MISO may read back as all ones. The runner
 detects `0xffff_ffff` and reports that no FPGA target responded.

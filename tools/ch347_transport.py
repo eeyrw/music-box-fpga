@@ -36,6 +36,8 @@ RESPONSE_OK = 0
 RESPONSE_BUS_ERROR = 1
 RESPONSE_BUSY = 2
 RESPONSE_EMPTY = 3
+COMMAND_STREAM = 0xA5
+COMMAND_FLUSH = 0xA6
 
 DDR_ACCESS_CONTROL = 0x9060
 DDR_ACCESS_STATUS = 0x9064
@@ -152,8 +154,22 @@ def command_crc16(words: Sequence[int]) -> int:
     for byte in payload:
         crc ^= byte << 8
         for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
     return crc
+
+
+def encode_flush_transaction() -> bytes:
+    payload = bytes((COMMAND_FLUSH, 0))
+    crc = 0xFFFF
+    for byte in payload:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return payload + crc.to_bytes(2, "big")
 
 
 def validate_command_words(words: Sequence[int]) -> None:
@@ -173,7 +189,7 @@ def validate_command_words(words: Sequence[int]) -> None:
 
 def encode_command_transaction(words: Sequence[int]) -> bytes:
     crc = command_crc16(words)
-    return bytes((0xA5, len(words), crc >> 8, crc & 0xFF)) + b"".join(
+    return bytes((COMMAND_STREAM, len(words), crc >> 8, crc & 0xFF)) + b"".join(
         word.to_bytes(4, "big") for word in words
     )
 
@@ -350,6 +366,9 @@ class Ch347Transport:
 
     def write_command_words(self, words: Sequence[int]) -> None:
         self.send(encode_command_transaction(words))
+
+    def flush_command_stream(self) -> None:
+        self.send(encode_flush_transaction())
 
 
 class DdrDebugAccess:

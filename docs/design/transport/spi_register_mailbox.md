@@ -1,7 +1,7 @@
 # SPI Register Mailbox Timing And Throughput
 
 This document covers the split-phase single-register protocol implemented by
-`spi_register_bridge`. Opcode `0xa5` command traffic is documented separately
+`spi_register_bridge`. Opcode `0xa5` command traffic and opcode `0xa6` FLUSH are documented separately
 in [`spi_command_stream.md`](spi_command_stream.md).
 
 The request receiver oversamples synchronized SPI mode-0 pins in the 100 MHz

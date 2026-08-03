@@ -908,16 +908,16 @@ not as evidence that the architectural cone is robust.
 9. Record final utilization, timing, checksum, and critical-path identity beside
    the board flow.
 
-The 2026-08-03 Smart Artix implementation uses synthesis checksum `d06bc090` and
+The 2026-08-03 Smart Artix implementation uses synthesis checksum `dc2bc351` and
 closed the constrained MIG `ui_clk` (`clk_pll_i`) domain at 100 MHz with WNS
-`+0.058 ns`, TNS `0 ns`, WHS `+0.013 ns`, THS `0 ns`, zero setup/hold failing
-endpoints, all 47,919 nets routed, and zero DRC errors. Utilization is 25,909
-LUTs (79.48%), 26,467 registers (40.59%), 39 DSPs (32.50%), and 46.5 BRAM tiles
-(62.00%). The SD reader's two 512-byte banks map to one 1K-by-8 RAMB18. The
-worst setup path is in the effect-return mixer's reverb-dry saturation-count
-logic; the worst hold path crosses the DDR register-access master into MIG.
+`+0.141 ns`, TNS `0 ns`, WHS `+0.044 ns`, THS `0 ns`, zero setup/hold failing
+endpoints, all 47,927 nets routed, and zero DRC errors. Utilization is 25,876
+LUTs (79.37%), 26,520 registers (40.67%), 39 DSPs (32.50%), and 46.5 BRAM tiles
+(62.00%). The SPI bridge's 63-by-32 command staging array maps to one RAMB18.
+The worst setup path is in the renderer's descriptor-plan count logic; the worst
+hold path is between renderer work-context and DSP-token filter state.
 
-The JSON summary records 126 DRC warnings. `vivado_report_summary.py analyze`
+The JSON summary records 128 DRC warnings. `vivado_report_summary.py analyze`
 reports no uncovered ordinary inputs and 10 uncovered outputs, while
 `check_timing` reports 3 `no_input_delay` and 11 `no_output_delay` objects. The
 methodology findings are `LUTAR-1=1`, `PDRC-190=12`, `SYNTH-6=53`,

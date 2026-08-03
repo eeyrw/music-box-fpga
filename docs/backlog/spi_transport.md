@@ -8,7 +8,7 @@ and
 [`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
 
 The status was refreshed against `spi_register_bridge`, the command plane, and
-`Ch347RegisterTransport` on 2026-07-31.
+`Ch347RegisterTransport` on 2026-08-03.
 
 ## Implemented Baseline
 
@@ -22,6 +22,8 @@ The status was refreshed against `spi_register_bridge`, the command plane, and
   mailbox. The former direct and burst opcodes are rejected.
 - Opcode `0xa5` begins an aligned four-byte header containing an 8-bit word
   count and CRC16, followed by 1 through 63 big-endian command words.
+- Opcode `0xa6` is the fixed four-byte out-of-band FLUSH transaction. It
+  cancels unpublished staging, clears the command FIFO, and resets parser state.
 - The bridge stages and validates the complete CS-delimited transaction before
   beginning a held ready/valid commit into the shared 1024-word FIFO.
 - `spi_error` is an output indication. It is cleared at the start of the next
@@ -30,9 +32,7 @@ The status was refreshed against `spi_register_bridge`, the command plane, and
   and does not currently preflight `CMD_FIFO_STATUS`. Its transport API can
   carry multiple complete commands but rejects malformed framing and more than
   63 total words.
-- `CMD_FIFO_DATA` is retained for controlled debug injection only. Production
-  software does not submit commands through register writes, so it is outside
-  the reliable SPI command-transaction contract.
+- There is no register-based command injection path.
 - Register requests hold the internal ready/valid bus until completion. Their
   CRC32-protected response is retained for later fetch, so register latency is
   not coupled to the active SPI request transaction.
@@ -119,8 +119,8 @@ Open design choices:
   the register map. `spi_error` remains only a per-transaction indication.
 - [ ] Decide whether a READY GPIO is needed or whether sparse host traffic plus
   software-readable counters is sufficient.
-- [ ] Define an out-of-band recovery operation that clears both FIFO and parser
-  state; an in-band `STREAM_FLUSH` cannot recover a missing-payload desync.
+- [x] Define and implement the `0xa6` out-of-band recovery operation that
+  cancels bridge publication, clears the FIFO, and resets parser state.
 
 This path fixes SPI-001 and SPI-002 for the current CH347 workflow. CRC detects
 corruption when enabled, but the protocol still does not provide an ACK,
@@ -218,8 +218,9 @@ For the compatible transport:
   not the truncation/framing atomicity mechanism;
 - [ ] read sticky rejection/framing status after a failed operation or during
   health polling;
-- [ ] bound retries and issue `STREAM_FLUSH` or reset only according to the
-  documented recovery contract.
+- [x] expose the dedicated FLUSH frame in the C++ and Python CH347 transports;
+- [ ] bound retries and issue FLUSH or reset only according to the documented
+  recovery contract.
 
 For a future packetized transport, additionally implement sequence-based retry,
 duplicate suppression, response polling or READY/IRQ, and CRC errors.
@@ -239,6 +240,8 @@ Compatible hardening is complete only when focused tests prove:
 - [ ] FIFO wrap and multiple commands in one `0xa5` transaction preserve
   ordering;
 - [ ] reset in receive, validate, and commit states leaves no visible prefix;
+- [x] a valid FLUSH under downstream backpressure cancels the staged commit,
+  clears downstream parsing state, and allows the next complete command;
 - [ ] all sticky counters saturate and clear according to the register contract;
 - [ ] sparse diagnostic register traffic and the maximum intended `0xa5`
   command workload do not cause audio underrun, drop, or hidden transport loss.

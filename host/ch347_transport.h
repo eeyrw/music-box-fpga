@@ -24,6 +24,7 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
  public:
   using RegisterRequest = std::array<uint8_t, 12>;
   using RegisterFetch = std::array<uint8_t, 16>;
+  using FlushTransaction = std::array<uint8_t, 4>;
 
   struct RegisterMailboxResponse {
     uint8_t status;
@@ -41,6 +42,7 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   void write_register(uint16_t address, uint32_t data) override;
   uint32_t read_register(uint16_t address) override;
   void write_command_words(render::CommandWordView words) override;
+  void flush_command_stream();
 
   struct CommandTransaction {
     std::array<uint8_t, 256> bytes{};
@@ -62,6 +64,7 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   }
   static uint16_t command_transaction_crc16_oracle(render::CommandWordView words);
   static CommandTransaction encode_command_transaction(render::CommandWordView words);
+  static FlushTransaction encode_flush_transaction();
   static uint32_t register_frame_crc32(uint8_t byte0, uint8_t byte1,
                                        uint16_t address, uint32_t data);
   static RegisterRequest encode_register_request(

@@ -71,15 +71,9 @@ std::size_t FrameBatchedCommandSink::apply_frame() {
     --pending_count_;
     max_deferred_frames_ = std::max(
         max_deferred_frames_, frame_index_ - command.enqueue_frame);
-    const bool flush = uint8_t(command.command.words[0] >> 24) == 0x7f;
     sink_.write_command_words(command.command.view());
     ++applied;
     ++total_applied_actions_;
-    if (flush) {
-      pending_count_ = 0;
-      pending_head_ = pending_tail_;
-      break;
-    }
   }
   ++frame_index_;
   return applied;

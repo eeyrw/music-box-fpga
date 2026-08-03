@@ -78,6 +78,7 @@ module voice_major_render_harness (
   render_block_read_req_t block_read_req;
   render_block_read_rsp_t block_read_rsp;
   sample_window_diagnostics_t sample_window_diagnostics;
+  logic command_stream_flush_ack;
   logic line_req_valid;
   logic line_req_ready;
   ordered_line_req_t line_req;
@@ -155,6 +156,8 @@ module voice_major_render_harness (
     .cmd_stream_valid,
     .cmd_stream_data,
     .cmd_stream_ready,
+    .cmd_stream_flush_req(1'b0),
+    .cmd_stream_flush_ack(command_stream_flush_ack),
     .command_error_count,
     .stale_generation_count,
     .audio_config,
@@ -185,7 +188,8 @@ module voice_major_render_harness (
   );
 
   logic unused_audio_control;
-  assign unused_audio_control = (|audio_config) | (|effect_clear);
+  assign unused_audio_control = (|audio_config) | (|effect_clear) |
+      command_stream_flush_ack;
 
 `ifdef SYNTH_SIM_DIRECT_MEMORY
   direct_line_memory_model #(

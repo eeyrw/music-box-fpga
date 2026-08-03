@@ -109,6 +109,7 @@ def parse_args() -> argparse.Namespace:
 
     command = subparsers.add_parser("command", help="send complete raw command word transactions")
     command.add_argument("words", type=integer, nargs="+", metavar="WORD")
+    subparsers.add_parser("flush", help="discard pending FPGA command-stream work")
     return parser.parse_args()
 
 
@@ -248,6 +249,9 @@ def main() -> int:
         elif args.command == "command":
             transport.write_command_words(args.words)
             print(f"sent {len(args.words)} command words")
+        elif args.command == "flush":
+            transport.flush_command_stream()
+            print("command stream flushed")
     return 0
 
 

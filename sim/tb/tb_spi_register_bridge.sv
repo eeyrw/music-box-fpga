@@ -21,6 +21,8 @@ module tb_spi_register_bridge;
   logic cmd_valid;
   logic [31:0] cmd_data;
   logic cmd_ready;
+  logic cmd_flush_req;
+  logic cmd_flush_ack;
   logic [31:0] registers [0:63];
   logic bus_allow;
   int bus_access_count = 0;
@@ -34,8 +36,12 @@ module tb_spi_register_bridge;
   logic [31:0] bus_wdata_no_crc;
   logic cmd_valid_no_crc;
   logic [31:0] cmd_data_no_crc;
+  logic cmd_flush_req_no_crc;
+  logic cmd_flush_ack_no_crc;
   logic [31:0] received_commands_no_crc [0:127];
   int received_count_no_crc = 0;
+  int flush_count = 0;
+  int flush_count_no_crc = 0;
   int bus_access_count_no_crc = 0;
   int errors = 0;
   time last_spi_fall;
@@ -85,8 +91,13 @@ module tb_spi_register_bridge;
     .bus_error,
     .cmd_valid(cmd_valid_no_crc),
     .cmd_data(cmd_data_no_crc),
-    .cmd_ready
+    .cmd_ready,
+    .cmd_flush_req(cmd_flush_req_no_crc),
+    .cmd_flush_ack(cmd_flush_ack_no_crc)
   );
+
+  assign cmd_flush_ack = cmd_flush_req;
+  assign cmd_flush_ack_no_crc = cmd_flush_req_no_crc;
 
   assign bus_ready = bus_allow && (bus_valid || bus_valid_no_crc);
   assign bus_error = bus_valid && (bus_address[15:8] != 8'h00);
@@ -108,6 +119,10 @@ module tb_spi_register_bridge;
       received_commands_no_crc[received_count_no_crc] <= cmd_data_no_crc;
       received_count_no_crc <= received_count_no_crc + 1;
     end
+    if (cmd_flush_req)
+      flush_count <= flush_count + 1;
+    if (cmd_flush_req_no_crc)
+      flush_count_no_crc <= flush_count_no_crc + 1;
   end
 
   function automatic logic [15:0] crc16_byte(
@@ -296,15 +311,33 @@ module tb_spi_register_bridge;
     end
   endtask
 
-  task automatic spi_flush_transaction(input logic [7:0] word_count);
+  task automatic spi_repeated_header_transaction(input logic [7:0] word_count);
     logic [15:0] crc;
     begin
       crc = crc16_byte(16'hffff, word_count);
       for (int index = 0; index < word_count; index++)
-        crc = crc16_word(crc, 32'h7f00_0000);
+        crc = crc16_word(crc, 32'h9900_0000);
       begin_command_transaction(word_count, crc);
       for (int index = 0; index < word_count; index++)
-        spi_send_word(32'h7f00_0000);
+        spi_send_word(32'h9900_0000);
+      end_transaction();
+    end
+  endtask
+
+  task automatic spi_command_flush(
+    input logic [7:0] flags,
+    input logic corrupt_crc
+  );
+    logic [15:0] crc;
+    begin
+      crc = crc16_byte(16'hffff, 8'ha6);
+      crc = crc16_byte(crc, flags);
+      if (corrupt_crc)
+        crc = crc ^ 16'h0001;
+      begin_transaction(8'ha6);
+      spi_send_byte(flags);
+      spi_send_byte(crc[15:8]);
+      spi_send_byte(crc[7:0]);
       end_transaction();
     end
   endtask
@@ -447,11 +480,11 @@ module tb_spi_register_bridge;
     end
 
     // One transaction may contain multiple complete commands.
-    spi_command_stream3(32'h7f00_0000, 32'h1500_0001, 32'h0000_0001,
+    spi_command_stream3(32'h9900_0000, 32'h1500_0001, 32'h0000_0001,
                         1'b0);
     repeat (8) @(negedge clk);
     if (spi_error || received_count != 3 ||
-        received_commands[0] != 32'h7f00_0000 ||
+        received_commands[0] != 32'h9900_0000 ||
         received_commands[1] != 32'h1500_0001 ||
         received_commands[2] != 32'h0000_0001) begin
       $error("command stream failed: error=%0b count=%0d", spi_error, received_count);
@@ -460,7 +493,7 @@ module tb_spi_register_bridge;
 
     // A complete transaction remains staged while the downstream FIFO stalls.
     cmd_ready = 1'b0;
-    spi_command_stream3(32'h7f00_0000, 32'h1500_0001, 32'h0000_0002,
+    spi_command_stream3(32'h9900_0000, 32'h1500_0001, 32'h0000_0002,
                         1'b0);
     repeat (8) @(negedge clk);
     if (spi_error || received_count != 3 || !cmd_valid) begin
@@ -470,7 +503,7 @@ module tb_spi_register_bridge;
     cmd_ready = 1'b1;
     repeat (8) @(negedge clk);
     if (received_count != 6 ||
-        received_commands[3] != 32'h7f00_0000 ||
+        received_commands[3] != 32'h9900_0000 ||
         received_commands[4] != 32'h1500_0001 ||
         received_commands[5] != 32'h0000_0002) begin
       $error("staged command transaction did not commit in order");
@@ -478,12 +511,12 @@ module tb_spi_register_bridge;
     end
 
     // CRC checking is a build option; the wire header never changes.
-    spi_command_stream3(32'h7f00_0000, 32'h1500_0001, 32'h0000_0003,
+    spi_command_stream3(32'h9900_0000, 32'h1500_0001, 32'h0000_0003,
                         1'b1);
     repeat (8) @(negedge clk);
     if (!spi_error || received_count != 6 ||
         spi_error_no_crc || received_count_no_crc != 9 ||
-        received_commands_no_crc[6] != 32'h7f00_0000 ||
+        received_commands_no_crc[6] != 32'h9900_0000 ||
         received_commands_no_crc[7] != 32'h1500_0001 ||
         received_commands_no_crc[8] != 32'h0000_0003) begin
       $error("configurable CRC checking mismatch: checked=%0d unchecked=%0d",
@@ -534,7 +567,44 @@ module tb_spi_register_bridge;
       errors++;
     end
 
-    spi_flush_transaction(8'd63);
+    // A dedicated flush cancels a previously accepted staging commit even
+    // while its first word is held by downstream backpressure.
+    cmd_ready = 1'b0;
+    spi_command_stream3(32'h9900_0000, 32'h1500_0001, 32'h0000_0006,
+                        1'b0);
+    repeat (8) @(negedge clk);
+    if (!cmd_valid || !cmd_valid_no_crc) begin
+      $error("pre-flush command transaction was not staged");
+      errors++;
+    end
+    spi_command_flush(8'h00, 1'b0);
+    repeat (4) @(negedge clk);
+    cmd_ready = 1'b1;
+    repeat (8) @(negedge clk);
+    if (spi_error || spi_error_no_crc || cmd_valid || cmd_valid_no_crc ||
+        flush_count != 1 || flush_count_no_crc != 1 ||
+        received_count != 6 || received_count_no_crc != 9) begin
+      $error("dedicated flush did not cancel staged publication");
+      errors++;
+    end
+
+    spi_command_flush(8'h00, 1'b1);
+    repeat (4) @(negedge clk);
+    if (!spi_error || spi_error_no_crc || flush_count != 1 ||
+        flush_count_no_crc != 2) begin
+      $error("flush CRC configuration mismatch");
+      errors++;
+    end
+
+    spi_command_flush(8'h01, 1'b0);
+    repeat (4) @(negedge clk);
+    if (!spi_error || !spi_error_no_crc || flush_count != 1 ||
+        flush_count_no_crc != 2) begin
+      $error("flush reserved flags were not rejected");
+      errors++;
+    end
+
+    spi_repeated_header_transaction(8'd63);
     repeat (140) @(negedge clk);
     if (spi_error || received_count != 69 || received_count_no_crc != 72) begin
       $error("maximum command transaction failed: checked=%0d unchecked=%0d",

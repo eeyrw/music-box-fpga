@@ -14,6 +14,8 @@ module tb_voice_major_render_core;
   logic cmd_stream_valid;
   logic [31:0] cmd_stream_data;
   logic cmd_stream_ready;
+  logic cmd_stream_flush_req;
+  logic cmd_stream_flush_ack;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
   global_audio_config_t audio_config;
@@ -173,6 +175,7 @@ module tb_voice_major_render_core;
     bus_req = '0;
     cmd_stream_valid = 1'b0;
     cmd_stream_data = '0;
+    cmd_stream_flush_req = 1'b0;
     block_req_valid = 1'b0;
     block_req = '0;
     line_req_ready = 1'b0;
@@ -189,6 +192,21 @@ module tb_voice_major_render_core;
     @(negedge clk);
     rst = 1'b0;
 
+    // Flush a partially received command and verify that parsing resumes at a
+    // fresh header without changing the active audio configuration.
+    send_command_word(32'h2100_0001);
+    repeat (2) @(posedge clk);
+    @(negedge clk);
+    cmd_stream_flush_req = 1'b1;
+    #1;
+    if (!cmd_stream_flush_ack || cmd_stream_ready)
+      $fatal(1, "command-stream flush handshake mismatch");
+    @(posedge clk);
+    @(negedge clk);
+    cmd_stream_flush_req = 1'b0;
+    if (audio_config.master_volume != 16'sh7fff || command_error_count != 0)
+      $fatal(1, "command-stream flush changed active state or diagnostics");
+
     configure_audio();
     start_mono_voice();
 
@@ -197,7 +215,8 @@ module tb_voice_major_render_core;
     if (command_error_count != 0 || stale_generation_count != 0)
       $fatal(1, "replacement core reported a false stale write");
 
-    send_command_word(32'hee00_0000);
+    // The former in-band STREAM_FLUSH opcode is now unsupported.
+    send_command_word(32'h7f00_0000);
     do @(posedge clk); while (command_error_count == 0);
     if (command_error_count != 1)
       $fatal(1, "malformed command count mismatch");

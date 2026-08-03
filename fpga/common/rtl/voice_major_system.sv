@@ -60,6 +60,8 @@ module voice_major_system #(
   logic spi_cmd_valid;
   logic [31:0] spi_cmd_data;
   logic spi_cmd_ready;
+  logic spi_cmd_flush_req;
+  logic spi_cmd_flush_ack;
   logic core_reset;
 
   logic block_req_valid;
@@ -157,7 +159,9 @@ module voice_major_system #(
     .bus_error(spi_bus_rsp.error),
     .cmd_valid(spi_cmd_valid),
     .cmd_data(spi_cmd_data),
-    .cmd_ready(spi_cmd_ready)
+    .cmd_ready(spi_cmd_ready),
+    .cmd_flush_req(spi_cmd_flush_req),
+    .cmd_flush_ack(spi_cmd_flush_ack)
   );
 
   wavetable_register_fabric #(
@@ -217,6 +221,8 @@ module voice_major_system #(
     .cmd_stream_valid(spi_cmd_valid),
     .cmd_stream_data(spi_cmd_data),
     .cmd_stream_ready(spi_cmd_ready),
+    .cmd_stream_flush_req(spi_cmd_flush_req),
+    .cmd_stream_flush_ack(spi_cmd_flush_ack),
     .command_error_count,
     .stale_generation_count,
     .audio_config,
