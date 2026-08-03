@@ -180,8 +180,8 @@ built before the MIDI device is opened. One process-lifetime
 the allocation, pedal, exclusive-class, pitch-bend, pressure, and controller
 behavior used by the simulation harness.
 
-With `--mcu-asset PATH`, the host instead uses the offline-compiled direct
-dispatch image and fixed-capacity MCU runtime. The sidecar is loaded and fully
+With `--mcu-asset PATH`, the host instead uses the offline-compiled compact-v2
+image and fixed-capacity MCU runtime. The sidecar is loaded and fully
 validated before the command scheduler starts. Startup fails closed unless its
 recorded SF2 byte size and CRC match the `--sf2` file; malformed section bounds,
 references, or profile fields are also rejected. The complete SF2 is currently
@@ -189,7 +189,17 @@ still parsed by this host application solely to perform the source identity
 check. A board integration may validate the same identity from its WTSF bundle
 manifest without parsing SF2 metadata. In either mode, the exact wave image
 referenced by the control metadata must already be present in FPGA-visible
-storage.
+storage. The compact image contains normalized preset-local zones rather than
+key dispatch, mono descriptors, or stored START commands. Note On scans only
+the selected preset, materializes matched zones into fixed local storage, and
+packs the normal command stream into the existing 17-word buffer.
+
+This C++ path is the executable compact-v2 behavior oracle and host integration,
+not the final MCU firmware. The deployment implementation is planned as a
+separate pure-C module with caller-owned fixed storage, generated integer lookup
+tables, no dynamic allocation, and no floating-point or `libm` dependency. Its
+asset reader, Note On commands, continuing modulation updates, and reference PCM
+must be checked against this C++ path before hardware qualification.
 
 Build and run the application with:
 

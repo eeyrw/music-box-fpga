@@ -153,6 +153,53 @@ void CommandVoiceControl::start_voice(int voice, uint32_t phase_inc, const Regio
                    r.filter_a1, r.filter_a2};
 }
 
+FixedCommand build_voice_start_command(int voice, uint16_t generation,
+                                       uint32_t phase_inc, const Region& r) {
+  if (voice < 0 || voice >= kNumVoices || r.stereo) {
+    throw std::out_of_range("invalid mono START command input");
+  }
+  const VolumeEnvelopeParams& env = r.volume_envelope;
+  const uint32_t attack_step = ceil_step(0xffffffffu, env.attack_samples);
+  const uint32_t decay_step = ceil_step(env.sustain_cb_q12_20, env.decay_samples);
+  const bool has_loop = r.loop_mode != 0;
+  const bool has_filter = r.filter_enable;
+  const bool has_envelope = env.delay_samples != 0 || env.attack_samples != 0 ||
+      env.hold_samples != 0 || env.decay_samples != 0 ||
+      env.sustain_cb_q12_20 != 0 || env.release_samples != 0;
+  uint8_t flags = uint8_t(r.loop_mode & 3);
+  if (has_filter) flags |= 1u << 2;
+  if (has_envelope) flags |= 1u << 3;
+  FixedCommand command;
+  const uint8_t payload_words = uint8_t(5 + (has_loop ? 2 : 0) +
+      (has_filter ? 3 : 0) + (has_envelope ? 6 : 0));
+  command.push_back((uint32_t(kDefineMono) << 24) |
+                    (uint32_t(voice) << 14) | (uint32_t(flags) << 8) |
+                    payload_words);
+  command.push_back(generation);
+  command.push_back(r.base_addr);
+  command.push_back(r.length);
+  if (has_loop) {
+    command.push_back(r.loop_start);
+    command.push_back(r.loop_end);
+  }
+  command.push_back(phase_inc);
+  command.push_back(pack_pair(r.gain_r, r.gain_l));
+  if (has_filter) {
+    command.push_back(pack_pair(r.filter_b1, r.filter_b0));
+    command.push_back(pack_pair(r.filter_a1, r.filter_b2));
+    command.push_back(uint32_t(uint16_t(r.filter_a2)) | 0x00010000u);
+  }
+  if (has_envelope) {
+    command.push_back(env.delay_samples);
+    command.push_back(attack_step);
+    command.push_back(env.hold_samples);
+    command.push_back(decay_step);
+    command.push_back(env.sustain_cb_q12_20);
+    command.push_back(envelope_release_step(r));
+  }
+  return command;
+}
+
 void CommandVoiceControl::update_gain_phase(int voice, int gain_l, int gain_r,
                                             uint32_t phase_inc) {
   const VoiceMirror& mirror = voices_.at(voice);

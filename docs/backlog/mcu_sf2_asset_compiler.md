@@ -60,8 +60,7 @@ the fast routine fixture; it does not replace SGM signoff.
   profile.
 - Tabulate finite input domains when that materially reduces MCU work without
   causing uncontrolled image growth.
-- Keep Note On lookup bounded by the selected preset's key entry and its small
-  velocity partition.
+- Keep Note On lookup bounded by the selected preset's declared zone count.
 - Represent runtime modulation as compact fixed-point data and dependency
   metadata rather than maps or general C++ objects.
 - Build existing `VOICE_START_MONO`, `VOICE_RELEASE`, `VOICE_STOP`,
@@ -142,9 +141,9 @@ MCU startup
 MCU real-time path
   MIDI event
     -> channel/preset state
-    -> preset + key + velocity dispatch
-    -> one or more immutable mono layer descriptors
-    -> note-static table values + current channel modulation
+    -> preset-local key + velocity zone scan
+    -> fixed-capacity zone materialization
+    -> note-static values + current channel modulation
     -> voice allocation and generation
     -> existing fixed command builder and asynchronous scheduler
     -> SPI opcode 0xa5
@@ -189,8 +188,7 @@ must rebuild the whole sidecar rather than patching individual tables.
 The image is a serialized format, not a dump of C or C++ structs.
 
 - All integer widths and signedness are explicit.
-- Version 1 uses little-endian integers unless the final MCU requires a
-  different canonical order.
+- Version 2 uses little-endian integers.
 - Every section is naturally aligned to at least four bytes.
 - References are 32-bit image-relative byte offsets or typed 32-bit indices,
   never native pointers or `size_t`.
@@ -219,7 +217,7 @@ The version-1 design should contain at least:
 | compiler/numeric-policy version | Identify conversion and compatibility behavior. |
 | output sample rate and tick samples | Bind all derived timing values. |
 | source SF2 size and digest | Match the WTSF wave image. |
-| sample word offset/count | Validate every descriptor address against loaded DDR data. |
+| sample word offset/count | Validate every materialized sample address against loaded DDR data. |
 | section directory offset/count | Locate typed tables without fixed native structs. |
 | maximum layers per Note On | Size bounded MCU batches before enabling input. |
 | maximum modulation terms per destination | Establish control-loop worst-case work. |
@@ -229,104 +227,49 @@ The section directory identifies section type, element stride, offset, count,
 and optional CRC. Unknown optional sections may be skipped; unknown required
 sections reject the image.
 
-Phase 1 now implements the intermediate `MSF2` semantic image version 1. Its
-96-byte header records the reference profile, command interface, source size
-and CRC32, complete image CRC32, SF2 sample span, and a five-entry section
-directory. The five required sections contain presets, expanded candidates,
-resolved generators, resolved modulators, and sample headers. All records use
-explicit little-endian fields and 32-bit image indexing. This semantic image is
-the checked serialization boundary. Phase 2 adds six optional-as-a-group
-sections for sparse preset dispatch, fixed key dispatch, velocity spans, layer
-references, mono descriptors, and START words. A Phase 1 reader can still
-validate the five required semantic sections; a runtime requiring direct
-dispatch rejects an incomplete optional group. The old private C++ compiled
-structs are never exposed as a file format.
+The current `MSF2` deployment image is format version 2 and is compact-only.
+Its 96-byte header records the reference profile, command interface, source
+size and CRC32, complete image CRC32, SF2 sample span, preset-selection digest,
+and a seven-entry required-section directory. Older format versions are not
+accepted.
 
-Phase 3 adds another all-or-none group containing one three-program reference
-record per candidate, globally interned gain/pitch/filter programs, fixed-stride
-terms, and 16 shared 128-entry Q16.16 source curves. Programs keep a note-static
-prefix and a dependency mask. Zero-amount terms are removed; `none` sources are
-folded to the Q16.16 unity constant by the evaluator. Candidate records never
-copy a term list.
+The compiler still constructs the semantic IR in host memory and uses it for
+exhaustive offline equivalence checks. Version 2 serializes only seven runtime
+sections: presets, normalized zones, resolved generator pairs, reachable sample
+headers, candidate program references, modulation programs, and modulation
+terms. It contains no key dispatch, velocity spans, mono descriptors, runtime
+configuration table, or stored START words. Shared source curves remain
+firmware numeric-policy data and are not duplicated in each image.
 
 ## Logical Tables
 
 ### Preset Directory
 
-Store only present `(bank, program)` pairs in sorted order. A compact sorted
-array plus binary search is deterministic and normally preferable to a native
-hash table. A generated two-level bank/program index may be selected later if
-target measurements show lookup latency matters.
+Each fixed-stride preset record stores `(bank, program)` plus the offset and
+count of its zones. Lookup is a bounded scan of the sparse preset directory;
+the selected SGM bank-zero image has 128 entries.
 
-Each preset record points to exactly 128 key-dispatch records. Instrument-name
-lookup and diagnostic names are not required by the performance firmware and
-belong in an optional diagnostic section.
+### Normalized Zones
 
-### Key And Velocity Dispatch
+Each 20-byte zone stores inclusive key/velocity ranges, a generator
+offset/count and presence bitmap, plus a reachable-sample index. Generator
+amounts occupy two bytes each; their operators come from the bitmap. Key range,
+velocity range, and sample ID are not duplicated in the generator stream.
+Source order is preserved, so linked layers remain adjacent and one Note On
+producer batch retains their ordering.
 
-Each key-dispatch record contains an offset and count into a velocity-span
-table. A span contains:
-
-- inclusive velocity low and high bounds;
-- offset and count of the ordered mono layers selected in that span;
-- optional note-initialization table identifier;
-- flags for an empty result or linked-stereo adjacency requirements.
-
-Adjacent velocities with identical layer selection are represented as one
-span. This preserves exact SF2 range selection without materializing a dense
-`preset x 128 x 128` matrix.
-
-The compiler must preserve source-defined layer order. Linked stereo and
-compatible stereo pairs remain two adjacent mono layer references, and the MCU
-scheduler must publish their START commands in one producer batch.
-
-### Mono Layer Descriptor
-
-A layer descriptor contains only immutable or table-selected control values:
-
-- absolute SF2 word address, sample length, loop start, exclusive loop end, and
-  loop mode;
-- sample rate, root key, pitch correction, scale tuning, and precomputed base
-  phase data;
-- base left/right gain, pan, file attenuation, and stereo routing policy;
-- fixed FPGA volume-envelope delay, attack, hold, decay, sustain, and release
-  fields for the selected output profile;
-- initial filter enable and coefficients;
-- exclusive class and preset identity used by MCU allocation policy;
-- IDs for note-initialization and runtime-modulation programs;
-- compact dependency masks for gain, pitch, and filter;
-- flags describing which optional START payload sections are present.
-
-Names, generator maps, modulator vectors, `double` values, and reference-model
-diagnostics do not belong in this record.
-
-The compiler should also intern the six envelope words and three filter words
-when measured data shows useful duplication. Interning is an image-size choice,
-not an excuse to add unbounded runtime pointer chasing; maximum reference depth
-is one table lookup.
-
-### START Command Template
-
-For each layer, the compiler may store a prepacked START template containing
-every word that is independent of voice slot, generation, and live MIDI channel
-state. The MCU patches only:
-
-- header voice ID;
-- generation;
-- phase increment when live pitch state changes the base value;
-- left/right gain when live attenuation or pan changes it;
-- filter words when live modulation changes the initial filter.
-
-The template must still pass through the shared `CommandVoiceControl` semantics
-or a verified equivalent packer. Directly transmitting opaque compiler bytes
-without validating generation and payload length would create a second command
-contract and is not allowed.
+At Note On, the runtime scans only the selected preset's zones, copies at most
+61 generator values into fixed local storage, materializes the command-visible
+region fields, applies live channel modulation, and packs an ordinary
+`VOICE_START_MONO` command into the existing 17-word fixed buffer. Active voice
+state owns every value needed after Note On; it retains no pointer into a zone
+or temporary materialization result.
 
 ## Precomputation Policy
 
-"Precompute everything possible" means that no function of only the SF2 and
-output profile remains in the MCU. It does not require an uncompressed table for
-every Cartesian product.
+Precomputation stops where retaining normalized source units is smaller and the
+bounded Note On conversion can meet the target deadline. It does not require an
+uncompressed table for every Cartesian product.
 
 ### Always Precomputed
 
@@ -339,12 +282,9 @@ every Cartesian product.
   sample expansion.
 - file-defined attenuation compatibility scaling.
 - destination grouping and source-dependency masks.
-- output-profile duration conversions and FPGA envelope fields.
-- sample-rate ratio constants, root-key correction, base phase values, LFO
-  increments, and static filter values.
-- reusable source transform tables, attenuation curves, pan factors, and pitch
-  ratios.
-- optional START word templates.
+- reachable sample headers and normalized generator values;
+- compact modulation programs, term ordering, constant folding, and dependency
+  masks.
 
 ### Finite-Domain Tables
 
@@ -389,18 +329,12 @@ change.
 
 ### Size-Guided Choice
 
-The compiler should support at least two policies. The implemented
-`direct-v1` policy keeps interval dispatch and materialized START commands for
-minimum Note On work. The planned `compact-v2` policy minimizes deployed bytes:
-it stores resolved normalized zones without per-key or per-velocity expansion,
-and performs bounded integer lookup, conversion, modulation, and command
-construction at Note On.
-
-Both policies must produce the same selected layers and command-visible
-quantized results. The build report compares their size and worst-case
-operation counts on the target SF2. The deployment policy is selected from
-measured target-MCU timing and available nonvolatile storage, not from a blanket
-assumption that either arithmetic or flash is free.
+The compiler has one deployment policy: `compact-v2`.
+Optional compact indexes and shared records are retained only when their total
+asset plus firmware cost is smaller or target timing proves them necessary.
+Selected layers and command-visible results continue to be compared with the
+existing dynamic host oracle during compiler tests, without serializing a
+second deployment representation.
 
 ## Modulation Representation
 
@@ -737,7 +671,7 @@ image contains 285 presets, 15,714 candidates, 156,953 resolved generators,
 Exit gate: Note On performs no SF2 parsing, zone merging, heap allocation,
 floating-point transcendental operation, or general map lookup.
 
-The direct dispatch test exhausts every preset, key, and Note On velocity. It
+The compact dispatch test exhausts every preset, key, and Note On velocity. It
 recomputes expected ordered candidate IDs from the Phase 1 semantic ranges and
 compares every returned layer. Each key-specific descriptor is independently
 converted through the existing `region_from_zone` path and then packed by
@@ -771,7 +705,7 @@ Exit gate: numeric sweeps pass their exact/error contracts and representative
 MIDI command traces match the approved reference behavior.
 
 The final SGM bank-zero GM deployment set contains 128 of 285 presets. Its
-Phase 2 direct-dispatch image is 4,230,916 bytes instead of the 9,700,276-byte
+Phase 2 precomputed image is 4,230,916 bytes instead of the 9,700,276-byte
 all-preset image (56.4% smaller): 3,658 candidates, 49,229 generators, 38,901
 modulators, 1,437 reachable sample headers, 36,625 mono descriptors, and 575,142
 globally interned START words. Product-specific bank variants and drum presets
@@ -833,7 +767,7 @@ specific MCU and flash execution model are selected.
 Exit gate: the MCU compiled-asset path is the documented production host path;
 the existing RTL contracts and implementation remain unchanged.
 
-The Phase 5 equivalence test drives both policies through layered Note On, CC7,
+The Phase 5 equivalence test drives the compiled and dynamic host paths through layered Note On, CC7,
 pitch bend, four periodic control ticks, and oldest-instance Note Off. It
 compares every command length and word, then feeds the two streams to independent
 `ReferenceSynth` instances and compares 1,024 stereo PCM frames exactly across
@@ -851,13 +785,6 @@ and keep the Phase 4/5 hardware exit gates unsatisfied.
 
 ## Compact MSF2 Extension
 
-The 4,450,632-byte bank-zero SGM image is a speed-first reference, not a
-metadata lower bound. Selecting only 128 presets removes unreachable SF2
-objects, but `direct-v1` then expands every playable candidate/key combination
-into a descriptor and nearly complete START command. That is the correct
-tradeoff for establishing a simple bounded runtime, but it spends external
-flash to avoid work that occurs only at Note On rate.
-
 The compact objective is lexicographic: preserve exact behavior and bounded
 memory first, meet the selected target's event deadline second, then minimize
 total deployed asset plus format-specific firmware-table bytes. MCU arithmetic
@@ -865,41 +792,14 @@ is not treated as a defect. A precomputed field, dispatch index, or cache is
 present only when the smallest representation without it misses the measured
 deadline.
 
-### Measured Direct-V1 Size
+### Layout And Compatibility
 
-The production SGM bank-zero image has the following byte accounting. The
-26-byte difference from the image total is section alignment padding.
+Layout is separate from the numeric output profile. `compact-v2` uses
+`generic-le32-48k-tick48-v15` and must emit the same command words as the
+dynamic host oracle:
 
-| Group | Bytes | Image share | Reason retained |
-| --- | ---: | ---: | --- |
-| START words | 2,300,568 | 51.69% | 575,142 prepacked command words |
-| mono descriptors | 732,500 | 16.46% | 36,625 candidate/key records |
-| semantic presets/candidates/generators/modulators/samples | 716,002 | 16.09% | verification and reconstruction data |
-| preset/key/span/layer dispatch | 481,572 | 10.82% | bounded Note On selection |
-| programs, curves, and runtime configurations | 219,620 | 4.93% | live modulation and descriptor references |
-| header and directory | 344 | 0.01% | identity and checked section views |
-
-The average key-specific descriptor references 15.7 START words. Exact whole
-image compression confirms that the expanded representation contains large
-structural redundancy: the 4,450,632-byte image becomes 529,488 bytes with
-`gzip -9`, 441,329 bytes with `zstd -3`, 419,022 bytes with `zstd -9`, and
-393,695 bytes with `zstd -19`. These are diagnostic lower-bound observations,
-not proposed MCU formats. A monolithic compressed stream would remove bounded
-random access and require memory for the complete 4.45 MB expansion, which is
-not acceptable for an RP2040-class design.
-
-### Layout Selection And Compatibility
-
-Layout is separate from the numeric output profile. Both layouts use
-`generic-le32-48k-tick48-v15` and must emit identical command words:
-
-- `direct-v1` remains readable and is the latency/reference baseline;
-- `compact-v2` uses a new format version because its required sections and
-  record meanings differ from version 1;
-- the compiler accepts an explicit `--layout direct|compact`; it never silently
-  changes layout because an image exceeds a heuristic size;
-- the host verifier supports both during migration, while target firmware may
-  compile in only the deployed reader;
+- the compiler emits only format version 2;
+- the host verifier and target runtime accept only version 2;
 - format, layout, source SF2 identity, preset-selection digest, numeric profile,
   and command interface remain fail-closed header checks;
 - there is no MCU fallback from a rejected compact image to runtime SF2 parsing.
@@ -1010,8 +910,8 @@ terms, arithmetic operations, and table reads per Note On so the later target
 gate can set an evidence-based deadline.
 
 The added work belongs only to Note On and cold preset acquisition. Periodic
-gain, pitch, and filter evaluation continues to use the same fixed integer
-evaluator and active-voice state semantics as `direct-v1`; the needed normalized
+gain, pitch, and filter evaluation continues to use the fixed integer evaluator
+and active-voice state semantics; the needed normalized
 terms are copied from the matched zone when the voice starts.
 
 ### Optional Block Compression
@@ -1055,9 +955,9 @@ For the exact SGM source, `gm_bank0.txt`, and reference output profile:
 - command buffer remains 17 words with no heap allocation;
 - the build report must list logical and stored bytes per section, record
   counts/strides, interning savings, index widths, and largest cold-read block;
-- the benchmark must report direct versus compact cold/warm Note On latency,
-  zone comparisons, arithmetic operations, storage reads, bytes read, and
-  commands emitted for the same trace;
+- the benchmark must report compact cold/warm Note On latency, zone
+  comparisons, arithmetic operations, storage reads, bytes read, and commands
+  emitted for the same trace;
 - every optional index, interned table, cached result, or precomputed field must
   report its added bytes and saved cold/warm cycles; the selected deployment is
   the smallest measured point that passes the target timing gate.
@@ -1072,39 +972,92 @@ behavior implicitly.
 
 ### Phase 6: Accounting And Deployment-Only Image
 
-- [ ] Add exact per-section byte accounting and direct/compact comparison to
-  the JSON manifest.
-- [ ] Separate verification-only semantic sections from runtime-required data.
-- [ ] Define the `compact-v2` header, layout ID, required-section set, and
-  independent malformed-image tests while preserving `direct-v1` reading.
-- [ ] Emit a first compact image without semantic sections and remap descriptors
+- [x] Add exact per-section byte accounting to the JSON manifest.
+- [x] Separate verification-only semantic sections from runtime-required data.
+- [x] Define the compact-only version-2 header and required-section set with
+  independent malformed-image tests.
+- [x] Emit a deployment image without semantic sections and remap descriptors
   directly to interned program/configuration IDs.
-- [ ] Re-run deterministic-build, source-mismatch, selection-mismatch, and CRC
-  tests on both layouts.
+- [x] Re-run deterministic-build, source-mismatch, selection-mismatch, and CRC
+  tests.
 
-Exit gate: byte-identical repeat builds, exact direct/compact selected layers,
-and a compact intermediate below 3,750,000 bytes for SGM bank zero.
+Exit gate: byte-identical repeat builds, exact selected layers against the
+dynamic host oracle, and a compact intermediate below 3,750,000 bytes for SGM
+bank zero.
+
+The SGM bank-zero Phase 6 image is 3,726,340 bytes, meeting the intermediate
+gate and reducing the previous 4,450,632-byte image by 724,292 bytes. The JSON
+report accounts for every section: START words still occupy 2,300,568 bytes,
+mono descriptors 732,500 bytes, and fixed key/velocity/layer dispatch 481,572
+bytes. These remaining expanded sections are explicitly temporary Phase 7
+inputs; the normalized-zone image does not retain them.
 
 ### Phase 7: Normalized Zones And Compute-First Runtime
 
-- [ ] Define normalized preset-base and zone-delta records with presence
-  bitmaps, compact integer fields, and at most one level of shared-record
-  indirection.
-- [ ] Implement preset-local sequential zone scanning as the zero-index
-  baseline; compare it with coarse key buckets and merged interval lists.
-- [ ] Implement the fixed-capacity integer materialization kernel and construct
-  START commands without stored START word arrays.
-- [ ] Move phase, envelope, gain/pan, filter, and initial modulation conversion
-  to generated firmware LUTs and fixed-point arithmetic.
-- [ ] Measure inline versus interned fields, varint/delta encodings, optional
-  indexes, and immutable-result caches; keep only net wins required by timing.
-- [ ] Exhaust every selected preset/key/velocity against `direct-v1`, including
-  layer order and START words before live channel patching.
+- [x] Define normalized zones with generator presence bitmaps, compact integer
+  fields, and no runtime record-reference chain.
+- [x] Implement preset-local sequential zone scanning as the zero-index
+  baseline.
+- [x] Implement fixed-capacity materialization and construct START commands
+  without stored START word arrays.
+- [ ] Reimplement phase, envelope, gain/pan, filter, and initial modulation
+  conversion in the production pure-C MCU runtime using generated firmware
+  LUTs and fixed-point arithmetic.
+- [x] Measure the zero-index normalized representation and omit larger dispatch,
+  descriptor, START-template, and runtime-configuration tables.
+- [x] Exhaust every selected preset/key/velocity against the dynamic host oracle,
+  including layer order, then compare every zone/key START command before live
+  channel patching.
 
 Exit gate: the SGM raw compact image is no larger than 1,000,000 bytes, targets
 512 KiB, performs no heap allocation or SF2 inheritance/object-graph walk, and
 emits bit-exact commands and reference PCM on checked and SGM traces. No larger
 indexed or precomputed variant is selected without a measured timing need.
+
+The SGM bank-zero normalized image is 195,664 bytes: 73,160 bytes of zones,
+76,510 bytes of generator amounts, 31,614 bytes of reachable samples, 10,974
+bytes of candidate program references, and 1,656 bytes of modulation programs
+and terms. Header, directory, presets, and alignment account for the remaining
+1,750 bytes. This is 94.7% smaller than the 3,726,340-byte Phase 6 image and is
+well below both the 1,000,000-byte ceiling and 512 KiB target. Target timing and
+the no-floating-point firmware conversion item remain open, so the complete
+Phase 7 exit gate is not yet satisfied.
+
+The current C++ asset view and `McuSf2AssetRuntime` are the executable format
+and behavior oracle. They are retained for compiler tests, host integration,
+command/PCM comparison, and rapid diagnostics; they are not the production MCU
+firmware implementation.
+
+### Phase 7B: Production Pure-C MCU Runtime
+
+- [ ] Implement a freestanding-compatible C reader for compact-v2 using only
+  explicit-width integer records, caller-owned storage, and checked
+  pointer/size views. It must not require C++, STL, exceptions, RTTI, `malloc`,
+  or a hosted filesystem.
+- [ ] Implement preset lookup, sequential zone scanning, presence-bitmap
+  generator decoding, fixed-capacity layer collection, voice allocation, and
+  command packing behind a small C API suitable for the selected MCU HAL.
+- [ ] Generate versioned integer lookup tables for timecents, pitch ratios,
+  attenuation, pan, LFO steps, and filter construction where table lookup plus
+  interpolation is smaller or faster than retained derived asset fields.
+- [ ] Remove floating point and `libm` from Note On and control-tick code. Audit
+  every multiply, division, rounding boundary, saturation, and intermediate
+  width against the C++ oracle.
+- [ ] Keep all continuing modulation state in fixed caller-owned voice/channel
+  arrays. Active voices must retain no pointer into temporary zone decode
+  storage, and command output must use a caller-provided 17-word buffer or
+  bounded sink.
+- [ ] Run the pure-C implementation against the same MT6276 and SGM exhaustive
+  layer/START tests, compiled-runtime command traces, and reference PCM checks.
+  Cross-compile it with the production MCU compiler and report code size,
+  read-only LUT bytes, static SRAM, maximum stack, cold/warm Note On time, and
+  control-tick time.
+
+Exit gate: the pure-C implementation accepts the same compact-v2 image and is
+command-bit-exact with the approved C++ oracle, uses no dynamic allocation or
+floating-point runtime support, and meets the selected MCU's flash, SRAM,
+stack, and worst-case timing budgets. Optional compression work does not begin
+until this uncompressed production path is measured.
 
 ### Phase 8: Optional Preset-Local Compression
 
@@ -1125,8 +1078,7 @@ record Phase 8 as measured but rejected.
 
 ### Phase 9: Deployment Qualification
 
-- [ ] Select `direct-v1` or `compact-v2` explicitly in the product bundle and
-  record the choice in its manifest.
+- [ ] Record compact-v2 explicitly in the product bundle manifest.
 - [ ] Run exact command/PCM comparisons on complete checked-in MIDI workloads
   and representative SGM bank/program changes.
 - [ ] Measure target cold/warm Note On, controller tick, cache behavior, flash
@@ -1136,23 +1088,23 @@ record Phase 8 as measured but rejected.
 - [ ] Promote compact layout documentation from backlog to stable tooling/host
   contracts only after the selected target passes.
 
-Exit gate: the chosen deployment image meets its flash, SRAM, timing, and
-integrity budgets on hardware. `direct-v1` remains a supported diagnostic
-baseline; compact deployment still causes no production RTL change.
+Exit gate: the deployment image meets its flash, SRAM, timing, and integrity
+budgets on hardware. Compact deployment still causes no production RTL change.
 
 ## Completion Criteria
 
 This backlog is complete only when:
 
-- the real-time MCU never parses SF2 metadata or constructs zones;
+- the real-time MCU never parses RIFF/SF2 metadata, resolves inheritance, or
+  constructs a general-purpose semantic object graph;
 - the deployed sidecar is deterministic, versioned, CRC-protected, and bound to
   the exact WTSF source image and output profile;
 - all Note On lookups, modulation programs, voice state, and queues have fixed
   capacities and measured worst-case work;
 - command-visible numeric behavior is exact or has an explicitly approved and
   tested fixed-point error contract;
-- `direct-v1` and `compact-v2` produce bit-exact command streams and reference
-  PCM for the same compiler profile, MIDI input, and event schedule;
+- `compact-v2` and the dynamic host oracle produce bit-exact command streams
+  and reference PCM for the same compiler profile, MIDI input, and event schedule;
 - the selected compact deployment image satisfies its declared raw or
   block-compressed size ceiling with all indexes, padding, and integrity data
   included;

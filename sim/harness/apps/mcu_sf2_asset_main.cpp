@@ -74,23 +74,35 @@ void write_file(const std::string& path, const std::vector<uint8_t>& data) {
   if (!output) throw std::runtime_error("failed writing MCU SF2 asset: " + path);
 }
 
+
 void write_report(const char* action, const std::string& asset_path,
                   const render::McuSf2AssetView& view, size_t image_size,
                   bool source_checked) {
-  uint16_t maximum_layers = 0;
-  uint16_t maximum_modulation_terms = 0;
-  for (size_t index = 0; index < view.velocity_span_count(); ++index) {
-    maximum_layers = std::max(maximum_layers, view.velocity_span(index).layer_count);
-  }
+  const auto bytes = [&](render::McuSf2AssetSection section) {
+    return view.section_bytes(section);
+  };
+  constexpr size_t directory_bytes = 7 * render::kMcuSf2AssetSectionEntrySize;
+  const size_t payload_bytes = bytes(render::McuSf2AssetSection::kPresets) +
+      bytes(render::McuSf2AssetSection::kZones) +
+      bytes(render::McuSf2AssetSection::kGenerators) +
+      bytes(render::McuSf2AssetSection::kSamples) +
+      bytes(render::McuSf2AssetSection::kCandidatePrograms) +
+      bytes(render::McuSf2AssetSection::kModulationPrograms) +
+      bytes(render::McuSf2AssetSection::kModulationTerms);
+  uint16_t maximum_terms = 0;
+  uint16_t maximum_zones = 0;
   for (size_t index = 0; index < view.modulation_program_count(); ++index) {
-    maximum_modulation_terms = std::max(maximum_modulation_terms,
-                                        view.modulation_program(index).term_count);
+    maximum_terms = std::max(maximum_terms, view.modulation_program(index).term_count);
+  }
+  for (size_t index = 0; index < view.preset_count(); ++index) {
+    maximum_zones = std::max<uint16_t>(maximum_zones,
+                                      uint16_t(view.preset(index).zone_count));
   }
   std::cout << "{\n"
-            << "  \"schema\": \"mcu-sf2-asset-report-v1\",\n"
+            << "  \"schema\": \"mcu-sf2-asset-report-v2\",\n"
+            << "  \"layout\": \"compact-v2\",\n"
             << "  \"action\": \"" << action << "\",\n"
-            << "  \"profile\": \""
-            << render::reference_mcu_sf2_asset_profile().id << "\",\n"
+            << "  \"profile\": \"" << render::reference_mcu_sf2_asset_profile().id << "\",\n"
             << "  \"asset_path\": " << json_string(asset_path) << ",\n"
             << "  \"image_bytes\": " << image_size << ",\n"
             << "  \"source_bytes\": " << view.source_size_bytes() << ",\n"
@@ -98,25 +110,26 @@ void write_report(const char* action, const std::string& asset_path,
             << "  \"source_checked\": " << (source_checked ? "true" : "false") << ",\n"
             << "  \"selection_crc32\": " << view.selection_crc32() << ",\n"
             << "  \"selected_presets\": " << view.selected_preset_count() << ",\n"
-            << "  \"presets\": " << view.preset_count() << ",\n"
-            << "  \"candidates\": " << view.candidate_count() << ",\n"
+            << "  \"zones\": " << view.zone_count() << ",\n"
             << "  \"generators\": " << view.generator_count() << ",\n"
-            << "  \"modulators\": " << view.modulator_count() << ",\n"
             << "  \"samples\": " << view.sample_count() << ",\n"
-            << "  \"preset_dispatch\": " << view.preset_dispatch_count() << ",\n"
-            << "  \"key_dispatch\": " << view.key_dispatch_count() << ",\n"
-            << "  \"velocity_spans\": " << view.velocity_span_count() << ",\n"
-            << "  \"layer_references\": " << view.layer_reference_count() << ",\n"
-            << "  \"mono_descriptors\": " << view.mono_descriptor_count() << ",\n"
-            << "  \"start_words\": " << view.start_word_count() << ",\n"
-            << "  \"candidate_programs\": " << view.candidate_program_count() << ",\n"
             << "  \"modulation_programs\": " << view.modulation_program_count() << ",\n"
             << "  \"modulation_terms\": " << view.modulation_term_count() << ",\n"
-            << "  \"source_curve_values\": " << view.source_curve_value_count() << ",\n"
-            << "  \"runtime_configs\": " << view.runtime_config_count() << ",\n"
-            << "  \"maximum_layers\": " << maximum_layers << ",\n"
-            << "  \"maximum_modulation_terms\": " << maximum_modulation_terms << "\n"
-            << "}\n";
+            << "  \"maximum_zones_per_preset\": " << maximum_zones << ",\n"
+            << "  \"maximum_modulation_terms\": " << maximum_terms << ",\n"
+            << "  \"section_bytes\": {\n"
+            << "    \"header\": " << render::kMcuSf2AssetHeaderSize << ",\n"
+            << "    \"directory\": " << directory_bytes << ",\n"
+            << "    \"presets\": " << bytes(render::McuSf2AssetSection::kPresets) << ",\n"
+            << "    \"zones\": " << bytes(render::McuSf2AssetSection::kZones) << ",\n"
+            << "    \"generators\": " << bytes(render::McuSf2AssetSection::kGenerators) << ",\n"
+            << "    \"samples\": " << bytes(render::McuSf2AssetSection::kSamples) << ",\n"
+            << "    \"candidate_programs\": " << bytes(render::McuSf2AssetSection::kCandidatePrograms) << ",\n"
+            << "    \"modulation_programs\": " << bytes(render::McuSf2AssetSection::kModulationPrograms) << ",\n"
+            << "    \"modulation_terms\": " << bytes(render::McuSf2AssetSection::kModulationTerms) << ",\n"
+            << "    \"alignment_padding\": "
+            << image_size - render::kMcuSf2AssetHeaderSize - directory_bytes - payload_bytes << "\n"
+            << "  }\n}\n";
 }
 
 }  // namespace

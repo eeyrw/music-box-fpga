@@ -116,6 +116,12 @@ Region make_region_for_compiled_candidate(const Sf2Data& sf2,
                                           size_t candidate_index,
                                           int key, int sample_rate,
                                           int tick_samples);
+Region materialize_sf2_region(const Sf2SemanticGenerator* generators,
+                              size_t generator_count,
+                              const Sf2SemanticSample& sample,
+                              uint32_t sample_word_offset,
+                              uint32_t sample_word_count,
+                              int key, int sample_rate, int tick_samples);
 int select_instrument(const Sf2Data& sf2, const std::string& instrument);
 
 class Sf2RegionCache {

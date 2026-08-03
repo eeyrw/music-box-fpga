@@ -51,158 +51,70 @@ void refresh_crc(std::vector<uint8_t>& data) {
             render::mcu_sf2_asset_image_crc(data.data(), data.size()));
 }
 
-void compare_semantics(const render::Sf2SemanticData& expected,
-                       const render::McuSf2AssetView& actual) {
-  require(actual.preset_count() == expected.presets.size(), "preset count mismatch");
-  require(actual.candidate_count() == expected.candidates.size(), "candidate count mismatch");
-  require(actual.generator_count() == expected.generators.size(), "generator count mismatch");
-  require(actual.modulator_count() == expected.modulators.size(), "modulator count mismatch");
-  require(actual.sample_count() == expected.samples.size(), "sample count mismatch");
 
-  for (size_t index = 0; index < expected.presets.size(); ++index) {
-    const auto a = actual.preset(index);
-    const auto& e = expected.presets[index];
-    require(a.program == e.program && a.bank == e.bank &&
-                a.first_candidate == e.first_candidate &&
-                a.candidate_count == e.candidate_count,
-            "preset record mismatch");
-  }
-  for (size_t index = 0; index < expected.candidates.size(); ++index) {
-    const auto a = actual.candidate(index);
-    const auto& e = expected.candidates[index];
-    require(a.key_low == e.key_low && a.key_high == e.key_high &&
-                a.velocity_low == e.velocity_low &&
-                a.velocity_high == e.velocity_high &&
-                a.instrument == e.instrument &&
-                a.first_generator == e.first_generator &&
-                a.generator_count == e.generator_count &&
-                a.first_modulator == e.first_modulator &&
-                a.modulator_count == e.modulator_count,
-            "candidate record mismatch");
-  }
-  for (size_t index = 0; index < expected.generators.size(); ++index) {
-    const auto a = actual.generator(index);
-    const auto& e = expected.generators[index];
-    require(a.oper == e.oper && a.amount == e.amount, "generator record mismatch");
-  }
-  for (size_t index = 0; index < expected.modulators.size(); ++index) {
-    const auto a = actual.modulator(index);
-    const auto& e = expected.modulators[index];
-    require(a.src == e.src && a.dest == e.dest && a.amount == e.amount &&
-                a.amount_src == e.amount_src && a.transform == e.transform,
-            "modulator record mismatch");
-  }
-  for (size_t index = 0; index < expected.samples.size(); ++index) {
-    const auto a = actual.sample(index);
-    const auto& e = expected.samples[index];
-    require(a.start == e.start && a.end == e.end &&
-                a.start_loop == e.start_loop && a.end_loop == e.end_loop &&
-                a.sample_rate == e.sample_rate &&
-                a.original_pitch == e.original_pitch &&
-                a.pitch_correction == e.pitch_correction &&
-                a.sample_link == e.sample_link && a.sample_type == e.sample_type,
-            "sample record mismatch");
-  }
-}
-
-void compare_dispatch(const render::Sf2Data& sf2,
-                      const render::Sf2SemanticData& semantic,
-                      const render::McuSf2AssetView& view) {
-  require(view.has_dispatch(), "asset has no direct dispatch tables");
-  require(view.has_runtime_configs(), "asset has no runtime modulation configs");
-  require(view.key_dispatch_count() == view.preset_dispatch_count() * 128u,
-          "direct key table size mismatch");
-
-  for (size_t dispatch_index = 0; dispatch_index < view.preset_dispatch_count();
-       ++dispatch_index) {
-    const auto dispatch = view.preset_dispatch(dispatch_index);
-    require(view.find_preset_dispatch(dispatch.program, dispatch.bank) ==
-                int32_t(dispatch_index),
-            "sparse preset lookup mismatch");
-    const auto& preset = semantic.presets.at(dispatch.semantic_preset);
+void compare_compact(const render::Sf2Data& sf2,
+                     const render::Sf2SemanticData& semantic,
+                     const render::McuSf2AssetView& view) {
+  require(view.preset_count() == semantic.presets.size(), "compact preset count mismatch");
+  require(view.zone_count() == semantic.candidates.size(), "compact zone count mismatch");
+  for (size_t preset_index = 0; preset_index < view.preset_count(); ++preset_index) {
+    const auto preset = view.preset(preset_index);
+    const auto& expected_preset = semantic.presets[preset_index];
+    require(preset.program == expected_preset.program && preset.bank == expected_preset.bank &&
+                preset.first_zone == expected_preset.first_candidate &&
+                preset.zone_count == expected_preset.candidate_count,
+            "compact preset mismatch");
+    require(view.find_preset(preset.program, preset.bank) == int32_t(preset_index),
+            "compact preset lookup mismatch");
     for (int key = 0; key < 128; ++key) {
       for (int velocity = 1; velocity < 128; ++velocity) {
-        std::vector<uint32_t> expected_candidates;
-        for (uint32_t local = 0; local < preset.candidate_count; ++local) {
-          const uint32_t candidate_index = preset.first_candidate + local;
-          const auto& candidate = semantic.candidates.at(candidate_index);
+        std::vector<uint32_t> expected;
+        std::vector<uint32_t> actual;
+        for (uint32_t local = 0; local < preset.zone_count; ++local) {
+          const uint32_t index = preset.first_zone + local;
+          const auto& candidate = semantic.candidates[index];
+          const auto zone = view.zone(index);
           if (key >= candidate.key_low && key <= candidate.key_high &&
-              velocity >= candidate.velocity_low &&
-              velocity <= candidate.velocity_high) {
-            expected_candidates.push_back(candidate_index);
+              velocity >= candidate.velocity_low && velocity <= candidate.velocity_high) {
+            expected.push_back(index);
+          }
+          if (key >= zone.key_low && key <= zone.key_high &&
+              velocity >= zone.velocity_low && velocity <= zone.velocity_high) {
+            actual.push_back(index);
           }
         }
-        const auto span = view.find_velocity_span(dispatch_index, key, velocity);
-        require(span.layer_count == expected_candidates.size(),
-                "velocity dispatch layer count mismatch");
-        for (uint32_t layer = 0; layer < span.layer_count; ++layer) {
-          const uint32_t descriptor_index =
-              view.layer_reference(span.first_layer + layer);
-          const auto descriptor = view.mono_descriptor(descriptor_index);
-          require(descriptor.semantic_candidate == expected_candidates[layer] &&
-                      descriptor.key == key,
-                  "velocity dispatch layer ordering mismatch");
-        }
+        require(actual == expected, "compact zone selection mismatch");
       }
     }
   }
 
-  std::vector<uint32_t> candidate_preset(semantic.candidates.size());
-  std::vector<uint32_t> candidate_local(semantic.candidates.size());
-  for (size_t preset_index = 0; preset_index < semantic.presets.size(); ++preset_index) {
-    const auto& preset = semantic.presets[preset_index];
-    for (uint32_t local = 0; local < preset.candidate_count; ++local) {
-      candidate_preset[preset.first_candidate + local] = uint32_t(preset_index);
-      candidate_local[preset.first_candidate + local] = local;
+  LatestCommandSink oracle_sink;
+  LatestCommandSink compact_sink;
+  render::CommandVoiceControl oracle_control(oracle_sink);
+  render::CommandVoiceControl compact_control(compact_sink);
+  for (size_t preset_index = 0; preset_index < view.preset_count(); ++preset_index) {
+    const auto preset = view.preset(preset_index);
+    for (uint32_t local = 0; local < preset.zone_count; ++local) {
+      const uint32_t zone_index = preset.first_zone + local;
+      const auto zone = view.zone(zone_index);
+      for (int key = zone.key_low; key <= zone.key_high; ++key) {
+        const auto oracle = render::make_region_for_compiled_candidate(
+            sf2, preset_index, local, key,
+            int(render::reference_mcu_sf2_asset_profile().sample_rate),
+            int(render::reference_mcu_sf2_asset_profile().control_tick_samples));
+        const auto compact = view.materialize_zone(zone_index, key);
+        const int voice = int(zone_index % render::kNumVoices);
+        oracle_control.start_voice(voice, oracle.phase_inc, oracle);
+        compact_control.start_voice(voice, compact.phase_inc, compact);
+        require(oracle_sink.latest.size() == compact_sink.latest.size(),
+                "compact START length mismatch");
+        oracle_sink.latest[0] &= ~(0x3ffu << 14);
+        compact_sink.latest[0] &= ~(0x3ffu << 14);
+        oracle_sink.latest[1] = compact_sink.latest[1] = 1;
+        require(oracle_sink.latest == compact_sink.latest,
+                "compact START materialization mismatch");
+      }
     }
-  }
-
-  LatestCommandSink sink;
-  render::CommandVoiceControl control(sink);
-  for (size_t index = 0; index < view.mono_descriptor_count(); ++index) {
-    const auto descriptor = view.mono_descriptor(index);
-    const render::Region region = render::make_region_for_compiled_candidate(
-        sf2, candidate_preset.at(descriptor.semantic_candidate),
-        candidate_local.at(descriptor.semantic_candidate), descriptor.key,
-        int(render::reference_mcu_sf2_asset_profile().sample_rate),
-        int(render::reference_mcu_sf2_asset_profile().control_tick_samples));
-    const int voice = int(index % render::kNumVoices);
-    control.start_voice(voice, region.phase_inc, region);
-    require(sink.latest.size() == descriptor.start_word_count,
-            "START template word count mismatch");
-    sink.latest[0] &= ~(0x3ffu << 14);
-    sink.latest[1] = 1;
-    for (uint32_t word = 0; word < descriptor.start_word_count; ++word) {
-      require(sink.latest[word] ==
-                  view.start_word(descriptor.first_start_word + word),
-              "START template word mismatch");
-    }
-    require(descriptor.base_gain == region.base_gain && descriptor.pan == region.pan &&
-                descriptor.exclusive_class == region.exclusive_class &&
-                descriptor.effective_velocity == region.effective_velocity &&
-                descriptor.release_samples == region.volume_envelope.release_samples,
-            "mono descriptor policy field mismatch");
-    const auto runtime = view.runtime_config(view.descriptor_runtime_config(index));
-    require(runtime.mod_lfo_delay_ticks == uint32_t(region.mod_lfo_delay_ticks) &&
-                runtime.mod_lfo_step == region.mod_lfo_step &&
-                runtime.vib_lfo_delay_ticks == uint32_t(region.vib_lfo_delay_ticks) &&
-                runtime.vib_lfo_step == region.vib_lfo_step &&
-                runtime.mod_lfo_to_pitch == region.mod_lfo_to_pitch &&
-                runtime.vib_lfo_to_pitch == region.vib_lfo_to_pitch &&
-                runtime.mod_env_to_pitch == region.mod_env_to_pitch &&
-                runtime.mod_lfo_to_filter_fc == region.mod_lfo_to_filter_fc &&
-                runtime.mod_env_to_filter_fc == region.mod_env_to_filter_fc &&
-                runtime.mod_lfo_to_volume == region.mod_lfo_to_volume &&
-                runtime.initial_filter_fc == region.initial_filter_fc &&
-                runtime.initial_filter_q == region.initial_filter_q &&
-                runtime.mod_env_delay_ticks == uint32_t(region.mod_env_delay_ticks) &&
-                runtime.mod_env_hold_ticks == uint32_t(region.mod_env_hold_ticks) &&
-                runtime.mod_env_attack_ticks == uint32_t(region.mod_env_attack_ticks) &&
-                runtime.mod_env_decay_ticks == uint32_t(region.mod_env_decay_ticks) &&
-                runtime.mod_env_release_ticks == uint32_t(region.mod_env_release_ticks) &&
-                runtime.mod_env_sustain_level == region.mod_env_sustain_level &&
-                runtime.mod_env_attack_sub_tick == region.mod_env_attack_sub_tick,
-            "runtime modulation config mismatch");
   }
 }
 
@@ -244,7 +156,6 @@ bool destination_in_family(uint16_t destination, int family) {
 
 void compare_modulation(const render::Sf2SemanticData& semantic,
                         const render::McuSf2AssetView& view) {
-  require(view.has_modulation_programs(), "asset has no fixed modulation programs");
   require(view.candidate_program_count() == semantic.candidates.size(),
           "candidate modulation reference count mismatch");
   int maximum_curve_error = 0;
@@ -254,8 +165,6 @@ void compare_modulation(const render::Sf2SemanticData& semantic,
     for (uint8_t value = 0; value < render::kMcuSourceCurveSize; ++value) {
       const int32_t expected = int32_t(std::llround(
           curve_reference(curve, value) * render::kMcuModulationOne));
-      const int32_t generated = view.source_curve_value(
-          size_t(curve) * render::kMcuSourceCurveSize + value);
       const int32_t runtime = render::mcu_sf2_source_curve_q16(curve, value);
       const int error = int(std::abs(int64_t(runtime) - expected));
       if (error > maximum_curve_error) {
@@ -263,7 +172,6 @@ void compare_modulation(const render::Sf2SemanticData& semantic,
         maximum_curve = curve;
         maximum_curve_value = value;
       }
-      require(generated == runtime, "serialized source curve differs from runtime curve");
     }
   }
   if (maximum_curve_error > 1) {
@@ -360,10 +268,9 @@ int main(int argc, char** argv) {
     require(view.sample_word_offset() == sf2.smpl_word_offset &&
                 view.sample_word_count() == sf2.smpl_word_count,
             "sample span mismatch");
-    compare_semantics(semantic, view);
-    compare_dispatch(sf2, semantic, view);
+    compare_compact(sf2, semantic, view);
     compare_modulation(semantic, view);
-    require(view.find_preset_dispatch(127, 16383) == -1,
+    require(view.find_preset(127, 16383) == -1,
             "missing sparse preset lookup did not fail");
 
     require(semantic.presets.size() >= 2, "fixture needs multiple presets for pruning test");
@@ -372,34 +279,20 @@ int main(int argc, char** argv) {
     const std::vector<uint8_t> subset_image = render::build_mcu_sf2_asset(
         sf2, source_size, render::reference_mcu_sf2_asset_profile(), subset);
     const render::McuSf2AssetView subset_view(subset_image.data(), subset_image.size());
-    require(subset_view.preset_count() == 1 && subset_view.preset_dispatch_count() == 1 &&
+    require(subset_view.preset_count() == 1 &&
                 subset_view.selected_preset_count() == 1 &&
                 subset_view.selection_crc32() != 0,
             "preset subset was not recorded");
-    require(subset_view.find_preset_dispatch(semantic.presets[0].program,
-                                             semantic.presets[0].bank) == 0,
+    require(subset_view.find_preset(semantic.presets[0].program,
+                                    semantic.presets[0].bank) == 0,
             "selected preset is not dispatchable");
-    require(subset_view.find_preset_dispatch(semantic.presets[1].program,
-                                             semantic.presets[1].bank) == -1,
+    require(subset_view.find_preset(semantic.presets[1].program,
+                                    semantic.presets[1].bank) == -1,
             "unselected preset remained dispatchable");
-    require(subset_view.candidate_count() < view.candidate_count() &&
-                subset_view.generator_count() < view.generator_count() &&
-                subset_view.modulator_count() < view.modulator_count() &&
-                subset_view.sample_count() <= view.sample_count() &&
+    require(subset_view.candidate_program_count() < view.candidate_program_count() &&
+                subset_view.zone_count() < view.zone_count() &&
                 subset_image.size() < image_a.size(),
             "preset subset did not prune reachable metadata");
-    for (size_t candidate_index = 0; candidate_index < subset_view.candidate_count();
-         ++candidate_index) {
-      const auto candidate = subset_view.candidate(candidate_index);
-      for (uint32_t generator_index = 0; generator_index < candidate.generator_count;
-           ++generator_index) {
-        const auto generator = subset_view.generator(candidate.first_generator + generator_index);
-        if (generator.oper == 53) {
-          require(generator.amount < subset_view.sample_count(),
-                  "pruned sample reference was not remapped");
-        }
-      }
-    }
 
     render::McuSf2AssetSelection duplicate = subset;
     duplicate.presets.push_back(duplicate.presets.front());
@@ -412,6 +305,14 @@ int main(int argc, char** argv) {
       render::McuSf2AssetView truncated(image_a.data(), image_a.size() - 1);
       (void)truncated;
     }, "truncated image was accepted");
+
+    std::vector<uint8_t> old_version = image_a;
+    old_version[4] = 1;
+    old_version[5] = 0;
+    require_failure([&] {
+      render::McuSf2AssetView invalid(old_version.data(), old_version.size());
+      (void)invalid;
+    }, "obsolete MCU SF2 asset version was accepted");
 
     std::vector<uint8_t> bad_crc = image_a;
     bad_crc.back() ^= 0x80;
@@ -429,30 +330,29 @@ int main(int argc, char** argv) {
     }, "misaligned section was accepted");
 
     std::vector<uint8_t> bad_reference = image_a;
-    const size_t first_candidate_entry = render::kMcuSf2AssetSectionDirectoryOffset +
-        render::kMcuSf2AssetSectionEntrySize;
-    write_u32(bad_reference, first_candidate_entry + 8, 0);
+    write_u32(bad_reference, render::kMcuSf2AssetSectionDirectoryOffset + 8, 0);
     refresh_crc(bad_reference);
     require_failure([&] {
       render::McuSf2AssetView invalid(bad_reference.data(), bad_reference.size());
       (void)invalid;
     }, "invalid cross-section reference was accepted");
 
-    std::vector<uint8_t> bad_layer = image_a;
-    const size_t layer_section_entry = render::kMcuSf2AssetSectionDirectoryOffset +
-        8 * render::kMcuSf2AssetSectionEntrySize;
-    const uint32_t first_layer_offset = read_u32(bad_layer, layer_section_entry + 4);
-    write_u32(bad_layer, first_layer_offset, uint32_t(view.mono_descriptor_count()));
-    refresh_crc(bad_layer);
+    std::vector<uint8_t> bad_zone = image_a;
+    const size_t zone_section_entry = render::kMcuSf2AssetSectionDirectoryOffset +
+        render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t first_zone_offset = read_u32(bad_zone, zone_section_entry + 4);
+    bad_zone.at(first_zone_offset + 10) = 0xff;
+    bad_zone.at(first_zone_offset + 11) = 0xff;
+    refresh_crc(bad_zone);
     require_failure([&] {
-      render::McuSf2AssetView invalid(bad_layer.data(), bad_layer.size());
+      render::McuSf2AssetView invalid(bad_zone.data(), bad_zone.size());
       (void)invalid;
-    }, "invalid layer descriptor reference was accepted");
+    }, "invalid zone sample reference was accepted");
 
     std::vector<uint8_t> bad_program = image_a;
     const size_t candidate_program_section_entry =
         render::kMcuSf2AssetSectionDirectoryOffset +
-        11 * render::kMcuSf2AssetSectionEntrySize;
+        4 * render::kMcuSf2AssetSectionEntrySize;
     const uint32_t candidate_program_offset =
         read_u32(bad_program, candidate_program_section_entry + 4);
     write_u32(bad_program, candidate_program_offset,
@@ -473,8 +373,8 @@ int main(int argc, char** argv) {
     sf2.file_words.at(0) ^= 1;
     require(!view.matches_source(sf2, source_size), "source mismatch was not detected");
 
-    std::cout << "PASS: MCU SF2 semantic image and direct dispatch are deterministic, "
-                 "equivalent, and validated\n";
+    std::cout << "PASS: MCU SF2 compact-v2 image is deterministic, equivalent, "
+                 "and validated\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "mcu_sf2_asset_test failed: " << error.what() << '\n';

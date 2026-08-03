@@ -645,7 +645,8 @@ bool default_generator_amount(int oper, int& amount) {
   }
 }
 
-int sample_offset(const Zone& zone, int fine_oper, int coarse_oper) {
+template <typename ZoneView>
+int sample_offset(const ZoneView& zone, int fine_oper, int coarse_oper) {
   int fine = zone.count(fine_oper) ? signed_amount(zone.at(fine_oper)) : 0;
   int coarse = zone.count(coarse_oper) ? signed_amount(zone.at(coarse_oper)) : 0;
   return fine + coarse * 32768;
@@ -657,16 +658,18 @@ uint32_t clamp_sample_pos(int64_t value, uint32_t low, uint32_t high) {
   return uint32_t(value);
 }
 
-std::pair<int, int> key_range(const Zone& zone) {
-  auto it = zone.find(GEN_KEY_RANGE);
-  if (it == zone.end()) return {0, 127};
-  return {it->second & 0xff, (it->second >> 8) & 0xff};
+template <typename ZoneView>
+std::pair<int, int> key_range(const ZoneView& zone) {
+  if (!zone.count(GEN_KEY_RANGE)) return {0, 127};
+  const int value = zone.at(GEN_KEY_RANGE);
+  return {value & 0xff, (value >> 8) & 0xff};
 }
 
-std::pair<int, int> vel_range(const Zone& zone) {
-  auto it = zone.find(GEN_VEL_RANGE);
-  if (it == zone.end()) return {0, 127};
-  return {it->second & 0xff, (it->second >> 8) & 0xff};
+template <typename ZoneView>
+std::pair<int, int> vel_range(const ZoneView& zone) {
+  if (!zone.count(GEN_VEL_RANGE)) return {0, 127};
+  const int value = zone.at(GEN_VEL_RANGE);
+  return {value & 0xff, (value >> 8) & 0xff};
 }
 
 std::vector<ArticulationZone> instrument_zones(const Sf2Data& sf2, int inst_index) {
@@ -760,7 +763,8 @@ int select_preset(const Sf2Data& sf2, int program, int bank) {
   throw std::runtime_error("soundfont has no presets");
 }
 
-uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample, int output_sample_rate) {
+template <typename ZoneView>
+uint32_t phase_inc_for_key(int key, const ZoneView& zone, const SampleHeader& sample, int output_sample_rate) {
   // Convert SF2 pitch metadata into the RTL Q24.8 phase increment. One integer
   // phase unit is 1/256 of a source sample frame; 0x00000100 advances by one
   // source frame per output frame.
@@ -788,13 +792,15 @@ uint32_t phase_inc_for_key(int key, const Zone& zone, const SampleHeader& sample
   return uint32_t(raw);
 }
 
-void pitch_modulation_generators(const Zone& zone, Region& region) {
+template <typename ZoneView>
+void pitch_modulation_generators(const ZoneView& zone, Region& region) {
   region.mod_lfo_to_pitch = zone.count(GEN_MOD_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_LFO_TO_PITCH)) : 0;
   region.vib_lfo_to_pitch = zone.count(GEN_VIB_LFO_TO_PITCH) ? signed_amount(zone.at(GEN_VIB_LFO_TO_PITCH)) : 0;
   region.mod_env_to_pitch = zone.count(GEN_MOD_ENV_TO_PITCH) ? signed_amount(zone.at(GEN_MOD_ENV_TO_PITCH)) : 0;
 }
 
-int zone_attenuation_gain(const Zone& zone) {
+template <typename ZoneView>
+int zone_attenuation_gain(const ZoneView& zone) {
   double atten = zone.count(GEN_INITIAL_ATTENUATION)
                      ? double(signed_amount(zone.at(GEN_INITIAL_ATTENUATION))) * EMU_FILE_ATTENUATION_SCALE
                      : 0.0;
@@ -804,7 +810,8 @@ int zone_attenuation_gain(const Zone& zone) {
   return std::max(0, std::min(0x7fff, gain));
 }
 
-void gain_config(const Zone& zone, Region& region) {
+template <typename ZoneView>
+void gain_config(const ZoneView& zone, Region& region) {
   int pan = signed_amount(zone.count(GEN_PAN) ? zone.at(GEN_PAN) : 0);
   region.pan = std::max(-500, std::min(500, pan));
   region.base_gain = zone_attenuation_gain(zone);
@@ -906,7 +913,8 @@ FilterConfig filter_config_for(int cutoff_cents, int resonance_cb, int output_sa
   return filter;
 }
 
-void filter_coefficients(const Zone& zone, int output_sample_rate, Region& region) {
+template <typename ZoneView>
+void filter_coefficients(const ZoneView& zone, int output_sample_rate, Region& region) {
   region.initial_filter_fc = zone.count(GEN_INITIAL_FILTER_FC) ? signed_amount(zone.at(GEN_INITIAL_FILTER_FC)) : 13500;
   region.initial_filter_q = zone.count(GEN_INITIAL_FILTER_Q) ? signed_amount(zone.at(GEN_INITIAL_FILTER_Q)) : 0;
   FilterConfig filter = filter_config_for(region.initial_filter_fc, region.initial_filter_q, output_sample_rate);
@@ -936,7 +944,8 @@ uint32_t lfo_step(int freq_cents, int tick_samples, int sample_rate) {
   return uint32_t(raw);
 }
 
-void modulation_generators(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
+template <typename ZoneView>
+void modulation_generators(const ZoneView& zone, int key, int tick_samples, int sample_rate, Region& region) {
   region.mod_lfo_delay_ticks = envelope_ticks(timecents_to_seconds(zone.count(GEN_DELAY_MOD_LFO) ? zone.at(GEN_DELAY_MOD_LFO) : 0,
                                                               zone.count(GEN_DELAY_MOD_LFO), -12000,
                                                               TimecentRange::kDelayHold),
@@ -986,7 +995,8 @@ void modulation_generators(const Zone& zone, int key, int tick_samples, int samp
   region.mod_env_release_step = envelope_step(r, tick_samples, sample_rate);
 }
 
-void volume_envelope(const Zone& zone, int key, int tick_samples, int sample_rate, Region& region) {
+template <typename ZoneView>
+void volume_envelope(const ZoneView& zone, int key, int tick_samples, int sample_rate, Region& region) {
   // Audible envelope parameters are prepared directly in output-sample units.
   // The tick counts below are only the MCU lifecycle shadow used for allocation.
   double a = timecents_to_seconds(zone.count(GEN_ATTACK_VOL_ENV) ? zone.at(GEN_ATTACK_VOL_ENV) : 0,
@@ -1122,7 +1132,8 @@ std::shared_ptr<const Sf2CompiledData> compile_sf2_data(const Sf2Data& sf2) {
   return compiled;
 }
 
-int loop_mode_from_zone(const Zone& zone) {
+template <typename ZoneView>
+int loop_mode_from_zone(const ZoneView& zone) {
   // SF2 sampleModes 1 means continuous loop and 3 means loop until note release.
   // Those map directly to the small loop-mode field implemented by the RTL.
   int sample_modes = (zone.count(GEN_SAMPLE_MODES) ? zone.at(GEN_SAMPLE_MODES) : 0) & 0x3;
@@ -1138,7 +1149,8 @@ struct SampleWindow {
   uint32_t end_loop = 0;
 };
 
-SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const Zone& zone) {
+template <typename ZoneView>
+SampleWindow sample_window(const Sf2Data& sf2, const SampleHeader& h, const ZoneView& zone) {
   uint32_t pool = sf2.smpl_word_count;
   uint32_t header_start = std::min<uint32_t>(h.start, pool);
   uint32_t header_end = std::min<uint32_t>(h.end, pool);
@@ -1161,21 +1173,25 @@ uint32_t relative_sample_pos(uint32_t value, uint32_t base) {
   return value > base ? value - base : 0;
 }
 
-void fill_region_addresses(const Sf2Data& sf2, int sample_id, const Zone& zone,
-                           Region& region) {
+template <typename ZoneView>
+void fill_region_addresses_from_sample(uint32_t sample_word_offset,
+                                       uint32_t sample_word_count,
+                                       const SampleHeader& sample,
+                                       const ZoneView& zone, Region& region) {
   // Every playable zone stays mono. Linked stereo is represented by two
   // adjacent zones and therefore two independently constructed Regions.
-  const auto& sample = sf2.samples.at(sample_id);
   if (sample.sample_type & SAMPLE_ROM_FLAG) {
     throw std::runtime_error("selected SF2 sample references ROM data");
   }
   if (sanitize_sample_type(sample.sample_type) == SAMPLE_LINKED) {
     throw std::runtime_error("SoundFont linkedSample type is unsupported");
   }
-  SampleWindow window = sample_window(sf2, sample, zone);
+  Sf2Data bounds;
+  bounds.smpl_word_count = sample_word_count;
+  SampleWindow window = sample_window(bounds, sample, zone);
   region.sample_left = sample.name;
   region.sample_right = sample.name;
-  region.base_addr = sf2.smpl_word_offset + window.start;
+  region.base_addr = sample_word_offset + window.start;
   region.base_addr_r = region.base_addr;
   uint32_t frames = std::min<uint32_t>(window.end - window.start, kPhaseFrameMask);
   region.stereo = false;
@@ -1197,7 +1213,15 @@ void fill_region_addresses(const Sf2Data& sf2, int sample_id, const Zone& zone,
   }
 }
 
-Region region_from_zone(const Sf2Data& sf2, const Zone& zone,
+template <typename ZoneView>
+void fill_region_addresses(const Sf2Data& sf2, int sample_id,
+                           const ZoneView& zone, Region& region) {
+  fill_region_addresses_from_sample(sf2.smpl_word_offset, sf2.smpl_word_count,
+                                    sf2.samples.at(sample_id), zone, region);
+}
+
+template <typename ZoneView>
+Region region_from_zone(const Sf2Data& sf2, const ZoneView& zone,
                         int key, int sample_rate, int tick_samples,
                         int program, int bank, const std::string& preset_name,
                         const std::string& instrument_name,
@@ -1434,6 +1458,65 @@ Region make_region_for_compiled_candidate(const Sf2Data& sf2,
       preset.preset, preset.bank, preset.name,
       sf2.instruments.at(size_t(candidate.instrument)).name,
       candidate.modulators_by_destination);
+}
+
+Region materialize_sf2_region(const Sf2SemanticGenerator* generators,
+                              size_t generator_count,
+                              const Sf2SemanticSample& source_sample,
+                              uint32_t sample_word_offset,
+                              uint32_t sample_word_count,
+                              int key, int sample_rate, int tick_samples) {
+  struct FixedZone {
+    std::array<uint16_t, 61> values{};
+    uint64_t present = 0;
+    size_t count(int oper) const {
+      return oper >= 0 && oper < int(values.size()) &&
+             (present & (uint64_t(1) << oper)) != 0;
+    }
+    int at(int oper) const {
+      if (!count(oper)) throw std::out_of_range("compact SF2 generator");
+      return values[size_t(oper)];
+    }
+  } zone;
+  if (key < 0 || key > 127 || generators == nullptr || generator_count > 61) {
+    throw std::out_of_range("compact SF2 materialization input");
+  }
+  for (size_t index = 0; index < generator_count; ++index) {
+    const auto generator = generators[index];
+    if (generator.oper >= zone.values.size() || zone.count(generator.oper)) {
+      throw std::runtime_error("invalid compact SF2 generator set");
+    }
+    zone.values[generator.oper] = generator.amount;
+    zone.present |= uint64_t(1) << generator.oper;
+  }
+
+  SampleHeader sample;
+  sample.start = source_sample.start;
+  sample.end = source_sample.end;
+  sample.start_loop = source_sample.start_loop;
+  sample.end_loop = source_sample.end_loop;
+  sample.sample_rate = source_sample.sample_rate;
+  sample.original_pitch = source_sample.original_pitch;
+  sample.pitch_correction = source_sample.pitch_correction;
+  sample.sample_link = source_sample.sample_link;
+  sample.sample_type = source_sample.sample_type;
+  Region region;
+  region.key = key;
+  region.output_sample_rate = sample_rate;
+  fill_region_addresses_from_sample(sample_word_offset, sample_word_count,
+                                    sample, zone, region);
+  region.phase_inc = phase_inc_for_key(key, zone, sample, sample_rate);
+  gain_config(zone, region);
+  region.loop_mode = loop_mode_from_zone(zone);
+  region.effective_velocity = zone.count(GEN_VELOCITY)
+      ? std::max(0, std::min(127, signed_amount(zone.at(GEN_VELOCITY)))) : -1;
+  region.exclusive_class = zone.count(GEN_EXCLUSIVE_CLASS)
+      ? std::max(0, std::min(127, signed_amount(zone.at(GEN_EXCLUSIVE_CLASS)))) : 0;
+  volume_envelope(zone, key, tick_samples, sample_rate, region);
+  modulation_generators(zone, key, tick_samples, sample_rate, region);
+  pitch_modulation_generators(zone, region);
+  filter_coefficients(zone, sample_rate, region);
+  return region;
 }
 
 int select_instrument(const Sf2Data& sf2, const std::string& instrument) {

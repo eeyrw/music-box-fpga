@@ -56,14 +56,18 @@ class McuSf2AssetRuntime {
     uint8_t velocity = 0;
     uint8_t exclusive_class = 0;
     uint16_t generation = 0;
-    uint32_t preset_dispatch = 0;
-    uint32_t descriptor = 0;
-    uint32_t runtime_config = 0;
+    uint32_t preset_index = 0;
+    uint32_t candidate = 0;
+    render::McuSf2RuntimeConfig runtime_config{};
     uint32_t release_samples = 0;
+    uint32_t release_step = 0;
     uint32_t phase_increment = 1;
     uint32_t base_phase_increment = 1;
     uint16_t gain_l = 0;
     uint16_t gain_r = 0;
+    uint16_t base_gain = 0;
+    int16_t pan = 0;
+    int8_t effective_velocity = -1;
     uint64_t note_instance = 0;
     uint64_t allocation_stamp = 0;
     uint32_t mod_lfo_phase = 0;
@@ -84,7 +88,7 @@ class McuSf2AssetRuntime {
   void reclaim_voice(uint16_t voice);
   void release_voice(uint16_t voice);
   void stop_voice(uint16_t voice);
-  void release_exclusive(uint8_t exclusive_class, uint32_t preset_dispatch);
+  void release_exclusive(uint8_t exclusive_class, uint32_t preset_index);
   void refresh_voice(uint16_t voice, uint8_t destination_groups = 0x07);
   void advance_modulation(uint16_t voice);
   int64_t destination_sum_q16(uint32_t candidate, uint32_t program,

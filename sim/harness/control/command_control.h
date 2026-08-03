@@ -49,6 +49,9 @@ struct FixedCommand {
   CommandWordView view() const { return {words.data(), length}; }
 };
 
+FixedCommand build_voice_start_command(int voice, uint16_t generation,
+                                       uint32_t phase_inc, const Region& region);
+
 class CommandWordSink {
  public:
   virtual ~CommandWordSink() = default;

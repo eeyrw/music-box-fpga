@@ -35,12 +35,17 @@ struct Cell {
 };
 
 Cell find_single_layer_cell(const render::McuSf2AssetView& view) {
-  for (size_t preset = 0; preset < view.preset_dispatch_count(); ++preset) {
-    const auto dispatch = view.preset_dispatch(preset);
+  for (size_t preset_index = 0; preset_index < view.preset_count(); ++preset_index) {
+    const auto preset = view.preset(preset_index);
     for (int key = 0; key < 128; ++key) {
-      const auto span = view.find_velocity_span(preset, key, 100);
-      if (span.layer_count == 1) {
-        return {dispatch.program, dispatch.bank, uint8_t(key), 100};
+      uint32_t layers = 0;
+      for (uint32_t local = 0; local < preset.zone_count; ++local) {
+        const auto zone = view.zone(preset.first_zone + local);
+        layers += key >= zone.key_low && key <= zone.key_high &&
+                  100 >= zone.velocity_low && 100 <= zone.velocity_high;
+      }
+      if (layers == 1) {
+        return {preset.program, preset.bank, uint8_t(key), 100};
       }
     }
   }
