@@ -889,7 +889,7 @@ The header pin table does not identify a ground pin on this connector. Provide
 a verified common board ground from a power connector or test point; do not use
 header pins 37/38 (`VCC3V3`) or 39/40 (`5V_DC`) as ground.
 
-The stream is Philips I2S, 48 kHz stereo with two 16-bit slots and a 3.072 MHz
+The stream is Philips I2S, 48 kHz stereo with two 16-bit slots and a 1.536 MHz
 BCLK. LRCLK changes one BCLK before the next word MSB. SDATA and LRCLK change on
 BCLK falling edges and are intended to be sampled on rising edges. The current
 top exports no MCLK, codec configuration, reset, or mute signal.

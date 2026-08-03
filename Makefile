@@ -284,6 +284,7 @@ check-docs:
 
 test-ch347-python:
 	python3 tools/ch347_transport_test.py
+	python3 tools/configure_audio_effects_test.py
 
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.

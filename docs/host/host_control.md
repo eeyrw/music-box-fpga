@@ -189,6 +189,13 @@ Build and run the application with:
 ```bash
 make host-realtime-midi
 
+# Configure the hardware output chain before live playback. This defaults to
+# 0 dB master gain, the -2 dBFS, 4:1 compressor, and the musical hall reverb.
+python3 tools/configure_audio_effects.py --device 1
+
+# Apply 6 dB of global attenuation while retaining the default effects.
+python3 tools/configure_audio_effects.py --device 1 --master-db -6
+
 # Exercise the complete scheduling path without CH347 hardware.
 build/realtime_midi_host --dry-run --midi-input /dev/snd/midiC0D0 \
   --sf2 /path/to/soundfont.sf2
@@ -272,6 +279,17 @@ python3 tools/ch347_tool.py snapshot --group cache \
   --output build/ch347/cache_snapshot.json
 python3 tools/ch347_tool.py clear-diagnostics --verify
 ```
+
+`tools/configure_audio_effects.py` sends the compressor, master-volume, and
+reverb configurations in one command transaction. Its defaults enable the
+compressor at a 20 cB (-2 dBFS) threshold, 4:1 ratio, 0 ms attack, and 5000 ms
+release; set master gain to 0 dB; and select the `hall` reverb preset. Master
+gain accepts `-120..0` dB. Reverb choices are `off`, `studio`, `hall`, and
+`reverb-max`; compressor state is selected with `--compressor on|off`.
+`--dry-run` prints the encoded command words and transaction without opening a
+CH347 device. Hardware runs read back the compressor and reverb enable status
+and reject a reverb configuration that the RTL reports as clamped. The current
+register interface has no master-volume readback field.
 
 Register operands accept names from `spec/register_map.json` or numeric
 addresses. Snapshot JSON includes raw address/value pairs and decoded named

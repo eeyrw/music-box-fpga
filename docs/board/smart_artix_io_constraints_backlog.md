@@ -243,13 +243,13 @@ Required work for a future timing-closed high-speed implementation:
 
 ## P1: I2S Output Timing
 
-At 48 kHz, 16-bit stereo, the transmitter produces a 3.072 MHz BCLK. The
-fractional tick generator emits BCLK edges every 16 or 17 system cycles, so the
-shortest half-cycle is approximately 160 ns. SDATA and LRCLK change on the
+At 48 kHz, 16-bit stereo, the transmitter produces a 1.536 MHz BCLK. The
+fractional tick generator emits BCLK edges every 32 or 33 system cycles, so the
+shortest half-cycle is approximately 320 ns. SDATA and LRCLK change on the
 falling phase and are intended to be sampled on the rising phase.
 
 NXP UM11732 gives a generic receiver setup requirement of `0.2 * T` and zero
-minimum hold. At the current BCLK this is about 65 ns setup, leaving substantial
+minimum hold. At the current BCLK this is about 130 ns setup, leaving substantial
 margin when the three outputs are kept physically close. The fractional divider
 is not a fixed integer generated clock; do not invent a fixed
 `create_generated_clock` relationship that does not match its edge sequence.
