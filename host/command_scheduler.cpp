@@ -8,7 +8,7 @@
 namespace host {
 
 void DryRunCommandTransport::write_command_words(render::CommandWordView words) {
-  Ch347RegisterTransport::validate_command_transaction(words);
+  Ch347CommandTransport::validate_command_transaction(words);
   if (failures_remaining_ != 0) {
     --failures_remaining_;
     throw std::runtime_error("injected dry-run transport failure");

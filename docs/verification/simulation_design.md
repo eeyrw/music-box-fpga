@@ -396,17 +396,17 @@ and the pin-level model must not be used as evidence for card-policy coverage.
 Neither model replaces post-route I/O timing analysis, oscilloscope capture, or
 tests with multiple physical SDHC/SDXC card families.
 
-Build host utilities with:
+Build the latency-sensitive host with:
 
 ```bash
-make host-ch347
-make host-smart-artix-bringup
+make host-realtime-midi
 ```
 
-The low-level tool can exercise the mono command transport without hardware:
+Non-real-time CH347 protocol encoding and DDR sequencing are covered by the
+Python tests without hardware:
 
 ```bash
-build/ch347_control --dry-run --start-voice 0 --base 0 --length 1024
+make test-ch347-python
 ```
 
 Simulation does not replace post-route qualification. Before declaring the

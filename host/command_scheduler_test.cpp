@@ -15,7 +15,7 @@ namespace {
 class RecordingTransport final : public render::CommandWordSink {
  public:
   void write_command_words(render::CommandWordView words) override {
-    host::Ch347RegisterTransport::validate_command_transaction(words);
+    host::Ch347CommandTransport::validate_command_transaction(words);
     if (failures_remaining != 0) {
       --failures_remaining;
       throw std::runtime_error("injected transport failure");

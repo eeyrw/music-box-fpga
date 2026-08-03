@@ -40,20 +40,24 @@ frame-batched queue has 1024 entries and reports overflow instead of growing.
 replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identical words to
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
-Global status and board control remain separate behind `host::RegisterIo`.
-This interface is not used for voice configuration; version 15 has no
-register-based command submission path.
+Global status and board control are handled by the Python CH347 transport.
+They are not used for voice configuration; version 15 has no register-based
+command submission path.
 
 ## SPI Transactions
 
-`Ch347RegisterTransport` implements both boundaries:
+CH347 ownership is split by latency requirement:
 
-- single-register mailbox requests and retained responses for status, DDR
-  diagnostics, and board control;
-- an aligned four-byte command-transaction header `{0xa5, word_count, CRC16}`
-  followed by consecutive big-endian command words for voice control;
-- a fixed four-byte `a6 00 aa d7` FLUSH transaction for cancelling pending FPGA
-  command work and recovering parser alignment.
+- `Ch347CommandTransport` is the C++ real-time path. It implements only the
+  aligned four-byte command-transaction header `{0xa5, word_count, CRC16}`
+  followed by consecutive big-endian voice-command words.
+- `tools/ch347_transport.py` owns the single-register mailbox and retained
+  responses used by status, DDR diagnostics, and board control. It also owns
+  the fixed `a6 00 aa d7` FLUSH transaction used for explicit recovery.
+
+This division is deliberate. The real-time MIDI scheduler needs bounded C++
+command submission; interactive register and diagnostic operations do not.
+Do not add mailbox, DDR, or recovery helpers back to the C++ transport.
 
 The CH347 command API accepts one or more complete commands in a CS assertion,
 up to the adapter buffer's 63-word transfer limit. `AsyncCommandScheduler`
@@ -64,14 +68,14 @@ byte update over the word-count byte and all big-endian payload bytes. A
 retained bit-at-a-time implementation is the independent unit-test oracle.
 Command transactions are encoded directly into a fixed 256-byte buffer. The
 FPGA wire layout always includes the CRC field; its `CHECK_COMMAND_CRC` build
-parameter may disable comparison. `flush_command_stream()` sends only the FPGA
-recovery transaction; callers must first stop or clear any local scheduler queue.
+parameter may disable comparison. Python sends the FLUSH recovery transaction.
+Stop the real-time host before invoking it, because the processes do not share
+ownership of one CH347 device.
 
-Each register API call first writes a fixed 12-byte request, then issues fixed
+Each Python register API call first writes a fixed 12-byte request, then issues fixed
 16-byte fetch transactions until the FPGA returns a completed response. Both
-frames carry CRC32. The inherited `RegisterIo::write_registers` convenience
-method performs independent single-register mailbox operations, and callers
-read multiple addresses individually; there is no SPI register burst opcode.
+frames carry CRC32. Callers read and write multiple addresses as independent
+mailbox operations; there is no SPI register burst opcode.
 
 The register and command-stream timing limits are intentionally separate, but
 neither has a released physical rating yet. The current host requests `1 MHz`
@@ -85,8 +89,8 @@ for the derivation, FIFO-capacity rule, CH347 transaction limit, and required
 hardware stress test. Register transaction limits and wire throughput are
 analyzed separately in
 [`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
-Only SPI mode 0 is accepted. Both host CLIs print the requested and selected
-clock so dry runs and hardware runs use the same discrete-frequency policy.
+Only SPI mode 0 is accepted. The Python tool and real-time host print the
+requested and selected clock so hardware runs use the same discrete-frequency policy.
 Requests below the CH347 minimum `468.75 kHz` step are rejected rather than
 silently selecting a faster clock.
 
@@ -230,37 +234,11 @@ enqueue latency for that single cold lookup was 1,146,115 ns. This is a
 functional development-container measurement, not target-PC or physical-USB
 qualification.
 
-Build the low-level tool with:
-
-```bash
-make host-ch347
-```
-
-Examples:
-
-```bash
-# Inspect a global register without opening hardware.
-build/ch347_control --dry-run --read 0x9000
-
-# Emit one complete mono START command.
-build/ch347_control --dry-run \
-  --start-voice 0 --base 0x1000 --length 48000 \
-  --loop-start 0 --loop-end 48000 --loop-mode 1 \
-  --phase-inc 0x100 --gain-l 0x4000 --gain-r 0x4000
-
-# Start and release in one session so the command builder owns the sequence.
-build/ch347_control --dry-run \
-  --start-voice 0 --base 0x1000 --length 48000 --phase-inc 0x100 \
-  --release 0
-```
-
-`phase-inc` is unsigned Q24.8; `0x100` is one sample frame per output frame.
-`--stop-voice` stops an active voice immediately. `--release` enters the FPGA
-release stage. The standalone low-level CLI keeps sequence state only for its
-own process lifetime; a real-time application must retain one
-`CommandVoiceControl` instance.
-
 ## Python CH347 Test Tool
+
+For copy-paste daily workflows, device-ownership rules, expected results, and
+failure triage, use
+[`ch347_daily_operations.md`](ch347_daily_operations.md).
 
 `tools/ch347_tool.py` is the scripting-oriented board-debug entry point. It
 uses Python `ctypes` to call the vendor's official
@@ -269,6 +247,11 @@ launch the C++ host. The reusable binding and protocol implementation lives in
 `tools/ch347_transport.py`. It mirrors the production CRC32 register mailbox,
 CRC16 command framing, CH347 clock-step selection, and 16-byte DDR debug
 aperture sequencing.
+
+This is the sole non-real-time CH347 application. The C++ CH347 implementation
+is retained only inside `realtime_midi_host`, where the scheduler and transport
+share a latency-sensitive process. Maintaining separate C++ register, DDR
+benchmark, and bring-up CLIs would duplicate protocol and board policy.
 
 The default device value `auto` accepts exactly one `/dev/ch34x_pis*` node.
 Select an index or path explicitly when more than one adapter is attached.
@@ -281,6 +264,7 @@ python3 tools/ch347_tool.py snapshot --group all --json
 python3 tools/ch347_tool.py snapshot --group cache \
   --output build/ch347/cache_snapshot.json
 python3 tools/ch347_tool.py clear-diagnostics --verify
+python3 tools/ch347_tool.py wait asset
 ```
 
 `tools/configure_audio_effects.py` sends the compressor, master-volume, and
@@ -308,6 +292,8 @@ python3 tools/ch347_tool.py ddr-read 0x0 --beats 256 \
   --output build/ch347/ddr_0_4k.bin
 python3 tools/ch347_tool.py ddr-verify /path/to/soundfont.sf2 \
   --samples 128 --seed 1
+python3 tools/ch347_tool.py ddr-benchmark --address 0 --bytes 65536 \
+  --verify /path/to/soundfont.sf2
 ```
 
 The read command reports elapsed time and effective payload KiB/s. `ddr-verify`
@@ -322,6 +308,13 @@ byte-enable mask. `command` is also low level: its arguments must contain one
 or more complete command records, because the tool validates but does not
 invent missing payload words.
 
+`ddr-smoke` destructively writes and reads one 16-byte beat. `ddr-benchmark`
+performs the former C++ benchmark's sequential full-range read, FNV-1a hash,
+optional raw output, and byte-exact file comparison. `voice-smoke` starts one
+mono voice, waits for parser drain and memory activity, and sends the matching
+STOP even on a failure path. `phase-inc` is unsigned Q24.8; `0x100` advances one
+sample frame per output frame.
+
 Run the protocol and DDR-sequencing unit tests without hardware using:
 
 ```bash
@@ -330,21 +323,22 @@ make test-ch347-python
 
 ## Smart Artix Bring-Up
 
-Build the board runner with:
+Compose board bring-up from the Python commands rather than a separate runner:
 
 ```bash
-make host-smart-artix-bringup
+python3 tools/ch347_tool.py info
+python3 tools/ch347_tool.py wait ddr
+python3 tools/ch347_tool.py wait asset
+python3 tools/ch347_tool.py snapshot --group all
+python3 tools/ch347_tool.py ddr-smoke 0x100
+python3 tools/ch347_tool.py voice-smoke \
+  --voice 0 --base 0 --length 48000 --phase-inc 0x100
 ```
 
-It requires the exact current interface value `0x000f0000`, reads
-platform/global and command-parser status through the CRC32 mailbox, exercises
-the DDR debug aperture as acknowledged single-register operations, and sends
-its voice smoke test through the same atomic `0xa5` command path as simulation.
-The voice test is mono, waits for the command FIFO/parser to drain, checks for
-new audio and parser errors, observes memory activity, and sends STOP before
-returning. `--dry-run` executes the complete workflow against a synthetic ready
-board while tracing every register and command transaction; it does not open
-CH347.
+`info` exposes the exact interface value, currently `0x000f0000`; automation
+must reject another version before interpreting current fields. The remaining
+commands cover platform readiness, decoded state, acknowledged DDR access, and
+the atomic `0xa5` mono voice path without duplicating that policy in C++.
 
 The transport still requires board validation of SPI mode, maximum SCLK, CS
 timing, read turnaround, and any pin-to-system-clock CDC implementation.

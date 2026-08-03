@@ -6,8 +6,8 @@ package at `/home/yuan/下载/ch341par_linux` for board bring-up convenience.
 Included files:
 
 - `ch347_lib.h`: CH347 user-space library declarations.
-- `lib/x64/libch347.so`: x86-64 dynamic library used by `build/ch347_control` by
-  default.
+- `lib/x64/libch347.so`: x86-64 dynamic library used by
+  `tools/ch347_tool.py` and `build/realtime_midi_host` by default.
 - `driver/`: WCH `ch34x_pis` kernel driver source and Makefile.
 
 Build and load the driver manually when needed:

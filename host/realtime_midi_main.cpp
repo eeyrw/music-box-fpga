@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
     if (args.dry_run) {
       transport = std::make_unique<host::DryRunCommandTransport>();
     } else {
-      transport = std::make_unique<host::Ch347RegisterTransport>(args.ch347);
+      transport = std::make_unique<host::Ch347CommandTransport>(args.ch347);
     }
     host::AsyncCommandScheduler scheduler(std::move(transport));
     render::RenderDiagnostics diagnostics;

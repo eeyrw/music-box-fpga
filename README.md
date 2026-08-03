@@ -58,7 +58,7 @@ make render-reference SECONDS=1
 make render-rtl-ddr3 SECONDS=1
 make wtsf-image SF2=assets/soundfonts/MT6276.sf2
 make verify-wtsf-image
-make host-smart-artix-bringup
+python3 tools/ch347_tool.py snapshot --group all
 ```
 
 Generated executables, WAV files, reports, Vivado projects, bitstreams, and SD

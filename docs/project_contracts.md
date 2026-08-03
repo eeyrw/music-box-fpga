@@ -14,7 +14,7 @@ these sources.
 | Register addresses and fields | [`register_map.md`](register_map.md) | `spec/register_map.json` |
 | Command words and voice lifecycle | [`command_stream.md`](command_stream.md) | `rtl/control/voice_major_command_plane.sv`, `sim/harness/control/command_control.*` |
 | SPI command transaction envelope | [`design/transport/spi_command_stream.md`](design/transport/spi_command_stream.md) | `fpga/common/rtl/spi_register_bridge.sv` |
-| SPI register mailbox | [`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md) | `fpga/common/rtl/spi_register_bridge.sv`, `host/ch347_transport.*` |
+| SPI register mailbox | [`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md) | `fpga/common/rtl/spi_register_bridge.sv`, `tools/ch347_transport.py` |
 | Current renderer ownership and flow | [`design/renderer/overview.md`](design/renderer/overview.md) | `rtl/top/voice_major_render_core.sv`, `rtl/voice/` |
 | Board asset image and loading | [`board/asset_loading.md`](board/asset_loading.md) | `fpga/smart_artix/rtl/` |
 

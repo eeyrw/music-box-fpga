@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "host/register_io.h"
 #include "sim/harness/control/command_control.h"
 #include "third_party/ch347_linux/ch347_lib.h"
 
@@ -20,29 +19,15 @@ struct Ch347Options {
   int clock_hz = 1000000;
 };
 
-class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink {
+class Ch347CommandTransport : public render::CommandWordSink {
  public:
-  using RegisterRequest = std::array<uint8_t, 12>;
-  using RegisterFetch = std::array<uint8_t, 16>;
-  using FlushTransaction = std::array<uint8_t, 4>;
+  explicit Ch347CommandTransport(const Ch347Options& options);
+  ~Ch347CommandTransport() override;
 
-  struct RegisterMailboxResponse {
-    uint8_t status;
-    uint8_t operation;
-    uint16_t address;
-    uint32_t data;
-  };
+  Ch347CommandTransport(const Ch347CommandTransport&) = delete;
+  Ch347CommandTransport& operator=(const Ch347CommandTransport&) = delete;
 
-  explicit Ch347RegisterTransport(const Ch347Options& options);
-  ~Ch347RegisterTransport() override;
-
-  Ch347RegisterTransport(const Ch347RegisterTransport&) = delete;
-  Ch347RegisterTransport& operator=(const Ch347RegisterTransport&) = delete;
-
-  void write_register(uint16_t address, uint32_t data) override;
-  uint32_t read_register(uint16_t address) override;
   void write_command_words(render::CommandWordView words) override;
-  void flush_command_stream();
 
   struct CommandTransaction {
     std::array<uint8_t, 256> bytes{};
@@ -64,14 +49,6 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   }
   static uint16_t command_transaction_crc16_oracle(render::CommandWordView words);
   static CommandTransaction encode_command_transaction(render::CommandWordView words);
-  static FlushTransaction encode_flush_transaction();
-  static uint32_t register_frame_crc32(uint8_t byte0, uint8_t byte1,
-                                       uint16_t address, uint32_t data);
-  static RegisterRequest encode_register_request(
-      bool write, uint16_t address, uint32_t data);
-  static RegisterMailboxResponse decode_register_response(
-      const RegisterFetch& transfer);
-
  private:
   using SpiConfig = mSpiCfgS;
   using OpenDeviceFn = decltype(&::CH347OpenDevice);
@@ -79,7 +56,6 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   using SpiInitFn = decltype(&::CH347SPI_Init);
   using SpiSetFrequencyFn = decltype(&::CH347SPI_SetFrequency);
   using SpiWriteFn = decltype(&::CH347SPI_Write);
-  using SpiWriteReadFn = decltype(&::CH347SPI_WriteRead);
 
   static std::string dl_error();
 
@@ -88,10 +64,6 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   template <typename T>
   T resolve_optional(const char* name);
 
-  void send_transaction(const uint8_t* data, size_t size);
-  void exchange_transaction(uint8_t* data, size_t size);
-  RegisterMailboxResponse transact_register(
-      bool write, uint16_t address, uint32_t data);
   void close() noexcept;
 
   Ch347Options options_;
@@ -104,7 +76,6 @@ class Ch347RegisterTransport : public RegisterIo, public render::CommandWordSink
   SpiInitFn spi_init_ = nullptr;
   SpiSetFrequencyFn spi_set_frequency_ = nullptr;
   SpiWriteFn spi_write_ = nullptr;
-  SpiWriteReadFn spi_write_read_ = nullptr;
 };
 
 }  // namespace host

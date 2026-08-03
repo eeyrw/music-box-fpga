@@ -16,6 +16,9 @@ from ch347_transport import (
     Ch347Transport,
     DEFAULT_LIBRARY,
     DEFAULT_REGISTER_MAP,
+    DDR_ACCESS_STATUS,
+    DDR_STATUS_PRESENT,
+    DDR_STATUS_READY,
     DdrDebugAccess,
     RegisterMap,
 )
@@ -51,12 +54,60 @@ SNAPSHOT_GROUPS = {
     ),
 }
 
+PLATFORM_ERROR_PRESENT = 1 << 1
+PLATFORM_DDR_CALIBRATED = 1 << 2
+PLATFORM_SD_INITIALIZED = 1 << 4
+PLATFORM_ASSET_LOADED = 1 << 5
+CMD_FIFO_EMPTY = 1 << 0
+CMD_PARSER_IDLE = 1 << 16
+CMD_ACTION_PENDING = 1 << 17
+COMMAND_ERROR_SUMMARY = (1 << 30) | (1 << 31)
+COMMON_EVENT_ERROR = (1 << 0) | (1 << 1) | (1 << 2)
+COMMON_EVENT_CLEAR = COMMON_EVENT_ERROR | (1 << 3)
+
 
 def integer(value: str) -> int:
     try:
         return int(value, 0)
     except ValueError as error:
         raise argparse.ArgumentTypeError(f"invalid integer: {value}") from error
+
+
+def voice_start_words(
+    voice: int,
+    generation: int,
+    base: int,
+    length: int,
+    phase_inc: int,
+    gain_l: int,
+    gain_r: int,
+) -> list[int]:
+    if not 0 <= voice < 512:
+        raise ValueError("voice must be in 0..511")
+    if not 0 < generation <= 0xFFFF:
+        raise ValueError("generation must be in 1..65535")
+    if not 0 <= base <= 0xFFFFFFFF:
+        raise ValueError("voice base address must be 32-bit")
+    if not 0 < length <= 0xFFFFFF:
+        raise ValueError("voice length must be in 1..0xffffff")
+    if not 0 <= phase_inc <= 0xFFFFFFFF:
+        raise ValueError("phase increment must be 32-bit")
+    if not 0 <= gain_l <= 0x7FFF or not 0 <= gain_r <= 0x7FFF:
+        raise ValueError("voice gains must be in 0..0x7fff")
+    header = (0x10 << 24) | (voice << 14) | 5
+    return [header, generation, base, length, phase_inc, gain_l | (gain_r << 16)]
+
+
+def voice_stop_words(voice: int, generation: int) -> list[int]:
+    if not 0 <= voice < 512 or not 0 < generation <= 0xFFFF:
+        raise ValueError("voice or generation is out of range")
+    return [(0x15 << 24) | (voice << 14) | 1, generation]
+
+
+def fnv1a32_update(value: int, data: bytes) -> int:
+    for byte in data:
+        value = ((value ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +137,11 @@ def parse_args() -> argparse.Namespace:
     snapshot.add_argument("--json", action="store_true")
     snapshot.add_argument("--output", type=Path)
 
+    wait = subparsers.add_parser("wait", help="wait for DDR or the SD asset to become ready")
+    wait.add_argument("target", choices=("ddr", "asset"))
+    wait.add_argument("--timeout-ms", type=integer, default=10_000)
+    wait.add_argument("--poll-ms", type=integer, default=100)
+
     ddr_read = subparsers.add_parser("ddr-read", help="read one or more 16-byte DDR beats")
     ddr_read.add_argument("address", type=integer)
     ddr_read.add_argument("--beats", type=integer, default=1)
@@ -106,6 +162,35 @@ def parse_args() -> argparse.Namespace:
     ddr_write.add_argument("words", type=integer, nargs=4, metavar="WORD")
     ddr_write.add_argument("--byte-enable", type=integer, default=0xFFFF)
     ddr_write.add_argument("--timeout-polls", type=integer, default=10_000)
+
+    ddr_smoke = subparsers.add_parser("ddr-smoke", help="destructively write and verify one DDR beat")
+    ddr_smoke.add_argument("address", type=integer)
+    ddr_smoke.add_argument("words", type=integer, nargs="*", metavar="WORD")
+    ddr_smoke.add_argument("--timeout-polls", type=integer, default=10_000)
+
+    ddr_benchmark = subparsers.add_parser(
+        "ddr-benchmark", help="sequentially read, hash, and optionally verify DDR bytes"
+    )
+    ddr_benchmark.add_argument("--address", type=integer, default=0)
+    ddr_benchmark.add_argument("--bytes", type=integer, default=64 * 1024)
+    ddr_benchmark.add_argument("--timeout-polls", type=integer, default=10_000)
+    ddr_benchmark.add_argument("--output", type=Path)
+    ddr_benchmark.add_argument("--verify", type=Path)
+    ddr_benchmark.add_argument("--verify-offset", type=integer)
+
+    voice_smoke = subparsers.add_parser(
+        "voice-smoke", help="start, observe, and always stop one mono voice"
+    )
+    voice_smoke.add_argument("--voice", type=integer, default=0)
+    voice_smoke.add_argument("--generation", type=integer, default=1)
+    voice_smoke.add_argument("--base", type=integer, required=True)
+    voice_smoke.add_argument("--length", type=integer, required=True)
+    voice_smoke.add_argument("--phase-inc", type=integer, default=0x100)
+    voice_smoke.add_argument("--gain-l", type=integer, default=0x2000)
+    voice_smoke.add_argument("--gain-r", type=integer, default=0x2000)
+    voice_smoke.add_argument("--duration-ms", type=integer, default=100)
+    voice_smoke.add_argument("--timeout-ms", type=integer, default=10_000)
+    voice_smoke.add_argument("--poll-ms", type=integer, default=10)
 
     command = subparsers.add_parser("command", help="send complete raw command word transactions")
     command.add_argument("words", type=integer, nargs="+", metavar="WORD")
@@ -132,6 +217,70 @@ def print_items(items: list[dict[str, object]]) -> None:
         fields = item.get("fields", {})
         if fields:
             print("  " + " ".join(f"{name}={value}" for name, value in fields.items()))
+
+
+def wait_until_ready(
+    transport: Ch347Transport,
+    register_map: RegisterMap,
+    target: str,
+    timeout_ms: int,
+    poll_ms: int,
+) -> tuple[int, int, int, int]:
+    if timeout_ms < 0 or poll_ms <= 0:
+        raise ValueError("timeout must be nonnegative and poll interval must be positive")
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while True:
+        platform = transport.read_register(register_map.resolve("PLATFORM_STATUS"))
+        errors = transport.read_register(register_map.resolve("PLATFORM_ERRORS"))
+        ddr = transport.read_register(DDR_ACCESS_STATUS)
+        loaded = transport.read_register(register_map.resolve("PLATFORM_BYTES_LOADED"))
+        size = transport.read_register(register_map.resolve("PLATFORM_SF2_SIZE"))
+        if target == "asset" and platform & PLATFORM_ERROR_PRESENT:
+            raise Ch347Error(f"platform error while waiting for asset: 0x{errors:08x}")
+        ddr_ready = bool(
+            platform & PLATFORM_DDR_CALIBRATED
+            and ddr & DDR_STATUS_PRESENT
+            and ddr & DDR_STATUS_READY
+        )
+        asset_ready = bool(
+            ddr_ready
+            and platform & PLATFORM_SD_INITIALIZED
+            and platform & PLATFORM_ASSET_LOADED
+            and size
+            and loaded == size
+        )
+        if ddr_ready and (target == "ddr" or asset_ready):
+            return platform, errors, loaded, size
+        if time.monotonic() >= deadline:
+            raise Ch347Error(
+                f"{target} readiness timed out: platform=0x{platform:08x} "
+                f"errors=0x{errors:08x} loaded={loaded} size={size}"
+            )
+        time.sleep(poll_ms / 1000.0)
+
+
+def wait_command_idle(
+    transport: Ch347Transport,
+    register_map: RegisterMap,
+    timeout_ms: int,
+    poll_ms: int,
+) -> int:
+    if timeout_ms < 0 or poll_ms <= 0:
+        raise ValueError("timeout must be nonnegative and poll interval must be positive")
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while True:
+        status = transport.read_register(register_map.resolve("CMD_FIFO_STATUS"))
+        if status & COMMAND_ERROR_SUMMARY:
+            raise Ch347Error(f"command parser reports an error: 0x{status:08x}")
+        if (
+            status & CMD_FIFO_EMPTY
+            and status & CMD_PARSER_IDLE
+            and not status & CMD_ACTION_PENDING
+        ):
+            return status
+        if time.monotonic() >= deadline:
+            raise Ch347Error(f"command drain timed out: 0x{status:08x}")
+        time.sleep(poll_ms / 1000.0)
 
 
 def main() -> int:
@@ -188,6 +337,14 @@ def main() -> int:
                 print(output, end="")
             else:
                 print_items(items)
+        elif args.command == "wait":
+            platform, errors, loaded, size = wait_until_ready(
+                transport, register_map, args.target, args.timeout_ms, args.poll_ms
+            )
+            print(
+                f"{args.target} ready: PLATFORM_STATUS=0x{platform:08x} "
+                f"PLATFORM_ERRORS=0x{errors:08x} loaded={loaded} size={size}"
+            )
         elif args.command == "ddr-read":
             started = time.perf_counter()
             data = DdrDebugAccess(transport, args.timeout_polls).read(args.address, args.beats)
@@ -246,6 +403,144 @@ def main() -> int:
                 args.address, args.words, args.byte_enable
             )
             print(f"wrote DDR beat at 0x{args.address:08x}")
+        elif args.command == "ddr-smoke":
+            words = args.words or [
+                0x01234567, 0x89ABCDEF, 0x76543210, 0xFEDCBA98
+            ]
+            if args.address < 0 or args.address & 0xF:
+                raise ValueError("DDR smoke address must be nonnegative and 16-byte aligned")
+            if len(words) != 4:
+                raise ValueError("ddr-smoke accepts either zero or four WORD values")
+            if any(word < 0 or word > 0xFFFFFFFF for word in words):
+                raise ValueError("DDR smoke words must be 32-bit unsigned values")
+            wait_until_ready(
+                transport, register_map, "ddr", 10_000, 100
+            )
+            access = DdrDebugAccess(transport, args.timeout_polls)
+            access.write_beat(args.address, words)
+            actual = access.read_beat(args.address)
+            expected = b"".join(word.to_bytes(4, "little") for word in words)
+            if actual != expected:
+                raise Ch347Error(
+                    f"DDR smoke mismatch: expected={expected.hex()} actual={actual.hex()}"
+                )
+            print(f"DDR smoke passed at 0x{args.address:08x}: {actual.hex(' ')}")
+        elif args.command == "ddr-benchmark":
+            if args.address < 0 or args.address & 0xF:
+                raise ValueError("DDR benchmark address must be nonnegative and 16-byte aligned")
+            if args.bytes <= 0 or args.bytes & 0xF:
+                raise ValueError("DDR benchmark byte count must be positive and 16-byte aligned")
+            if args.address + args.bytes > 512 * 1024 * 1024:
+                raise ValueError("DDR benchmark range exceeds 512 MiB")
+            verify_offset = args.address if args.verify_offset is None else args.verify_offset
+            if verify_offset < 0:
+                raise ValueError("verify offset must be nonnegative")
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+            output = args.output.open("wb") if args.output else None
+            expected_file = args.verify.open("rb") if args.verify else None
+            if expected_file:
+                expected_file.seek(verify_offset)
+            access = DdrDebugAccess(transport, args.timeout_polls)
+            checksum = 0x811C9DC5
+            mismatches = 0
+            first_mismatch: tuple[int, int, int] | None = None
+            started = time.perf_counter()
+            try:
+                for offset in range(0, args.bytes, 16):
+                    actual = access.read_beat(args.address + offset)
+                    checksum = fnv1a32_update(checksum, actual)
+                    if output:
+                        output.write(actual)
+                    if expected_file:
+                        expected = expected_file.read(16)
+                        if len(expected) != 16:
+                            raise ValueError("verify file is too short for the selected range")
+                        for index, (actual_byte, expected_byte) in enumerate(zip(actual, expected)):
+                            if actual_byte != expected_byte:
+                                if first_mismatch is None:
+                                    first_mismatch = (
+                                        args.address + offset + index,
+                                        actual_byte,
+                                        expected_byte,
+                                    )
+                                mismatches += 1
+            finally:
+                if output:
+                    output.close()
+                if expected_file:
+                    expected_file.close()
+            elapsed = time.perf_counter() - started
+            rate = args.bytes / elapsed
+            print(
+                f"DDR address=0x{args.address:08x} bytes={args.bytes} "
+                f"elapsed={elapsed:.6f} s throughput={rate / 1024.0:.3f} KiB/s "
+                f"({rate * 8.0 / 1_000_000.0:.3f} Mbit/s) fnv1a32=0x{checksum:08x}"
+            )
+            if args.verify:
+                print(f"verify={'PASS' if mismatches == 0 else 'FAIL'} mismatches={mismatches}")
+            if first_mismatch is not None:
+                address, actual_byte, expected_byte = first_mismatch
+                print(
+                    f"first mismatch at 0x{address:08x}: "
+                    f"actual=0x{actual_byte:02x} expected=0x{expected_byte:02x}"
+                )
+                return 2
+        elif args.command == "voice-smoke":
+            if args.duration_ms < 0:
+                raise ValueError("voice smoke duration must be nonnegative")
+            wait_until_ready(
+                transport, register_map, "ddr", args.timeout_ms, args.poll_ms
+            )
+            wait_command_idle(
+                transport, register_map, args.timeout_ms, args.poll_ms
+            )
+            start_words = voice_start_words(
+                args.voice, args.generation, args.base, args.length,
+                args.phase_inc, args.gain_l, args.gain_r,
+            )
+            stop_words = voice_stop_words(args.voice, args.generation)
+            error_address = register_map.resolve("COMMAND_ERROR_COUNT")
+            stale_address = register_map.resolve("STALE_GENERATION_COUNT")
+            memory_address = register_map.resolve("MEM_RESPONSE_COUNT")
+            event_address = register_map.resolve("COMMON_EVENT_FLAGS")
+            errors_before = transport.read_register(error_address)
+            stale_before = transport.read_register(stale_address)
+            memory_before = transport.read_register(memory_address)
+            transport.write_register(event_address, COMMON_EVENT_CLEAR)
+            started = False
+            try:
+                transport.write_command_words(start_words)
+                started = True
+                wait_command_idle(
+                    transport, register_map, args.timeout_ms, args.poll_ms
+                )
+                time.sleep(args.duration_ms / 1000.0)
+            finally:
+                if started:
+                    transport.write_command_words(stop_words)
+                    wait_command_idle(
+                        transport, register_map, args.timeout_ms, args.poll_ms
+                    )
+            errors_after = transport.read_register(error_address)
+            stale_after = transport.read_register(stale_address)
+            memory_after = transport.read_register(memory_address)
+            events_after = transport.read_register(event_address)
+            if errors_after != errors_before or stale_after != stale_before:
+                raise Ch347Error(
+                    f"voice smoke changed command diagnostics: errors "
+                    f"{errors_before}->{errors_after}, stale {stale_before}->{stale_after}"
+                )
+            if events_after & COMMON_EVENT_ERROR:
+                raise Ch347Error(
+                    f"voice smoke observed an audio error: events=0x{events_after:08x}"
+                )
+            if memory_after <= memory_before:
+                raise Ch347Error("voice smoke observed no new memory response")
+            print(
+                f"voice smoke passed: voice={args.voice} generation={args.generation} "
+                f"memory_responses={memory_before}->{memory_after}"
+            )
         elif args.command == "command":
             transport.write_command_words(args.words)
             print(f"sent {len(args.words)} command words")

@@ -35,7 +35,7 @@ The current real-time-relevant baseline is:
 - unchanged gain, pitch, and filter commands are suppressed;
 - volume envelopes run in the FPGA and do not require per-frame host traffic;
 - `CommandVoiceControl` allocates vectors while building commands;
-- `Ch347RegisterTransport` performs a synchronous driver call for each command;
+- `Ch347CommandTransport` performs a synchronous driver call for each command;
 - the wire format permits multiple complete commands in one 63-word
   transaction, but current producers send one command per CS assertion.
 
@@ -191,7 +191,7 @@ timestamped MIDI input
   -> CH347
 ```
 
-- [x] Add a dedicated SPI worker that owns `Ch347RegisterTransport` and all
+- [x] Add a dedicated SPI worker that owns `Ch347CommandTransport` and all
   blocking driver calls.
 - [x] Use bounded queues with explicit overload behavior between MIDI input,
   control processing, and SPI output.

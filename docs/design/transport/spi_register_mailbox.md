@@ -67,14 +67,14 @@ executing a write twice. A new structurally complete request made while idle
 clears the prior response; a rejected CRC then yields `EMPTY` rather than a
 stale matching response.
 
-`Ch347RegisterTransport` permits at most 1000 fetch attempts for one API call,
+The Python `Ch347Transport` permits at most 1000 fetch attempts for one API call,
 including `BUSY` responses and response-CRC retries. It verifies response CRC,
 operation, address, and status before returning. Register writes are
 acknowledged operations rather than posted SPI writes.
 
-There is one outstanding register request and no register burst. The inherited
-C++ `RegisterIo::write_registers` helper issues one complete mailbox operation
-for each address; multiple reads are likewise issued individually. DDR debug
+There is one outstanding register request and no register burst. Python issues
+one complete mailbox operation for each address; multiple reads are likewise
+issued individually. DDR debug
 remains unchanged at the register-map level: software fills its buffer
 registers, writes `DDR_ACCESS_CONTROL`, polls status, and later reads the
 buffered data registers.

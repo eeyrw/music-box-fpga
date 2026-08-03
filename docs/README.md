@@ -64,6 +64,9 @@ matching contract whenever its RTL or host implementation changes.
   split-phase register wire protocol and timing.
 - [`host/host_control.md`](host/host_control.md): host ownership and CH347
   integration.
+- [`host/ch347_daily_operations.md`](host/ch347_daily_operations.md): routine
+  board checks, audio setup, playback, diagnostics, FLUSH, DDR, and smoke-test
+  commands.
 
 ## Verification
 

@@ -253,7 +253,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-ch347 host-ddr-read-benchmark host-realtime-midi host-smart-artix-bringup list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean FORCE
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-realtime-midi list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean FORCE
 
 all: test
 
@@ -458,7 +458,7 @@ measure-voice-compute-pipeline:
 		-o $(BUILD_DIR)/voice_compute_pipeline_model_test
 	$(BUILD_DIR)/voice_compute_pipeline_model_test
 
-test-cpp-unit: host-smart-artix-bringup
+test-cpp-unit:
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) \
 		sim/harness/render/voice_compute_pipeline_model.cpp \
@@ -540,8 +540,6 @@ test-cpp-unit: host-smart-artix-bringup
 		host/realtime_midi.cpp host/realtime_midi_test.cpp \
 		-o $(BUILD_DIR)/realtime_midi_test -pthread
 	$(BUILD_DIR)/realtime_midi_test
-	$(BUILD_DIR)/smart_artix_bringup --dry-run --wait-ddr --wait-asset \
-		--ddr-smoke --voice-smoke --base 0x100 --length 8
 	python3 tools/compare_reference_fluidsynth_test.py
 	python3 tools/analyze_sf2_access_span_test.py
 	python3 tools/midi_events_test.py
@@ -794,20 +792,6 @@ $(SMART_ARTIX_TESTBENCHES):
 		$(if $(wildcard fpga/smart_artix/sim/$@.sv),fpga/smart_artix/sim/$@.sv,fpga/common/sim/$@.sv)
 	$(BUILD_DIR)/$@_obj_dir/V$@
 
-host-ch347:
-	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXX_STD_FLAGS) -I. \
-		host/ch347_control_main.cpp host/ch347_transport.cpp \
-		sim/harness/control/command_control.cpp \
-		-o $(BUILD_DIR)/ch347_control -ldl
-
-host-ddr-read-benchmark:
-	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXX_STD_FLAGS) -I. \
-		host/ddr_read_benchmark_main.cpp host/ch347_transport.cpp \
-		sim/harness/control/command_control.cpp \
-		-o $(BUILD_DIR)/ddr_read_benchmark -ldl
-
 host-realtime-midi:
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
@@ -822,13 +806,6 @@ host-realtime-midi:
 		sim/harness/formats/midi_parser.cpp \
 		sim/harness/formats/sf2_loader.cpp \
 		-o $(BUILD_DIR)/realtime_midi_host -ldl -pthread
-
-host-smart-artix-bringup:
-	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXX_STD_FLAGS) -I. \
-		host/smart_artix_bringup_main.cpp host/ch347_transport.cpp \
-		sim/harness/control/command_control.cpp \
-		-o $(BUILD_DIR)/smart_artix_bringup -ldl
 
 list-instruments:
 	# Inspect instrument names from the configured SF2 without running RTL.

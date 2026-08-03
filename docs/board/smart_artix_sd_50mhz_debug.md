@@ -230,10 +230,12 @@ The first run was read at 937.5 kHz and again at 30 MHz SPI. The second run was
 read at 30 MHz SPI. All reads were exact. This demonstrates that the 50 MHz SD
 change did not regress the previously qualified 30 MHz SPI Bridge path.
 
-The repaired `smart_artix_bringup` tool was also run against the physical board:
+The board smoke flow was also run against the physical board. The original C++
+runner is now retired; its current Python equivalent is:
 
 ```bash
-build/smart_artix_bringup --clock-hz 30000000 --wait-ddr --ddr-smoke
+python3 tools/ch347_tool.py --clock-hz 30000000 wait ddr
+python3 tools/ch347_tool.py --clock-hz 30000000 ddr-smoke 0x100
 ```
 
 It passed interface-version validation, printed the expected SD/loader status,
@@ -264,9 +266,10 @@ make vivado-analyze
 make vivado-bitstream
 sha256sum build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 make vivado-program
-build/ch347_control --clock-hz 30000000 \
-  --read 0x9000 --read 0x9040 --read 0x9044
-build/smart_artix_bringup --clock-hz 30000000 --wait-ddr --ddr-smoke
+python3 tools/ch347_tool.py --clock-hz 30000000 \
+  read VERSION PLATFORM_STATUS PLATFORM_ERRORS
+python3 tools/ch347_tool.py --clock-hz 30000000 wait ddr
+python3 tools/ch347_tool.py --clock-hz 30000000 ddr-smoke 0x100
 ```
 
 Verilator targets use the Makefile default `-j 0`. A sporadic parallel build

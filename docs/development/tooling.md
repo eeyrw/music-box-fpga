@@ -124,14 +124,15 @@ sim/harness/apps      executable entry points
 | `make mcu-sf2-asset SF2=path/to/file.sf2` | Builds the target-neutral packed semantic metadata sidecar and JSON manifest under `build/assets/`. |
 | `make verify-mcu-sf2-asset SF2=path/to/file.sf2` | Validates the sidecar structure, profile, whole-image CRC, and source SF2 identity. |
 | `make flash-wtsf-sd SD_DEVICE=...` | Writes the verified image to an explicitly selected whole-card device. |
-| `tools/ch347_tool.py` | Direct official-SO Python CLI for named register access, decoded snapshots, diagnostic clear, DDR dump/verification, and raw command transactions. |
-| `make host-ch347` | Builds the generic CH347 register/command utility. |
-| `make host-ddr-read-benchmark` | Builds the CH347 DDR read-throughput and file-verification utility. |
-| `make host-smart-artix-bringup` | Builds the board snapshot and smoke-test runner. |
+| `tools/ch347_tool.py` | Direct official-SO Python CLI for named register access, decoded snapshots, readiness waits, diagnostic clear, DDR smoke/dump/benchmark/verification, voice smoke, FLUSH, and raw command transactions. |
+| `make host-realtime-midi` | Builds the latency-sensitive C++ MIDI/SF2 player; this is the only CH347 application kept in C++. |
 
 `tools/flash_wtsf_sd.sh` is intentionally behind a Make target and requires an
-explicit device. The host tools dynamically load the vendor CH347 library from
-`third_party/ch347_linux`; they do not link vendor code into RTL or simulation.
+explicit device. Both the Python board tool and the real-time C++ host
+dynamically load the vendor CH347 library from `third_party/ch347_linux`; they
+do not link vendor code into RTL or simulation. Non-real-time CH347 inspection,
+bring-up, and benchmark applications belong in the Python tool rather than a
+parallel C++ CLI.
 
 ## Vivado Flow And Reports
 

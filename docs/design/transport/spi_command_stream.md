@@ -63,7 +63,8 @@ new `0xa5` transaction to be rejected as a whole.
 FLUSH preserves active voice state, already accepted state-store actions,
 global audio configuration, effect history, and diagnostics. It cannot recall
 commands still queued by the host, so software must quiesce or clear its local
-producer before calling `flush_command_stream()`.
+producer before issuing FLUSH. The current recovery entry point is
+`tools/ch347_tool.py flush`.
 
 The bridge cannot backpressure SPI after CS is asserted, so it receives the
 complete declared transaction into a 63-word synchronous block RAM. A valid
@@ -80,7 +81,7 @@ rejected as a whole.
 free_words = 1024 - CMD_FIFO_STATUS[15:2]
 ```
 
-The current `Ch347RegisterTransport::write_command_words` does not perform this
+The current `Ch347CommandTransport::write_command_words` does not perform this
 read. It sends the supplied command immediately; bridge staging decouples SPI
 reception from temporary command-FIFO backpressure. Capacity preflight remains
 useful for avoiding a busy rejection when a prior staged transaction has not

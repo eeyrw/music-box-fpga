@@ -11,9 +11,12 @@ from ch347_transport import (
     DDR_CONTROL_CLEAR,
     DDR_CONTROL_START,
     DDR_STATUS_DONE,
+    DDR_STATUS_PRESENT,
     DDR_STATUS_READY,
+    Ch347Error,
     DdrDebugAccess,
     MailboxCrcError,
+    RegisterMap,
     SpiConfig,
     command_crc16,
     decode_register_response,
@@ -22,6 +25,16 @@ from ch347_transport import (
     encode_register_request,
     register_crc32,
     selected_clock,
+)
+from ch347_tool import (
+    PLATFORM_ASSET_LOADED,
+    PLATFORM_DDR_CALIBRATED,
+    PLATFORM_ERROR_PRESENT,
+    PLATFORM_SD_INITIALIZED,
+    fnv1a32_update,
+    voice_start_words,
+    voice_stop_words,
+    wait_until_ready,
 )
 
 
@@ -41,6 +54,14 @@ class FakeRegisters:
 
     def read_register(self, address: int) -> int:
         return self.reads[address].pop(0)
+
+
+class StaticRegisters:
+    def __init__(self, values: dict[int, int]) -> None:
+        self.values = values
+
+    def read_register(self, address: int) -> int:
+        return self.values[address]
 
 
 class Ch347TransportTest(unittest.TestCase):
@@ -76,6 +97,49 @@ class Ch347TransportTest(unittest.TestCase):
 
     def test_flush_transaction(self) -> None:
         self.assertEqual(encode_flush_transaction(), bytes.fromhex("a600aad7"))
+
+    def test_non_realtime_voice_command_builders(self) -> None:
+        self.assertEqual(
+            voice_start_words(3, 7, 0x1000, 48_000, 0x100, 0x2000, 0x3000),
+            [0x1000C005, 7, 0x1000, 48_000, 0x100, 0x30002000],
+        )
+        self.assertEqual(voice_stop_words(3, 7), [0x1500C001, 7])
+        with self.assertRaises(ValueError):
+            voice_start_words(512, 1, 0, 1, 0x100, 0, 0)
+
+    def test_fnv1a32(self) -> None:
+        self.assertEqual(fnv1a32_update(0x811C9DC5, b"foobar"), 0xBF9CF968)
+
+    def test_wait_for_asset_ready(self) -> None:
+        register_map = RegisterMap()
+        platform = (
+            PLATFORM_DDR_CALIBRATED
+            | PLATFORM_SD_INITIALIZED
+            | PLATFORM_ASSET_LOADED
+        )
+        registers = StaticRegisters({
+            register_map.resolve("PLATFORM_STATUS"): platform,
+            register_map.resolve("PLATFORM_ERRORS"): 0,
+            DDR_ACCESS_STATUS: DDR_STATUS_PRESENT | DDR_STATUS_READY,
+            register_map.resolve("PLATFORM_BYTES_LOADED"): 4096,
+            register_map.resolve("PLATFORM_SF2_SIZE"): 4096,
+        })
+        self.assertEqual(
+            wait_until_ready(registers, register_map, "asset", 0, 1),
+            (platform, 0, 4096, 4096),
+        )
+
+    def test_wait_for_asset_stops_on_platform_error(self) -> None:
+        register_map = RegisterMap()
+        registers = StaticRegisters({
+            register_map.resolve("PLATFORM_STATUS"): PLATFORM_ERROR_PRESENT,
+            register_map.resolve("PLATFORM_ERRORS"): 0x20,
+            DDR_ACCESS_STATUS: DDR_STATUS_PRESENT,
+            register_map.resolve("PLATFORM_BYTES_LOADED"): 0,
+            register_map.resolve("PLATFORM_SF2_SIZE"): 4096,
+        })
+        with self.assertRaisesRegex(Ch347Error, "platform error"):
+            wait_until_ready(registers, register_map, "asset", 0, 1)
 
     def test_ddr_read_sequence_and_byte_order(self) -> None:
         registers = FakeRegisters()

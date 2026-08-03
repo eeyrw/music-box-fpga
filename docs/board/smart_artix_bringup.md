@@ -321,19 +321,13 @@ and CDC status snapshots.
 
 ## SPI Status Smoke Test
 
-Build the CH347 host tools:
+Run the Python protocol tests without hardware access, then inspect the board:
 
 ```bash
-make host-ch347
-make host-smart-artix-bringup
-```
-
-First test without hardware access:
-
-```bash
-build/ch347_control --dry-run --write 0x9000 0
-build/ch347_control --dry-run --read 0x9000
-build/smart_artix_bringup --dry-run --wait-ddr --ddr-smoke
+make test-ch347-python
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 info
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 \
+  read VERSION PLATFORM_STATUS PLATFORM_ERRORS
 ```
 
 Then use the selected CH347 library and conservative SPI speed. Start around
@@ -356,29 +350,21 @@ workload derivation and stress criteria are documented in
 [`../design/transport/spi_command_stream.md`](../design/transport/spi_command_stream.md).
 
 ```bash
-build/smart_artix_bringup --device 0 \
-  --clock-hz 1000000 --cs-mask 0x80
-
-build/ch347_control --device 0 \
-  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --read 0x9000
+python3 tools/ch347_tool.py --device 0 \
+  --clock-hz 1000000 --cs-mask 0x80 snapshot --group platform
+python3 tools/ch347_tool.py --device 0 \
+  --clock-hz 1000000 --cs-mask 0x80 wait ddr
 ```
 
 The CH347 Linux SDK opens device paths such as `/dev/ch34x_pis0`; the host tool
 maps `--device 0` to that path for convenience. The copied x64 vendor library is
 used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
-`build/smart_artix_bringup` reads the current mailbox-backed common status as a
-staged checklist and exits nonzero when a required stage fails. It requires
-`VERSION == 0x000f0000`; an older bitstream is rejected instead
-of being diagnosed with current semantics. If CH347 is connected to the host
-but not to a valid FPGA SPI target, MISO may read back as all ones. The runner
-detects `0xffff_ffff` and reports that no FPGA target responded.
-
-The runner has no SPI-mode option because the board transport is unconditionally
-mode 0. Its dry run is a synthetic ready-board execution, not zero-valued reads:
-the same polling, DDR comparison, command validation, and final snapshot paths
-run without opening CH347. `make test` exercises this complete synthetic flow.
+`ch347_tool.py` reads the mailbox-backed status and exits nonzero when an
+operation fails. Confirm `VERSION == 0x000f0000` before interpreting current
+fields. If CH347 is connected to the host but not to a valid FPGA SPI target,
+MISO may read back as all ones and the version check will fail. The Python
+transport is unconditionally configured for the board's SPI mode 0.
 
 The useful first reads are:
 
@@ -504,21 +490,19 @@ After `PLATFORM_DDR_STATUS[0]` reports calibration complete and
 CH347 tool to prove direct DDR access before depending on SD-loaded data:
 
 ```bash
-# Staged runner form. This writes one 16-byte DDR beat at the selected address.
-build/smart_artix_bringup --device 0 \
-  --clock-hz 1000000 --cs-mask 0x80 \
-  --wait-ddr --ddr-smoke --ddr-addr 0x00000100
+# Wait for DDR, then destructively write and verify one 16-byte beat.
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 wait ddr
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 \
+  ddr-smoke 0x00000100
 
 # Write 16 bytes at DDR byte address 0x100.
-build/ch347_control --device 0 \
-  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --ddr-byte-enable 0xffff \
-  --ddr-write 0x00000100 0x01234567 0x89abcdef 0x76543210 0xfedcba98
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 \
+  ddr-write 0x00000100 0x01234567 0x89abcdef 0x76543210 0xfedcba98 \
+  --byte-enable 0xffff
 
 # Read back the same 16-byte beat.
-build/ch347_control --device 0 \
-  --clock-hz 1000000 --mode 0 --cs-mask 0x80 \
-  --ddr-read 0x00000100
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 \
+  ddr-read 0x00000100
 ```
 
 Each DDR register-access command accesses one 128-bit MIG beat, which is 16
@@ -528,11 +512,11 @@ commands and increment the address by `0x10` each time. The address must be
 reports an error and does not access DDR.
 
 For a sequential read-throughput measurement or an exact comparison with a
-source byte image, build and run the dedicated host utility:
+source byte image, use the Python benchmark command:
 
 ```bash
-make host-ddr-read-benchmark
-build/ddr_read_benchmark --device /dev/ch34x_pis0 --clock-hz 30000000 \
+python3 tools/ch347_tool.py --device /dev/ch34x_pis0 --clock-hz 30000000 \
+  ddr-benchmark \
   --address 0 --bytes 65536 --verify path/to/source.sf2
 ```
 
@@ -557,18 +541,11 @@ counters immediately before the workload, then read the diagnostic registers
 after it stops:
 
 ```bash
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --write 0x9080 0x1
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --read 0x9084
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --read 0x9088
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --read 0x908c
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --read 0x9090
-build/ch347_control --device 0 --clock-hz 30000000 --mode 0 --cs-mask 0x80 \
-  --read 0x9094
+python3 tools/ch347_tool.py --device 0 --clock-hz 30000000 \
+  clear-diagnostics --verify
+python3 tools/ch347_tool.py --device 0 --clock-hz 30000000 \
+  read PIPELINE_LATENCY_MAX AUDIO_FIFO_DIAGNOSTICS AUDIO_LEAD \
+  COMMAND_ERROR_COUNT STALE_GENERATION_COUNT
 ```
 
 `DIAGNOSTIC_CONTROL.CLEAR` clears sticky event flags, event counters, latency
@@ -722,13 +699,12 @@ running.
 After loading a valid sample range, exercise the atomic command path separately:
 
 ```bash
-build/smart_artix_bringup --device 0 \
-  --clock-hz 1000000 --cs-mask 0x80 \
-  --wait-asset --voice-smoke --voice 0 \
-  --base 0x00000000 --length 48000 --phase-inc 0x100
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 wait asset
+python3 tools/ch347_tool.py --device 0 --clock-hz 1000000 voice-smoke \
+  --voice 0 --base 0x00000000 --length 48000 --phase-inc 0x100
 ```
 
-The runner supports only the current mono hardware voice contract. It verifies
+The command supports only the current mono hardware voice contract. It verifies
 that the command FIFO and parser drain without command/stale-generation errors,
 waits for memory-response activity, rejects new underrun/drop/deadline flags,
 and sends a matching STOP command before returning. Linked stereo must use two

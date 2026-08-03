@@ -7,8 +7,8 @@ protocol. Throughput and register timing remain in
 and
 [`../design/transport/spi_register_mailbox.md`](../design/transport/spi_register_mailbox.md).
 
-The status was refreshed against `spi_register_bridge`, the command plane, and
-`Ch347RegisterTransport` on 2026-08-03.
+The status was refreshed against `spi_register_bridge`, the command plane,
+`Ch347CommandTransport`, and `tools/ch347_transport.py` on 2026-08-03.
 
 ## Implemented Baseline
 
