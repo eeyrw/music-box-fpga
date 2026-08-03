@@ -89,6 +89,38 @@ The completed response remains available for repeated fetches and is replaced
 only by a later request. The host checks CRC32, echoed operation/address, and
 status before treating either a read or write as complete.
 
+### SPI-004: FLUSH Hardware Qualification Needs Deterministic Observability
+
+Status: open verification gap; focused RTL coverage passes.
+
+The production bridge rejects an incomplete command record before publication,
+so a missing-payload frame cannot be used to strand the hardware parser. With
+an otherwise idle renderer, the 100 MHz command plane also consumes the maximum
+63-word staging transaction before the complete four-byte `0xa6` frame arrives
+at 30 MHz. Hardware attempts using a malformed tail therefore exercised the
+tail before FLUSH acknowledgement and did not create the required downstream
+backpressure window. The tests cleaned the parser, FIFO, and diagnostic counts
+afterward; this result is a limitation of the stimulus and observability, not a
+demonstrated FLUSH failure.
+
+Add a qualification mechanism that can hold command consumption without
+changing normal production behavior, plus software-readable accepted/rejected
+FLUSH history. An ILA or a qualification-only command-ready hold is acceptable;
+a permanent debug register requires an explicit interface and safety review.
+
+Hardware acceptance requires all of the following:
+
+- establish and observe a pending staging commit, nonempty command FIFO, or
+  blocked parser action before sending FLUSH;
+- observe one accepted FLUSH and bounded return to FIFO-empty/parser-idle;
+- place a sentinel command behind the blocked action and prove that it is not
+  executed after FLUSH;
+- prove that active voices, global audio configuration, effect history, and
+  diagnostic counts retain their documented values;
+- reject corrupt-CRC, nonzero-reserved-byte, truncated, and overlong `0xa6`
+  frames without clearing pending work;
+- accept a new complete `0xa5` transaction after FLUSH acknowledgement.
+
 ## Near-Term Compatible Hardening
 
 The implemented compatible-sized transport uses an aligned header:
@@ -242,6 +274,8 @@ Compatible hardening is complete only when focused tests prove:
 - [ ] reset in receive, validate, and commit states leaves no visible prefix;
 - [x] a valid FLUSH under downstream backpressure cancels the staged commit,
   clears downstream parsing state, and allows the next complete command;
+- [ ] complete SPI-004 deterministic hardware qualification with an observable
+  accepted FLUSH and a canceled sentinel command;
 - [ ] all sticky counters saturate and clear according to the register contract;
 - [ ] sparse diagnostic register traffic and the maximum intended `0xa5`
   command workload do not cause audio underrun, drop, or hidden transport loss.
