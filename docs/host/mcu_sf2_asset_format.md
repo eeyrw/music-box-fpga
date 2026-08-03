@@ -14,11 +14,14 @@ the complete source SF2/WTSF image defined by
 SoundFont operator numbers retain their SoundFont 2.04 meanings; see
 [`../reference/soundfont-2.04.pdf`](../reference/soundfont-2.04.pdf).
 
-The current writer and checked reader are
+The current writer and C++ oracle reader are
 [`../../sim/harness/formats/mcu_sf2_asset.cpp`](../../sim/harness/formats/mcu_sf2_asset.cpp).
 Its C++ declarations in
 [`../../sim/harness/formats/mcu_sf2_asset.h`](../../sim/harness/formats/mcu_sf2_asset.h)
-are APIs, not serialized native structures. Evolution and pure-C MCU work are
+are APIs, not serialized native structures. The freestanding production reader,
+static Note On materializer, and START packer are
+[`../../mcu/msf2.c`](../../mcu/msf2.c), exposed by
+[`../../mcu/msf2.h`](../../mcu/msf2.h). Evolution and remaining pure-C MCU work are
 tracked in
 [`../backlog/mcu_sf2_asset_compiler.md`](../backlog/mcu_sf2_asset_compiler.md).
 
@@ -284,6 +287,36 @@ Generated integer lookup tables are firmware/profile data, not MSF2 sections.
 Their version is bound by the profile ID. They may implement phase, timecent,
 attenuation, pan, LFO, and filter conversion, but emitted words must obey
 [`../command_stream.md`](../command_stream.md) and match the C++ oracle.
+
+The production C implementation may approximate continuous conversions with a
+shared exponent-mantissa table and interpolation. Structural values remain bit
+exact. The Phase 7B numeric contract permits one destination LSB for Q24.8
+phase, Q1.15 gain, and Q2.14 filter coefficients; envelope durations permit one
+sample or two parts per million, whichever is larger. Filter enable decisions,
+sample and loop addresses, layer order, and command framing are exact.
+
+## Lookup Strategy
+
+Compact-v2 does not require preset records to be sorted, so the pure-C reader
+uses bounded linear preset lookup rather than binary search. A preset's zones
+are contiguous and retain compiler layer order; Note On therefore scans that
+single zone range sequentially, applies key/velocity bounds, and copies at most
+four matching zone indices to caller-owned storage. Generator decoding scans
+the 61-bit presence bitmap in operator order and consumes the packed amount
+stream without searching.
+
+Numeric conversion is constant-time table indexing, not a table search. Pitch,
+timecents, attenuation, and filter-Q conversion split an exponent into an
+integer octave and an eight-bit mantissa, then use shifts plus interpolation
+between adjacent `exp2` entries. Pan and filter trigonometry use direct phase
+indexing, interpolation, and quarter-wave symmetry. CLZ-based mantissa lookup
+is useful for the inverse direction, such as linear magnitude to centibels, but
+the current Note On path already receives logarithmic SoundFont units and does
+not need CLZ.
+
+If measured target timing later makes preset lookup significant, the format
+must add an explicit sorted index or fixed dispatch section. Readers must not
+silently binary-search the current semantic-order preset section.
 
 ## Generation And Verification
 

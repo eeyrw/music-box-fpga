@@ -10,7 +10,7 @@ one exists.
 ```text
 spec/register_map.json ----> gen_register_map.py ----> SV/C++ register constants
 spec/mcu_asset_profiles.json -> offline MCU asset compiler profile selection
-tools/gen_dsp_lut.py ------> generated DSP tables ----> RTL + C++ reference
+tools/gen_dsp_lut.py ------> generated DSP tables ----> RTL + C++ + MCU C
 
 RTL filelists + SV TBs ----> Verilator -------------> self-checking executables
 SF2 + MIDI ----------------> C++ reference ----------> WAV + JSON
@@ -34,6 +34,7 @@ interfaces:
 - `sim/harness/generated/register_map.h`;
 - `rtl/generated/synth_dsp_lut_pkg.sv`;
 - `sim/harness/generated/dsp_lut.h`;
+- `mcu/generated/msf2_lut.h`;
 - `sim/harness/generated/mcu_asset_profile.h`.
 
 ## Build And Verification Tools
@@ -58,7 +59,7 @@ the results as if they were the same build.
 | Script | Input | Output | Normal command |
 | --- | --- | --- | --- |
 | `tools/gen_register_map.py` | `spec/register_map.json` | SV and C++ register constants | `make generate-register-map` |
-| `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope, dynamics, and DSP lookup tables | `make generate-dsp-lut` |
+| `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope and dynamics tables plus shared pure-C MSF2 `exp2` mantissa and quarter-sine tables | `make generate-dsp-lut` |
 | `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | `sim/harness/generated/mcu_asset_profile.h` plus profile/interface consistency | `make generate-mcu-asset-profile`; check with `make check-mcu-asset-profiles` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
 

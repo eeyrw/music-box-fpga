@@ -621,12 +621,15 @@ benchmark-mcu-sf2-baseline:
 
 test-mcu-sf2-asset:
 	mkdir -p $(BUILD_DIR)
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -ffreestanding -fno-builtin \
+		-I. -c mcu/msf2.c -o $(BUILD_DIR)/msf2.o
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
 		sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \
 		sim/harness/formats/mcu_sf2_modulation.cpp \
 		sim/harness/formats/mcu_sf2_asset.cpp \
 		sim/harness/formats/mcu_sf2_asset_test.cpp \
+		$(BUILD_DIR)/msf2.o \
 		-o $(BUILD_DIR)/mcu_sf2_asset_test
 	$(BUILD_DIR)/mcu_sf2_asset_test "$(SF2)"
 

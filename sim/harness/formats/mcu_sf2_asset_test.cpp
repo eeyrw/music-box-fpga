@@ -1,5 +1,6 @@
 #include "mcu_sf2_asset.h"
 #include "command_control.h"
+#include "../../../mcu/msf2.h"
 
 #include <cstdint>
 #include <cmath>
@@ -124,6 +125,163 @@ void compare_compact(const render::Sf2Data& sf2,
         require(oracle_sink.latest == compact_sink.latest,
                 "compact START materialization mismatch");
       }
+    }
+  }
+}
+
+void compare_pure_c(const std::vector<uint8_t>& image,
+                    const render::McuSf2AssetView& oracle) {
+  msf2_view view{};
+  require(msf2_view_init(&view, image.data(), image.size()) == MSF2_OK,
+          "pure-C reader rejected valid compact image");
+  require(msf2_preset_count(&view) == oracle.preset_count() &&
+              msf2_zone_count(&view) == oracle.zone_count(),
+          "pure-C compact counts mismatch");
+  for (uint32_t preset_index = 0; preset_index < msf2_preset_count(&view);
+       ++preset_index) {
+    msf2_preset preset{};
+    require(msf2_get_preset(&view, preset_index, &preset) == MSF2_OK,
+            "pure-C preset read failed");
+    const auto expected = oracle.preset(preset_index);
+    require(preset.program == expected.program && preset.bank == expected.bank &&
+                preset.first_zone == expected.first_zone &&
+                preset.zone_count == expected.zone_count,
+            "pure-C preset mismatch");
+    require(msf2_find_preset(&view, preset.program, preset.bank) ==
+                int32_t(preset_index),
+            "pure-C preset lookup mismatch");
+    for (int key = 0; key < 128; ++key) {
+      for (int velocity = 0; velocity < 128; ++velocity) {
+        std::vector<uint32_t> wanted;
+        for (uint32_t local = 0; local < preset.zone_count; ++local) {
+          const uint32_t zone_index = preset.first_zone + local;
+          const auto zone = oracle.zone(zone_index);
+          if (key >= zone.key_low && key <= zone.key_high &&
+              velocity >= zone.velocity_low && velocity <= zone.velocity_high) {
+            wanted.push_back(zone_index);
+          }
+        }
+        msf2_layers layers{};
+        const msf2_result result = msf2_collect_layers(
+            &view, preset_index, uint8_t(key), uint8_t(velocity), &layers);
+        if (wanted.size() > MSF2_MAX_LAYERS) {
+          require(result == MSF2_ERR_CAPACITY,
+                  "pure-C layer overflow was not bounded");
+          continue;
+        }
+        require(result == MSF2_OK && layers.count == wanted.size(),
+                "pure-C layer selection count mismatch");
+        for (size_t index = 0; index < wanted.size(); ++index) {
+          require(layers.zone_index[index] == wanted[index],
+                  "pure-C layer order mismatch");
+        }
+      }
+    }
+  }
+  for (uint32_t zone_index = 0; zone_index < msf2_zone_count(&view); ++zone_index) {
+    msf2_zone zone{};
+    uint16_t amounts[MSF2_GENERATOR_COUNT]{};
+    uint64_t presence = 0;
+    require(msf2_get_zone(&view, zone_index, &zone) == MSF2_OK &&
+                msf2_decode_generators(&view, zone_index, amounts, &presence) == MSF2_OK,
+            "pure-C zone decode failed");
+    const auto expected = oracle.zone(zone_index);
+    require(zone.key_low == expected.key_low && zone.key_high == expected.key_high &&
+                zone.velocity_low == expected.velocity_low &&
+                zone.velocity_high == expected.velocity_high &&
+                zone.sample_index == expected.sample_index &&
+                presence == expected.generator_presence,
+            "pure-C zone mismatch");
+    uint32_t packed = 0;
+    for (uint32_t oper = 0; oper < MSF2_GENERATOR_COUNT; ++oper) {
+      if ((presence & (uint64_t(1) << oper)) == 0) continue;
+      require(amounts[oper] == oracle.generator_amount(expected.first_generator + packed),
+              "pure-C generator amount mismatch");
+      ++packed;
+    }
+    msf2_sample sample{};
+    require(msf2_get_sample(&view, zone.sample_index, &sample) == MSF2_OK,
+            "pure-C sample read failed");
+    const auto expected_sample = oracle.sample(zone.sample_index);
+    require(sample.start == expected_sample.start && sample.end == expected_sample.end &&
+                sample.loop_start == expected_sample.start_loop &&
+                sample.loop_end == expected_sample.end_loop &&
+                sample.sample_rate == expected_sample.sample_rate &&
+                sample.original_pitch == expected_sample.original_pitch &&
+                sample.pitch_correction == expected_sample.pitch_correction,
+            "pure-C sample mismatch");
+    for (int key = zone.key_low; key <= zone.key_high; ++key) {
+      msf2_note_params params{};
+      require(msf2_materialize_note(&view, zone_index, uint8_t(key), &params) == MSF2_OK,
+              "pure-C note materialization failed");
+      const auto expected_note = oracle.materialize_zone(zone_index, key);
+      require(params.base_addr == expected_note.base_addr &&
+                  params.length == expected_note.length &&
+                  params.loop_start == expected_note.loop_start &&
+                  params.loop_end == expected_note.loop_end &&
+                  params.loop_mode == expected_note.loop_mode,
+              "pure-C sample window mismatch");
+      require(std::abs(int64_t(params.phase_inc) - expected_note.phase_inc) <= 1,
+              "pure-C phase increment exceeds one-LSB error");
+      require(std::abs(int(params.gain_l) - expected_note.gain_l) <= 1 &&
+                  std::abs(int(params.gain_r) - expected_note.gain_r) <= 1,
+              "pure-C gain/pan exceeds one-LSB error");
+      require(bool(params.filter_enable) == expected_note.filter_enable &&
+                  std::abs(int(params.filter_b0) - expected_note.filter_b0) <= 1 &&
+                  std::abs(int(params.filter_b1) - expected_note.filter_b1) <= 1 &&
+                  std::abs(int(params.filter_b2) - expected_note.filter_b2) <= 1 &&
+                  std::abs(int(params.filter_a1) - expected_note.filter_a1) <= 1 &&
+                  std::abs(int(params.filter_a2) - expected_note.filter_a2) <= 1,
+              "pure-C filter exceeds one-LSB error");
+      const auto& envelope = expected_note.volume_envelope;
+      const auto duration_close = [](uint32_t actual, uint32_t wanted) {
+        const int64_t tolerance = std::max<int64_t>(1, (int64_t(wanted) + 499999) / 500000);
+        return std::abs(int64_t(actual) - wanted) <= tolerance;
+      };
+      if (!(duration_close(params.delay_samples, envelope.delay_samples) &&
+            duration_close(params.attack_samples, envelope.attack_samples) &&
+            duration_close(params.hold_samples, envelope.hold_samples) &&
+            duration_close(params.decay_samples, envelope.decay_samples) &&
+            params.sustain_cb_q12_20 == envelope.sustain_cb_q12_20 &&
+            duration_close(params.release_samples, envelope.release_samples))) {
+        throw std::runtime_error(
+            "pure-C volume envelope exceeds numeric error contract at zone/key " +
+            std::to_string(zone_index) + "/" + std::to_string(key) + " C=" +
+            std::to_string(params.delay_samples) + "," +
+            std::to_string(params.attack_samples) + "," +
+            std::to_string(params.hold_samples) + "," +
+            std::to_string(params.decay_samples) + "," +
+            std::to_string(params.release_samples) + " oracle=" +
+            std::to_string(envelope.delay_samples) + "," +
+            std::to_string(envelope.attack_samples) + "," +
+            std::to_string(envelope.hold_samples) + "," +
+            std::to_string(envelope.decay_samples) + "," +
+            std::to_string(envelope.release_samples));
+      }
+      uint32_t start_words[17]{};
+      uint8_t start_word_count = 0;
+      const uint16_t voice = uint16_t(zone_index % render::kNumVoices);
+      auto packed_note = expected_note;
+      packed_note.phase_inc = params.phase_inc;
+      packed_note.gain_l = params.gain_l;
+      packed_note.gain_r = params.gain_r;
+      packed_note.filter_enable = params.filter_enable != 0;
+      packed_note.filter_b0 = params.filter_b0;
+      packed_note.filter_b1 = params.filter_b1;
+      packed_note.filter_b2 = params.filter_b2;
+      packed_note.filter_a1 = params.filter_a1;
+      packed_note.filter_a2 = params.filter_a2;
+      packed_note.volume_envelope = {
+          params.delay_samples, params.attack_samples, params.hold_samples,
+          params.decay_samples, params.sustain_cb_q12_20, params.release_samples};
+      const auto expected_start = render::build_voice_start_command(
+          voice, 7u, params.phase_inc, packed_note);
+      require(msf2_pack_start(voice, 7u, &params, start_words,
+                              &start_word_count) == MSF2_OK &&
+                  start_word_count == expected_start.length &&
+                  std::equal(start_words, start_words + start_word_count,
+                             expected_start.words.begin()),
+              "pure-C START framing mismatch");
     }
   }
 }
@@ -280,6 +438,7 @@ int main(int argc, char** argv) {
             "sample span mismatch");
     compare_compact(sf2, semantic, view);
     compare_modulation(semantic, view);
+    compare_pure_c(image_a, view);
     require(view.find_preset(127, 16383) == -1,
             "missing sparse preset lookup did not fail");
 
@@ -326,6 +485,9 @@ int main(int argc, char** argv) {
 
     std::vector<uint8_t> bad_crc = image_a;
     bad_crc.back() ^= 0x80;
+    msf2_view bad_c_view{};
+    require(msf2_view_init(&bad_c_view, bad_crc.data(), bad_crc.size()) == MSF2_ERR_CRC,
+            "pure-C reader accepted bad image CRC");
     require_failure([&] {
       render::McuSf2AssetView invalid(bad_crc.data(), bad_crc.size());
       (void)invalid;
