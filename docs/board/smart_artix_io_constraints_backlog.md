@@ -248,20 +248,59 @@ fractional tick generator emits BCLK edges every 32 or 33 system cycles, so the
 shortest half-cycle is approximately 320 ns. SDATA and LRCLK change on the
 falling phase and are intended to be sampled on the rising phase.
 
-NXP UM11732 gives a generic receiver setup requirement of `0.2 * T` and zero
-minimum hold. At the current BCLK this is about 130 ns setup, leaving substantial
-margin when the three outputs are kept physically close. The fractional divider
-is not a fixed integer generated clock; do not invent a fixed
-`create_generated_clock` relationship that does not match its edge sequence.
+The selected receiver timing contract is the Analog Devices MAX98357A/MAX98357B
+data sheet, revision 16 (February 2026), archived as
+[`../reference/max98357a-max98357b.pdf`](../reference/max98357a-max98357b.pdf).
+Both parts capture PCM inputs on the BCLK rising edge and require at least 10 ns
+setup and 10 ns hold for DIN and LRCLK, with at least 15 ns BCLK high and low
+times. The current Philips-I2S framing is compatible with MAX98357A; MAX98357B
+expects left-justified data and is not a drop-in protocol substitute.
+
+The same data sheet permits a 2.5 V to 5.5 V supply, so the current 3.3 V supply
+and LVCMOS33 inputs are within the electrical range. A 4 ohm speaker is a
+documented load, but it must connect differentially between OUTP and OUTN and
+have more than 10 uH series inductance. Place the specified 0.1 uF and 10 uF
+bypass capacitors at the amplifier; add local bulk capacitance when the supply
+path is long. The 2.8 A typical current limit disables the outputs for about
+100 us and retries, so repeated protection or supply collapse can sound like
+bursts or pops even when the I2S timing is valid.
+
+The fractional divider is not a fixed integer generated clock; do not invent a
+fixed `create_generated_clock` relationship that does not match its edge
+sequence. The XDC instead packs BCLK, LRCLK, and SDATA launch registers into
+their pins within 10 ns. It deliberately does not force output IOB registers:
+at 1.536 MHz the 320 ns shortest half-cycle already leaves at least 300 ns after
+worst-case independent 10 ns FPGA output delays, while an IOB constraint would
+complicate the BCLK feedback and clock-enable paths without materially
+improving receiver margin. This is a conservative internal physical-path bound,
+not a replacement for measuring connector and cable skew at the receiver.
+
+The 2026-08-03 forced Vivado 2025.2 implementation with 512 voices and
+`Performance_ExplorePostRoutePhysOpt` met the 10 ns I2S path bound without IOB
+placement:
+
+| Output | Routed register-to-pad delay | Constraint slack |
+| --- | ---: | ---: |
+| BCLK / G16 | 6.468 ns | 3.532 ns |
+| LRCLK / G15 | 6.433 ns | 3.567 ns |
+| SDATA / H15 | 6.376 ns | 3.624 ns |
+
+The routed path-delay spread is 0.092 ns. Overall implementation timing was
+WNS 0.148 ns, TNS 0, WHS 0.040 ns, and THS 0. All 47,904 routable nets were
+fully routed; DRC reported zero errors and zero critical warnings. The remaining
+report warnings and low global timing margin predate this interface constraint
+and remain review items. Connector-level timing and signal integrity are still
+unmeasured.
 
 Required work:
 
-- [ ] Prefer output IOB registers for BCLK, LRCLK, and SDATA.
-- [ ] Add a conservative system-clock-to-output physical maximum delay for all
+- [x] Do not force output IOB registers; use the explicit 10 ns path bound for
+  this low-frequency interface.
+- [x] Add a conservative system-clock-to-output physical maximum delay for all
   three pins, initially 10 ns, and inspect each routed path.
-- [ ] Use `LVCMOS33`, `DRIVE 8`, and `SLEW SLOW` for the low-frequency header
+- [x] Use `LVCMOS33`, `DRIVE 8`, and `SLEW SLOW` for the low-frequency header
   connection.
-- [ ] Select the actual DAC/codec and replace the generic assumption with its
+- [x] Select the actual DAC/codec and replace the generic assumption with its
   setup, hold, voltage, load, MCLK, reset, and configuration requirements.
 - [ ] Measure BCLK period/duty jitter, falling-edge-to-data delay, rising-edge
   setup, LRCLK phase, and channel ordering at the receiver connector.
@@ -274,7 +313,7 @@ Required work:
   documented asynchronous exception.
 - [ ] Check-timing, methodology, CDC, setup, and hold reports contain no
   unexplained issue for these interfaces.
-- [ ] Forced synthesis and implementation complete with the constrained board
+- [x] Forced synthesis and implementation complete with the constrained board
   top, and detailed I/O paths meet their budgets.
 - [ ] Self-checking simulation covers every RTL phase or CDC change.
 - [ ] Scope or logic-analyzer measurements confirm timing at the physical

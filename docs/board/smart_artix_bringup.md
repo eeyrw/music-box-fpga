@@ -148,12 +148,14 @@ Review at least:
 - bitstream log messages about unconstrained or unrouted I/O
 - MIG IP warnings that mention clocking, reset, or pin incompatibility
 
-The latest 2026-08-03 forced-fresh route met setup and hold timing with WNS
-`+0.058 ns`, WHS `+0.013 ns`, and zero TNS/THS. All 47,919 routable nets were
-routed and DRC reported zero errors or critical warnings. Routed utilization was
-25,909 LUTs (79.48%), 26,467 registers, 46.5 BRAM tiles, and 39 DSPs. The margin
-and LUT headroom remain small, so every functional RTL change still requires a
-fresh post-route result.
+The latest 2026-08-03 forced-fresh route, including the MAX98357A I2S output
+constraints, met setup and hold timing with WNS `+0.148 ns`, WHS `+0.040 ns`,
+and zero TNS/THS. All 47,904 routable nets were routed and DRC reported zero
+errors or critical warnings. Routed utilization was 25,905 LUTs (79.46%),
+26,517 registers, 46.5 BRAM tiles, and 39 DSPs. The margin and LUT headroom
+remain small, so every functional RTL change still requires a fresh post-route
+result. Detailed I2S path results are recorded in
+[`smart_artix_io_constraints_backlog.md`](smart_artix_io_constraints_backlog.md#p1-i2s-output-timing).
 
 ### Current Bitstream and Programming Status
 
@@ -165,7 +167,7 @@ was identified as an image for `7a50tfgg484`:
 ```text
 build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit
 size:   2,192,139 bytes
-sha256: eabaefc2f40ed8170d277e2d9abc76312d71cec0bf03f56690790d889526ad7c
+sha256: f3fdfaf76bab00bc319891210ceadc89d5a0c50d56201fc8015444d27bb209fe
 ```
 
 Generated files under `build/` are intentionally not committed. Regenerate the

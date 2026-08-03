@@ -55,12 +55,35 @@ set_false_path -from [get_ports spi_cs_n] \
 set_false_path -from [get_ports spi_mosi] \
   -to [get_pins -hier -quiet -regexp {.*mosi_sync_reg\[0\]/D}]
 
-# I2S output to an external simple codec on BANK15 header pins. No MCLK or codec
-# configuration pins are assumed.
+# I2S output to an external MAX98357A PCM class-D amplifier on BANK15 header
+# pins. The MAX98357A accepts 16-bit I2S with 32 BCLKs per stereo frame and does
+# not require MCLK. MAX98357B uses left-justified data and is not protocol
+# compatible with this transmitter.
 set_property PACKAGE_PIN G16 [get_ports i2s_bclk]
 set_property PACKAGE_PIN G15 [get_ports i2s_lrclk]
 set_property PACKAGE_PIN H15 [get_ports i2s_sdata]
 set_property IOSTANDARD LVCMOS33 [get_ports {i2s_bclk i2s_lrclk i2s_sdata}]
+set_property DRIVE 8 [get_ports {i2s_bclk i2s_lrclk i2s_sdata}]
+set_property SLEW SLOW [get_ports {i2s_bclk i2s_lrclk i2s_sdata}]
+
+# MAX98357A/MAX98357B Rev 16 specifies rising-edge capture, 10 ns minimum setup
+# and hold for DIN/LRCLK, and 15 ns minimum BCLK high/low time. The fractional
+# divider does not have a fixed periodic relationship to clk_sys, so a generated
+# clock would misrepresent its alternating 32/33-cycle edge intervals. Bound
+# each register-to-pin path to 10 ns instead. At this 1.536 MHz BCLK there is no
+# need to force the output registers into IOBs: SDATA and LRCLK change with the
+# falling BCLK transition, and the shortest falling-to-rising or rising-to-
+# falling interval is 320 ns. Worst-case independent 10 ns output delays still
+# leave at least 300 ns for the receiver requirements. Connector/cable skew
+# remains a board measurement item.
+set i2s_output_regs [get_cells -hier -filter \
+  {NAME =~ "*/audio_output/audio_tx/i2s_bclk_reg" || \
+   NAME =~ "*/audio_output/audio_tx/i2s_lrclk_reg" || \
+   NAME =~ "*/audio_output/audio_tx/i2s_sdata_reg"}]
+set_max_delay 10.000 \
+  -from $i2s_output_regs \
+  -to [get_ports {i2s_bclk i2s_lrclk i2s_sdata}] \
+  -datapath_only
 
 # Native SD card pins. Some boards label these nets by their SPI-mode role:
 # SCK -> SD_CLK, MOSI -> SD_CMD, MISO -> SD_D0, and CS -> SD_D3. Native 4-bit
@@ -169,4 +192,3 @@ set_false_path -hold \
   -to [get_pins -hier -quiet -regexp {.*u_ddr_mc_phy/ddr_phy_4lanes_0\.u_ddr_phy_4lanes/ddr_byte_lane_[A-D]\.ddr_byte_lane_[A-D]/ddr_byte_group_io/slave_ts\.oserdes_slave_ts/RST}]
 
 # TODO: Add generated clock constraints after selecting the MMCM/PLL clocking.
-# TODO: Add I2S output timing constraints if required by the codec datasheet.
