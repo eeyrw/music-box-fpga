@@ -7,6 +7,8 @@ asset or firmware contract. Stable behavior remains defined by
 [`../fixed_point.md`](../fixed_point.md),
 [`../memory_format.md`](../memory_format.md), and
 [`../board/asset_loading.md`](../board/asset_loading.md).
+The implemented compact-v2 byte format is defined separately by
+[`../host/mcu_sf2_asset_format.md`](../host/mcu_sf2_asset_format.md).
 
 The central constraint is that this work must not require production RTL
 changes. The compiler moves SF2 parsing, zone inheritance, finite-domain table

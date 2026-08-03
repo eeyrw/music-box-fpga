@@ -193,6 +193,8 @@ storage. The compact image contains normalized preset-local zones rather than
 key dispatch, mono descriptors, or stored START commands. Note On scans only
 the selected preset, materializes matched zones into fixed local storage, and
 packs the normal command stream into the existing 17-word buffer.
+The byte-level header, section, record, CRC, and validation contract is
+[`mcu_sf2_asset_format.md`](mcu_sf2_asset_format.md).
 
 This C++ path is the executable compact-v2 behavior oracle and host integration,
 not the final MCU firmware. The deployment implementation is planned as a

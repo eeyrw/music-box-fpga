@@ -21,6 +21,12 @@ constexpr uint32_t kModulationTermStride = 12;
 constexpr uint16_t kGeneratorKeyRange = 43;
 constexpr uint16_t kGeneratorVelocityRange = 44;
 constexpr uint16_t kGeneratorSampleId = 53;
+constexpr uint16_t kDefinedDependencyMask = 0x001fu;
+constexpr uint64_t kValidGeneratorPresence =
+    ((uint64_t(1) << 61) - 1) &
+    ~(uint64_t(1) << kGeneratorKeyRange) &
+    ~(uint64_t(1) << kGeneratorVelocityRange) &
+    ~(uint64_t(1) << kGeneratorSampleId);
 
 uint16_t read_u16(const uint8_t* data) {
   return uint16_t(data[0]) | (uint16_t(data[1]) << 8);
@@ -549,6 +555,10 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   sample_word_count_ = read_u32(data + 52);
   selection_crc32_ = read_u32(data + 64);
   selected_preset_count_ = read_u32(data + 68);
+  if (uint64_t(sample_word_offset_) * 2u + uint64_t(sample_word_count_) * 2u >
+      source_size_bytes_) {
+    throw std::runtime_error("MCU SF2 sample span exceeds source image");
+  }
   const uint32_t directory_offset = read_u32(data + 40);
   const uint16_t section_count = read_u16(data + 44);
   if (read_u32(data + 60) != kAssetFlagSourceCrc32 ||
@@ -578,13 +588,18 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   }
   for (size_t index = 0; index < preset_count(); ++index) {
     const auto value = preset(index);
+    if (value.program > 127 || value.bank > 16383) {
+      throw std::runtime_error("invalid compact preset identity");
+    }
     validate_range(value.first_zone, value.zone_count, uint32_t(zone_count()),
                    "preset zones");
   }
   for (size_t index = 0; index < zone_count(); ++index) {
     const auto value = zone(index);
-    if (value.key_low > value.key_high || value.velocity_low > value.velocity_high ||
+    if (value.key_low > value.key_high || value.key_high > 127 ||
+        value.velocity_low > value.velocity_high || value.velocity_high > 127 ||
         value.generator_count > 61 || value.sample_index >= sample_count() ||
+        (value.generator_presence & ~kValidGeneratorPresence) != 0 ||
         __builtin_popcountll(value.generator_presence) != value.generator_count) {
       throw std::runtime_error("invalid compact zone");
     }
@@ -594,7 +609,8 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
   for (size_t index = 0; index < sample_count(); ++index) {
     const auto value = sample(index);
     if (value.start > value.end || value.end > sample_word_count_ ||
-        value.start_loop > value.end_loop || value.end_loop > value.end) {
+        value.start_loop < value.start || value.start_loop > value.end_loop ||
+        value.end_loop > value.end || value.sample_rate == 0) {
       throw std::runtime_error("invalid compact sample");
     }
   }
@@ -604,6 +620,36 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       if (program != UINT32_MAX && program >= modulation_program_count()) {
         throw std::runtime_error("invalid compact modulation reference");
       }
+    }
+  }
+  for (size_t index = 0; index < modulation_program_count(); ++index) {
+    const auto program = modulation_program(index);
+    const uint8_t* raw = record(section(McuSf2AssetSection::kModulationPrograms), index);
+    if (uint8_t(program.family) > uint8_t(McuSf2ModulationFamily::kFilter) ||
+        program.note_static_term_count > program.term_count || raw[11] != 0 ||
+        (program.dependencies & ~kDefinedDependencyMask) != 0) {
+      throw std::runtime_error("invalid compact modulation program");
+    }
+    validate_range(program.first_term, program.term_count,
+                   uint32_t(modulation_term_count()), "modulation program terms");
+    uint16_t observed_dependencies = 0;
+    for (uint32_t local = 0; local < program.term_count; ++local) {
+      const auto term = modulation_term(program.first_term + local);
+      const uint16_t expected_dependencies = uint16_t(
+          mcu_sf2_source_dependencies(term.source) |
+          mcu_sf2_source_dependencies(term.amount_source));
+      if (!destination_in_family(term.destination, program.family) ||
+          (term.transform != 0 && term.transform != 2) ||
+          (term.dependencies & ~kDefinedDependencyMask) != 0 ||
+          term.dependencies != expected_dependencies ||
+          (local < program.note_static_term_count &&
+           (term.dependencies & ~kMcuDependencyNote) != 0)) {
+        throw std::runtime_error("invalid compact modulation term");
+      }
+      observed_dependencies |= term.dependencies;
+    }
+    if (observed_dependencies != program.dependencies) {
+      throw std::runtime_error("compact modulation dependency mismatch");
     }
   }
   return;

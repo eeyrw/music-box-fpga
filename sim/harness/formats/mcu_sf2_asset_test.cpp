@@ -39,10 +39,20 @@ void write_u32(std::vector<uint8_t>& data, size_t offset, uint32_t value) {
   }
 }
 
+void write_u64(std::vector<uint8_t>& data, size_t offset, uint64_t value) {
+  write_u32(data, offset, uint32_t(value));
+  write_u32(data, offset + 4, uint32_t(value >> 32));
+}
+
 uint32_t read_u32(const std::vector<uint8_t>& data, size_t offset) {
   return uint32_t(data.at(offset)) | (uint32_t(data.at(offset + 1)) << 8) |
          (uint32_t(data.at(offset + 2)) << 16) |
          (uint32_t(data.at(offset + 3)) << 24);
+}
+
+uint64_t read_u64(const std::vector<uint8_t>& data, size_t offset) {
+  return uint64_t(read_u32(data, offset)) |
+         (uint64_t(read_u32(data, offset + 4)) << 32);
 }
 
 void refresh_crc(std::vector<uint8_t>& data) {
@@ -349,6 +359,38 @@ int main(int argc, char** argv) {
       (void)invalid;
     }, "invalid zone sample reference was accepted");
 
+    std::vector<uint8_t> bad_presence = image_a;
+    uint64_t presence = read_u64(bad_presence, first_zone_offset + 12);
+    require(presence != 0, "fixture first zone needs a generator presence bit");
+    presence &= presence - 1;
+    presence |= uint64_t(1) << 63;
+    write_u64(bad_presence, first_zone_offset + 12, presence);
+    refresh_crc(bad_presence);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_presence.data(), bad_presence.size());
+      (void)invalid;
+    }, "reserved generator presence bit was accepted");
+
+    std::vector<uint8_t> bad_key_range = image_a;
+    bad_key_range.at(first_zone_offset + 1) = 128;
+    refresh_crc(bad_key_range);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_key_range.data(), bad_key_range.size());
+      (void)invalid;
+    }, "out-of-range zone key was accepted");
+
+    std::vector<uint8_t> bad_sample_rate = image_a;
+    const size_t sample_section_entry = render::kMcuSf2AssetSectionDirectoryOffset +
+        3 * render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t first_sample_offset =
+        read_u32(bad_sample_rate, sample_section_entry + 4);
+    write_u32(bad_sample_rate, first_sample_offset + 16, 0);
+    refresh_crc(bad_sample_rate);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_sample_rate.data(), bad_sample_rate.size());
+      (void)invalid;
+    }, "zero compact sample rate was accepted");
+
     std::vector<uint8_t> bad_program = image_a;
     const size_t candidate_program_section_entry =
         render::kMcuSf2AssetSectionDirectoryOffset +
@@ -362,6 +404,33 @@ int main(int argc, char** argv) {
       render::McuSf2AssetView invalid(bad_program.data(), bad_program.size());
       (void)invalid;
     }, "invalid modulation program reference was accepted");
+
+    std::vector<uint8_t> bad_program_reserved = image_a;
+    const size_t modulation_program_section_entry =
+        render::kMcuSf2AssetSectionDirectoryOffset +
+        5 * render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t modulation_program_offset =
+        read_u32(bad_program_reserved, modulation_program_section_entry + 4);
+    bad_program_reserved.at(modulation_program_offset + 11) = 1;
+    refresh_crc(bad_program_reserved);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(
+          bad_program_reserved.data(), bad_program_reserved.size());
+      (void)invalid;
+    }, "nonzero modulation program reserved byte was accepted");
+
+    std::vector<uint8_t> bad_transform = image_a;
+    const size_t modulation_term_section_entry =
+        render::kMcuSf2AssetSectionDirectoryOffset +
+        6 * render::kMcuSf2AssetSectionEntrySize;
+    const uint32_t modulation_term_offset =
+        read_u32(bad_transform, modulation_term_section_entry + 4);
+    bad_transform.at(modulation_term_offset + 8) = 1;
+    refresh_crc(bad_transform);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_transform.data(), bad_transform.size());
+      (void)invalid;
+    }, "unsupported modulation transform was accepted");
 
     render::McuSf2AssetProfile wrong_profile = render::reference_mcu_sf2_asset_profile();
     ++wrong_profile.control_tick_samples;

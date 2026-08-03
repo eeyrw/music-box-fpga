@@ -35,6 +35,8 @@ matching contract whenever its RTL or host implementation changes.
   fields.
 - [`command_stream.md`](command_stream.md):
   command framing, payloads, voice lifecycle, and commit boundaries.
+- [`host/mcu_sf2_asset_format.md`](host/mcu_sf2_asset_format.md): compact-v2
+  MSF2 header, sections, records, CRC, identity, and reader validation.
 
 ## Current Design
 
