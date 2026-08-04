@@ -70,8 +70,21 @@ python3 tools/configure_audio_effects.py \
 ```
 
 For 6 dB output attenuation use `--master-db -6`. Inspect encoding without
-opening hardware by adding `--dry-run`. The tool reads back compressor and
-reverb enable state; the current interface has no master-volume readback field.
+opening hardware by adding `--dry-run`. A successful hardware run prints the
+requested configuration followed by decoded register state, for example:
+
+```text
+configured compressor=on master_db=0 reverb=hall
+COMPRESSOR_STATUS=0x00003003 [enabled=on, primed=yes, gain_reduction=inactive, delay_level_frames=48]
+EFFECT_STATUS=0x00000ffa [chorus=off, reverb=on, busy=no, chorus_history=valid, reverb_valid_lines=0xff (8/8), clamped=none]
+```
+
+The tool verifies compressor and reverb enable readback. `primed`,
+`chorus_history`, and `reverb_valid_lines` describe retained processing history,
+so they can remain valid after an effect is disabled. `busy` is an instantaneous
+pipeline state, and `clamped` names any effect configuration adjusted by RTL.
+Raw hexadecimal values are retained for register-level diagnosis. The current
+interface has no master-volume readback field.
 
 ## Real-Time MIDI Playback
 

@@ -133,6 +133,40 @@ def build_words(args: argparse.Namespace) -> list[int]:
     ) + master_volume_command(args.master_db) + reverb_command(args.reverb)
 
 
+def format_compressor_status(status: int) -> str:
+    enabled = "on" if status & (1 << 0) else "off"
+    primed = "yes" if status & (1 << 1) else "no"
+    gain_reduction = "active" if status & (1 << 2) else "inactive"
+    delay_level_frames = (status >> 8) & 0xFFFF
+    return (
+        f"COMPRESSOR_STATUS=0x{status:08x} "
+        f"[enabled={enabled}, primed={primed}, gain_reduction={gain_reduction}, "
+        f"delay_level_frames={delay_level_frames}]"
+    )
+
+
+def format_effect_status(status: int) -> str:
+    chorus = "on" if status & (1 << 0) else "off"
+    reverb = "on" if status & (1 << 1) else "off"
+    busy = "yes" if status & (1 << 2) else "no"
+    chorus_history = "valid" if status & (1 << 3) else "empty"
+    reverb_valid_mask = (status >> 4) & 0xFF
+    valid_line_count = reverb_valid_mask.bit_count()
+    clamped = [
+        name
+        for bit, name in ((12, "chorus"), (13, "reverb"), (14, "return_mixer"))
+        if status & (1 << bit)
+    ]
+    clamped_text = ",".join(clamped) if clamped else "none"
+    return (
+        f"EFFECT_STATUS=0x{status:08x} "
+        f"[chorus={chorus}, reverb={reverb}, busy={busy}, "
+        f"chorus_history={chorus_history}, "
+        f"reverb_valid_lines=0x{reverb_valid_mask:02x} ({valid_line_count}/8), "
+        f"clamped={clamped_text}]"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="auto", help="device path, index, or auto")
@@ -181,16 +215,20 @@ def main() -> int:
     if compressor_enabled != expected_compressor or reverb_enabled != expected_reverb:
         raise Ch347Error(
             "configuration readback mismatch: "
-            f"COMPRESSOR_STATUS=0x{compressor_status:08x} "
-            f"EFFECT_STATUS=0x{effect_status:08x}"
+            f"{format_compressor_status(compressor_status)}; "
+            f"{format_effect_status(effect_status)}"
         )
     if effect_status & (1 << 13):
-        raise Ch347Error(f"reverb configuration was clamped: EFFECT_STATUS=0x{effect_status:08x}")
+        raise Ch347Error(
+            "reverb configuration was clamped: "
+            f"{format_effect_status(effect_status)}"
+        )
     print(
-        f"compressor={args.compressor} master_db={args.master_db:g} reverb={args.reverb} "
-        f"COMPRESSOR_STATUS=0x{compressor_status:08x} "
-        f"EFFECT_STATUS=0x{effect_status:08x}"
+        f"configured compressor={args.compressor} master_db={args.master_db:g} "
+        f"reverb={args.reverb}"
     )
+    print(format_compressor_status(compressor_status))
+    print(format_effect_status(effect_status))
     return 0
 
 

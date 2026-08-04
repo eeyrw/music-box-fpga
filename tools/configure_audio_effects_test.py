@@ -2,7 +2,13 @@
 
 import unittest
 
-from configure_audio_effects import compressor_command, master_volume_command, reverb_command
+from configure_audio_effects import (
+    compressor_command,
+    format_compressor_status,
+    format_effect_status,
+    master_volume_command,
+    reverb_command,
+)
 from ch347_transport import encode_command_transaction
 
 
@@ -35,6 +41,28 @@ class ConfigureAudioEffectsTest(unittest.TestCase):
         )
         encoded = encode_command_transaction(words)
         self.assertEqual(encoded[:2], bytes((0xA5, 17)))
+
+    def test_compressor_status_has_semantic_readback(self) -> None:
+        self.assertEqual(
+            format_compressor_status(0x00012307),
+            "COMPRESSOR_STATUS=0x00012307 [enabled=on, primed=yes, "
+            "gain_reduction=active, delay_level_frames=291]",
+        )
+
+    def test_effect_status_has_semantic_readback(self) -> None:
+        self.assertEqual(
+            format_effect_status(0x00005A5E),
+            "EFFECT_STATUS=0x00005a5e [chorus=off, reverb=on, busy=yes, "
+            "chorus_history=valid, reverb_valid_lines=0xa5 (4/8), "
+            "clamped=chorus,return_mixer]",
+        )
+
+    def test_effect_status_reports_empty_flags(self) -> None:
+        self.assertEqual(
+            format_effect_status(0),
+            "EFFECT_STATUS=0x00000000 [chorus=off, reverb=off, busy=no, "
+            "chorus_history=empty, reverb_valid_lines=0x00 (0/8), clamped=none]",
+        )
 
 
 if __name__ == "__main__":

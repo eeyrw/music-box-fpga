@@ -286,9 +286,13 @@ release; set master gain to 0 dB; and select the `hall` reverb preset. Master
 gain accepts `-120..0` dB. Reverb choices are `off`, `studio`, `hall`, and
 `reverb-max`; compressor state is selected with `--compressor on|off`.
 `--dry-run` prints the encoded command words and transaction without opening a
-CH347 device. Hardware runs read back the compressor and reverb enable status
-and reject a reverb configuration that the RTL reports as clamped. The current
-register interface has no master-volume readback field.
+CH347 device. Hardware runs decode the compressor status (enable, delay priming,
+active gain reduction, and delay fill level) and spatial-effect status (enables,
+activity, history validity, valid reverb lines, and configuration-clamped
+flags). They reject an enable-state mismatch or a reverb configuration that the
+RTL reports as clamped. The hexadecimal register values remain in the output
+for low-level diagnosis. The current register interface has no master-volume
+readback field.
 
 Register operands accept names from `spec/register_map.json` or numeric
 addresses. Snapshot JSON includes raw address/value pairs and decoded named
