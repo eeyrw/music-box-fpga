@@ -551,12 +551,14 @@ test-sf2-slow: test-mcu-sf2-asset test-sf2-runtime test-sf2-equivalence test-rea
 
 test-sf2-runtime:
 	mkdir -p $(BUILD_DIR)
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -ffreestanding -fno-builtin \
+		-I. -c mcu/msf2.c -o $(BUILD_DIR)/msf2.o
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) -I. \
 		host/mcu_sf2_asset_runtime.cpp host/mcu_sf2_asset_runtime_test.cpp \
 		sim/harness/formats/mcu_sf2_modulation.cpp \
 		sim/harness/formats/mcu_sf2_asset.cpp \
 		sim/harness/formats/sf2_loader.cpp \
-		sim/harness/control/command_control.cpp \
+		sim/harness/control/command_control.cpp $(BUILD_DIR)/msf2.o \
 		-o $(BUILD_DIR)/mcu_sf2_asset_runtime_test
 	$(BUILD_DIR)/mcu_sf2_asset_runtime_test "$(SF2)"
 
@@ -623,6 +625,8 @@ test-mcu-sf2-asset:
 	mkdir -p $(BUILD_DIR)
 	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -ffreestanding -fno-builtin \
 		-I. -c mcu/msf2.c -o $(BUILD_DIR)/msf2.o
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -ffreestanding -fno-builtin \
+		-I. -c mcu/msf2_example.c -o $(BUILD_DIR)/msf2_example.o
 	$(CXX) $(CXX_STD_FLAGS) $(RENDER_OPT_FAST) \
 		sim/harness/control/command_control.cpp \
 		sim/harness/formats/sf2_loader.cpp \

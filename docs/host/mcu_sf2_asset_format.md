@@ -295,6 +295,59 @@ phase, Q1.15 gain, and Q2.14 filter coefficients; envelope durations permit one
 sample or two parts per million, whichever is larger. Filter enable decisions,
 sample and loop addresses, layer order, and command framing are exact.
 
+## Pure-C Runtime Integration
+
+The public runtime API in [`../../mcu/msf2.h`](../../mcu/msf2.h) uses
+caller-owned channel, voice, and
+free-stack arrays. `msf2_runtime_init` binds those arrays, the validated image,
+and a bounded command sink. MIDI handlers call the corresponding
+`msf2_runtime_note_on`, `msf2_runtime_note_off`, control-change, pitch-bend, or
+pressure entry point. The runtime never reads a system clock. Firmware advances
+time through `msf2_runtime_advance_samples`; the function accumulates partial
+intervals and executes one control tick for every 48 elapsed output samples.
+At 48 kHz this is exactly 1 ms. A serialized 1 ms timer callback may instead
+call the convenience entry `msf2_runtime_control_tick`, which is exactly one
+48-sample advance. MIDI and timer calls must not concurrently mutate one runtime
+instance.
+
+[`../../mcu/msf2_example.c`](../../mcu/msf2_example.c) is a compiled firmware
+integration example with static storage, serialized timer service, Bank
+Select/Program Change state, and MIDI event adapters. The same file implements
+the complete synchronous SPI command sink. Firmware supplies:
+
+- linker symbols for the compact-v2 image start and end;
+- `platform_spi_write_mode0_cs0` for a complete SPI mode-0, MSB-first transfer;
+- `platform_irq_save` and `platform_irq_restore` for timer-counter handoff;
+- a 1 ms timer that calls `app_synth_1ms_timer_isr`.
+
+The SPI HAL must keep chip select asserted across the complete transaction and
+must consume or copy the stack-owned byte buffer before returning. The example
+emits the command frame defined by
+[`../command_stream.md`](../command_stream.md#spi-command-transaction):
+
+```text
+0xa5 | word_count | crc16_msb | crc16_lsb | word0_be | ... | wordN_be
+```
+
+CRC-16/CCITT-FALSE covers `word_count` followed by every big-endian command-word
+byte; it does not cover opcode `0xa5`. The command sink rejects empty, oversized,
+or internally inconsistent commands before calling the HAL. HAL failures return
+through `MSF2_ERR_SINK` to the MIDI or control-service caller.
+
+The example forwards MIDI CC values as SoundFont modulation sources and applies
+runtime policy for sustain, soft pedal, and All Sound Off. Bank Select and
+Program Change remain application state. RPN/NRPN selector and data-entry
+sequencing is explicitly not implemented; raw selector CC forwarding is not a
+complete RPN/NRPN mapping.
+
+Each control tick advances the modulation envelope and mod/vibrato LFO state,
+updates gain and pitch, evaluates filter state every fourth tick, suppresses
+unchanged commands, and reclaims released voices after their sample lifetime.
+The allocator takes free slots in constant time. At capacity it first prefers a
+released voice, then the oldest voice in the selected lifecycle stage, emits
+`VOICE_STOP`, increments the 16-bit generation, and publishes the replacement
+`VOICE_START_MONO`.
+
 ## Lookup Strategy
 
 Compact-v2 does not require preset records to be sorted, so the pure-C reader
@@ -325,6 +378,7 @@ Routine checked-in fixture:
 ```bash
 make mcu-sf2-asset
 make test-mcu-sf2-asset
+make test-sf2-runtime
 ```
 
 Production SGM verification is explicit because it is intentionally outside

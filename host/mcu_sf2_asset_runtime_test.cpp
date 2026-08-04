@@ -1,8 +1,11 @@
 #include "host/mcu_sf2_asset_runtime.h"
 
+#include "mcu/msf2.h"
+
 #include "sim/harness/formats/sf2_loader.h"
 
 #include <filesystem>
+#include <cstdlib>
 #include <stdexcept>
 #include <vector>
 
@@ -17,6 +20,60 @@ class RecordingSink final : public render::CommandWordSink {
   }
   std::vector<render::FixedCommand> commands;
 };
+
+int record_c_command(void* context, const uint32_t* words, uint8_t word_count) {
+  auto& sink = *static_cast<RecordingSink*>(context);
+  render::FixedCommand command;
+  for (uint8_t index = 0; index < word_count; ++index) command.push_back(words[index]);
+  sink.commands.push_back(command);
+  return 0;
+}
+
+void require_same_command_shape(const RecordingSink& expected,
+                                const RecordingSink& actual,
+                                const char* stage) {
+  if (expected.commands.size() != actual.commands.size()) {
+    throw std::runtime_error(std::string(stage) + " pure-C command count mismatch: " +
+                             std::to_string(expected.commands.size()) + " != " +
+                             std::to_string(actual.commands.size()));
+  }
+  for (size_t index = 0; index < expected.commands.size(); ++index) {
+    const auto& a = expected.commands[index];
+    const auto& b = actual.commands[index];
+    if (a.length != b.length || (a.words[0] >> 24) != (b.words[0] >> 24) ||
+        ((a.words[0] >> 14) & 0x3ffu) != ((b.words[0] >> 14) & 0x3ffu) ||
+        a.words[1] != b.words[1]) {
+      throw std::runtime_error(std::string(stage) +
+                               " pure-C command framing/lifecycle mismatch at " +
+                               std::to_string(index));
+    }
+    const uint8_t command_opcode = uint8_t(a.words[0] >> 24);
+    const auto close_u16_pair = [](uint32_t left, uint32_t right) {
+      return std::abs(int64_t(uint16_t(left)) - uint16_t(right)) <= 1 &&
+             std::abs(int64_t(uint16_t(left >> 16)) - uint16_t(right >> 16)) <= 1;
+    };
+    const auto close_s16_pair = [](uint32_t left, uint32_t right) {
+      return std::abs(int64_t(int16_t(left)) - int16_t(right)) <= 1 &&
+             std::abs(int64_t(int16_t(left >> 16)) - int16_t(right >> 16)) <= 1;
+    };
+    bool numeric_ok = true;
+    if (command_opcode == 0x18) {
+      numeric_ok = std::abs(int64_t(a.words[2]) - b.words[2]) <= 1;
+    } else if (command_opcode == 0x16) {
+      numeric_ok = close_u16_pair(a.words[2], b.words[2]);
+    } else if (command_opcode == 0x17) {
+      numeric_ok = close_s16_pair(a.words[2], b.words[2]) &&
+                   close_s16_pair(a.words[3], b.words[3]) &&
+                   std::abs(int64_t(int16_t(a.words[4])) - int16_t(b.words[4])) <= 1 &&
+                   ((a.words[4] ^ b.words[4]) & 0x00010000u) == 0;
+    }
+    if (!numeric_ok) {
+      throw std::runtime_error(std::string(stage) +
+                               " pure-C runtime numeric error exceeds one LSB at " +
+                               std::to_string(index));
+    }
+  }
+}
 
 uint8_t opcode(const render::FixedCommand& command) {
   return uint8_t(command.words[0] >> 24);
@@ -61,8 +118,26 @@ int main(int argc, char** argv) {
 
   RecordingSink sink;
   host::McuSf2AssetRuntime runtime(view, sink, 8);
+  msf2_view c_view{};
+  msf2_runtime c_runtime{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_channels{};
+  std::array<msf2_voice_state, 8> c_voices{};
+  std::array<uint16_t, 8> c_free_stack{};
+  RecordingSink c_sink;
+  require(msf2_view_init(&c_view, image.data(), image.size()) == MSF2_OK &&
+              msf2_runtime_init(&c_runtime, &c_view, c_channels.data(),
+                                c_voices.data(), c_free_stack.data(),
+                                uint16_t(c_voices.size()), record_c_command,
+                                &c_sink) == MSF2_OK,
+          "pure-C runtime initialization failed");
   const uint16_t layers = runtime.note_on(
       0, cell.program, cell.bank, cell.key, cell.velocity);
+  uint8_t c_layers = 0;
+  require(msf2_runtime_note_on(&c_runtime, 0, cell.program, cell.bank, cell.key,
+                               cell.velocity, &c_layers) == MSF2_OK &&
+              c_layers == layers,
+          "pure-C Note On layer count mismatch");
+  require_same_command_shape(sink, c_sink, "Note On");
   require(layers != 0 && !sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "compiled runtime did not emit START first");
   const uint16_t first_voice = uint16_t((sink.commands.front().words[0] >> 14) & 0x3ffu);
@@ -71,25 +146,63 @@ int main(int argc, char** argv) {
 
   const size_t before_controller = sink.commands.size();
   runtime.control_change(0, 7, 0);
+  require(msf2_runtime_control_change(&c_runtime, 0, 7, 0) == MSF2_OK,
+          "pure-C CC7 failed");
+  require_same_command_shape(sink, c_sink, "CC7");
   bool saw_gain = false;
   for (size_t index = before_controller; index < sink.commands.size(); ++index) {
     saw_gain |= opcode(sink.commands[index]) == 0x16;
   }
   require(saw_gain, "CC7 did not update active compiled voices");
 
+  runtime.pitch_bend(0, 4096);
+  require(msf2_runtime_pitch_bend(&c_runtime, 0, 4096) == MSF2_OK,
+          "pure-C pitch bend failed");
+  require_same_command_shape(sink, c_sink, "pitch bend");
+  runtime.channel_pressure(0, 73);
+  require(msf2_runtime_channel_pressure(&c_runtime, 0, 73) == MSF2_OK,
+          "pure-C channel pressure failed");
+  require_same_command_shape(sink, c_sink, "channel pressure");
+  runtime.key_pressure(0, cell.key, 51);
+  require(msf2_runtime_key_pressure(&c_runtime, 0, cell.key, 51) == MSF2_OK,
+          "pure-C key pressure failed");
+  require_same_command_shape(sink, c_sink, "key pressure");
+  for (int tick = 0; tick < 4; ++tick) {
+    runtime.advance_samples(48);
+    require(msf2_runtime_advance_samples(&c_runtime, 48) == MSF2_OK,
+            "pure-C modulation tick failed");
+  }
+  require_same_command_shape(sink, c_sink, "modulation ticks");
+
   runtime.control_change(0, 64, 127);
+  require(msf2_runtime_control_change(&c_runtime, 0, 64, 127) == MSF2_OK,
+          "pure-C sustain-on failed");
   const size_t before_sustain_note_off = sink.commands.size();
   runtime.note_off(0, cell.key);
+  require(msf2_runtime_note_off(&c_runtime, 0, cell.key) == MSF2_OK,
+          "pure-C sustained Note Off failed");
   require(sink.commands.size() == before_sustain_note_off,
           "sustain-held Note Off emitted a release");
   runtime.control_change(0, 64, 0);
+  require(msf2_runtime_control_change(&c_runtime, 0, 64, 0) == MSF2_OK,
+          "pure-C sustain release failed");
+  require_same_command_shape(sink, c_sink, "sustain release");
   require(sink.commands.size() > before_sustain_note_off,
           "sustain release did not emit a lifecycle command");
   runtime.advance_samples(UINT32_MAX);
+  require(msf2_runtime_advance_samples(&c_runtime, UINT32_MAX) == MSF2_OK,
+          "pure-C release reclamation failed");
 
   sink.commands.clear();
+  c_sink.commands.clear();
   runtime.control_change(0, 7, 127);
+  require(msf2_runtime_control_change(&c_runtime, 0, 7, 127) == MSF2_OK,
+          "pure-C CC7 reset failed");
   runtime.note_on(0, cell.program, cell.bank, cell.key, cell.velocity);
+  require(msf2_runtime_note_on(&c_runtime, 0, cell.program, cell.bank, cell.key,
+                               cell.velocity, &c_layers) == MSF2_OK,
+          "pure-C reused Note On failed");
+  require_same_command_shape(sink, c_sink, "reused Note On");
   require(!sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "reused compiled voice did not emit START");
   require(((sink.commands.front().words[0] >> 14) & 0x3ffu) == first_voice &&
@@ -104,6 +217,35 @@ int main(int argc, char** argv) {
   for (const auto& command : steal_sink.commands) saw_stop |= opcode(command) == 0x15;
   require(saw_stop && one_voice.stats().stolen_voices != 0,
           "fixed allocator did not use the bounded steal path");
+
+  msf2_runtime c_one_voice{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_one_channels{};
+  std::array<msf2_voice_state, 1> c_one_voices{};
+  std::array<uint16_t, 1> c_one_free{};
+  RecordingSink c_steal_sink;
+  require(msf2_runtime_init(&c_one_voice, &c_view, c_one_channels.data(),
+                            c_one_voices.data(), c_one_free.data(), 1,
+                            record_c_command, &c_steal_sink) == MSF2_OK &&
+              msf2_runtime_note_on(&c_one_voice, 0, cell.program, cell.bank,
+                                   cell.key, cell.velocity, &c_layers) == MSF2_OK &&
+              msf2_runtime_note_on(&c_one_voice, 0, cell.program, cell.bank,
+                                   cell.key, cell.velocity, &c_layers) == MSF2_OK &&
+              c_one_voice.stats.stolen_voices != 0,
+          "pure-C fixed allocator did not use the bounded steal path");
+
+  msf2_runtime c_tick_runtime{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_tick_channels{};
+  std::array<msf2_voice_state, 1> c_tick_voices{};
+  std::array<uint16_t, 1> c_tick_free{};
+  RecordingSink c_tick_sink;
+  require(msf2_runtime_init(&c_tick_runtime, &c_view, c_tick_channels.data(),
+                            c_tick_voices.data(), c_tick_free.data(), 1,
+                            record_c_command, &c_tick_sink) == MSF2_OK &&
+              msf2_runtime_advance_samples(&c_tick_runtime, 47) == MSF2_OK &&
+              c_tick_runtime.control_tick_index == 0 &&
+              msf2_runtime_advance_samples(&c_tick_runtime, 1) == MSF2_OK &&
+              c_tick_runtime.control_tick_index == 1,
+          "pure-C sample accumulator did not produce one 1 ms control tick");
 
   const auto before_unmapped = runtime.stats().unmapped_notes;
   (void)runtime.note_on(0, 127, 16383, cell.key, cell.velocity);

@@ -59,7 +59,7 @@ the results as if they were the same build.
 | Script | Input | Output | Normal command |
 | --- | --- | --- | --- |
 | `tools/gen_register_map.py` | `spec/register_map.json` | SV and C++ register constants | `make generate-register-map` |
-| `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope and dynamics tables plus shared pure-C MSF2 `exp2` mantissa and quarter-sine tables | `make generate-dsp-lut` |
+| `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope and dynamics tables plus pure-C MSF2 `exp2`, quarter-sine, and SoundFont source-curve tables | `make generate-dsp-lut` |
 | `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | `sim/harness/generated/mcu_asset_profile.h` plus profile/interface consistency | `make generate-mcu-asset-profile`; check with `make check-mcu-asset-profiles` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
 
