@@ -91,6 +91,42 @@ build/realtime_midi_host \
 The process owns transport scheduling, voice generations, MIDI timing, and
 shutdown. Let it finish or stop it before using `ch347_tool.py`.
 
+### Non-GM SoundFont Preset Mapping
+
+Do not treat an audible but incorrect instrument as an asset-loader failure
+until the MIDI bank/program requests have been compared with the SoundFont
+preset directory. A SoundFont can use valid `(bank, program)` numbers without
+following the General MIDI instrument assignments. `realtime_midi_host` uses
+the MIDI file's bank and program state; `--sf2` does not remap a non-GM bank to
+General MIDI.
+
+The 2026-08-04 investigation of `Undertale.sf2` established this concrete case:
+
+- The source was 499,844,752 bytes with SHA-256
+  `c4c25182da11a86284a3b36f16060c65fd314529aa2b05e54bbc4609ba2c8326`.
+  Its size and preset directory identify it as the community
+  [`Undertale V3 (PC).sf2`](https://anapan.ca/Anapan/FM/NON%20GM%20Soundfonts/),
+  which is distributed as a non-GM SoundFont.
+- The local WTSF payload was byte-exact with the source SF2. On hardware,
+  `PLATFORM_BYTES_LOADED` and `PLATFORM_SF2_SIZE` both reported 499,844,752,
+  with `asset_loaded=1` and no SD, loader, underrun, sample-drop, or render
+  deadline error.
+- `debussy_bergamasque_03.mid` contained 1,489 Note On events, all requesting
+  bank 0, program 0. General MIDI assigns that location to Acoustic Grand
+  Piano, but this SoundFont assigns it to `100 Over. Gt.`. Its numeric preset
+  name prefixes refer to Undertale soundtrack entries rather than GM program
+  categories.
+- A three-second dry run covered the first four Note On events, reached four
+  active voices, emitted complete command transactions, and reported zero
+  unmapped Note Ons or transport errors. The wrong timbre was therefore preset
+  selection, not failed parsing or voice generation.
+
+Use a GM-compatible SoundFont for arbitrary GM MIDI files. To use this
+Undertale bank, author bank/program changes for its preset directory instead;
+for example, its bank 0, program 29 preset is named `086 Grand Piano`. The
+current real-time host has no command-line program override, so this selection
+must be present in the MIDI data.
+
 ## Diagnostics
 
 Clear interval diagnostics immediately before a workload, then capture the
