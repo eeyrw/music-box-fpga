@@ -11,6 +11,9 @@ design documents linked from [`../README.md`](../README.md).
 - [`effects.md`](effects.md): effects completion status and open qualification.
 - [`spi_transport.md`](spi_transport.md): SPI correctness, physical timing, and
   optional future transport work.
+- [`ethernet_udp_ddr3.md`](ethernet_udp_ddr3.md): static-IPv4 RGMII/UDP DDR3
+  maintenance transport that retains SD loading, with protocol, arbitration,
+  resource, verification, and hardware gates.
 - [`realtime_midi_host.md`](realtime_midi_host.md): SF2 loading and lookup
   efficiency, bounded host control work, CH347 command scheduling, and the
   future real-time MIDI application.
