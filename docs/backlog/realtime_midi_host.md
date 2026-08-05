@@ -252,6 +252,37 @@ this entry point. The application can play the same SMF itself with
 `--midi-file`; live Sequencer routing requires a future backend or a virtual
 raw-MIDI bridge that exposes a `/dev/snd/midiC*D*` path.
 
+### Open Issue: 512-Voice Steal Age Ordering
+
+The real-time host is compiled with `RENDER_NUM_VOICES=512`, allocates voice IDs
+0 through 511, and encodes them in the command header's 10-bit voice field. Its
+declared capacity is therefore correct. Linked-stereo regions remain two mono
+voices and consume two of those slots.
+
+The direct-SF2 `McuModel` path nevertheless has a full-capacity policy defect.
+`alloc_stamp_` is reduced to eight bits and the final equal-score steal
+tie-break compares that wrapping value. Once allocation history crosses 255,
+512 simultaneously active voices cannot have a total oldest-to-newest ordering.
+When released-state preference and audible steal scores are equal, the selected
+victim may therefore not be the strictly oldest voice. This does not reduce the
+available capacity to 128 or corrupt the 10-bit voice ID; it affects only victim
+selection after all 512 mono slots are occupied.
+
+The compiled `--mcu-asset` path is not affected because
+`McuSf2AssetRuntime` uses a 64-bit `allocation_stamp`. Its existing C++ focused
+test uses an eight-voice capacity, however, so the final voice-511 boundary is
+not directly covered by that test.
+
+- [ ] Replace the direct-SF2 eight-bit allocation stamp with a non-wrapping or
+  explicitly total-ordered age value suitable for all 512 active voices.
+- [ ] Add a direct-SF2 test with all 512 slots active, equal steal scores, and
+  allocation history extending beyond 256 Note On allocations; require the
+  strictly oldest eligible voice to be selected.
+- [ ] Add a compiled-runtime boundary test that allocates voice IDs through 511,
+  verifies the emitted 10-bit command field, then exercises the first steal.
+- [ ] Keep released-voice and lower-audibility preferences ahead of the age
+  tie-break and retain existing steal diagnostics.
+
 ## Priority 8: Bandwidth And Protocol Follow-Up
 
 Host CPU optimization cannot compensate for an oversubscribed SPI link. The
