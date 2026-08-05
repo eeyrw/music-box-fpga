@@ -14,6 +14,8 @@ typedef struct i2s_clock_monitor {
     uint8_t stopped_tick_count;
     bool initialized;
     bool valid;
+    bool seen_valid;
+    bool recovery_pending;
 } i2s_clock_monitor;
 
 void i2s_clock_monitor_init(i2s_clock_monitor *monitor,
@@ -21,5 +23,9 @@ void i2s_clock_monitor_init(i2s_clock_monitor *monitor,
 void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
                             uint32_t frame_count);
 bool i2s_clock_monitor_valid(const i2s_clock_monitor *monitor);
+/* True after a previously valid source stopped and a valid 48 kHz cadence has
+ * returned. The hardware owner must then restart its frame synchronizer and
+ * reinitialize this monitor before publishing Clock Validity again. */
+bool i2s_clock_monitor_recovery_ready(const i2s_clock_monitor *monitor);
 
 #endif

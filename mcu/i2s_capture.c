@@ -14,10 +14,14 @@
 static uint32_t capture_ring[I2S_RING_FRAME_COUNT]
     __attribute__((aligned(1u << I2S_RING_BYTE_BITS)));
 static int capture_dma_channel;
+static PIO capture_pio;
+static uint capture_state_machine;
+static uint capture_program_offset;
 static volatile uint32_t capture_completed_count;
 static uint32_t capture_read_count;
 static i2s_clock_monitor capture_clock_monitor;
 static volatile bool capture_clock_valid;
+static volatile bool capture_resync_pending;
 
 _Static_assert((I2S_RING_FRAME_COUNT & (I2S_RING_FRAME_COUNT - 1u)) == 0u,
                "I2S DMA ring frame count must be a power of two");
@@ -51,6 +55,41 @@ static void __isr i2s_capture_dma_irq(void) {
     capture_completed_count += I2S_RING_FRAME_COUNT;
     dma_channel_set_trans_count(capture_dma_channel, I2S_RING_FRAME_COUNT,
                                 true);
+}
+
+static void i2s_capture_restart_hardware(void) {
+    uint32_t producer_count;
+    const uint32_t irq_state = save_and_disable_interrupts();
+
+    /* Stop the producer before aborting DMA so no new FIFO word can race the
+     * reset. dma_channel_abort() may report a completion IRQ, hence the channel
+     * IRQ is masked and acknowledged around the operation as required by the
+     * Pico SDK. All buffered data is deliberately discarded: after a clock
+     * interruption its frame alignment cannot be trusted. */
+    pio_sm_set_enabled(capture_pio, capture_state_machine, false);
+    dma_channel_set_irq0_enabled(capture_dma_channel, false);
+    dma_channel_abort(capture_dma_channel);
+    dma_channel_acknowledge_irq0(capture_dma_channel);
+
+    producer_count = capture_completed_count + I2S_RING_FRAME_COUNT -
+                     dma_hw->ch[capture_dma_channel].transfer_count;
+    capture_completed_count = producer_count;
+    capture_read_count = producer_count;
+
+    pio_sm_clear_fifos(capture_pio, capture_state_machine);
+    pio_sm_restart(capture_pio, capture_state_machine);
+    pio_sm_exec(capture_pio, capture_state_machine,
+                pio_encode_jmp(capture_program_offset));
+
+    dma_channel_set_write_addr(capture_dma_channel, capture_ring, false);
+    dma_channel_set_trans_count(capture_dma_channel, I2S_RING_FRAME_COUNT, true);
+    dma_channel_set_irq0_enabled(capture_dma_channel, true);
+    pio_sm_set_enabled(capture_pio, capture_state_machine, true);
+
+    i2s_clock_monitor_init(&capture_clock_monitor, producer_count);
+    capture_clock_valid = false;
+    capture_resync_pending = false;
+    restore_interrupts(irq_state);
 }
 
 void i2s_capture_init(void) {
@@ -108,6 +147,9 @@ void i2s_capture_init(void) {
 
     state_machine = pio_claim_unused_sm(pio, true);
     offset = pio_add_program_at_offset(pio, &program, 0u);
+    capture_pio = pio;
+    capture_state_machine = state_machine;
+    capture_program_offset = offset;
     config = pio_get_default_sm_config();
     sm_config_set_wrap(&config, offset + 4u, offset + 9u);
     sm_config_set_in_pins(&config, APP_I2S_DATA_PIN);
@@ -137,7 +179,19 @@ void i2s_capture_tick_1ms(void) {
      * control-request callback can therefore answer immediately even when the
      * external clock is absent or stopped at either logic level. */
     i2s_clock_monitor_tick(&capture_clock_monitor, capture_write_count());
-    capture_clock_valid = i2s_clock_monitor_valid(&capture_clock_monitor);
+    if (i2s_clock_monitor_recovery_ready(&capture_clock_monitor)) {
+        /* Hardware reset is deferred out of this timer IRQ. USB callbacks and
+         * ring reads run in the main context, so the reset cannot change their
+         * read cursor halfway through a packet copy. */
+        capture_resync_pending = true;
+        capture_clock_valid = false;
+    } else if (!capture_resync_pending) {
+        capture_clock_valid = i2s_clock_monitor_valid(&capture_clock_monitor);
+    }
+}
+
+void i2s_capture_task(void) {
+    if (capture_resync_pending) i2s_capture_restart_hardware();
 }
 
 size_t i2s_capture_available(void) {

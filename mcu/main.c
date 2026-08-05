@@ -300,6 +300,7 @@ int main(void) {
 
     while (true) {
         watchdog_update();
+        i2s_capture_task();
         tud_task();
         if (service_usb_midi() != 0) fatal_blink();
 #if !APP_USB_CAPTURE_ONLY

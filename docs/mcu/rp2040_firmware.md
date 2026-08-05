@@ -34,7 +34,12 @@ host on 2026-08-05:
 - the capture-only ELF containing the stream-resynchronization and rolling
   clock-validation changes was written through the persistent OpenOCD server,
   re-enumerated successfully, and reported a 48,000 Hz momentary rate in ALSA
-  without new Clock Validity, `-110`, or XRUN kernel messages.
+  without new Clock Validity, `-110`, or XRUN kernel messages;
+- the later stopped-clock recovery ELF was also written through OpenOCD,
+  re-enumerated as `cafe:4018`, and completed a two-second direct ALSA capture
+  containing exactly 96,000 stereo frames at 48 kHz. The captured PCM was
+  silence, so this proves clocking, packet delivery, and non-wedging behavior,
+  but not sample or channel correctness.
 
 The verified capture used the capture-only build described below, so it did not
 initialize or drive SPI. The existing 30 MHz FPGA SPI result was obtained with
@@ -47,6 +52,15 @@ covered enumeration and continuous streaming, while initial open, reopen,
 unmount, suspend, 47/49 kHz rejection, and control Channel Number behavior are
 covered by focused host unit tests. A fresh physical open/close sequence remains
 the appropriate regression whenever the host audio service can release `hw:`.
+
+Physical stopped-clock recovery remains deliberately pending. A future hardware
+session must record continuously while disconnecting I2S or resetting the FPGA
+for longer than four milliseconds, reconnect at an unrelated frame phase, and
+verify that USB stays responsive, supplies silence during recovery, resumes
+correct left/right sample alignment, and produces no kernel timeout or XRUN.
+The focused monitor test proves the recovery state sequence, while the two-second
+capture above proves only the uninterrupted path; neither substitutes for that
+fault-injection test.
 
 The `0xcafe` vendor ID is a development identity. Replace it with an assigned
 VID/PID before distributing a product.
@@ -345,6 +359,14 @@ A completely stopped producer invalidates after four 1 ms ticks. The USB EP0
 callback only returns this cached state, so a missing or stopped I2S clock
 cannot block a control request while waiting for GPIO activity.
 
+If a source that was previously valid stops and later returns at a stable
+48 kHz cadence, the firmware does not trust the PIO's interrupted bit counter.
+It disables the state machine, aborts and rearms DMA, clears the RX FIFO and
+ring cursors, jumps back to the initial LRCLK synchronization sequence, and
+then measures a fresh eight-millisecond clock window. Clock Validity remains
+false and USB capture supplies silence throughout this recovery. This handles
+FPGA reset, cable removal, and a source restarting at an unrelated frame phase.
+
 The Connector, Sampling Frequency, and Clock Validity controls are all UAC2
 master controls and accept only Channel Number zero. Requests for any nonzero
 channel are stalled as required by UAC2 section 5.2.2.
@@ -497,6 +519,14 @@ LRCLK transition, skips the Philips-I2S one-bit delay, then samples continuously
 in 32-bit groups on BCLK rising edges. The RX word contains left PCM in bits
 31:16 and right PCM in bits 15:0.
 
+After a previously valid clock has been absent for at least four timer ticks,
+the first subsequently stable 48 kHz window requests a complete PIO/DMA restart
+from the main loop. Recovery therefore takes approximately 16 ms after useful
+clocking returns: up to eight milliseconds to recognize the returned cadence,
+followed by restart and another eight milliseconds to validate frames captured
+from the reacquired LRCLK boundary. The USB ring then accumulates its normal
+two-millisecond target before live PCM resumes.
+
 The LRCLK synchronization is intentionally outside the PIO wrap region. An
 earlier implementation returned to the LRCLK waits after every 32-bit word; by
 then the following frame transition had already occurred, so it captured every
@@ -508,6 +538,13 @@ DMA transfer is bounded to 2,048 frames; a highest-priority DMA IRQ reloads the
 next transfer so the hardware's finite `TRANS_COUNT` cannot expire after long
 uptime. If the producer laps the consumer, the oldest overwritten frames are
 discarded and reading resumes from the newest ring contents.
+
+This recovery detects stopped/restarted clocks through DMA progress. It cannot
+prove signal integrity or PCM correctness: a BCLK glitch that still yields the
+expected average word rate, an incorrect but 48 kHz LRCLK waveform, or corrupted
+SDATA may pass Clock Validity. Board qualification must therefore still check
+LRCLK/BCLK phase, channel patterns, and long-running capture content with real
+hardware.
 
 Pico SDK 2.3.0 vendors TinyUSB 0.18.0, whose RP2040 driver did not abort an
 active allocated isochronous endpoint before reactivation. Linux alternate-
@@ -627,8 +664,8 @@ rather than assuming card 2.
 | `mcu/main.c` | Clock/SPI/USB initialization, MIDI dispatch, UAC2 controls, main loop, fatal handling. |
 | `mcu/usb_descriptors.c` | Device, UAC2, MIDI, endpoint, entity, and string descriptors. |
 | `mcu/tusb_config.h` | TinyUSB class buffers and exact audio parser boundary. |
-| `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, Clock Validity. |
-| `mcu/i2s_clock_monitor.c` | Eight-millisecond 48 kHz average validation and four-millisecond stopped-clock detection. |
+| `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, and deferred PIO/DMA frame resynchronization. |
+| `mcu/i2s_clock_monitor.c` | Eight-millisecond 48 kHz validation, four-millisecond stopped-clock detection, and recovery-ready state. |
 | `mcu/rp2040_usb_iso_fix.c` | TinyUSB 0.18 RP2040 isochronous reactivation backport. |
 | `mcu/usb_audio_rate_match.c` | Stream-open resynchronization and 47/48/49-frame asynchronous packet policy. |
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader and fixed-capacity runtime. |
@@ -652,6 +689,14 @@ descriptor dump cannot prove that TinyUSB's class drivers will accept the same
 function boundaries at `SET_CONFIGURATION`. I2S changes require a real source
 or a signal generator and a captured WAV check; MIDI policy changes require
 both packet-level and FPGA command/voice behavior checks.
+
+The stopped-clock recovery acceptance test is intentionally deferred. When the
+hardware setup is available, run capture before interrupting the source, keep
+the interruption longer than the four-millisecond loss threshold, then restore
+48 kHz I2S without coordinating its frame phase. Acceptance requires continued
+USB responsiveness, silence during the approximately 18-millisecond reacquire
+interval, correctly aligned stereo PCM afterward, and no new `-110`, Clock
+Validity, XRUN, or DMA failure messages in the kernel log.
 
 ## Local Specifications
 

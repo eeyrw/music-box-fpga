@@ -43,6 +43,7 @@ void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
             ++monitor->stopped_tick_count;
         }
         if (monitor->stopped_tick_count >= I2S_CLOCK_STOPPED_TICKS) {
+            if (monitor->seen_valid) monitor->recovery_pending = true;
             monitor->valid = false;
         }
         return;
@@ -55,6 +56,7 @@ void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
         monitor->valid =
             monitor->window_frame_count >= I2S_CLOCK_WINDOW_MIN_FRAMES &&
             monitor->window_frame_count <= I2S_CLOCK_WINDOW_MAX_FRAMES;
+        if (monitor->valid) monitor->seen_valid = true;
         monitor->window_frame_count = 0u;
         monitor->window_tick_count = 0u;
     }
@@ -62,4 +64,8 @@ void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
 
 bool i2s_clock_monitor_valid(const i2s_clock_monitor *monitor) {
     return monitor != NULL && monitor->valid;
+}
+
+bool i2s_clock_monitor_recovery_ready(const i2s_clock_monitor *monitor) {
+    return monitor != NULL && monitor->valid && monitor->recovery_pending;
 }
