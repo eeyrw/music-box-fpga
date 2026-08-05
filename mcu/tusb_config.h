@@ -28,8 +28,22 @@
 #define CFG_TUD_MIDI_TX_BUFSIZE 64
 
 #define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE APP_USB_AUDIO_SAMPLE_RATE_HZ
-#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN \
-    (TUD_AUDIO_MIC_ONE_CH_DESC_LEN + 4)
+/* Exact byte length of the custom UAC2 function, including its IAD. TinyUSB
+ * uses this value to skip from the AudioControl interface to the next USB
+ * function during SET_CONFIGURATION; it is therefore a parsing boundary, not
+ * merely a buffer-size hint. Keep usb_descriptors.c tied to this same macro.
+ *
+ * This topology deliberately has no Feature Unit. Starting from TinyUSB's
+ * stock microphone descriptor length and adjusting for channel count would be
+ * wrong because Feature Unit descriptors have a variable entity length. */
+#define APP_USB_AUDIO_DESC_LEN \
+    (TUD_AUDIO_DESC_IAD_LEN + TUD_AUDIO_DESC_STD_AC_LEN + \
+     TUD_AUDIO_DESC_CS_AC_LEN + TUD_AUDIO_DESC_CLK_SRC_LEN + \
+     TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN + \
+     2 * TUD_AUDIO_DESC_STD_AS_INT_LEN + TUD_AUDIO_DESC_CS_AS_INT_LEN + \
+     TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN + \
+     TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN)
+#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN APP_USB_AUDIO_DESC_LEN
 #define CFG_TUD_AUDIO_FUNC_1_N_AS_INT 1
 #define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ 64
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1

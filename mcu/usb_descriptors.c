@@ -11,13 +11,7 @@
 #define AUDIO_TERM_TYPE_DIGITAL_AUDIO_INTERFACE 0x0602
 #define MIDI_IAD_DESC_LEN 8
 
-#define AUDIO_STEREO_DESC_LEN \
-    (TUD_AUDIO_DESC_IAD_LEN + TUD_AUDIO_DESC_STD_AC_LEN + \
-     TUD_AUDIO_DESC_CS_AC_LEN + TUD_AUDIO_DESC_CLK_SRC_LEN + \
-     TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN + \
-     2 * TUD_AUDIO_DESC_STD_AS_INT_LEN + TUD_AUDIO_DESC_CS_AS_INT_LEN + \
-     TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN + \
-     TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN)
+#define AUDIO_STEREO_DESC_LEN APP_USB_AUDIO_DESC_LEN
 
 /* UAC2 recording topology (entity direction is relative to the USB audio
  * function, not to the host):
@@ -137,6 +131,8 @@ static const uint8_t configuration_descriptor[] = {
 };
 _Static_assert(sizeof(configuration_descriptor) == CONFIG_TOTAL_LEN,
                "USB configuration descriptor length mismatch");
+_Static_assert(AUDIO_STEREO_DESC_LEN == CFG_TUD_AUDIO_FUNC_1_DESC_LEN,
+               "TinyUSB audio parser length must match the UAC2 descriptor");
 
 static const char *const string_descriptors[] = {
     NULL,
