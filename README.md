@@ -31,6 +31,7 @@ physical board qualification remain open.
 - [Project contracts and command quick reference](docs/project_contracts.md)
 - [Current system architecture](docs/design/system_design.md)
 - [Tooling architecture](docs/development/tooling.md)
+- [RP2040 USB MIDI and I2S capture firmware](docs/mcu/rp2040_firmware.md)
 - [Required RTL change workflow](docs/development/rtl_change_workflow.md)
 - [Verification and render flows](docs/verification/simulation_design.md)
 - [SF2 phase and address-span analysis](docs/verification/sf2_access_span_analysis.md)
@@ -76,6 +77,7 @@ sim/harness/         C++ parsers, control policy, reference synth, DUT adapters
 fpga/common/rtl/     reusable board-facing transport/audio wrappers
 fpga/smart_artix/    board RTL, XDC, Vivado Tcl/IP inputs, and board tests
 host/                CH347 transport and board bring-up applications
+mcu/                 RP2040 USB MIDI, MSF2 control, SPI, and I2S capture firmware
 spec/                machine-readable register-map source
 tools/               generators, asset builders, analyzers, report tools
 docs/                contracts, current design, workflow, verification, history

@@ -854,6 +854,11 @@ If loading fails:
 Do not connect a power amplifier for the first I2S test. Use a scope, logic
 analyzer, or codec input with safe gain first.
 
+For the Raspberry Pi Pico capture path, use the complete SPI/I2S wiring table,
+USB checks, and Clock Validity troubleshooting in
+[`../mcu/rp2040_firmware.md`](../mcu/rp2040_firmware.md). The table below remains
+the FPGA-side I2S pin contract.
+
 The current bitstream routes the three 3.3 V `LVCMOS33` outputs to adjacent
 BANK15 expansion-header pins:
 

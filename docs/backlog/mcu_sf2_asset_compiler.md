@@ -10,6 +10,13 @@ asset or firmware contract. Stable behavior remains defined by
 The implemented compact-v2 byte format is defined separately by
 [`../host/mcu_sf2_asset_format.md`](../host/mcu_sf2_asset_format.md).
 
+Current implementation status is recorded in
+[`../mcu/rp2040_firmware.md`](../mcu/rp2040_firmware.md). An RP2040 target now
+embeds and parses a concrete compact-v2 image, accepts USB-MIDI, and serializes
+commands to the FPGA. This backlog remains useful for unfinished capacity,
+bundle-identity, overload, and end-to-end qualification work; statements below
+that predate target selection do not override the current firmware contract.
+
 The central constraint is that this work must not require production RTL
 changes. The compiler moves SF2 parsing, zone inheritance, finite-domain table
 generation, and output-format conversion out of the MCU hot path. The MCU still

@@ -62,6 +62,14 @@ platform/common status windows, effects, PCM FIFO, and I2S serializer. The
 superseded single-frame tops and their compatibility wrappers have been removed;
 the voice-major path is the only supported implementation.
 
+The production control and USB bridge is now an RP2040 firmware target under
+`mcu/`. USB-MIDI enters the compact MSF2 policy, which allocates voices and sends
+the existing `0xa5` transactional command stream over SPI. FPGA-generated I2S
+returns to the RP2040 through PIO/DMA and is exposed as asynchronous UAC2 stereo
+capture. This does not move PCM synthesis or effects into the MCU. See
+[`../mcu/rp2040_firmware.md`](../mcu/rp2040_firmware.md) for the exact ownership,
+wiring, USB topology, and current hardware qualification.
+
 See `rtl_module_map.md` for file ownership and the full instantiation tree.
 
 ## Voice Control
@@ -227,6 +235,11 @@ Reusable board-facing RTL under `fpga/common/rtl` provides:
 
 The Smart Artix implementation additionally owns native SD loading, DDR3
 arbitration, MIG integration, DDR debug access, clocking, and constraints.
+
+The RP2040 board boundary owns USB device enumeration, MIDI policy, MSF2
+metadata, voice allocation, command serialization, and I2S-to-USB capture. The
+FPGA remains the SPI target and I2S source. Both links use 3.3 V signaling and a
+verified common ground.
 
 ## Next Hardware Work
 

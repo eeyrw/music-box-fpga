@@ -23,6 +23,10 @@ SF2 -----------------------> mcu_sf2_asset ----------> packed MCU metadata
 WTSF image ----------------> flash_wtsf_sd.sh -------> physical SD card
 CH347 host tools ----------> SPI mailbox/commands ---> Smart Artix board
 
+MSF2 sidecar + Pico SDK ---> CMake/Ninja ------------> RP2040 ELF/UF2
+RP2040 USB-MIDI -----------> MSF2 runtime -> SPI ----> Smart Artix commands
+Smart Artix I2S -----------> RP2040 PIO/DMA --------> UAC2 capture
+
 RTL filelists + XDC + IP --> Vivado Tcl flow --------> DCP/reports/bitstream/cfgmem
 Vivado reports ------------> vivado_report_summary.py -> signoff summary/analysis
 ```
@@ -127,6 +131,9 @@ sim/harness/apps      executable entry points
 | `make flash-wtsf-sd SD_DEVICE=...` | Writes the verified image to an explicitly selected whole-card device. |
 | `tools/ch347_tool.py` | Direct official-SO Python CLI for named register access, decoded snapshots, readiness waits, diagnostic clear, DDR smoke/dump/benchmark/verification, voice smoke, FLUSH, and raw command transactions. |
 | `make host-realtime-midi` | Builds the latency-sensitive C++ MIDI/SF2 player; this is the only CH347 application kept in C++. |
+| `cmake -S mcu -B build/mcu -G Ninja ...` | Configures the RP2040 firmware with an embedded MSF2 sidecar; see the [firmware guide](../mcu/rp2040_firmware.md). |
+| `cmake --build build/mcu --parallel` | Builds ELF/BIN/HEX/UF2 outputs and validates the compiled UAC2/MIDI descriptor. |
+| `make test-mcu-usb-audio-rate` | Checks the 47/48/49-frame asynchronous USB capture rate matcher. |
 
 `tools/flash_wtsf_sd.sh` is intentionally behind a Make target and requires an
 explicit device. Both the Python board tool and the real-time C++ host

@@ -70,6 +70,14 @@ matching contract whenever its RTL or host implementation changes.
   board checks, audio setup, playback, diagnostics, FLUSH, DDR, and smoke-test
   commands.
 
+### MCU Firmware
+
+- [`mcu/rp2040_firmware.md`](mcu/rp2040_firmware.md): current Raspberry Pi Pico
+  wiring, build and flash flow, USB MIDI/UAC2 topology, I2S PIO/DMA capture,
+  SPI control path, hardware evidence, and troubleshooting.
+- [`host/mcu_sf2_asset_format.md`](host/mcu_sf2_asset_format.md): compact-v2
+  metadata consumed by the RP2040 runtime.
+
 ## Verification
 
 - [`verification/simulation_design.md`](verification/simulation_design.md): test
@@ -105,6 +113,8 @@ matching contract whenever its RTL or host implementation changes.
   closure, and hardware evidence.
 - [`board/asset_loading.md`](board/asset_loading.md): current SD-to-DDR3 asset
   loading contract.
+- [`mcu/rp2040_firmware.md`](mcu/rp2040_firmware.md): Pico-to-Smart-Artix SPI
+  and I2S wiring plus physical USB bring-up.
 - [`board/smart_artix_io_constraints_backlog.md`](board/smart_artix_io_constraints_backlog.md):
   unresolved external timing and constraint work.
 - [`board/sd_native_backlog.md`](board/sd_native_backlog.md): native SD protocol
