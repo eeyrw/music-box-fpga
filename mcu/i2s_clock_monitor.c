@@ -2,14 +2,15 @@
 
 #include <stddef.h>
 
-/* A nominal 48 kHz source advances by 48 frames in a 1 ms observation window.
- * Integer tick timing and the short DMA block-rearm interval can move one or
- * two frames across a boundary, so accept 46..50. This rejects absent clocks,
- * common 44.1/96 kHz mistakes, and random activity on floating wiring. */
-#define I2S_CLOCK_MIN_FRAMES_PER_MS 46u
-#define I2S_CLOCK_MAX_FRAMES_PER_MS 50u
-#define I2S_CLOCK_ACQUIRE_TICKS 3u
-#define I2S_CLOCK_LOSS_TICKS 4u
+/* Per-millisecond counts may move across timer boundaries, so determine rate
+ * from an eight-millisecond sum. A nominal source contributes 384 frames; the
+ * +/-2 tolerance accepts boundary jitter while rejecting sustained 47/49 kHz
+ * clocks that the fixed-48-kHz USB declaration must not label as valid. A
+ * completely stopped producer still invalidates after four 1 ms ticks. */
+#define I2S_CLOCK_WINDOW_TICKS 8u
+#define I2S_CLOCK_WINDOW_MIN_FRAMES 382u
+#define I2S_CLOCK_WINDOW_MAX_FRAMES 386u
+#define I2S_CLOCK_STOPPED_TICKS 4u
 
 void i2s_clock_monitor_init(i2s_clock_monitor *monitor,
                             uint32_t frame_count) {
@@ -23,7 +24,6 @@ void i2s_clock_monitor_init(i2s_clock_monitor *monitor,
 void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
                             uint32_t frame_count) {
     uint32_t elapsed_frames;
-    bool cadence_ok;
 
     if (monitor == NULL) return;
     if (!monitor->initialized) {
@@ -35,25 +35,28 @@ void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
      * wrapping after long uptime. Only a one-millisecond delta is interpreted. */
     elapsed_frames = frame_count - monitor->previous_frame_count;
     monitor->previous_frame_count = frame_count;
-    cadence_ok = elapsed_frames >= I2S_CLOCK_MIN_FRAMES_PER_MS &&
-                 elapsed_frames <= I2S_CLOCK_MAX_FRAMES_PER_MS;
 
-    if (cadence_ok) {
-        monitor->bad_ticks = 0u;
-        if (monitor->good_ticks < I2S_CLOCK_ACQUIRE_TICKS) {
-            ++monitor->good_ticks;
+    if (elapsed_frames == 0u) {
+        monitor->window_frame_count = 0u;
+        monitor->window_tick_count = 0u;
+        if (monitor->stopped_tick_count < I2S_CLOCK_STOPPED_TICKS) {
+            ++monitor->stopped_tick_count;
         }
-        if (monitor->good_ticks >= I2S_CLOCK_ACQUIRE_TICKS) {
-            monitor->valid = true;
-        }
-    } else {
-        monitor->good_ticks = 0u;
-        if (monitor->bad_ticks < I2S_CLOCK_LOSS_TICKS) {
-            ++monitor->bad_ticks;
-        }
-        if (monitor->bad_ticks >= I2S_CLOCK_LOSS_TICKS) {
+        if (monitor->stopped_tick_count >= I2S_CLOCK_STOPPED_TICKS) {
             monitor->valid = false;
         }
+        return;
+    }
+
+    monitor->stopped_tick_count = 0u;
+    monitor->window_frame_count += elapsed_frames;
+    ++monitor->window_tick_count;
+    if (monitor->window_tick_count >= I2S_CLOCK_WINDOW_TICKS) {
+        monitor->valid =
+            monitor->window_frame_count >= I2S_CLOCK_WINDOW_MIN_FRAMES &&
+            monitor->window_frame_count <= I2S_CLOCK_WINDOW_MAX_FRAMES;
+        monitor->window_frame_count = 0u;
+        monitor->window_tick_count = 0u;
     }
 }
 

@@ -19,7 +19,9 @@
 #include <stdint.h>
 
 static repeating_timer_t app_timer;
-static bool audio_started;
+static app_usb_audio_stream_state usb_audio_stream = {
+    .resync_pending = true,
+};
 static int16_t usb_audio_samples[APP_USB_AUDIO_MAX_FRAMES * 2u];
 
 _Static_assert(APP_USB_AUDIO_SAMPLE_RATE_HZ % 1000u == 0u,
@@ -137,19 +139,20 @@ static size_t fill_usb_audio_packet(
     size_t available = i2s_capture_available();
     size_t requested;
     size_t captured;
+    app_usb_audio_packet_action action;
 
-    /* Clock loss is a normal cable/reset condition. Keep the already-open USB
-     * isochronous pipe alive with nominal silence and discard stale ring data.
-     * This avoids a run of zero-length packets while Linux is synchronously
-     * stopping or reprobeing the ALSA stream. */
-    if (!i2s_capture_clock_valid()) {
-        audio_started = false;
+    action = app_usb_audio_stream_plan(
+        &usb_audio_stream, i2s_capture_clock_valid(), available, &requested);
+    if (action == APP_USB_AUDIO_PACKET_DISCARD_AND_SILENCE) {
         i2s_capture_discard();
         return fill_usb_audio_silence(samples);
     }
+    if (action == APP_USB_AUDIO_PACKET_SILENCE) {
+        return fill_usb_audio_silence(samples);
+    }
 
-    /* Wait for 2 ms of I2S data before exposing live audio. Thereafter, vary
-     * packet length rather than modifying samples:
+    /* Once 2 ms of fresh I2S data is available, vary packet length rather than
+     * modifying samples:
      *
      *   low fill  -> 47 frames, allowing the capture ring to gain one frame
      *   nominal   -> 48 frames
@@ -159,23 +162,6 @@ static size_t fill_usb_audio_packet(
      * UAC2 asynchronous IN endpoints are specifically intended for a source
      * clock independent of SOF. This preserves every FPGA sample; it does not
      * drop a frame or duplicate the previous one to correct clock drift. */
-    if (!audio_started) {
-        if (available < APP_USB_AUDIO_TARGET_FRAMES) {
-            return fill_usb_audio_silence(samples);
-        }
-        audio_started = true;
-    }
-
-    /* Clock validity has a short loss debounce. If the producer stops inside
-     * that window, do not emit a short or zero packet: abandon the old stream
-     * contents and return nominal silence until a fresh buffer is established. */
-    if (available < APP_USB_AUDIO_NOMINAL_FRAMES - 1u) {
-        audio_started = false;
-        i2s_capture_discard();
-        return fill_usb_audio_silence(samples);
-    }
-
-    requested = app_usb_audio_packet_frames(available);
     captured = i2s_capture_read(samples, requested);
     return captured;
 }
@@ -214,6 +200,10 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport,
     const uint8_t entity = (uint8_t)(request->wIndex >> 8);
     const uint8_t control = (uint8_t)(request->wValue >> 8);
 
+    /* All controls in this topology are master controls. UAC2 section 5.2.2
+     * requires an unsupported Channel Number to stall the control pipe. */
+    if (!app_usb_audio_control_channel_supported(request->wValue)) return false;
+
     /* Input Terminal 1 advertises its Connector Control as read-only. Return
      * the same two-channel cluster encoded in the terminal and AS descriptors. */
     if (entity == APP_USB_AUDIO_INPUT_TERMINAL_ID &&
@@ -248,8 +238,17 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
                                    const tusb_control_request_t *request) {
     (void)rhport;
     (void)request;
-    audio_started = false;
+    app_usb_audio_stream_reset(&usb_audio_stream);
     return true;
+}
+
+void tud_umount_cb(void) {
+    app_usb_audio_stream_reset(&usb_audio_stream);
+}
+
+void tud_suspend_cb(bool remote_wakeup_enabled) {
+    (void)remote_wakeup_enabled;
+    app_usb_audio_stream_reset(&usb_audio_stream);
 }
 
 #if !APP_USB_CAPTURE_ONLY

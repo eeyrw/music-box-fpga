@@ -9,8 +9,9 @@
  * rate without depending on USB control-request timing. */
 typedef struct i2s_clock_monitor {
     uint32_t previous_frame_count;
-    uint8_t good_ticks;
-    uint8_t bad_ticks;
+    uint32_t window_frame_count;
+    uint8_t window_tick_count;
+    uint8_t stopped_tick_count;
     bool initialized;
     bool valid;
 } i2s_clock_monitor;

@@ -30,12 +30,23 @@ host on 2026-08-05:
 - the UAC2 Clock Validity control reports valid only for a measured 48 kHz
   capture cadence and reports invalid without a usable FPGA clock;
 - repeated AudioStreaming alternate-setting changes no longer wedge TinyUSB or
-  produce Linux `-110` control-transfer timeouts.
+  produce Linux `-110` control-transfer timeouts;
+- the capture-only ELF containing the stream-resynchronization and rolling
+  clock-validation changes was written through the persistent OpenOCD server,
+  re-enumerated successfully, and reported a 48,000 Hz momentary rate in ALSA
+  without new Clock Validity, `-110`, or XRUN kernel messages.
 
 The verified capture used the capture-only build described below, so it did not
 initialize or drive SPI. The existing 30 MHz FPGA SPI result was obtained with
 the CH347 path; it establishes a tested ceiling for the current FPGA image, not
 yet an RP2040 signal-integrity result.
+
+During the final 2026-08-05 check, PipeWire retained the ALSA capture device and
+kept alternate setting 1 active. The current-source hardware check therefore
+covered enumeration and continuous streaming, while initial open, reopen,
+unmount, suspend, 47/49 kHz rejection, and control Channel Number behavior are
+covered by focused host unit tests. A fresh physical open/close sequence remains
+the appropriate regression whenever the host audio service can release `hw:`.
 
 The `0xcafe` vendor ID is a development identity. Replace it with an assigned
 VID/PID before distributing a product.
@@ -326,10 +337,17 @@ without USB mute or volume processing.
 Clock Source 3 is external because the sample cadence comes from FPGA BCLK, not
 USB SOF. Frequency and Clock Validity are read-only controls. Frequency `CUR`
 and `RANGE` both describe a fixed 48 kHz source. A timer samples the DMA producer
-once per millisecond. Clock Validity acquires after three consecutive windows of
-46 through 50 frames and drops after four invalid windows. The USB EP0 callback
-only returns this cached state, so a missing or stopped I2S clock cannot block a
-control request while waiting for GPIO activity.
+once per millisecond. Clock Validity is evaluated over an eight-millisecond
+window and requires 382 through 386 captured frames around the nominal 384.
+This tolerates frames moving across individual timer boundaries without
+accepting a sustained 47 or 49 kHz source as the advertised fixed 48 kHz clock.
+A completely stopped producer invalidates after four 1 ms ticks. The USB EP0
+callback only returns this cached state, so a missing or stopped I2S clock
+cannot block a control request while waiting for GPIO activity.
+
+The Connector, Sampling Frequency, and Clock Validity controls are all UAC2
+master controls and accept only Channel Number zero. Requests for any nonzero
+channel are stalled as required by UAC2 section 5.2.2.
 
 The terminals' `bAssocTerminal` values are zero. That field pairs physical
 bidirectional terminals such as a headset microphone and earpiece; it does not
@@ -358,6 +376,13 @@ USB endpoint permits packets shorter than `wMaxPacketSize`, which is required
 for this source-driven asynchronous rate matching. This is not USB implicit
 feedback: endpoint `0x81` carries captured PCM, not timing information for a
 separate playback endpoint.
+
+When the AudioStreaming endpoint first opens or reopens, or after USB unmount
+or suspend, the first packet callback discards everything accumulated while no
+host consumed the DMA ring. The stream then waits for 96 new frames before
+exposing live PCM. This prevents the 2,048-frame hardware ring from adding up
+to 42.7 ms of stale audio and then taking almost two seconds of 49-frame packets
+to return to the target fill.
 
 If the external clock disappears or the producer underflows during the short
 loss debounce, the firmware discards stale ring contents and sends a nominal
@@ -441,8 +466,11 @@ oscilloscope measurement. At 48 kHz, one sample frame is approximately
 
 The resulting I2S-wire-to-host-period estimate is approximately 3 to 4 ms. It
 describes when a captured sample can reach a low-period host capture path. It
-does not include scheduling jitter, ALSA USB URB aggregation, a larger ALSA
-buffer, PipeWire/PulseAudio buffering, application buffering, or filesystem
+assumes the stream-open resynchronization has discarded data captured while the
+endpoint was closed; the firmware enforces that condition before accumulating
+the fresh 96-frame target. It does not include scheduling jitter, ALSA USB URB
+aggregation, a larger ALSA buffer, PipeWire/PulseAudio buffering, application
+buffering, or filesystem
 writes. Those layers can add several milliseconds or substantially more, so an
 application-visible value must be measured with the intended host stack.
 
@@ -600,9 +628,9 @@ rather than assuming card 2.
 | `mcu/usb_descriptors.c` | Device, UAC2, MIDI, endpoint, entity, and string descriptors. |
 | `mcu/tusb_config.h` | TinyUSB class buffers and exact audio parser boundary. |
 | `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, Clock Validity. |
-| `mcu/i2s_clock_monitor.c` | Debounced 48 kHz cadence validation independent of USB request timing. |
+| `mcu/i2s_clock_monitor.c` | Eight-millisecond 48 kHz average validation and four-millisecond stopped-clock detection. |
 | `mcu/rp2040_usb_iso_fix.c` | TinyUSB 0.18 RP2040 isochronous reactivation backport. |
-| `mcu/usb_audio_rate_match.c` | 47/48/49-frame asynchronous packet policy. |
+| `mcu/usb_audio_rate_match.c` | Stream-open resynchronization and 47/48/49-frame asynchronous packet policy. |
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader and fixed-capacity runtime. |
 | `mcu/msf2_example.c` | 512-voice integration, MIDI policy, command packing, synchronous SPI sink. |
 | `mcu/check_usb_descriptor.sh` | Post-link structural validation of compiled USB descriptors. |

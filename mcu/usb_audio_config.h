@@ -1,6 +1,9 @@
 #ifndef USB_AUDIO_CONFIG_H
 #define USB_AUDIO_CONFIG_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* One full-speed USB frame is 1 ms. The asynchronous capture endpoint may
  * send one frame less or more than the nominal 48 stereo frames, so its
  * wMaxPacketSize must accommodate 49 frames * 2 channels * 2 bytes. */
@@ -17,5 +20,11 @@ enum app_usb_audio_entity_id {
     APP_USB_AUDIO_OUTPUT_TERMINAL_ID = 2,
     APP_USB_AUDIO_CLOCK_SOURCE_ID = 3,
 };
+
+/* Every advertised Entity control is channel-independent and therefore uses
+ * UAC2 master Channel Number zero in wValue[7:0]. */
+static inline bool app_usb_audio_control_channel_supported(uint16_t w_value) {
+    return (uint8_t)w_value == 0u;
+}
 
 #endif
