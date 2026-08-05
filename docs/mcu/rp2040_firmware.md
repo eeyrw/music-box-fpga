@@ -25,13 +25,17 @@ host on 2026-08-05:
 - ALSA exposes one stereo `S16_LE`, 48 kHz capture device;
 - ALSA exposes one bidirectional USB-MIDI 1.0 port;
 - host-to-device MIDI Note On and Note Off packets complete successfully;
-- the UAC2 Clock Validity control reports invalid while FPGA I2S is absent.
+- FPGA I2S was recorded for five seconds as exactly 240,000 non-silent stereo
+  frames, followed by five successful one-second open/record/close cycles;
+- the UAC2 Clock Validity control reports valid only for a measured 48 kHz
+  capture cadence and reports invalid without a usable FPGA clock;
+- repeated AudioStreaming alternate-setting changes no longer wedge TinyUSB or
+  produce Linux `-110` control-transfer timeouts.
 
-The last item is intentional. The FPGA was not wired to the Pico during this
-test, so an actual captured PCM stream and the Pico-to-FPGA SPI command path
-remain hardware-integration checks. The existing 30 MHz FPGA SPI result was
-obtained with the CH347 path; it establishes a tested ceiling for the current
-FPGA image, not yet an RP2040 signal-integrity result.
+The verified capture used the capture-only build described below, so it did not
+initialize or drive SPI. The existing 30 MHz FPGA SPI result was obtained with
+the CH347 path; it establishes a tested ceiling for the current FPGA image, not
+yet an RP2040 signal-integrity result.
 
 The `0xcafe` vendor ID is a development identity. Replace it with an assigned
 VID/PID before distributing a product.
@@ -56,6 +60,11 @@ The FPGA is the I2S clock and data source. The Pico pins are inputs.
 The BANK15 header table does not identify a ground pin beside I2S. Use a ground
 confirmed from the board connector or a test point. BANK15 pins 37/38 are 3.3 V
 and pins 39/40 are 5 V; none of them is ground.
+
+BANK15 is a 2x20 header: pins 5 and 7 are in one column and pin 6 is in the
+adjacent column. The three I2S signals are therefore not three consecutive
+positions in one column. Do not connect the boards' 3.3 V rails together; only
+the three FPGA outputs and a verified common ground are required.
 
 The expected stream is Philips I2S, 48 kHz stereo, 16 bits per channel, 32 BCLK
 periods per stereo frame, and 1.536 MHz BCLK. LRCLK changes one BCLK before the
@@ -142,6 +151,21 @@ cmake -S mcu -B build/mcu -G Ninja \
 cmake --build build/mcu --parallel
 ```
 
+For I2S-to-USB isolation testing, build without MSF2 or SPI:
+
+```bash
+cmake -S mcu -B build/mcu-capture -G Ninja \
+  -DPICO_BOARD=pico \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DAPP_USB_CAPTURE_ONLY=1
+cmake --build build/mcu-capture --parallel
+```
+
+This mode does not require an `MSF2_IMAGE`, does not link the MSF2 runtime, and
+does not configure or drive the SPI pins. The composite MIDI endpoints remain
+enumerated for descriptor compatibility, but incoming MIDI packets are only
+drained and have no FPGA side effect.
+
 The main outputs are:
 
 | File | Purpose |
@@ -170,6 +194,7 @@ other runtime use.
 | `APP_I2S_BCLK_PIN` | `8` | GPIO receiving FPGA BCLK. |
 | `APP_I2S_LRCLK_PIN` | `9` | GPIO receiving FPGA LRCLK. |
 | `APP_I2S_DATA_PIN` | `10` | GPIO receiving FPGA serial data. |
+| `APP_USB_CAPTURE_ONLY` | `0` | Set to `1` for UAC2/I2S testing without MSF2 or SPI. |
 | `MSF2_IMAGE` | `build/assets/wavetable.msf2` | Metadata image embedded into RP2040 flash. |
 
 SPI uses the `pico` board defaults: GP17 CS, GP18 SCLK, GP19 TX, and unused GP16
@@ -203,17 +228,48 @@ The application does not currently expose a software reboot-to-BOOTSEL USB
 interface. Updating a running board therefore requires the physical BOOTSEL
 sequence.
 
+### Debug Probe And 16 MiB Flash
+
+The board under test uses a replacement ZB25VQ128 16 MiB QSPI Flash with JEDEC
+ID `0x0018405e`. Ubuntu's packaged OpenOCD 0.12 can access SWD but does not know
+that Flash ID. Raspberry Pi's `sdk-2.3.0` OpenOCD branch was built and installed
+outside the repository's disposable `build/` tree:
+
+```text
+source   /home/yuan/.local/src/raspberrypi-openocd-sdk-2.3.0
+build    /home/yuan/.local/build/raspberrypi-openocd-sdk-2.3.0
+install  /home/yuan/.local/opt/raspberrypi-openocd-sdk-2.3.0
+```
+
+Program an ELF, not a UF2, through the Debug Probe:
+
+```bash
+/home/yuan/.local/opt/raspberrypi-openocd-sdk-2.3.0/bin/openocd \
+  -f interface/cmsis-dap.cfg \
+  -f target/rp2040.cfg \
+  -c 'adapter speed 5000' \
+  -c 'program build/mcu-capture/music_box_mcu.elf verify reset exit'
+```
+
+The successful probe text identifies `zbit zb25vq128`, `16384 KiB`, then ends
+with `Verified OK`. A persistent debugging server uses the same two config files
+without the `program` command and listens on GDB port 3333. Halting either core
+can pause the RP2040 timer through `TIMER.DBGPAUSE`; do not interpret clock
+monitor state observed during a halt as live I2S behavior.
+
 ## Firmware Execution Model
 
 Startup proceeds in this order:
 
 1. switch the RP2040 system clock to the configured frequency;
-2. initialize SPI mode 0 and deassert CS;
+2. initialize SPI mode 0 and deassert CS, except in capture-only builds;
 3. start PIO and DMA I2S capture;
-4. validate the embedded MSF2 image and initialize 512 voice slots;
+4. validate the embedded MSF2 image and initialize 512 voice slots, except in
+   capture-only builds;
 5. start the 1 ms control timer;
 6. initialize the TinyUSB device stack;
-7. service USB MIDI and MSF2 control work from one serialized main loop.
+7. service USB MIDI and, in the full build, MSF2 control work from one
+   serialized main loop.
 
 The timer interrupt only increments a pending-tick counter. All MIDI and MSF2
 state mutation occurs in the main loop, so it does not race the timer ISR.
@@ -223,6 +279,8 @@ Clock setup failure, invalid MSF2 metadata, timer allocation failure, USB
 initialization failure, SPI sink failure, or an MSF2 runtime error enters a
 fatal loop that toggles the Pico LED every 100 ms. UART and USB stdio are both
 disabled; the production USB interfaces are not mixed with a debug CDC port.
+The watchdog resets a main-loop fault after two seconds so a failed firmware
+cannot leave Linux blocked indefinitely in a synchronous USB audio request.
 
 ## USB Composite Device
 
@@ -267,8 +325,11 @@ without USB mute or volume processing.
 
 Clock Source 3 is external because the sample cadence comes from FPGA BCLK, not
 USB SOF. Frequency and Clock Validity are read-only controls. Frequency `CUR`
-and `RANGE` both describe a fixed 48 kHz source. Clock Validity becomes true
-only when the DMA producer has advanced within the previous 10 ms.
+and `RANGE` both describe a fixed 48 kHz source. A timer samples the DMA producer
+once per millisecond. Clock Validity acquires after three consecutive windows of
+46 through 50 frames and drops after four invalid windows. The USB EP0 callback
+only returns this cached state, so a missing or stopped I2S clock cannot block a
+control request while waiting for GPIO activity.
 
 The terminals' `bAssocTerminal` values are zero. That field pairs physical
 bidirectional terminals such as a headset microphone and earpiece; it does not
@@ -296,17 +357,38 @@ ring reaches the target, packet generation returns nominal-length silence. The
 USB endpoint permits packets shorter than `wMaxPacketSize`, which is required
 for this implicit asynchronous rate matching.
 
+If the external clock disappears or the producer underflows during the short
+loss debounce, the firmware discards stale ring contents and sends a nominal
+48-frame silence packet. It does not send zero-length packets. This keeps an
+already-open Linux isochronous stream responsive while the FPGA is reset,
+disconnected, or not yet driving I2S.
+
 ### PIO And DMA Capture
 
-PIO0 uses one state machine. It waits for the right-to-left LRCLK transition,
-skips the Philips-I2S one-bit delay, then samples 32 serial bits on BCLK rising
-edges. The RX word contains left PCM in bits 31:16 and right PCM in bits 15:0.
+PIO0 uses one state machine. At startup it waits once for the right-to-left
+LRCLK transition, skips the Philips-I2S one-bit delay, then samples continuously
+in 32-bit groups on BCLK rising edges. The RX word contains left PCM in bits
+31:16 and right PCM in bits 15:0.
+
+The LRCLK synchronization is intentionally outside the PIO wrap region. An
+earlier implementation returned to the LRCLK waits after every 32-bit word; by
+then the following frame transition had already occurred, so it captured every
+other frame and measured about 24 kframes/s. Wrapping directly to `SET X` keeps
+bit alignment and produces one DMA word for every 48 kHz stereo frame.
 
 DMA stores words in an aligned 2,048-frame ring, about 42.7 ms at 48 kHz. Each
 DMA transfer is bounded to 2,048 frames; a highest-priority DMA IRQ reloads the
 next transfer so the hardware's finite `TRANS_COUNT` cannot expire after long
 uptime. If the producer laps the consumer, the oldest overwritten frames are
 discarded and reading resumes from the newest ring contents.
+
+Pico SDK 2.3.0 vendors TinyUSB 0.18.0, whose RP2040 driver did not abort an
+active allocated isochronous endpoint before reactivation. Linux alternate-
+setting changes could therefore panic at `ep 81 was already available` and
+eventually cause `-110` timeouts. `mcu/rp2040_usb_iso_fix.c` backports the narrow
+behavior from upstream TinyUSB commit `102c1991d`: abort and clear a still-armed
+buffer before calling the SDK activation function. The vendored SDK itself is
+not modified.
 
 ## USB MIDI And MSF2 Control
 
@@ -387,7 +469,9 @@ After FPGA I2S is connected and running, record a sample:
 
 ```bash
 arecord -D hw:CARD=Capture,DEV=0 \
-  -f S16_LE -c 2 -r 48000 -d 10 build/fpga-i2s-capture.wav
+  -f S16_LE -c 2 -r 48000 \
+  --period-size=48 --buffer-size=480 \
+  -d 10 build/fpga-i2s-capture.wav
 ```
 
 ALSA card numbers are not stable across hosts. Use `arecord -l` and `amidi -l`
@@ -402,6 +486,8 @@ rather than assuming card 2.
 | Audio and MIDI appear in ALSA | Composite enumeration and class binding succeeded. |
 | `clock source 3 is not valid, cannot use` | No recent I2S DMA progress; check common ground, BCLK on GP8, LRCLK on GP9, and FPGA reset/playback clocking. Expected when FPGA I2S is disconnected. |
 | Audio device lists but recording cannot install parameters | Check Clock Validity first; Linux rejects stream setup while the external UAC2 clock is invalid. |
+| I2S is present but Clock Validity stays false | Check for 48 kHz LRCLK and 1.536 MHz BCLK. A 24 kHz producer indicates an old firmware whose PIO re-synchronized every frame. |
+| `ep 81 was already available` or repeated `-110` after reopening capture | Verify the firmware includes `rp2040_usb_iso_fix.c`; reset and reflash the current ELF. |
 | MIDI transfer succeeds but FPGA is silent | Check Pico-to-FPGA SPI wiring, FPGA `asset_loaded`, selected MSF2/WTSF identity, and FPGA command diagnostics. |
 | Pico LED toggles every 100 ms | Fatal firmware error: clock, MSF2 validation, timer, USB initialization, SPI sink, or runtime failure. |
 | Intermittent MIDI/audio USB failures | Check USB power/cable first, then main-loop stalls and synchronous SPI command burst duration. |
@@ -415,6 +501,8 @@ rather than assuming card 2.
 | `mcu/usb_descriptors.c` | Device, UAC2, MIDI, endpoint, entity, and string descriptors. |
 | `mcu/tusb_config.h` | TinyUSB class buffers and exact audio parser boundary. |
 | `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, Clock Validity. |
+| `mcu/i2s_clock_monitor.c` | Debounced 48 kHz cadence validation independent of USB request timing. |
+| `mcu/rp2040_usb_iso_fix.c` | TinyUSB 0.18 RP2040 isochronous reactivation backport. |
 | `mcu/usb_audio_rate_match.c` | 47/48/49-frame asynchronous packet policy. |
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader and fixed-capacity runtime. |
 | `mcu/msf2_example.c` | 512-voice integration, MIDI policy, command packing, synchronous SPI sink. |
@@ -424,6 +512,7 @@ Run the focused MCU checks and normal project gates after changes:
 
 ```bash
 make test-mcu-usb-audio-rate
+make test-mcu-i2s-clock
 make test-mcu-sf2-asset
 cmake --build build/mcu --parallel
 make lint

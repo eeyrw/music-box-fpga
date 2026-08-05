@@ -19,62 +19,76 @@ set(APP_VOICE_COUNT 512 CACHE STRING "RP2040-managed FPGA mono voice count")
 set(APP_I2S_BCLK_PIN 8 CACHE STRING "GPIO receiving FPGA I2S BCLK")
 set(APP_I2S_LRCLK_PIN 9 CACHE STRING "GPIO receiving FPGA I2S LRCLK")
 set(APP_I2S_DATA_PIN 10 CACHE STRING "GPIO receiving FPGA I2S SDATA")
+set(APP_USB_CAPTURE_ONLY 0 CACHE STRING
+    "Build UAC2 I2S capture without SPI or the MSF2 synth runtime")
 
-set(MSF2_IMAGE "${CMAKE_CURRENT_LIST_DIR}/../build/assets/wavetable.msf2"
-    CACHE FILEPATH "Compact-v2 MSF2 image embedded in RP2040 flash")
-if(NOT IS_ABSOLUTE "${MSF2_IMAGE}")
-    get_filename_component(MSF2_IMAGE "${MSF2_IMAGE}" ABSOLUTE
-        BASE_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+if(NOT APP_USB_CAPTURE_ONLY)
+    set(MSF2_IMAGE "${CMAKE_CURRENT_LIST_DIR}/../build/assets/wavetable.msf2"
+        CACHE FILEPATH "Compact-v2 MSF2 image embedded in RP2040 flash")
+    if(NOT IS_ABSOLUTE "${MSF2_IMAGE}")
+        get_filename_component(MSF2_IMAGE "${MSF2_IMAGE}" ABSOLUTE
+            BASE_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+    endif()
+    if(NOT EXISTS "${MSF2_IMAGE}")
+        message(FATAL_ERROR
+            "MSF2 image not found: ${MSF2_IMAGE}\n"
+            "Generate it with 'make mcu-sf2-asset' or set -DMSF2_IMAGE=<path>.")
+    endif()
+
+    set(MSF2_IMAGE_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/app_msf2_image.o")
+    add_custom_command(
+        OUTPUT "${MSF2_IMAGE_OBJECT}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${MSF2_IMAGE}" app_msf2_image.bin
+        COMMAND "${CMAKE_OBJCOPY}"
+                -I binary -O elf32-littlearm -B arm
+                --rename-section .data=.rodata,alloc,load,readonly,data,contents
+                --redefine-sym _binary_app_msf2_image_bin_start=app_msf2_image_start
+                --redefine-sym _binary_app_msf2_image_bin_end=app_msf2_image_end
+                app_msf2_image.bin app_msf2_image.o
+        DEPENDS "${MSF2_IMAGE}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        VERBATIM
+    )
+    set_source_files_properties("${MSF2_IMAGE_OBJECT}" PROPERTIES
+        EXTERNAL_OBJECT TRUE
+        GENERATED TRUE
+    )
+
+    add_library(msf2 STATIC msf2.c)
+    target_compile_options(msf2 PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    target_include_directories(msf2 PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 endif()
-if(NOT EXISTS "${MSF2_IMAGE}")
-    message(FATAL_ERROR
-        "MSF2 image not found: ${MSF2_IMAGE}\n"
-        "Generate it with 'make mcu-sf2-asset' or set -DMSF2_IMAGE=<path>.")
-endif()
-
-set(MSF2_IMAGE_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/app_msf2_image.o")
-add_custom_command(
-    OUTPUT "${MSF2_IMAGE_OBJECT}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${MSF2_IMAGE}" app_msf2_image.bin
-    COMMAND "${CMAKE_OBJCOPY}"
-            -I binary -O elf32-littlearm -B arm
-            --rename-section .data=.rodata,alloc,load,readonly,data,contents
-            --redefine-sym _binary_app_msf2_image_bin_start=app_msf2_image_start
-            --redefine-sym _binary_app_msf2_image_bin_end=app_msf2_image_end
-            app_msf2_image.bin app_msf2_image.o
-    DEPENDS "${MSF2_IMAGE}"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-    VERBATIM
-)
-set_source_files_properties("${MSF2_IMAGE_OBJECT}" PROPERTIES
-    EXTERNAL_OBJECT TRUE
-    GENERATED TRUE
-)
-
-add_library(msf2 STATIC
-    msf2.c
-)
-target_compile_options(msf2 PRIVATE -Wall -Wextra -Werror -Wpedantic)
-target_include_directories(msf2 PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}
-)
 
 add_executable(music_box_mcu
+    i2s_clock_monitor.c
     i2s_capture.c
     main.c
-    msf2_example.c
+    rp2040_usb_iso_fix.c
     usb_audio_rate_match.c
     usb_descriptors.c
-    "${MSF2_IMAGE_OBJECT}"
 )
+target_include_directories(music_box_mcu PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+if(NOT APP_USB_CAPTURE_ONLY)
+    target_sources(music_box_mcu PRIVATE
+        msf2_example.c
+        "${MSF2_IMAGE_OBJECT}"
+    )
+endif()
 set_source_files_properties(
+    i2s_clock_monitor.c
     i2s_capture.c
     main.c
     msf2_example.c
+    rp2040_usb_iso_fix.c
     usb_audio_rate_match.c
     usb_descriptors.c
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror"
+)
+target_link_options(music_box_mcu PRIVATE
+    "LINKER:--wrap=dcd_edpt_iso_activate"
 )
 target_compile_definitions(music_box_mcu PRIVATE
     APP_SYS_CLOCK_KHZ=${APP_SYS_CLOCK_KHZ}
@@ -83,16 +97,19 @@ target_compile_definitions(music_box_mcu PRIVATE
     APP_I2S_BCLK_PIN=${APP_I2S_BCLK_PIN}
     APP_I2S_LRCLK_PIN=${APP_I2S_LRCLK_PIN}
     APP_I2S_DATA_PIN=${APP_I2S_DATA_PIN}
+    APP_USB_CAPTURE_ONLY=${APP_USB_CAPTURE_ONLY}
 )
 target_link_libraries(music_box_mcu PRIVATE
-    msf2
     hardware_dma
     hardware_pio
-    hardware_spi
+    hardware_watchdog
     pico_unique_id
     pico_stdlib
     tinyusb_device
 )
+if(NOT APP_USB_CAPTURE_ONLY)
+    target_link_libraries(music_box_mcu PRIVATE msf2 hardware_spi)
+endif()
 
 pico_enable_stdio_uart(music_box_mcu 0)
 pico_enable_stdio_usb(music_box_mcu 0)

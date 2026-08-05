@@ -1,11 +1,16 @@
 #include "i2s_capture.h"
+#if !APP_USB_CAPTURE_ONLY
 #include "msf2_example.h"
+#endif
 #include "usb_audio_config.h"
 #include "usb_audio_rate_match.h"
 
+#if !APP_USB_CAPTURE_ONLY
 #include "hardware/spi.h"
 #include "hardware/sync.h"
+#endif
 #include "hardware/clocks.h"
+#include "hardware/watchdog.h"
 #include "pico/binary_info.h"
 #include "pico/stdlib.h"
 #include "tusb.h"
@@ -13,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static repeating_timer_t synth_timer;
+static repeating_timer_t app_timer;
 static bool audio_started;
 static int16_t usb_audio_samples[APP_USB_AUDIO_MAX_FRAMES * 2u];
 
@@ -30,15 +35,18 @@ bi_decl(bi_program_description(
     "USB MIDI synth controller and stereo FPGA I2S capture"));
 bi_decl(bi_program_feature("USB MIDI 1.0 input"));
 bi_decl(bi_program_feature("USB Audio Class 2 stereo 48 kHz capture"));
+#if !APP_USB_CAPTURE_ONLY
 bi_decl(bi_3pins_with_names(
     PICO_DEFAULT_SPI_CSN_PIN, "FPGA SPI CS",
     PICO_DEFAULT_SPI_SCK_PIN, "FPGA SPI SCLK",
     PICO_DEFAULT_SPI_TX_PIN, "FPGA SPI MOSI"));
+#endif
 bi_decl(bi_3pins_with_names(
     APP_I2S_BCLK_PIN, "FPGA I2S BCLK",
     APP_I2S_LRCLK_PIN, "FPGA I2S LRCLK",
     APP_I2S_DATA_PIN, "FPGA I2S SDATA"));
 
+#if !APP_USB_CAPTURE_ONLY
 int platform_spi_write_mode0_cs0(const uint8_t *bytes, size_t byte_count) {
     int written;
     gpio_put(PICO_DEFAULT_SPI_CSN_PIN, false);
@@ -54,13 +62,18 @@ uint32_t platform_irq_save(void) {
 void platform_irq_restore(uint32_t state) {
     restore_interrupts(state);
 }
+#endif
 
-static bool synth_timer_callback(repeating_timer_t *timer) {
+static bool app_timer_callback(repeating_timer_t *timer) {
     (void)timer;
+    i2s_capture_tick_1ms();
+#if !APP_USB_CAPTURE_ONLY
     app_synth_1ms_timer_isr();
+#endif
     return true;
 }
 
+#if !APP_USB_CAPTURE_ONLY
 static int dispatch_midi_packet(const uint8_t packet[4]) {
     /* USB-MIDI 1.0 packets are [Cable/CIN, status, data1, data2]. There is one
      * embedded cable, so routing needs no cable lookup. System/SysEx packets
@@ -93,14 +106,30 @@ static int dispatch_midi_packet(const uint8_t packet[4]) {
             return 0;
     }
 }
+#endif
 
 static int service_usb_midi(void) {
     uint8_t packet[4];
     while (tud_midi_available() != 0u && tud_midi_packet_read(packet)) {
+#if !APP_USB_CAPTURE_ONLY
         const int result = dispatch_midi_packet(packet);
         if (result < 0) return result;
+#else
+        /* Keep the composite MIDI OUT endpoint drained in capture-only builds,
+         * but deliberately perform no MSF2 lookup or FPGA command output. */
+        (void)packet;
+#endif
     }
     return 0;
+}
+
+static size_t fill_usb_audio_silence(
+    int16_t samples[APP_USB_AUDIO_MAX_FRAMES * 2u]) {
+    size_t sample;
+    for (sample = 0u; sample < APP_USB_AUDIO_NOMINAL_FRAMES * 2u; ++sample) {
+        samples[sample] = 0;
+    }
+    return APP_USB_AUDIO_NOMINAL_FRAMES;
 }
 
 static size_t fill_usb_audio_packet(
@@ -108,7 +137,16 @@ static size_t fill_usb_audio_packet(
     size_t available = i2s_capture_available();
     size_t requested;
     size_t captured;
-    size_t frame;
+
+    /* Clock loss is a normal cable/reset condition. Keep the already-open USB
+     * isochronous pipe alive with nominal silence and discard stale ring data.
+     * This avoids a run of zero-length packets while Linux is synchronously
+     * stopping or reprobeing the ALSA stream. */
+    if (!i2s_capture_clock_valid()) {
+        audio_started = false;
+        i2s_capture_discard();
+        return fill_usb_audio_silence(samples);
+    }
 
     /* Wait for 2 ms of I2S data before exposing live audio. Thereafter, vary
      * packet length rather than modifying samples:
@@ -123,13 +161,18 @@ static size_t fill_usb_audio_packet(
      * drop a frame or duplicate the previous one to correct clock drift. */
     if (!audio_started) {
         if (available < APP_USB_AUDIO_TARGET_FRAMES) {
-            for (frame = 0u; frame < APP_USB_AUDIO_NOMINAL_FRAMES * 2u;
-                 ++frame) {
-                samples[frame] = 0;
-            }
-            return APP_USB_AUDIO_NOMINAL_FRAMES;
+            return fill_usb_audio_silence(samples);
         }
         audio_started = true;
+    }
+
+    /* Clock validity has a short loss debounce. If the producer stops inside
+     * that window, do not emit a short or zero packet: abandon the old stream
+     * contents and return nominal silence until a fresh buffer is established. */
+    if (available < APP_USB_AUDIO_NOMINAL_FRAMES - 1u) {
+        audio_started = false;
+        i2s_capture_discard();
+        return fill_usb_audio_silence(samples);
     }
 
     requested = app_usb_audio_packet_frames(available);
@@ -209,6 +252,7 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
     return true;
 }
 
+#if !APP_USB_CAPTURE_ONLY
 static void init_fpga_spi(void) {
     /* APP_FPGA_SPI_HZ is a requested ceiling. At the default 120 MHz peripheral
      * clock, RP2040's even prescaler produces exactly the tested 30 MHz rate;
@@ -221,6 +265,7 @@ static void init_fpga_spi(void) {
     gpio_put(PICO_DEFAULT_SPI_CSN_PIN, true);
     gpio_set_dir(PICO_DEFAULT_SPI_CSN_PIN, GPIO_OUT);
 }
+#endif
 
 static void fatal_blink(void) {
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -238,18 +283,29 @@ int main(void) {
     };
 
     if (!set_sys_clock_khz(APP_SYS_CLOCK_KHZ, true)) fatal_blink();
+#if !APP_USB_CAPTURE_ONLY
     init_fpga_spi();
+#endif
     i2s_capture_init();
+#if !APP_USB_CAPTURE_ONLY
     if (app_synth_init() != 0) fatal_blink();
-    if (!add_repeating_timer_ms(-1, synth_timer_callback, NULL, &synth_timer)) {
+#endif
+    if (!add_repeating_timer_ms(-1, app_timer_callback, NULL, &app_timer)) {
         fatal_blink();
     }
     if (!tusb_init(BOARD_TUD_RHPORT, &usb_init)) fatal_blink();
+    /* A firmware fault must not leave Linux blocked forever in a synchronous
+     * USB audio ioctl. The watchdog pauses under SWD so normal debugging still
+     * works, but resets a genuinely wedged main loop within two seconds. */
+    watchdog_enable(2000u, true);
 
     while (true) {
+        watchdog_update();
         tud_task();
         if (service_usb_midi() != 0) fatal_blink();
+#if !APP_USB_CAPTURE_ONLY
         if (app_synth_service() != 0) fatal_blink();
+#endif
         tight_loop_contents();
     }
 }

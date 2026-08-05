@@ -1,4 +1,5 @@
 #include "i2s_capture.h"
+#include "i2s_clock_monitor.h"
 
 #include "hardware/dma.h"
 #include "hardware/irq.h"
@@ -15,8 +16,8 @@ static uint32_t capture_ring[I2S_RING_FRAME_COUNT]
 static int capture_dma_channel;
 static volatile uint32_t capture_completed_count;
 static uint32_t capture_read_count;
-static uint32_t capture_activity_count;
-static absolute_time_t capture_last_activity;
+static i2s_clock_monitor capture_clock_monitor;
+static volatile bool capture_clock_valid;
 
 _Static_assert((I2S_RING_FRAME_COUNT & (I2S_RING_FRAME_COUNT - 1u)) == 0u,
                "I2S DMA ring frame count must be a power of two");
@@ -67,9 +68,20 @@ void i2s_capture_init(void) {
     dma_channel_config dma_config;
 
     /* Philips I2S changes LRCLK on a falling BCLK edge, one bit clock before
-     * the next channel MSB. Synchronize on the right-to-left transition, skip
-     * that one-bit delay, then sample 32 bits on rising BCLK edges. With shift
-     * left, the FIFO word is left[15:0] in bits 31:16 and right[15:0] in 15:0. */
+     * the next channel MSB. Synchronize once on the right-to-left transition,
+     * skip that one-bit delay, then sample continuously on rising BCLK edges.
+     *
+     * The PIO wrap target deliberately starts at SET X, not the first LRCLK
+     * WAIT. At the falling edge after the 32nd captured bit, the transmitter
+     * has already changed LRCLK for the following frame and placed its left
+     * MSB. Waiting for another high-to-low LRCLK transition at that point would
+     * miss the frame already in progress and capture only every other frame
+     * (24 kframes/s from a valid 48 kHz source). Once the initial bit alignment
+     * is established, each following group of 32 BCLK rising edges is exactly
+     * one stereo frame and needs no further LRCLK resynchronization.
+     *
+     * With shift-left input, the FIFO word is left[15:0] in bits 31:16 and
+     * right[15:0] in bits 15:0. */
     instructions[0] = pio_encode_wait_gpio(true, APP_I2S_LRCLK_PIN);
     instructions[1] = pio_encode_wait_gpio(false, APP_I2S_LRCLK_PIN);
     instructions[2] = pio_encode_wait_gpio(true, APP_I2S_BCLK_PIN);
@@ -87,11 +99,17 @@ void i2s_capture_init(void) {
     gpio_set_dir(APP_I2S_BCLK_PIN, GPIO_IN);
     gpio_set_dir(APP_I2S_LRCLK_PIN, GPIO_IN);
     gpio_set_dir(APP_I2S_DATA_PIN, GPIO_IN);
+    /* Disconnected inputs must have a deterministic idle state. Without weak
+     * pulls, nearby digital edges can look like an external I2S clock and make
+     * UAC2 Clock Validity intermittently true while no FPGA is connected. */
+    gpio_pull_down(APP_I2S_BCLK_PIN);
+    gpio_pull_down(APP_I2S_LRCLK_PIN);
+    gpio_pull_down(APP_I2S_DATA_PIN);
 
     state_machine = pio_claim_unused_sm(pio, true);
     offset = pio_add_program_at_offset(pio, &program, 0u);
     config = pio_get_default_sm_config();
-    sm_config_set_wrap(&config, offset, offset + 9u);
+    sm_config_set_wrap(&config, offset + 4u, offset + 9u);
     sm_config_set_in_pins(&config, APP_I2S_DATA_PIN);
     sm_config_set_in_shift(&config, false, false, 32u);
     sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_RX);
@@ -111,6 +129,15 @@ void i2s_capture_init(void) {
     irq_set_enabled(DMA_IRQ_0, true);
     dma_channel_configure(capture_dma_channel, &dma_config, capture_ring,
                           &pio->rxf[state_machine], I2S_RING_FRAME_COUNT, true);
+    i2s_clock_monitor_init(&capture_clock_monitor, capture_write_count());
+}
+
+void i2s_capture_tick_1ms(void) {
+    /* This runs from the regular 1 ms alarm callback, not from USB EP0. The
+     * control-request callback can therefore answer immediately even when the
+     * external clock is absent or stopped at either logic level. */
+    i2s_clock_monitor_tick(&capture_clock_monitor, capture_write_count());
+    capture_clock_valid = i2s_clock_monitor_valid(&capture_clock_monitor);
 }
 
 size_t i2s_capture_available(void) {
@@ -138,17 +165,10 @@ size_t i2s_capture_read(int16_t *stereo_samples, size_t frame_count) {
     return frame_count;
 }
 
-bool i2s_capture_clock_valid(void) {
-    const uint32_t write_count = capture_write_count();
-    const absolute_time_t now = get_absolute_time();
+void i2s_capture_discard(void) {
+    capture_read_count = capture_write_count();
+}
 
-    if (write_count != capture_activity_count) {
-        capture_activity_count = write_count;
-        capture_last_activity = now;
-    }
-    /* At 48 kHz the producer should advance every 20.8 us. A 10 ms timeout is
-     * deliberately generous, but still reports a missing/stopped FPGA clock
-     * promptly when the host asks for UAC2 Clock Validity. */
-    return !is_nil_time(capture_last_activity) &&
-           absolute_time_diff_us(capture_last_activity, now) < 10000;
+bool i2s_capture_clock_valid(void) {
+    return capture_clock_valid;
 }
