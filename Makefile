@@ -253,7 +253,7 @@ SMART_ARTIX_TESTBENCHES := \
 	tb_sd_native_pin_phy \
 	tb_sd_native_pin_phy_fake
 
-.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-realtime-midi list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean FORCE
+.PHONY: all generate-generated generate-register-map generate-dsp-lut generate-mcu-asset-profile check-generated check-register-map check-dsp-lut check-mcu-asset-profiles check-docs lint test test-ch347-python test-cpp-unit test-mcu-usb-audio-rate test-sf2-slow test-sf2-runtime test-sf2-equivalence test-realtime-sf2 test-mcu-sf2-asset benchmark-sf2-loader benchmark-mcu-control benchmark-mcu-sf2-baseline benchmark-mcu-sf2-runtime mcu-sf2-asset verify-mcu-sf2-asset test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness test-voice-major-512 measure-voice-compute-pipeline measure-voice-major-throughput measure-voice-major-throughput-filtered measure-voice-major-throughput-512 measure-voice-major-throughput-512-filtered polyphony-stress-midi analyze-polyphony-stress smart-artix-test $(SMART_ARTIX_TESTBENCHES) host-realtime-midi list-instruments wtsf-image verify-wtsf-image flash-wtsf-sd render-reference render-rtl-memory render-rtl-direct render-rtl-ddr3 render-rtl-qspi render-rtl-parallel-nor vivado-project vivado-synth vivado-impl vivado-bitstream vivado-program vivado-readback vivado-cfgmem-image vivado-flash-readback vivado-flash-program vivado-summary vivado-analyze clean FORCE
 
 all: test
 
@@ -286,6 +286,13 @@ test-ch347-python:
 	python3 tools/ch347_transport_test.py
 	python3 tools/configure_audio_effects_test.py
 
+test-mcu-usb-audio-rate:
+	mkdir -p $(BUILD_DIR)
+	cc -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
+		mcu/usb_audio_rate_match.c mcu/usb_audio_rate_match_test.c \
+		-o $(BUILD_DIR)/usb_audio_rate_match_test
+	$(BUILD_DIR)/usb_audio_rate_match_test
+
 lint:
 	# Lint only synthesizable RTL; simulation models and testbenches are excluded.
 	$(VERILATOR) $(RTL_DEFINES) --lint-only --Wall -Wno-fatal --top-module stereo_chorus \
@@ -314,7 +321,7 @@ lint:
 	$(VERILATOR) --lint-only --Wall -Wno-fatal --top-module smart_artix_ddr3_subsystem \
 		$(SMART_ARTIX_RTL_SOURCES)
 
-test: check-generated check-docs test-ch347-python test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
+test: check-generated test-mcu-usb-audio-rate check-docs test-ch347-python test-cpp-unit test-rtl-core test-rtl-peripheral test-sample-window test-direct-memory-model test-ddr3-model test-qspi-nor-model test-parallel-nor-model test-render-effects-harness
 
 test-sample-window:
 	mkdir -p $(BUILD_DIR)

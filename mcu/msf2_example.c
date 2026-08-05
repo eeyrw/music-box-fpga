@@ -7,6 +7,7 @@
  */
 
 #include "msf2.h"
+#include "msf2_example.h"
 
 #include <stddef.h>
 #include <stdint.h>

@@ -10,7 +10,14 @@ from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_PARTS = {".git", ".opencode", "build", "node_modules", "__pycache__"}
+SKIP_PARTS = {
+    ".git",
+    ".opencode",
+    "build",
+    "node_modules",
+    "third_party",
+    "__pycache__",
+}
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 PATH_CODE_RE = re.compile(r"`([^`\n]+\.(?:md|pdf|html))(?:#[^`]*)?`")

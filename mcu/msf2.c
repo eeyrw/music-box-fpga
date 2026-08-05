@@ -398,7 +398,7 @@ int32_t msf2_find_preset(const msf2_view *view, uint16_t program, uint16_t bank)
     if (view == NULL || program > 127u || bank > 16383u) return -1;
     for (index = 0u; index < view->sections[0].count; ++index) {
         msf2_preset preset;
-        (void)msf2_get_preset(view, index, &preset);
+        if (msf2_get_preset(view, index, &preset) != MSF2_OK) return -1;
         if (preset.program == program && preset.bank == bank) return (int32_t)index;
     }
     return -1;
@@ -415,7 +415,8 @@ msf2_result msf2_collect_layers(const msf2_view *view, uint32_t preset_index,
     for (local = 0u; local < preset.zone_count; ++local) {
         uint32_t index = preset.first_zone + local;
         msf2_zone zone;
-        (void)msf2_get_zone(view, index, &zone);
+        msf2_result result = msf2_get_zone(view, index, &zone);
+        if (result != MSF2_OK) return result;
         if (key < zone.key_low || key > zone.key_high ||
             velocity < zone.velocity_low || velocity > zone.velocity_high) continue;
         if (layers->count == MSF2_MAX_LAYERS) return MSF2_ERR_CAPACITY;
