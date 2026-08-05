@@ -355,13 +355,112 @@ packet according to DMA-ring fill:
 The target is 96 captured frames with a 24-frame adjustment margin. Before the
 ring reaches the target, packet generation returns nominal-length silence. The
 USB endpoint permits packets shorter than `wMaxPacketSize`, which is required
-for this implicit asynchronous rate matching.
+for this source-driven asynchronous rate matching. This is not USB implicit
+feedback: endpoint `0x81` carries captured PCM, not timing information for a
+separate playback endpoint.
 
 If the external clock disappears or the producer underflows during the short
 loss debounce, the firmware discards stale ring contents and sends a nominal
 48-frame silence packet. It does not send zero-length packets. This keeps an
 already-open Linux isochronous stream responsive while the FPGA is reset,
 disconnected, or not yet driving I2S.
+
+### Feedback Endpoint Decision
+
+The current capture-only UAC2 function intentionally has no feedback endpoint.
+Feedback is direction-specific rather than a feature that every asynchronous
+UAC2 stream needs:
+
+```text
+current capture path:
+FPGA clock -> I2S producer -> asynchronous USB IN -> host
+              device expresses its rate by sending 47/48/49 PCM frames
+
+possible future playback path:
+host -> asynchronous USB OUT -> FPGA-clocked consumer
+        explicit feedback IN tells the host how much PCM to send
+```
+
+For an asynchronous IN capture stream, the device owns the sample production
+rate. It communicates that rate directly through the amount of PCM in successive
+isochronous IN packets. The current 47/48/49-frame policy stays within the UAC2
+Audio Data Formats limit of nominal packet size plus or minus one audio slot.
+For this stereo stream, one audio slot is one two-channel sample frame. The
+196-byte `wMaxPacketSize` accommodates the largest 49-frame packet.
+
+An explicit feedback endpoint is principally needed for asynchronous OUT
+playback. In that direction the host produces PCM, so the device must report the
+rate at which its independent audio clock consumes it. Adding such an endpoint
+to the present IN-only stream would not reduce capture latency, provide USB
+isochronous retransmission, or prevent a host XRUN. It would consume an endpoint
+and RP2040 USB DPRAM and add descriptor and TinyUSB lifecycle state without
+controlling anything. An Adaptive IN feed-forward endpoint is also rejected:
+current operating-system behavior is less portable, and UAC2 Clock Source
+entities plus asynchronous IN already model the hardware correctly.
+
+Operating-system support reviewed on 2026-08-05 is:
+
+| Host driver | Asynchronous capture IN | Explicit feedback for asynchronous OUT | Implicit feedback from a shared-clock IN stream |
+| --- | --- | --- | --- |
+| Linux ALSA `snd-usb-audio` | supported without feedback | supported | supported, including generic UAC2 matching and device quirks |
+| Windows `usbaudio2.sys` | supported without feedback | supported and required for asynchronous OUT | not supported |
+| Apple USB Audio driver | supported without feedback | supported | supported when capture and playback share a clock |
+
+Windows ignores an Adaptive IN feed-forward endpoint and handles that stream as
+asynchronous IN. Apple likewise treats Adaptive IN as asynchronous IN and does
+not support adaptive feedback endpoints. Therefore, if USB playback is added
+later, the portable choice is an asynchronous OUT data endpoint plus a separate
+explicit feedback IN endpoint. At full speed that feedback payload is three
+bytes. Relying only on implicit feedback would exclude the Windows class driver.
+
+Primary references:
+
+- USB 2.0 sections 5.12.4.1 and 5.12.4.2, and UAC2 Audio Data Formats section
+  2.3.1.1, in the local PDFs listed under [Local Specifications](#local-specifications);
+- [Microsoft USB Audio 2.0 driver support](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/usb-2-0-audio-drivers),
+  including asynchronous endpoint, explicit-feedback, implicit-feedback, and
+  packet-size restrictions;
+- [Apple TN3190 USB audio device design considerations](https://developer.apple.com/documentation/technotes/tn3190-usb-audio-device-design-considerations),
+  including explicit and implicit feedback rules and full-speed payload size;
+- [Linux ALSA USB-audio configuration](https://www.kernel.org/doc/html/latest/sound/alsa-configuration.html)
+  and the upstream [`implicit.c`](https://github.com/torvalds/linux/blob/master/sound/usb/implicit.c)
+  implementation of generic and device-specific implicit feedback.
+
+### Capture Latency Budget
+
+The latency figures below are architectural estimates, not a loopback or
+oscilloscope measurement. At 48 kHz, one sample frame is approximately
+20.83 microseconds and one full-speed USB frame is 1 ms.
+
+| Stage | Nominal contribution | Basis |
+| --- | ---: | --- |
+| PIO word assembly and DMA visibility | less than 1 frame | one 32-bit stereo I2S frame is assembled before DMA publishes it |
+| RP2040 capture-ring target | 96 frames = 2 ms | rate matcher holds the consumer around the configured target fill |
+| wait for the next USB SOF/IN service | 0 to 1 ms | full-speed endpoint is serviced once per USB frame |
+| one 48-frame host capture period | about 1 ms | applies to the documented ALSA test using `--period-size=48` |
+
+The resulting I2S-wire-to-host-period estimate is approximately 3 to 4 ms. It
+describes when a captured sample can reach a low-period host capture path. It
+does not include scheduling jitter, ALSA USB URB aggregation, a larger ALSA
+buffer, PipeWire/PulseAudio buffering, application buffering, or filesystem
+writes. Those layers can add several milliseconds or substantially more, so an
+application-visible value must be measured with the intended host stack.
+
+The FPGA has a separate default 96-frame sample-domain latency: 48 frames of
+compressor look-ahead plus a 48-frame output-FIFO lead, as documented in
+[`../design/system_design.md`](../design/system_design.md). With those defaults, a sample
+entering the FPGA effects/output path reaches a low-period host capture path in
+roughly 5 to 6 ms. This estimate does not include MIDI arrival, the MCU 1 ms
+control tick, SPI command delivery, voice scheduling, or any application output
+buffer.
+
+Normal 47/48/49 packet-size correction does not lose samples: it changes only
+how many consecutive source frames are transferred in a USB frame. Loss or
+replacement remains possible when the 2,048-frame DMA ring overruns, the I2S
+clock fails and the firmware deliberately substitutes silence, DMA/firmware
+service is delayed long enough to exhaust buffering, an isochronous USB
+transaction fails, or the host capture stack reports an XRUN. A feedback
+endpoint would not repair any of those failure modes for this IN stream.
 
 ### PIO And DMA Capture
 
