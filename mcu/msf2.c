@@ -590,7 +590,8 @@ msf2_result msf2_pack_start(uint16_t voice, uint16_t generation,
     uint8_t count = 0u;
     int has_loop;
     int has_envelope;
-    if (params == NULL || words == NULL || word_count == NULL || voice >= 512u) {
+    if (params == NULL || words == NULL || word_count == NULL ||
+        voice >= MSF2_MAX_VOICE_COUNT) {
         return MSF2_ERR_ARGUMENT;
     }
     has_loop = params->loop_mode != 0u;
@@ -1150,7 +1151,7 @@ msf2_result msf2_runtime_init(msf2_runtime *runtime, const msf2_view *view,
     unsigned channel;
     if (runtime == NULL || view == NULL || channels == NULL || voices == NULL ||
         free_stack == NULL || sink == NULL || voice_capacity == 0u ||
-        voice_capacity > 1024u) return MSF2_ERR_ARGUMENT;
+        voice_capacity > MSF2_MAX_VOICE_COUNT) return MSF2_ERR_ARGUMENT;
     *runtime = (msf2_runtime){0};
     runtime->view = view;
     runtime->channels = channels;

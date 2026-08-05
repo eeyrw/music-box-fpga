@@ -12,11 +12,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APP_VOICE_COUNT 128u
+#ifndef APP_VOICE_COUNT
+#define APP_VOICE_COUNT MSF2_MAX_VOICE_COUNT
+#endif
 #define APP_SPI_COMMAND_OPCODE UINT8_C(0xa5)
 #define APP_MAX_COMMAND_PAYLOAD_WORDS 16u
 #define APP_MAX_COMMAND_WORDS (1u + APP_MAX_COMMAND_PAYLOAD_WORDS)
 #define APP_MAX_SPI_FRAME_BYTES (4u + 4u * APP_MAX_COMMAND_WORDS)
+
+_Static_assert(APP_VOICE_COUNT > 0u,
+               "firmware must allocate at least one FPGA voice");
+_Static_assert(APP_VOICE_COUNT <= MSF2_MAX_VOICE_COUNT,
+               "firmware voice capacity exceeds the FPGA command protocol");
 
 /* The linker script may expose an MSF2 blob stored in internal flash or XIP
  * memory. Replace these symbols with the selected MCU's asset mechanism. */

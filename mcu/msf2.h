@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 #define MSF2_MAX_LAYERS 4u
+#define MSF2_MAX_VOICE_COUNT 512u
 #define MSF2_GENERATOR_COUNT 61u
 #define MSF2_CHANNEL_COUNT 16u
 #define MSF2_MIDI_VALUE_COUNT 128u

@@ -24,6 +24,10 @@ void require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
 
+int discard_c_command(void*, const uint32_t*, uint8_t) {
+  return 0;
+}
+
 template <typename Action>
 void require_failure(Action action, const char* message) {
   try {
@@ -134,6 +138,20 @@ void compare_pure_c(const std::vector<uint8_t>& image,
   msf2_view view{};
   require(msf2_view_init(&view, image.data(), image.size()) == MSF2_OK,
           "pure-C reader rejected valid compact image");
+  {
+    msf2_runtime runtime{};
+    msf2_channel_state channels[MSF2_CHANNEL_COUNT]{};
+    std::vector<msf2_voice_state> voices(MSF2_MAX_VOICE_COUNT + 1u);
+    std::vector<uint16_t> free_stack(MSF2_MAX_VOICE_COUNT + 1u);
+    require(msf2_runtime_init(&runtime, &view, channels, voices.data(),
+                              free_stack.data(), MSF2_MAX_VOICE_COUNT,
+                              discard_c_command, nullptr) == MSF2_OK,
+            "pure-C runtime rejected the FPGA's 512-voice capacity");
+    require(msf2_runtime_init(&runtime, &view, channels, voices.data(),
+                              free_stack.data(), MSF2_MAX_VOICE_COUNT + 1u,
+                              discard_c_command, nullptr) == MSF2_ERR_ARGUMENT,
+            "pure-C runtime accepted a capacity above the FPGA protocol");
+  }
   require(msf2_preset_count(&view) == oracle.preset_count() &&
               msf2_zone_count(&view) == oracle.zone_count(),
           "pure-C compact counts mismatch");
@@ -260,7 +278,11 @@ void compare_pure_c(const std::vector<uint8_t>& image,
       }
       uint32_t start_words[17]{};
       uint8_t start_word_count = 0;
-      const uint16_t voice = uint16_t(zone_index % render::kNumVoices);
+      // Exercise the last protocol-valid voice ID as well as ordinary IDs.
+      // The RP2040 firmware defaults to all 512 FPGA mono voices.
+      const uint16_t voice = zone_index == 0u ?
+          uint16_t(MSF2_MAX_VOICE_COUNT - 1u) :
+          uint16_t(zone_index % render::kNumVoices);
       auto packed_note = expected_note;
       packed_note.phase_inc = params.phase_inc;
       packed_note.gain_l = params.gain_l;
@@ -282,6 +304,12 @@ void compare_pure_c(const std::vector<uint8_t>& image,
                   std::equal(start_words, start_words + start_word_count,
                              expected_start.words.begin()),
               "pure-C START framing mismatch");
+      if (zone_index == 0u && key == zone.key_low) {
+        require(msf2_pack_start(MSF2_MAX_VOICE_COUNT, 7u, &params,
+                                start_words, &start_word_count) ==
+                    MSF2_ERR_ARGUMENT,
+                "pure-C START accepted voice ID 512");
+      }
     }
   }
 }

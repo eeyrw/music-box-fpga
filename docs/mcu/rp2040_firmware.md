@@ -151,9 +151,14 @@ The main outputs are:
 | `build/mcu/music_box_mcu.hex` | Intel HEX image. |
 | `build/mcu/music_box_mcu.uf2` | BOOTSEL mass-storage image. |
 
-The verified build used 72,052 bytes of text and 37,088 bytes of BSS, excluding
-the generated output-file container overhead. The embedded MSF2 image affects
-flash usage and therefore changes with the selected SoundFont/preset set.
+The default firmware manages all 512 FPGA mono voices. Linked SoundFont stereo
+regions consume two mono voices. The embedded MSF2 image affects flash usage and
+therefore changes with the selected SoundFont/preset set; use
+`arm-none-eabi-size build/mcu/music_box_mcu.elf` for the exact build footprint.
+The verified 512-voice build uses 72,060 bytes of text and 96,224 bytes of BSS.
+The voice-state array is 77,824 bytes and its free stack is 1,024 bytes, leaving
+174,112 bytes outside static BSS in the RP2040's 264 KiB SRAM for stacks and
+other runtime use.
 
 ### Build-Time Options
 
@@ -161,6 +166,7 @@ flash usage and therefore changes with the selected SoundFont/preset set.
 | --- | ---: | --- |
 | `APP_SYS_CLOCK_KHZ` | `120000` | RP2040 system clock in kHz. |
 | `APP_FPGA_SPI_HZ` | `30000000` | Requested maximum SPI command rate. |
+| `APP_VOICE_COUNT` | `512` | MCU-managed mono voices; valid range is 1 through 512. |
 | `APP_I2S_BCLK_PIN` | `8` | GPIO receiving FPGA BCLK. |
 | `APP_I2S_LRCLK_PIN` | `9` | GPIO receiving FPGA LRCLK. |
 | `APP_I2S_DATA_PIN` | `10` | GPIO receiving FPGA serial data. |
@@ -204,7 +210,7 @@ Startup proceeds in this order:
 1. switch the RP2040 system clock to the configured frequency;
 2. initialize SPI mode 0 and deassert CS;
 3. start PIO and DMA I2S capture;
-4. validate the embedded MSF2 image and initialize 128 voice slots;
+4. validate the embedded MSF2 image and initialize 512 voice slots;
 5. start the 1 ms control timer;
 6. initialize the TinyUSB device stack;
 7. service USB MIDI and MSF2 control work from one serialized main loop.
@@ -321,10 +327,10 @@ the firmware currently emits no device-to-host MIDI messages.
 
 The embedded MSF2 sidecar is validated at startup and supplies preset lookup,
 zone selection, SoundFont generator conversion, controller/modulator state,
-and a fixed 128-voice allocator. Up to four matching layers may start for one
-Note On. The 1 ms runtime tick updates MCU-owned modulation state and emits FPGA
-commands; FPGA-owned phase, volume envelope, filter state, mixing, effects, and
-PCM rendering remain on the FPGA.
+and a fixed-capacity 512-voice allocator. Up to four matching layers may start
+for one Note On. The 1 ms runtime tick updates MCU-owned modulation state and
+emits FPGA commands; FPGA-owned phase, volume envelope, filter state, mixing,
+effects, and PCM rendering remain on the FPGA.
 
 Each SPI command transaction is:
 
@@ -411,7 +417,7 @@ rather than assuming card 2.
 | `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, Clock Validity. |
 | `mcu/usb_audio_rate_match.c` | 47/48/49-frame asynchronous packet policy. |
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader and fixed-capacity runtime. |
-| `mcu/msf2_example.c` | 128-voice integration, MIDI policy, command packing, synchronous SPI sink. |
+| `mcu/msf2_example.c` | 512-voice integration, MIDI policy, command packing, synchronous SPI sink. |
 | `mcu/check_usb_descriptor.sh` | Post-link structural validation of compiled USB descriptors. |
 
 Run the focused MCU checks and normal project gates after changes:
