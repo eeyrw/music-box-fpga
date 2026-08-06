@@ -241,6 +241,23 @@ metadata, voice allocation, command serialization, and I2S-to-USB capture. The
 FPGA remains the SPI target and I2S source. Both links use 3.3 V signaling and a
 verified common ground.
 
+`smart_artix_top` holds the complete render and audio path in `core_rst_sys`
+until the SD loader asserts `asset_loaded`. This reset covers voice state,
+effects, scheduling, the output FIFO, and the I2S serializer; no render or I2S
+timeline advances while DDR is being populated. The platform register window
+and SPI mailbox remain available after the MIG clock/reset is usable, allowing
+an attached controller to observe loading. The RP2040 treats loss of
+`asset_loaded` as a new FPGA session, discards MIDI received during loading, and
+performs version/SF2 identity checks plus FLUSH before resuming control.
+
+An explicit software-requested render-session reset is still required. It must
+not redefine the state-preserving SPI FLUSH operation: the future RTL mechanism
+needs its own request, completion acknowledgement, and readable session epoch,
+and must clear command, voice, scheduler, effects, and buffered-audio state
+before software establishes new ownership. The detailed requirement and
+acceptance gates are tracked in
+[`../backlog/midi_panic.md`](../backlog/midi_panic.md).
+
 ## Next Hardware Work
 
 The generic command/control and render architecture is complete. The current

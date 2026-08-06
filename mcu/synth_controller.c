@@ -19,6 +19,11 @@
 #endif
 #define APP_MAX_COMMAND_PAYLOAD_WORDS 16u
 #define APP_MAX_COMMAND_WORDS (1u + APP_MAX_COMMAND_PAYLOAD_WORDS)
+#define APP_FPGA_INTERFACE_VERSION UINT32_C(0x000f0000)
+#define APP_FPGA_PLATFORM_STATUS_ADDRESS UINT16_C(0x9040)
+#define APP_FPGA_SF2_SIZE_ADDRESS UINT16_C(0x9050)
+#define APP_FPGA_COMMAND_ERROR_ADDRESS UINT16_C(0x9090)
+#define APP_FPGA_STALE_GENERATION_ADDRESS UINT16_C(0x9094)
 #ifndef APP_CONTROL_UPDATE_PERIOD_MS
 #define APP_CONTROL_UPDATE_PERIOD_MS 5u
 #endif
@@ -87,7 +92,32 @@ static app_synth_command_snapshot app_last_start;
 static uint32_t app_last_control_millisecond;
 static command_batch app_command_batch;
 static uint32_t app_transport_monitor_millisecond;
+static uint32_t app_transport_diagnostics_millisecond;
 static uint8_t app_transport_monitor_consecutive_failures;
+
+static int app_command_sink(void *context, const uint32_t *words,
+                            uint8_t word_count);
+
+static msf2_result app_reset_local_session(void) {
+    msf2_result result;
+    command_batch_init(&app_command_batch);
+    result = msf2_runtime_init(&app_runtime, &app_view, app_channels,
+                               app_voices, app_free_stack, APP_VOICE_COUNT,
+                               app_command_sink, NULL);
+    if (result == MSF2_OK) result = midi_policy_init(&app_midi, &app_runtime);
+    app_diagnostics.control_voice_evaluations = 0u;
+    app_diagnostics.controller_voice_updates = 0u;
+    app_diagnostics.active_voices = 0u;
+    app_diagnostics.maximum_active_voices = 0u;
+    return result;
+}
+
+static int app_mark_session_offline(void) {
+    if (app_diagnostics.fpga_session_ready == 0u) return 0;
+    app_diagnostics.fpga_session_ready = 0u;
+    ++app_diagnostics.fpga_disconnect_count;
+    return app_reset_local_session() == MSF2_OK ? 0 : -(int)MSF2_ERR_SINK;
+}
 
 static int app_send_command_words(void *context, const uint32_t *words,
                                   uint8_t word_count) {
@@ -96,6 +126,10 @@ static int app_send_command_words(void *context, const uint32_t *words,
 }
 
 int app_synth_flush_commands(void) {
+    if (app_diagnostics.fpga_session_ready == 0u) {
+        command_batch_init(&app_command_batch);
+        return 0;
+    }
     return command_batch_flush(&app_command_batch, app_send_command_words, NULL);
 }
 
@@ -126,12 +160,7 @@ static int app_command_sink(void *context, const uint32_t *words,
 
 int app_synth_init(void) {
     const size_t image_size = (size_t)(app_msf2_image_end - app_msf2_image_start);
-    const uint32_t expected_interface = UINT32_C(0x000f0000);
     const uint16_t version_address = UINT16_C(0x9000);
-    const uint16_t platform_status_address = UINT16_C(0x9040);
-    const uint16_t sf2_size_address = UINT16_C(0x9050);
-    const uint16_t command_error_address = UINT16_C(0x9090);
-    const uint16_t stale_generation_address = UINT16_C(0x9094);
     const uint32_t platform_error_mask = UINT32_C(0x00000002);
     const uint32_t asset_loaded_mask = UINT32_C(0x00000020);
     uint32_t attempt;
@@ -164,12 +193,13 @@ int app_synth_init(void) {
             continue;
         }
         app_diagnostics.version = version;
-        if (version != expected_interface) {
+        if (version != APP_FPGA_INTERFACE_VERSION) {
             app_diagnostics.init_result = -(int)MSF2_ERR_PROFILE;
             return app_diagnostics.init_result;
         }
         app_diagnostics.last_spi_result = fpga_spi_read_register(
-            app_spi_write, app_spi_exchange, NULL, platform_status_address,
+            app_spi_write, app_spi_exchange, NULL,
+            APP_FPGA_PLATFORM_STATUS_ADDRESS,
             &platform_status, 8u);
         if (app_diagnostics.last_spi_result != 0) {
             platform_delay_ms(1u);
@@ -185,7 +215,8 @@ int app_synth_init(void) {
             continue;
         }
         app_diagnostics.last_spi_result = fpga_spi_read_register(
-            app_spi_write, app_spi_exchange, NULL, sf2_size_address, &sf2_size,
+            app_spi_write, app_spi_exchange, NULL, APP_FPGA_SF2_SIZE_ADDRESS,
+            &sf2_size,
             8u);
         if (app_diagnostics.last_spi_result != 0) {
             platform_delay_ms(1u);
@@ -204,25 +235,24 @@ int app_synth_init(void) {
         app_diagnostics.init_result = -(int)MSF2_ERR_SINK;
         return app_diagnostics.init_result;
     }
-    result = msf2_runtime_init(&app_runtime, &app_view, app_channels,
-                               app_voices, app_free_stack, APP_VOICE_COUNT,
-                               app_command_sink, NULL);
-    if (result == MSF2_OK) result = midi_policy_init(&app_midi, &app_runtime);
+    result = app_reset_local_session();
     if (result == MSF2_OK &&
         fpga_spi_read_register(app_spi_write, app_spi_exchange, NULL,
-                               command_error_address,
+                               APP_FPGA_COMMAND_ERROR_ADDRESS,
                                &app_diagnostics.command_error_count, 8u) != 0) {
         result = MSF2_ERR_SINK;
     }
     if (result == MSF2_OK &&
         fpga_spi_read_register(app_spi_write, app_spi_exchange, NULL,
-                               stale_generation_address,
+                               APP_FPGA_STALE_GENERATION_ADDRESS,
                                &app_diagnostics.stale_generation_count, 8u) != 0) {
         result = MSF2_ERR_SINK;
     }
     app_last_control_millisecond = 0u;
     app_transport_monitor_millisecond = 0u;
+    app_transport_diagnostics_millisecond = 0u;
     app_transport_monitor_consecutive_failures = 0u;
+    app_diagnostics.fpga_session_ready = result == MSF2_OK ? 1u : 0u;
     app_diagnostics.init_result = result == MSF2_OK ? 0 : -(int)result;
     return app_diagnostics.init_result;
 }
@@ -321,6 +351,10 @@ int app_synth_service(uint32_t millisecond_count) {
     const uint32_t elapsed_ticks =
         millisecond_count - app_last_control_millisecond;
     msf2_result result;
+    if (app_diagnostics.fpga_session_ready == 0u) {
+        app_last_control_millisecond = millisecond_count;
+        return 0;
+    }
     if (elapsed_ticks < APP_CONTROL_UPDATE_PERIOD_MS) return 0;
     app_last_control_millisecond = millisecond_count;
     app_diagnostics.control_last_update_ms = millisecond_count;
@@ -341,28 +375,91 @@ int app_synth_service(uint32_t millisecond_count) {
 }
 
 int app_synth_monitor_transport(uint32_t millisecond_count) {
+    uint32_t version = 0u;
+    uint32_t platform_status = 0u;
+    uint32_t sf2_size = 0u;
     uint32_t command_errors;
     uint32_t stale_generations;
+    fpga_session_observation observation;
     transport_health_result health;
+    int version_result = 0;
+    int status_result = -1;
     int result;
     if (millisecond_count - app_transport_monitor_millisecond < 100u) return 0;
-    if (app_command_batch.word_count != 0u || platform_spi_wait_idle(0u) != 0) {
+    if (app_command_batch.word_count != 0u) return 0;
+    if (platform_spi_wait_idle(UINT32_C(1000)) != 0) return 0;
+    app_transport_monitor_millisecond = millisecond_count;
+    if (app_diagnostics.fpga_session_ready != 0u) {
+        version = APP_FPGA_INTERFACE_VERSION;
+    } else {
+        version_result = fpga_spi_read_register(
+            app_spi_write, app_spi_exchange, NULL, UINT16_C(0x9000), &version,
+            8u);
+    }
+    if (version_result == 0) {
+        status_result = fpga_spi_read_register(
+            app_spi_write, app_spi_exchange, NULL,
+            APP_FPGA_PLATFORM_STATUS_ADDRESS, &platform_status, 8u);
+    }
+    observation = fpga_session_classify(
+        version_result, version, APP_FPGA_INTERFACE_VERSION, status_result,
+        platform_status);
+    app_diagnostics.last_spi_result = version_result != 0 ? version_result :
+                                      status_result;
+    if (version_result == 0) app_diagnostics.version = version;
+    if (status_result == 0) app_diagnostics.platform_status = platform_status;
+    if (observation == FPGA_SESSION_UNREACHABLE) {
+        ++app_diagnostics.transport_monitor_failures;
+        if (++app_transport_monitor_consecutive_failures < 2u) return 0;
+    } else {
+        app_transport_monitor_consecutive_failures = 0u;
+    }
+    if (observation == FPGA_SESSION_UNREACHABLE ||
+        observation == FPGA_SESSION_LOADING) {
+        return app_mark_session_offline();
+    }
+    if (observation == FPGA_SESSION_PLATFORM_FAULT ||
+        observation == FPGA_SESSION_INCOMPATIBLE) {
+        return -(int)MSF2_ERR_PROFILE;
+    }
+    if (app_diagnostics.fpga_session_ready != 0u &&
+        millisecond_count - app_transport_diagnostics_millisecond < 500u) {
         return 0;
     }
-    app_transport_monitor_millisecond = millisecond_count;
-    result = fpga_spi_read_register(app_spi_write, app_spi_exchange, NULL,
-                                    UINT16_C(0x9090), &command_errors, 8u);
+    if (app_diagnostics.fpga_session_ready == 0u) {
+        result = fpga_spi_read_register(
+            app_spi_write, app_spi_exchange, NULL, APP_FPGA_SF2_SIZE_ADDRESS,
+            &sf2_size, 8u);
+        if (result != 0) {
+            ++app_diagnostics.transport_monitor_failures;
+            return 0;
+        }
+        app_diagnostics.sf2_size = sf2_size;
+        if (sf2_size != (uint32_t)app_view.source_size_bytes) {
+            return -(int)MSF2_ERR_PROFILE;
+        }
+        result = fpga_spi_flush(app_spi_write, NULL);
+        app_diagnostics.flush_result = result;
+        if (result != 0 || app_reset_local_session() != MSF2_OK) return 0;
+        app_last_control_millisecond = millisecond_count;
+    }
+    app_transport_diagnostics_millisecond = millisecond_count;
+    result = fpga_spi_read_register(
+        app_spi_write, app_spi_exchange, NULL, APP_FPGA_COMMAND_ERROR_ADDRESS,
+        &command_errors, 8u);
     if (result == 0) {
-        result = fpga_spi_read_register(app_spi_write, app_spi_exchange, NULL,
-                                        UINT16_C(0x9094), &stale_generations,
-                                        8u);
+        result = fpga_spi_read_register(
+            app_spi_write, app_spi_exchange, NULL,
+            APP_FPGA_STALE_GENERATION_ADDRESS, &stale_generations, 8u);
     }
-    if (result != 0) {
-        ++app_diagnostics.transport_monitor_failures;
-        if (++app_transport_monitor_consecutive_failures < 3u) return 0;
-        return -(int)MSF2_ERR_SINK;
+    if (result != 0) return 0;
+    if (app_diagnostics.fpga_session_ready == 0u) {
+        app_diagnostics.command_error_count = command_errors;
+        app_diagnostics.stale_generation_count = stale_generations;
+        app_diagnostics.fpga_session_ready = 1u;
+        ++app_diagnostics.fpga_recovery_count;
+        return 0;
     }
-    app_transport_monitor_consecutive_failures = 0u;
     health = transport_health_classify(
         app_diagnostics.command_error_count,
         app_diagnostics.stale_generation_count, command_errors,
@@ -373,6 +470,10 @@ int app_synth_monitor_transport(uint32_t millisecond_count) {
         return -(int)MSF2_ERR_SINK;
     }
     return 0;
+}
+
+int app_synth_session_ready(void) {
+    return app_diagnostics.fpga_session_ready != 0u;
 }
 
 int app_midi_note_on(uint8_t channel, uint8_t key, uint8_t velocity) {

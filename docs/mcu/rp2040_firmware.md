@@ -440,6 +440,39 @@ drains at most four MIDI packets per loop, forcing synth timebase service and an
 SPI flush between dense MIDI batches. TinyUSB mounted/ready state is exported
 to Core 1 only through atomic snapshots; Core 1 never calls TinyUSB.
 
+Core 1 also owns an FPGA-session monitor. While online it reads only
+`PLATFORM_STATUS` every 100 ms; command-error diagnostics are sampled every
+500 ms. These reads occur only after the command batch and SPI DMA queue are
+idle, never once per MIDI command. Two consecutive mailbox failures, or one
+valid status with `ASSET_LOADED=0`, takes the session offline. Core 1 then clears
+its local MSF2/MIDI voice state and drains incoming USB-MIDI packets without
+dispatching them, so events played during the multi-second SD load are not
+replayed late.
+
+While offline the same 100 ms monitor reads `VERSION` and `PLATFORM_STATUS`.
+When `ASSET_LOADED` returns, it verifies `PLATFORM_SF2_SIZE`, sends FLUSH,
+creates a new local voice session, establishes fresh command-counter baselines,
+and resumes MIDI. A reported platform loader error, incompatible interface, or
+different SF2 size remains a fatal configuration error. UART `s` exposes
+`ready`, disconnect/recovery counts, and the number of MIDI packets discarded
+during offline intervals.
+
+The 2026-08-06 FPGA-only power-cycle test exercised this path with the RP2040
+and Debug Probe left powered. After the SD load, UART reported `ready=1`,
+`disconnects=1`, `recoveries=1`, 29 unavailable/loading monitor observations,
+and no control fault. A subsequent UART C4 started four MSF2 layers; SPI DMA
+reached only one queued frame and FPGA command-error/stale counters stayed zero.
+FPGA current-sample, compressor, and memory-response counters advanced, while
+the RP2040 I2S monitor returned to `clock_valid=1` with a full capture ring.
+
+This run also exposed a distinct host-open limitation: attempting ALSA
+`hw_params` while the FPGA clock was stopped made Linux retain an invalid-clock
+condition for the existing USB session, and later opens still failed even after
+the firmware reported a valid recovered I2S clock. The continuous-open
+silence/resume acceptance test and host reopen after an invalid-clock rejection
+therefore remain separate work; neither changes the verified MIDI/SPI session
+recovery above.
+
 The runtime maintains a dense list of active voice IDs plus a reverse position
 in each active voice. Allocation adds one ID, and reclaim removes it in constant
 time by moving the last ID into the vacated position. Capacity remains 512, but
@@ -877,6 +910,14 @@ fails closed if the interface version differs, the platform reports an error,
 the FPGA does not report `ASSET_LOADED` within 30 seconds, or its SF2 size does
 not match the source identity recorded in embedded MSF2 metadata.
 
+The same identity handshake is repeated after an FPGA-only cold restart. The
+Smart Artix top asserts `core_rst_sys` whenever `ASSET_LOADED` is false; this
+holds the renderer, effects chain, output scheduler, audio FIFO, and I2S output
+in reset throughout DDR calibration and SD copying. RP2040 UAC2 capture reports
+an invalid external clock and supplies silence during that interval. Once the
+FPGA finishes loading, its synth state is empty, so the MCU deliberately resets
+its own voice ownership rather than attempting to continue pre-reset notes.
+
 The startup size comparison catches a missing or differently sized WTSF/SF2
 image. A future FPGA source-CRC register is still required for a complete
 cross-device identity check when two source files have the same byte count.
@@ -940,6 +981,7 @@ rather than assuming card 2.
 | `ep 81 was already available` or repeated `-110` after reopening capture | Verify the firmware includes `rp2040_usb_iso_fix.c`; reset and reflash the current ELF. |
 | Pico enters fatal blink before USB enumerates | Check all four SPI wires, especially GP16 MISO, FPGA MIG/SD loader status, and MSF2/WTSF size identity; startup waits at most 30 seconds. |
 | MIDI transfer succeeds but FPGA is silent | Check Pico-to-FPGA SPI wiring, FPGA `asset_loaded`, selected MSF2/WTSF identity, and FPGA command diagnostics. |
+| FPGA-only cold restart leaves later MIDI silent | UART `s` must first show `ready=0`, then `ready=1` with an increased recovery count after SD loading. MIDI sent while offline is intentionally discarded; begin or restart playback after recovery. |
 | Pico LED toggles every 100 ms | Fatal startup error: clock, MSF2 validation, initial FPGA handshake, timer, or USB initialization. |
 | UART `s` reports nonzero `CONTROL fault` | Core 1 quarantined MIDI after a runtime, SPI enqueue, or FPGA command-health failure. USB/I2S remains live; inspect command counters before resetting either side. |
 | UART `u` reports a large ring-overrun count before recording starts | Expected when I2S is running but the host is not consuming UAC2 audio. Measure the counter delta during an active direct-ALSA capture. |
@@ -961,8 +1003,8 @@ rather than assuming card 2.
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader, dense active-voice index, allocator, MIDI voice semantics, and coalesced control update. |
 | `mcu/midi_policy.c` | Bank/program state, RPN/NRPN, channel modes, pedals, and System Reset. |
 | `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing and `0xa6` FLUSH framing. |
-| `mcu/transport_health_policy.c` | Classifies command errors as faults and stale-generation changes as nonfatal warnings. |
-| `mcu/synth_controller.c` | Production 512-voice integration, startup identity checks, 5 ms publication, command batching, and 100 ms FPGA command-health monitoring. |
+| `mcu/transport_health_policy.c` | Classifies command counters and reachable/loading/ready/incompatible FPGA session observations. |
+| `mcu/synth_controller.c` | Production 512-voice integration, startup/recovery identity checks, 5 ms publication, command batching, and low-rate FPGA session monitoring. |
 | `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |
 | `mcu/spi_dma_queue.c` | Bounded copied-frame FIFO owned by the RP2040 SPI DMA transport. |
 | `mcu/check_usb_descriptor.sh` | Post-link structural validation of compiled USB descriptors. |

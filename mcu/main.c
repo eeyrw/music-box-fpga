@@ -41,6 +41,7 @@ static int16_t usb_audio_samples[APP_USB_AUDIO_MAX_FRAMES * 2u];
 static _Atomic uint32_t usb_midi_rx_callback_count;
 static _Atomic uint32_t usb_midi_available_event_count;
 static _Atomic uint32_t usb_midi_packet_count;
+static _Atomic uint32_t usb_midi_offline_discard_count;
 static _Atomic uint32_t usb_midi_last_packet;
 static midi_ingress_queue usb_midi_ingress;
 static _Atomic bool usb_midi_mounted_snapshot;
@@ -213,9 +214,12 @@ static void debug_uart_print_status(void) {
         diagnostics->flush_result, diagnostics->register_attempts);
     debug_uart_queue_printf(
         "FPGA version=%08" PRIx32 " status=%08" PRIx32
-        " sf2_size=%" PRIu32 "\r\n",
+        " sf2_size=%" PRIu32 " ready=%u disconnects=%" PRIu32
+        " recoveries=%" PRIu32 "\r\n",
         diagnostics->version, diagnostics->platform_status,
-        diagnostics->sf2_size);
+        diagnostics->sf2_size, diagnostics->fpga_session_ready,
+        diagnostics->fpga_disconnect_count,
+        diagnostics->fpga_recovery_count);
     debug_uart_queue_printf(
         "SPI writes=%" PRIu32 " exchanges=%" PRIu32
         " bytes=%" PRIu32 " errors=%" PRIu32
@@ -250,6 +254,10 @@ static void debug_uart_print_status(void) {
         diagnostics->command_error_count,
         diagnostics->stale_generation_count,
         diagnostics->transport_monitor_failures);
+    debug_uart_queue_printf(
+        "MIDI offline_discards=%" PRIu32 "\r\n",
+        atomic_load_explicit(&usb_midi_offline_discard_count,
+                             memory_order_relaxed));
 }
 
 static void debug_uart_read_register(const char *name, uint16_t address) {
@@ -677,6 +685,14 @@ static int service_control_midi(void) {
     return 0;
 }
 
+static void discard_offline_control_midi(void) {
+    uint8_t packet[4];
+    while (midi_ingress_queue_pop(&usb_midi_ingress, packet)) {
+        atomic_fetch_add_explicit(&usb_midi_offline_discard_count, 1u,
+                                  memory_order_relaxed);
+    }
+}
+
 static size_t fill_usb_audio_silence(
     int16_t samples[APP_USB_AUDIO_MAX_FRAMES * 2u]) {
     size_t sample;
@@ -869,26 +885,35 @@ static void app_control_core_main(void) {
         atomic_store_explicit(&app_control_core_heartbeat_ms,
                               millisecond_count, memory_order_relaxed);
         if (atomic_load_explicit(&app_control_fault, memory_order_acquire) == 0) {
-            set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_MIDI, 0);
+            set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_SYNTH, 0);
             stage_start_us = diagnostic_time_us();
-            result = service_control_midi();
-            update_maximum(&runtime_timing.maximum_midi_us,
+            result = app_synth_monitor_transport(millisecond_count);
+            update_maximum(&runtime_timing.maximum_synth_us,
                            diagnostic_time_us() - stage_start_us);
             if (result != 0) {
                 atomic_store_explicit(&app_control_fault, result,
                                       memory_order_release);
             }
 
+            set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_MIDI, 0);
+            stage_start_us = diagnostic_time_us();
+            if (result == 0 && app_synth_session_ready()) {
+                result = service_control_midi();
+            } else if (result == 0) {
+                discard_offline_control_midi();
+            }
+            update_maximum(&runtime_timing.maximum_midi_us,
+                           diagnostic_time_us() - stage_start_us);
+
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_SYNTH, 0);
             stage_start_us = diagnostic_time_us();
-            if (result == 0) result = app_synth_service(millisecond_count);
+            if (result == 0 && app_synth_session_ready()) {
+                result = app_synth_service(millisecond_count);
+            }
             if (result == 0 &&
                 millisecond_count != command_flush_millisecond) {
                 command_flush_millisecond = millisecond_count;
                 result = app_synth_flush_commands();
-            }
-            if (result == 0) {
-                result = app_synth_monitor_transport(millisecond_count);
             }
             update_maximum(&runtime_timing.maximum_synth_us,
                            diagnostic_time_us() - stage_start_us);

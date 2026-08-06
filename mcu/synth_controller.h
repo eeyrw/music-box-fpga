@@ -29,6 +29,9 @@ typedef struct {
     uint32_t command_error_count;
     uint32_t stale_generation_count;
     uint32_t transport_monitor_failures;
+    uint32_t fpga_disconnect_count;
+    uint32_t fpga_recovery_count;
+    uint8_t fpga_session_ready;
 } app_synth_diagnostics;
 
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
@@ -51,6 +54,7 @@ int app_fpga_debug_read_ddr_line(uint32_t byte_address, uint32_t data[4]);
 int app_fpga_debug_flush(void);
 int app_synth_service(uint32_t millisecond_count);
 int app_synth_monitor_transport(uint32_t millisecond_count);
+int app_synth_session_ready(void);
 int app_synth_flush_commands(void);
 int app_midi_note_on(uint8_t channel, uint8_t key, uint8_t velocity);
 int app_midi_note_off(uint8_t channel, uint8_t key);

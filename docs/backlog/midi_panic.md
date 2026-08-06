@@ -121,25 +121,42 @@ requires an exact generation match and exposes no readable per-voice generation
 table. Consequently, neither a 512-slot MCU scan nor current-session UART `a`
 can address voices accepted before the reset.
 
-The RP2040 now quarantines runtime transport errors instead of deliberately
-rebooting: it stops consuming MIDI, retains its current generation table, keeps
-USB/I2S and UART alive, and compares FPGA command-error/stale-generation counts
-with their previous samples every 100 ms. This prevents a local queue-pressure
-fault from unnecessarily creating orphan voices, but it does not solve power
-loss, manual reset, firmware update, watchdog reset, or missing transaction
-acknowledgement. The bounded global RTL operation proposed below remains the
-required recovery mechanism.
+The RP2040 now detects an FPGA-only cold restart through low-rate platform
+status monitoring, discards MIDI during SD loading, and creates a fresh local
+voice session after the FPGA reports the expected loaded asset. This handles
+the case where FPGA reset already erased the render state. It does not solve an
+MCU-only reset, firmware update, watchdog reset, or missing transaction
+acknowledgement while the FPGA preserves active voices. The bounded global RTL
+operation proposed below remains the required recovery mechanism.
 
-The two counters have different fault semantics. A command-error increase or
-three consecutive mailbox failures enters quarantine. A stale-generation
-increase is observable but nonfatal: the FPGA has already prevented an old
-command from modifying the current voice. Treating that protected rejection as
-a sink failure caused a 2026-08-06 MIDI stoppage while USB capture remained
-alive and was removed. Note On also no longer sends redundant control updates
-immediately behind START, avoiding an unnecessary not-yet-installed race.
-Post-fix hardware tests still observed stale rejection on per-layer RELEASE,
-including after a short key press, so FPGA-side lifecycle attribution remains
-open even though it no longer causes global MIDI quarantine.
+The two counters have different fault semantics. A command-error increase
+enters quarantine. Two consecutive mailbox failures instead mark the FPGA
+session offline and begin recoverable loading-state monitoring. A
+stale-generation increase is observable but nonfatal: the FPGA has already
+prevented an old command from modifying the current voice. Treating that
+protected rejection as a sink failure caused a 2026-08-06 MIDI stoppage while
+USB capture remained alive and was removed. Note On also no longer sends
+redundant control updates immediately behind START, avoiding an unnecessary
+not-yet-installed race. Post-fix hardware tests still observed stale rejection
+on per-layer RELEASE, including after a short key press, so FPGA-side lifecycle
+attribution remains open even though it no longer causes global MIDI
+quarantine.
+
+### PANIC-007: No Explicit Render-Session Reset
+
+The FPGA has no software-requested operation that establishes a completely new
+render session without a board reset. A future register or out-of-band command
+must atomically block command acceptance, discard bridge/parser/FIFO contents,
+invalidate every voice generation, reset the renderer and scheduler, clear
+effect history and the audio FIFO according to an explicit policy, and then
+acknowledge completion with a new readable session epoch.
+
+This is broader than MIDI CC120 and different from emergency output mute. It is
+also different from SPI `0xa6` FLUSH, whose state-preserving contract must not
+change. The MCU must use the acknowledged render-session reset before rebuilding
+its local ownership table after an MCU-only recovery. A reset request cannot be
+considered complete merely because it was written into the normal ordered
+command FIFO.
 
 ## Proposed Ownership And Dependency Order
 
@@ -161,6 +178,9 @@ controller parsing to each RTL voice merely to support panic.
 6. Keep MIDI System Reset distinct from the future bounded emergency operation.
 7. Add operator entry points only after host queue cancellation and RTL
    acknowledgement are both observable.
+8. Add the explicit render-session reset described above, with a monotonically
+   changing readable epoch so MCU/FPGA ownership can be reconciled after either
+   side restarts.
 
 An RTL implementation may use a global kill epoch plus background state-RAM
 invalidation, or a bounded state sweep combined with an immediate output mute.
@@ -183,6 +203,9 @@ is released.
   frames independent of whether 1 or 512 voices are active.
 - Panic acknowledgement is software-readable, and timeout/failure leaves the
   host in a stopped state rather than resuming Note On traffic.
+- Render-session reset acknowledgement includes a changed epoch; after it, no
+  voice, queued command, scheduler job, effect sample, or audio-FIFO sample from
+  the preceding epoch can become observable.
 - Normal CC120 does not clear unrelated-channel voices or shared effects unless
   that behavior is explicitly selected and documented.
 - A6 FLUSH tests continue to prove that FLUSH preserves active voice and effect
