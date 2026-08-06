@@ -140,6 +140,8 @@ int main(int argc, char** argv) {
   require_same_command_shape(sink, c_sink, "Note On");
   require(layers != 0 && !sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "compiled runtime did not emit START first");
+  require(sink.commands.size() == layers && c_sink.commands.size() == layers,
+          "Note On emitted a control update before START installation");
   std::array<uint16_t, render::kNumVoices> first_generations{};
   uint16_t first_start_count = 0;
   for (const auto& command : sink.commands) {

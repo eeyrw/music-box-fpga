@@ -111,6 +111,43 @@ counters remained zero. `STALE_GENERATION_COUNT=1623` was an existing FPGA
 cumulative value accepted as the startup health baseline, not a post-boot
 increase.
 
+A subsequent simultaneous MIDI/capture run exposed a control-policy failure,
+not a USB disconnect. The host remained mounted and continued submitting MIDI,
+but UART showed `CONTROL fault=-8`, a full 256-packet cross-core MIDI queue,
+zero SPI errors/timeouts, and `STALE_GENERATION_COUNT` increasing from 1623 to
+1625. The firmware had treated any stale-generation increase as a fatal sink
+error, stopped Core 1 MIDI consumption, and therefore left Core 0 applying USB
+OUT backpressure indefinitely.
+
+The confirmed cause of the global stoppage was the health-policy
+misclassification: FPGA stale-generation rejection had already contained the
+individual command, but the MCU escalated it into permanent control quarantine.
+The exact producer of the original two stale commands was not encoded in the
+counter. As a separate ordering hardening, Note On no longer publishes redundant
+gain/pitch modulation immediately behind START. START acceptance queues FPGA
+state installation rather than acknowledging active-state commit, and START
+already contains initial gain, pitch, and filter values. Normal modulation now
+begins at the next control service.
+
+Post-fix hardware isolation started a four-layer C4 without increasing the
+stale counter, while its later Note Off increased the counter by four. A short
+key press produced the same RELEASE-side increase. This demonstrates that the
+current FPGA lifecycle can reject RELEASE after the addressed voice is already
+inactive or otherwise no longer generation-matched; identifying which state
+transition caused that mismatch still requires FPGA-side event attribution.
+The rejection remains observable and must not be silently cleared, but it is not
+a command-stream failure and no longer stops unrelated MIDI.
+
+The final post-fix qualification simultaneously played ten seconds of
+`butter fly ver2.mid` and captured twelve seconds of direct ALSA audio. Core 1
+consumed all 1,422 USB-MIDI packets, the cross-core queue returned from a
+high-water mark of 53 to zero, SPI DMA reached two of sixteen queued frames,
+and SPI errors, enqueue timeouts, command errors, and `CONTROL fault` remained
+zero. The WAV contained exactly 576,000 stereo frames. FFmpeg found no silence
+interval of at least one millisecond at the `-100 dB` threshold. The stale
+counter continued to rise as a warning during the workload, confirming that
+continued MIDI service no longer depends on it remaining constant.
+
 ## Wiring
 
 Both boards use 3.3 V logic. Power the Pico from USB and connect a verified
@@ -396,10 +433,12 @@ first wait for this DMA queue to become idle because they share the SPI target.
 Register reads use one 12-byte request followed by CRC-protected 16-byte fetches;
 BUSY and corrupt fetch responses are retried without reissuing the register
 request. Once per 100 ms, when the command batch and DMA queue are empty, Core 1
-compares `COMMAND_ERROR_COUNT` and `STALE_GENERATION_COUNT` with their startup
-baselines. Three consecutive mailbox failures or any counter change enters the
-control fault state. This detects rejected command transactions; DMA completion
-alone proves only that bytes were clocked.
+compares `COMMAND_ERROR_COUNT` and `STALE_GENERATION_COUNT` with their previous
+samples. Three consecutive mailbox failures or a command-error increase enters
+the control fault state. A stale-generation increase updates the UART diagnostic
+without stopping MIDI because the FPGA has already rejected that command safely.
+This distinguishes a malformed transaction from a protected voice-lifecycle
+race; DMA completion alone proves only that bytes were clocked.
 
 Clock setup failure, invalid MSF2 metadata, initial FPGA handshake failure,
 timer allocation failure, or USB initialization failure enters a fatal loop
@@ -883,6 +922,7 @@ rather than assuming card 2.
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader, dense active-voice index, allocator, MIDI voice semantics, and coalesced control update. |
 | `mcu/midi_policy.c` | Bank/program state, RPN/NRPN, channel modes, pedals, and System Reset. |
 | `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing and `0xa6` FLUSH framing. |
+| `mcu/transport_health_policy.c` | Classifies command errors as faults and stale-generation changes as nonfatal warnings. |
 | `mcu/synth_controller.c` | Production 512-voice integration, startup identity checks, 5 ms publication, command batching, and 100 ms FPGA command-health monitoring. |
 | `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |
 | `mcu/spi_dma_queue.c` | Bounded copied-frame FIFO owned by the RP2040 SPI DMA transport. |

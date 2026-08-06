@@ -443,7 +443,6 @@ uint16_t McuSf2AssetRuntime::note_on(uint8_t channel, uint16_t program,
     stats_.maximum_active_voices = std::max(stats_.maximum_active_voices,
                                             stats_.active_voices);
     commands_.write_command_words(command.view());
-    advance_modulation(voice);
     ++stats_.started_voices;
   }
   return matched_count;

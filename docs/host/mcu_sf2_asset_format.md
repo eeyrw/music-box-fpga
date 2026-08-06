@@ -376,6 +376,13 @@ a 512-voice SPI burst from USB-MIDI dispatch; the next active-only control pass
 materializes the newest gain, pitch, and filter values. Lifecycle operations
 remain immediate. MIDI channel 10 is fixed to SoundFont bank 128.
 
+Note On emits only START for each selected layer. START already carries the
+initial phase increment, gain, filter, and envelope configuration. The runtime
+does not append an immediate gain/pitch update because FPGA START acceptance
+queues installation rather than acknowledging active-state commit. Modulation
+updates begin on the next scheduled control pass, after installation has had a
+bounded interval to complete.
+
 Each control tick advances the modulation envelope and mod/vibrato LFO state,
 updates gain and pitch, evaluates filter state every fourth tick, suppresses
 unchanged commands, and reclaims released voices after their sample lifetime.

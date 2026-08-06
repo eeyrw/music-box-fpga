@@ -319,6 +319,10 @@ test-mcu-firmware:
 		-o $(BUILD_DIR)/fpga_spi_transport_test
 	$(BUILD_DIR)/fpga_spi_transport_test
 	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
+		mcu/transport_health_policy.c mcu/transport_health_policy_test.c \
+		-o $(BUILD_DIR)/transport_health_policy_test
+	$(BUILD_DIR)/transport_health_policy_test
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
 		mcu/msf2.c mcu/midi_policy.c mcu/midi_policy_test.c \
 		-o $(BUILD_DIR)/midi_policy_test
 	$(BUILD_DIR)/midi_policy_test

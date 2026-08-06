@@ -124,11 +124,22 @@ can address voices accepted before the reset.
 The RP2040 now quarantines runtime transport errors instead of deliberately
 rebooting: it stops consuming MIDI, retains its current generation table, keeps
 USB/I2S and UART alive, and compares FPGA command-error/stale-generation counts
-with their startup baselines every 100 ms. This prevents a local queue-pressure
+with their previous samples every 100 ms. This prevents a local queue-pressure
 fault from unnecessarily creating orphan voices, but it does not solve power
 loss, manual reset, firmware update, watchdog reset, or missing transaction
 acknowledgement. The bounded global RTL operation proposed below remains the
 required recovery mechanism.
+
+The two counters have different fault semantics. A command-error increase or
+three consecutive mailbox failures enters quarantine. A stale-generation
+increase is observable but nonfatal: the FPGA has already prevented an old
+command from modifying the current voice. Treating that protected rejection as
+a sink failure caused a 2026-08-06 MIDI stoppage while USB capture remained
+alive and was removed. Note On also no longer sends redundant control updates
+immediately behind START, avoiding an unnecessary not-yet-installed race.
+Post-fix hardware tests still observed stale rejection on per-layer RELEASE,
+including after a short key press, so FPGA-side lifecycle attribution remains
+open even though it no longer causes global MIDI quarantine.
 
 ## Proposed Ownership And Dependency Order
 

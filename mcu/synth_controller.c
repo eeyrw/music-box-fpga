@@ -5,6 +5,7 @@
 #include "command_batch.h"
 #include "fpga_spi_transport.h"
 #include "midi_policy.h"
+#include "transport_health_policy.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -316,6 +317,7 @@ int app_synth_service(uint32_t millisecond_count) {
 int app_synth_monitor_transport(uint32_t millisecond_count) {
     uint32_t command_errors;
     uint32_t stale_generations;
+    transport_health_result health;
     int result;
     if (millisecond_count - app_transport_monitor_millisecond < 100u) return 0;
     if (app_command_batch.word_count != 0u || platform_spi_wait_idle(0u) != 0) {
@@ -335,10 +337,13 @@ int app_synth_monitor_transport(uint32_t millisecond_count) {
         return -(int)MSF2_ERR_SINK;
     }
     app_transport_monitor_consecutive_failures = 0u;
-    if (command_errors != app_diagnostics.command_error_count ||
-        stale_generations != app_diagnostics.stale_generation_count) {
-        app_diagnostics.command_error_count = command_errors;
-        app_diagnostics.stale_generation_count = stale_generations;
+    health = transport_health_classify(
+        app_diagnostics.command_error_count,
+        app_diagnostics.stale_generation_count, command_errors,
+        stale_generations);
+    app_diagnostics.command_error_count = command_errors;
+    app_diagnostics.stale_generation_count = stale_generations;
+    if (health == TRANSPORT_HEALTH_COMMAND_FAULT) {
         return -(int)MSF2_ERR_SINK;
     }
     return 0;

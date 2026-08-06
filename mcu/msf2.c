@@ -1376,8 +1376,6 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         }
         activate_voice(runtime, voice_index);
         ++runtime->stats.started_voices;
-        result = advance_voice_modulation(runtime, voice_index);
-        if (result != MSF2_OK) return result;
         ++*started_layers;
     }
     return MSF2_OK;
