@@ -151,6 +151,67 @@ static uint32_t ratio_scaled_q24(uint64_t multiplier, uint32_t divisor,
     return quotient > UINT32_MAX ? UINT32_MAX : (uint32_t)quotient;
 }
 
+static uint32_t scale_u32_by_exp2_q24(uint32_t multiplier,
+                                      int64_t exponent_q24,
+                                      uint32_t minimum) {
+    int64_t octave = exponent_q24 / (INT64_C(1) << 24);
+    int64_t fraction = exponent_q24 % (INT64_C(1) << 24);
+    uint32_t table_index;
+    uint32_t interpolation;
+    uint64_t lower;
+    uint64_t upper;
+    uint64_t ratio;
+    uint64_t fraction_product;
+    uint64_t quotient;
+    uint64_t residual;
+    if (fraction < 0) {
+        fraction += INT64_C(1) << 24;
+        --octave;
+    }
+    table_index = (uint32_t)(fraction >> 16);
+    interpolation = (uint32_t)(fraction & UINT32_C(0xffff));
+    lower = (UINT64_C(1) << 32) |
+            msf2_lut_exp2_fraction_q32[table_index];
+    upper = table_index == 255u ? (UINT64_C(2) << 32) :
+            ((UINT64_C(1) << 32) |
+             msf2_lut_exp2_fraction_q32[table_index + 1u]);
+    ratio = lower + (((upper - lower) * interpolation + UINT32_C(0x8000)) >> 16);
+
+    /* The common runtime path has divisor one. Split the Q32 ratio into one
+     * plus a 32-bit fraction so a 32x32 multiply replaces the general 64-bit
+     * divide and remainder operations used by ratio_scaled_q24(). */
+    fraction_product =
+        (uint64_t)multiplier * (uint32_t)(ratio - (UINT64_C(1) << 32));
+    quotient = (uint64_t)multiplier + (fraction_product >> 32);
+    residual = (uint32_t)fraction_product;
+    if (quotient > UINT32_MAX) return UINT32_MAX;
+    if (octave >= 0) {
+        int64_t shift;
+        if (octave >= 63) return UINT32_MAX;
+        for (shift = 0; shift < octave; ++shift) {
+            if (quotient > UINT32_MAX / 2u) return UINT32_MAX;
+            quotient *= 2u;
+            residual *= 2u;
+            if (residual >= (UINT64_C(1) << 32)) {
+                residual -= UINT64_C(1) << 32;
+                ++quotient;
+            }
+        }
+        if (residual * 2u >= (UINT64_C(1) << 32)) ++quotient;
+    } else {
+        uint32_t shift = (uint32_t)(-octave);
+        if (shift >= 63u) quotient = 0u;
+        else {
+            const uint64_t mask = (UINT64_C(1) << shift) - 1u;
+            const uint64_t discarded = quotient & mask;
+            quotient >>= shift;
+            if (discarded >= (UINT64_C(1) << (shift - 1u))) ++quotient;
+        }
+    }
+    if (quotient < minimum) return minimum;
+    return quotient > UINT32_MAX ? UINT32_MAX : (uint32_t)quotient;
+}
+
 static int64_t cents_exponent_q24(int32_t cents) {
     return ((int64_t)cents << 24) / 1200;
 }
@@ -211,11 +272,32 @@ static int32_t cosine_index_q16(uint32_t index_q16) {
     return -(int32_t)quarter_sine_index_q16(index_q16 - quarter_turn);
 }
 
-static int32_t round_divide(int64_t numerator, uint64_t denominator) {
-    if (numerator >= 0) return (int32_t)((numerator + (int64_t)(denominator / 2u)) /
-                                        (int64_t)denominator);
-    return (int32_t)((numerator - (int64_t)(denominator / 2u)) /
-                     (int64_t)denominator);
+static int32_t round_shift_signed(int64_t value, uint8_t shift) {
+    const int64_t bias = INT64_C(1) << (shift - 1u);
+    if (value >= 0) return (int32_t)((value + bias) >> shift);
+    return -(int32_t)((-value + bias) >> shift);
+}
+
+static void filter_coefficients_from_cos_alpha(
+    int32_t cos_q30, int32_t alpha_q30,
+    int16_t *b0, int16_t *b1, int16_t *b2,
+    int16_t *a1, int16_t *a2) {
+    const uint64_t a0_q30 = (UINT64_C(1) << 30) + alpha_q30;
+    const uint64_t inverse_a0_q30 =
+        ((UINT64_C(1) << 60) + a0_q30 / 2u) / a0_q30;
+    const int64_t one_minus_cos = (INT64_C(1) << 30) - cos_q30;
+    const int16_t calculated_b0 = (int16_t)round_shift_signed(
+        one_minus_cos * (int64_t)inverse_a0_q30, 47u);
+    *b0 = calculated_b0;
+    *b1 = (int16_t)round_shift_signed(
+        one_minus_cos * (int64_t)inverse_a0_q30, 46u);
+    *b2 = calculated_b0;
+    *a1 = (int16_t)round_shift_signed(
+        -(int64_t)cos_q30 * (int64_t)inverse_a0_q30, 45u);
+    *a2 = (int16_t)round_shift_signed(
+        ((INT64_C(1) << 30) - alpha_q30) *
+            (int64_t)inverse_a0_q30,
+        46u);
 }
 
 static uint32_t ceil_divide(uint64_t numerator, uint32_t denominator) {
@@ -444,10 +526,10 @@ msf2_result msf2_decode_generators(const msf2_view *view, uint32_t zone_index,
     return MSF2_OK;
 }
 
-msf2_result msf2_materialize_note(const msf2_view *view, uint32_t zone_index,
-                                  uint8_t key, msf2_note_params *params) {
-    uint16_t gen[MSF2_GENERATOR_COUNT];
-    uint64_t presence;
+static msf2_result materialize_note_decoded(
+    const msf2_view *view, uint32_t zone_index, uint8_t key,
+    const uint16_t gen[MSF2_GENERATOR_COUNT], uint64_t presence,
+    msf2_note_params *params) {
     msf2_zone zone;
     msf2_sample sample;
     uint32_t start;
@@ -466,10 +548,9 @@ msf2_result msf2_materialize_note(const msf2_view *view, uint32_t zone_index,
     int32_t sustain_cb;
     int32_t cutoff_cents;
     int32_t resonance_cb;
-    if (params == NULL || key > 127u ||
+    if (view == NULL || gen == NULL || params == NULL || key > 127u ||
         msf2_get_zone(view, zone_index, &zone) != MSF2_OK ||
-        msf2_get_sample(view, zone.sample_index, &sample) != MSF2_OK ||
-        msf2_decode_generators(view, zone_index, gen, &presence) != MSF2_OK) {
+        msf2_get_sample(view, zone.sample_index, &sample) != MSF2_OK) {
         return MSF2_ERR_ARGUMENT;
     }
     *params = (msf2_note_params){0};
@@ -542,15 +623,11 @@ msf2_result msf2_materialize_note(const msf2_view *view, uint32_t zone_index,
             UINT32_C(759250125), 1u, -(int64_t)resonance_cb * 278664, 0u);
         const int32_t alpha_q30 = (int32_t)(((int64_t)sin_q30 * inv_2q_q30 +
                                              (INT64_C(1) << 29)) >> 30);
-        const uint64_t a0_q30 = (UINT64_C(1) << 30) + alpha_q30;
-        const int64_t one_minus_cos = (INT64_C(1) << 30) - cos_q30;
         params->filter_enable = 1u;
-        params->filter_b0 = (int16_t)round_divide(one_minus_cos * 8192, a0_q30);
-        params->filter_b1 = (int16_t)round_divide(one_minus_cos * 16384, a0_q30);
-        params->filter_b2 = params->filter_b0;
-        params->filter_a1 = (int16_t)round_divide(-(int64_t)cos_q30 * 32768, a0_q30);
-        params->filter_a2 = (int16_t)round_divide(
-            ((INT64_C(1) << 30) - alpha_q30) * 16384, a0_q30);
+        filter_coefficients_from_cos_alpha(
+            cos_q30, alpha_q30,
+            &params->filter_b0, &params->filter_b1, &params->filter_b2,
+            &params->filter_a1, &params->filter_a2);
     }
 
     params->delay_samples = timecent_samples(signed_amount(gen[33]),
@@ -580,6 +657,18 @@ msf2_result msf2_materialize_note(const msf2_view *view, uint32_t zone_index,
     params->release_samples = timecent_samples(signed_amount(gen[38]),
         has_generator(presence, 38u), 8000, UINT32_MAX);
     return MSF2_OK;
+}
+
+msf2_result msf2_materialize_note(const msf2_view *view, uint32_t zone_index,
+                                  uint8_t key, msf2_note_params *params) {
+    uint16_t gen[MSF2_GENERATOR_COUNT];
+    uint64_t presence;
+    if (params == NULL || key > 127u ||
+        msf2_decode_generators(view, zone_index, gen, &presence) != MSF2_OK) {
+        return MSF2_ERR_ARGUMENT;
+    }
+    return materialize_note_decoded(
+        view, zone_index, key, gen, presence, params);
 }
 
 msf2_result msf2_pack_start(uint16_t voice, uint16_t generation,
@@ -767,39 +856,58 @@ static int64_t multiply_q16(int64_t a, int64_t b) {
            MSF2_MOD_ONE;
 }
 
-static int64_t destination_sum_q16(const msf2_runtime *runtime,
-                                   const msf2_voice_state *voice,
-                                   uint8_t program_id, uint16_t destination,
-                                   int include_note_sources) {
-    const uint8_t *program;
-    uint32_t first;
-    uint16_t count;
+static const uint16_t modulation_destinations[3][4] = {
+    {13u, 48u, 17u, 0u},
+    {0u, 5u, 6u, 7u},
+    {8u, 10u, 11u, 0u},
+};
+static const uint8_t modulation_destination_counts[3] = {3u, 4u, 3u};
+static const uint8_t modulation_static_offsets[3] = {0u, 3u, 7u};
+static const uint8_t modulation_include_note_sources[3][4] = {
+    {1u, 0u, 0u, 0u},
+    {1u, 1u, 1u, 1u},
+    {1u, 1u, 1u, 0u},
+};
+
+static void destination_sums_q16(const msf2_runtime *runtime,
+                                 const msf2_voice_state *voice,
+                                 uint8_t program_slot, int64_t *sums) {
     uint16_t local;
-    int64_t sum = runtime->channels[voice->channel]
-                      .generator_offsets_q16[destination];
-    /* Programs and terms remain in immutable MSF2 storage. Only scalar source
-     * state and final sums are copied into SRAM, bounding per-tick work by the
-     * verified term_count in the image. */
-    if (program_id == UINT8_MAX) return sum;
-    program = record(runtime->view, 5u, program_id);
-    first = read_u32(program);
-    count = read_u16(program + 4);
-    for (local = 0u; local < count; ++local) {
-        const uint8_t *term = record(runtime->view, 6u, first + local);
+    uint8_t output;
+    const uint8_t sum_count = modulation_destination_counts[program_slot];
+    for (output = 0u; output < sum_count; ++output) {
+        sums[output] = runtime->channels[voice->channel]
+                           .generator_offsets_q16[
+                               modulation_destinations[program_slot][output]] +
+            voice->modulation_static_sums_q16[
+                modulation_static_offsets[program_slot] + output];
+    }
+    if (voice->modulation_programs[program_slot] == UINT8_MAX) return;
+    /* A term has exactly one destination. Accumulating all destinations used
+     * by a control family in one traversal avoids evaluating the same program
+     * three or four times per voice and tick. */
+    for (local = voice->modulation_note_static_counts[program_slot];
+         local < voice->modulation_term_counts[program_slot]; ++local) {
+        const uint8_t *term = record(runtime->view, 6u,
+            voice->modulation_first_terms[program_slot] + local);
+        const uint16_t destination = read_u16(term + 2);
         int32_t source_value;
         int32_t amount_value;
         int64_t value;
-        if (read_u16(term + 2) != destination ||
-            (include_note_sources == 0 && (read_u16(term + 10) & 1u) != 0u)) continue;
+        for (output = 0u; output < sum_count; ++output) {
+            if (modulation_destinations[program_slot][output] == destination) break;
+        }
+        if (output == sum_count ||
+            (modulation_include_note_sources[program_slot][output] == 0u &&
+             (read_u16(term + 10) & 1u) != 0u)) continue;
         source_value = source_value_q16(read_u16(term),
             &runtime->channels[voice->channel], voice);
         amount_value = source_value_q16(read_u16(term + 6),
             &runtime->channels[voice->channel], voice);
         value = multiply_q16(source_value, amount_value) * (int16_t)read_u16(term + 4);
         if (read_u16(term + 8) == 2u && value < 0) value = -value;
-        sum += value;
+        sums[output] += value;
     }
-    return sum;
 }
 
 static void candidate_programs(const msf2_view *view, uint32_t candidate,
@@ -810,18 +918,69 @@ static void candidate_programs(const msf2_view *view, uint32_t candidate,
     programs[2] = record_value[2];
 }
 
-static int program_has_destination(const msf2_view *view, uint8_t program_id,
+static void cache_candidate_programs(const msf2_view *view,
+                                     msf2_voice_state *voice) {
+    uint8_t slot;
+    candidate_programs(view, voice->candidate, voice->modulation_programs);
+    for (slot = 0u; slot < 3u; ++slot) {
+        if (voice->modulation_programs[slot] == UINT8_MAX) {
+            voice->modulation_first_terms[slot] = 0u;
+            voice->modulation_term_counts[slot] = 0u;
+            voice->modulation_note_static_counts[slot] = 0u;
+        } else {
+            const uint8_t *program = record(
+                view, 5u, voice->modulation_programs[slot]);
+            voice->modulation_first_terms[slot] = read_u32(program);
+            voice->modulation_term_counts[slot] = read_u16(program + 4);
+            voice->modulation_note_static_counts[slot] = read_u16(program + 6);
+        }
+    }
+}
+
+static void cache_note_static_modulation(const msf2_runtime *runtime,
+                                         msf2_voice_state *voice) {
+    uint8_t slot;
+    for (slot = 0u; slot < 3u; ++slot) {
+        uint16_t local;
+        for (local = 0u; local < voice->modulation_note_static_counts[slot];
+             ++local) {
+            const uint8_t *term = record(runtime->view, 6u,
+                voice->modulation_first_terms[slot] + local);
+            const uint16_t destination = read_u16(term + 2);
+            uint8_t output;
+            int32_t source_value;
+            int32_t amount_value;
+            int64_t value;
+            for (output = 0u; output < modulation_destination_counts[slot];
+                 ++output) {
+                if (modulation_destinations[slot][output] == destination) break;
+            }
+            if (output == modulation_destination_counts[slot] ||
+                (modulation_include_note_sources[slot][output] == 0u &&
+                 (read_u16(term + 10) & 1u) != 0u)) continue;
+            source_value = source_value_q16(read_u16(term),
+                &runtime->channels[voice->channel], voice);
+            amount_value = source_value_q16(read_u16(term + 6),
+                &runtime->channels[voice->channel], voice);
+            value = multiply_q16(source_value, amount_value) *
+                    (int16_t)read_u16(term + 4);
+            if (read_u16(term + 8) == 2u && value < 0) value = -value;
+            voice->modulation_static_sums_q16[
+                modulation_static_offsets[slot] + output] += value;
+        }
+    }
+}
+
+static int program_has_destination(const msf2_view *view,
+                                   const msf2_voice_state *voice,
+                                   uint8_t program_slot,
                                    uint16_t destination) {
-    const uint8_t *program;
-    uint32_t first;
-    uint16_t count;
     uint16_t local;
-    if (program_id == UINT8_MAX) return 0;
-    program = record(view, 5u, program_id);
-    first = read_u32(program);
-    count = read_u16(program + 4);
-    for (local = 0u; local < count; ++local) {
-        if (read_u16(record(view, 6u, first + local) + 2) == destination) {
+    if (voice->modulation_programs[program_slot] == UINT8_MAX) return 0;
+    for (local = 0u; local < voice->modulation_term_counts[program_slot]; ++local) {
+        if (read_u16(record(view, 6u,
+                           voice->modulation_first_terms[program_slot] + local) + 2) ==
+            destination) {
             return 1;
         }
     }
@@ -830,25 +989,23 @@ static int program_has_destination(const msf2_view *view, uint8_t program_id,
 
 static uint8_t voice_periodic_groups(const msf2_runtime *runtime,
                                      const msf2_voice_state *voice) {
-    uint8_t programs[3];
     uint8_t groups = 0u;
-    candidate_programs(runtime->view, voice->candidate, programs);
     if (voice->config.mod_lfo_to_volume != 0 ||
-        program_has_destination(runtime->view, programs[0], 13u)) {
+        program_has_destination(runtime->view, voice, 0u, 13u)) {
         groups |= MSF2_CONTROL_GROUP_GAIN;
     }
     if (voice->config.mod_lfo_to_pitch != 0 ||
         voice->config.vib_lfo_to_pitch != 0 ||
         voice->config.mod_env_to_pitch != 0 ||
-        program_has_destination(runtime->view, programs[1], 5u) ||
-        program_has_destination(runtime->view, programs[1], 6u) ||
-        program_has_destination(runtime->view, programs[1], 7u)) {
+        program_has_destination(runtime->view, voice, 1u, 5u) ||
+        program_has_destination(runtime->view, voice, 1u, 6u) ||
+        program_has_destination(runtime->view, voice, 1u, 7u)) {
         groups |= MSF2_CONTROL_GROUP_PITCH;
     }
     if (voice->config.mod_lfo_to_filter_fc != 0 ||
         voice->config.mod_env_to_filter_fc != 0 ||
-        program_has_destination(runtime->view, programs[2], 10u) ||
-        program_has_destination(runtime->view, programs[2], 11u)) {
+        program_has_destination(runtime->view, voice, 2u, 10u) ||
+        program_has_destination(runtime->view, voice, 2u, 11u)) {
         groups |= MSF2_CONTROL_GROUP_FILTER;
     }
     return groups;
@@ -856,10 +1013,20 @@ static uint8_t voice_periodic_groups(const msf2_runtime *runtime,
 
 static uint32_t phase_with_cents(uint32_t base, int64_t cents_q16) {
     const int64_t limit = INT64_C(24000) * MSF2_MOD_ONE;
+    int32_t cents;
+    int32_t quotient;
+    int32_t remainder;
+    int64_t exponent_q24;
     if (cents_q16 < -limit) cents_q16 = -limit;
     if (cents_q16 > limit) cents_q16 = limit;
-    int64_t exponent_q24 = (cents_q16 * 256) / 1200;
-    return ratio_scaled_q24(base, 1u, exponent_q24, 1u);
+    cents = (int32_t)cents_q16;
+    /* (cents * 256) / 1200 == (cents * 16) / 75. Split quotient
+     * and remainder so the constant division stays 32-bit and the result
+     * retains C's exact truncation-toward-zero behavior. */
+    quotient = cents / 75;
+    remainder = cents % 75;
+    exponent_q24 = (int64_t)quotient * 16 + (remainder * 16) / 75;
+    return scale_u32_by_exp2_q24(base, exponent_q24, 1u);
 }
 
 static void gains_with_modulation(uint16_t base_gain, int16_t base_pan,
@@ -883,7 +1050,7 @@ static void gains_with_modulation(uint16_t base_gain, int16_t base_pan,
         attenuation_q16 = INT64_C(4000) * MSF2_MOD_ONE;
     }
     exponent_q24 = -(attenuation_q16 * INT64_C(278663)) / MSF2_MOD_ONE;
-    scaled = ratio_scaled_q24(base_gain, 1u, exponent_q24, 0u);
+    scaled = scale_u32_by_exp2_q24(base_gain, exponent_q24, 0u);
     if (scaled > 32767u) scaled = 32767u;
     pan = clamp_i32(pan, -500, 500);
     position = (uint32_t)(pan + 500);
@@ -900,8 +1067,6 @@ static void filter_from_cents(int32_t cutoff_cents, int32_t resonance_cb,
     int32_t cos_q30;
     uint32_t inv_2q_q30;
     int32_t alpha_q30;
-    uint64_t a0_q30;
-    int64_t one_minus_cos;
     cutoff_cents = clamp_i32(cutoff_cents, 1500, 13500);
     resonance_cb = clamp_i32(resonance_cb, 0, 960);
     resonance_cb = ((resonance_cb + 1) / 2) * 2;
@@ -913,15 +1078,11 @@ static void filter_from_cents(int32_t cutoff_cents, int32_t resonance_cb,
         -(int64_t)resonance_cb * 278664, 0u);
     alpha_q30 = (int32_t)(((int64_t)sin_q30 * inv_2q_q30 +
                            (INT64_C(1) << 29)) >> 30);
-    a0_q30 = (UINT64_C(1) << 30) + alpha_q30;
-    one_minus_cos = (INT64_C(1) << 30) - cos_q30;
     voice->filter_enable = 1u;
-    voice->filter_b0 = (int16_t)round_divide(one_minus_cos * 8192, a0_q30);
-    voice->filter_b1 = (int16_t)round_divide(one_minus_cos * 16384, a0_q30);
-    voice->filter_b2 = voice->filter_b0;
-    voice->filter_a1 = (int16_t)round_divide(-(int64_t)cos_q30 * 32768, a0_q30);
-    voice->filter_a2 = (int16_t)round_divide(
-        ((INT64_C(1) << 30) - alpha_q30) * 16384, a0_q30);
+    filter_coefficients_from_cos_alpha(
+        cos_q30, alpha_q30,
+        &voice->filter_b0, &voice->filter_b1, &voice->filter_b2,
+        &voice->filter_a1, &voice->filter_a2);
 }
 
 static msf2_result emit_command(msf2_runtime *runtime, const uint32_t *words,
@@ -1054,7 +1215,6 @@ static uint16_t linear_level(uint16_t start, uint16_t target,
 static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
                                  uint8_t groups) {
     msf2_voice_state *voice = &runtime->voices[voice_index];
-    uint8_t programs[3];
     int32_t mod_lfo;
     int32_t vib_lfo;
     int32_t env_q16;
@@ -1064,25 +1224,27 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     /* Re-evaluate only MCU-owned destinations. Each result is compared with
      * the last emitted value, so stationary controllers and envelope plateaus
      * consume no command bandwidth. */
-    candidate_programs(runtime->view, voice->candidate, programs);
     mod_lfo = voice->mod_lfo_wait_ticks == 0u ? lfo_q16(voice->mod_lfo_phase) : 0;
     vib_lfo = voice->vib_lfo_wait_ticks == 0u ? lfo_q16(voice->vib_lfo_phase) : 0;
     env_q16 = (int32_t)(((int64_t)voice->mod_env_level * MSF2_MOD_ONE +
                          32767 / 2) / 32767);
     if ((groups & MSF2_CONTROL_GROUP_PITCH) != 0u) {
-        int64_t pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1) +
+        int64_t sums[4];
+        int64_t pitch;
+        destination_sums_q16(runtime, voice, 1u, sums);
+        pitch = sums[0] +
             runtime->channels[voice->channel].generator_offsets_q16[51] +
             runtime->channels[voice->channel].generator_offsets_q16[52];
         uint32_t phase;
         pitch += multiply_q16(mod_lfo,
             (int64_t)voice->config.mod_lfo_to_pitch * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[1], 5u, 1));
+            sums[1]);
         pitch += multiply_q16(vib_lfo,
             (int64_t)voice->config.vib_lfo_to_pitch * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[1], 6u, 1));
+            sums[2]);
         pitch += multiply_q16(env_q16,
             (int64_t)voice->config.mod_env_to_pitch * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[1], 7u, 1));
+            sums[3]);
         phase = phase_with_cents(voice->base_phase_increment, pitch);
         if (phase != voice->phase_increment) {
             result = emit_short(runtime, UINT8_C(0x18), voice_index,
@@ -1093,18 +1255,20 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
         }
     }
     if ((groups & MSF2_CONTROL_GROUP_GAIN) != 0u) {
+        int64_t sums[3];
         int64_t attenuation;
         int64_t pan;
         uint16_t gain_l;
         uint16_t gain_r;
+        destination_sums_q16(runtime, voice, 0u, sums);
         voice->tremolo_attenuation_q16 = (int32_t)-multiply_q16(mod_lfo,
             (int64_t)voice->config.mod_lfo_to_volume * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[0], 13u, 1));
-        attenuation = destination_sum_q16(runtime, voice, programs[0], 48u, 0) +
+            sums[0]);
+        attenuation = sums[1] +
                       voice->tremolo_attenuation_q16 +
                       (runtime->channels[voice->channel].soft != 0u ?
                            INT64_C(30) * MSF2_MOD_ONE : 0);
-        pan = destination_sum_q16(runtime, voice, programs[0], 17u, 0);
+        pan = sums[2];
         gains_with_modulation(voice->base_gain, voice->pan, attenuation, pan,
                               &gain_l, &gain_r);
         if (gain_l != voice->gain_l || gain_r != voice->gain_r) {
@@ -1117,25 +1281,28 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
         }
     }
     if ((groups & MSF2_CONTROL_GROUP_FILTER) != 0u) {
-        int64_t cutoff = (int64_t)voice->config.initial_filter_fc * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[2], 8u, 1);
+        int64_t sums[3];
+        int64_t cutoff;
+        destination_sums_q16(runtime, voice, 2u, sums);
+        cutoff = (int64_t)voice->config.initial_filter_fc * MSF2_MOD_ONE + sums[0];
         msf2_voice_state calculated = *voice;
         uint32_t words[5];
         cutoff += multiply_q16(mod_lfo,
             (int64_t)voice->config.mod_lfo_to_filter_fc * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[2], 10u, 1));
+            sums[1]);
         cutoff += multiply_q16(env_q16,
             (int64_t)voice->config.mod_env_to_filter_fc * MSF2_MOD_ONE +
-            destination_sum_q16(runtime, voice, programs[2], 11u, 1));
+            sums[2]);
         if (cutoff < INT64_C(1500) * MSF2_MOD_ONE) {
             cutoff = INT64_C(1500) * MSF2_MOD_ONE;
         }
         if (cutoff > INT64_C(13500) * MSF2_MOD_ONE) {
             cutoff = INT64_C(13500) * MSF2_MOD_ONE;
         }
-        filter_from_cents((int32_t)((cutoff + (cutoff >= 0 ? 32768 : -32768)) /
-                                   MSF2_MOD_ONE),
-                          voice->config.initial_filter_q, &calculated);
+        filter_from_cents(
+            (int32_t)((cutoff + (cutoff >= 0 ? 32768 : -32768)) /
+                      MSF2_MOD_ONE),
+            voice->config.initial_filter_q, &calculated);
         if (calculated.filter_enable != voice->filter_enable ||
             calculated.filter_b0 != voice->filter_b0 ||
             calculated.filter_b1 != voice->filter_b1 ||
@@ -1162,38 +1329,84 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     return MSF2_OK;
 }
 
-static void advance_modulation_envelope(msf2_voice_state *voice) {
-    if (voice->mod_env_stage == MSF2_ENV_DELAY) {
-        if (voice->mod_env_wait_ticks != 0u) --voice->mod_env_wait_ticks;
-        if (voice->mod_env_wait_ticks == 0u) voice->mod_env_stage = MSF2_ENV_ATTACK;
-    } else if (voice->mod_env_stage == MSF2_ENV_ATTACK) {
-        ++voice->mod_env_stage_tick;
-        voice->mod_env_level = linear_level(0u, 32767u,
-            voice->mod_env_stage_tick, voice->config.mod_env_attack_ticks);
-        if (voice->mod_env_stage_tick >= voice->config.mod_env_attack_ticks) {
-            voice->mod_env_level = 32767u;
-            voice->mod_env_stage_tick = 0u;
-            voice->mod_env_wait_ticks = voice->config.mod_env_hold_ticks;
-            voice->mod_env_stage = voice->mod_env_wait_ticks != 0u ?
-                MSF2_ENV_HOLD : MSF2_ENV_DECAY;
+static void advance_modulation_envelope_elapsed(msf2_voice_state *voice,
+                                                uint32_t elapsed_ticks) {
+    while (elapsed_ticks != 0u) {
+        uint32_t duration;
+        uint32_t remaining;
+        uint32_t advance;
+        if (voice->mod_env_stage == MSF2_ENV_DELAY ||
+            voice->mod_env_stage == MSF2_ENV_HOLD) {
+            if (voice->mod_env_wait_ticks == 0u) {
+                voice->mod_env_stage = voice->mod_env_stage == MSF2_ENV_DELAY ?
+                    MSF2_ENV_ATTACK : MSF2_ENV_DECAY;
+                --elapsed_ticks;
+                continue;
+            }
+            advance = elapsed_ticks < voice->mod_env_wait_ticks ?
+                elapsed_ticks : voice->mod_env_wait_ticks;
+            voice->mod_env_wait_ticks -= advance;
+            elapsed_ticks -= advance;
+            if (voice->mod_env_wait_ticks == 0u) {
+                voice->mod_env_stage = voice->mod_env_stage == MSF2_ENV_DELAY ?
+                    MSF2_ENV_ATTACK : MSF2_ENV_DECAY;
+            }
+            continue;
         }
-    } else if (voice->mod_env_stage == MSF2_ENV_HOLD) {
-        if (voice->mod_env_wait_ticks != 0u) --voice->mod_env_wait_ticks;
-        if (voice->mod_env_wait_ticks == 0u) voice->mod_env_stage = MSF2_ENV_DECAY;
-    } else if (voice->mod_env_stage == MSF2_ENV_DECAY) {
-        ++voice->mod_env_stage_tick;
-        voice->mod_env_level = linear_level(32767u, voice->config.mod_env_sustain_level,
-            voice->mod_env_stage_tick, voice->config.mod_env_decay_ticks);
-        if (voice->mod_env_stage_tick >= voice->config.mod_env_decay_ticks) {
-            voice->mod_env_level = voice->config.mod_env_sustain_level;
-            voice->mod_env_stage_tick = 0u;
-            voice->mod_env_stage = MSF2_ENV_SUSTAIN;
+        if (voice->mod_env_stage == MSF2_ENV_ATTACK ||
+            voice->mod_env_stage == MSF2_ENV_DECAY) {
+            duration = voice->mod_env_stage == MSF2_ENV_ATTACK ?
+                voice->config.mod_env_attack_ticks :
+                voice->config.mod_env_decay_ticks;
+            remaining = duration > voice->mod_env_stage_tick ?
+                duration - voice->mod_env_stage_tick : 1u;
+            advance = elapsed_ticks < remaining ? elapsed_ticks : remaining;
+            voice->mod_env_stage_tick += advance;
+            elapsed_ticks -= advance;
+            if (voice->mod_env_stage == MSF2_ENV_ATTACK) {
+                voice->mod_env_level = linear_level(
+                    0u, 32767u, voice->mod_env_stage_tick, duration);
+                if (voice->mod_env_stage_tick >= duration) {
+                    voice->mod_env_level = 32767u;
+                    voice->mod_env_stage_tick = 0u;
+                    voice->mod_env_wait_ticks = voice->config.mod_env_hold_ticks;
+                    voice->mod_env_stage = voice->mod_env_wait_ticks != 0u ?
+                        MSF2_ENV_HOLD : MSF2_ENV_DECAY;
+                }
+            } else {
+                voice->mod_env_level = linear_level(
+                    32767u, voice->config.mod_env_sustain_level,
+                    voice->mod_env_stage_tick, duration);
+                if (voice->mod_env_stage_tick >= duration) {
+                    voice->mod_env_level = voice->config.mod_env_sustain_level;
+                    voice->mod_env_stage_tick = 0u;
+                    voice->mod_env_stage = MSF2_ENV_SUSTAIN;
+                }
+            }
+            continue;
         }
-    } else if (voice->mod_env_stage == MSF2_ENV_RELEASE) {
-        ++voice->mod_env_stage_tick;
-        voice->mod_env_level = linear_level(voice->mod_env_release_start, 0u,
-            voice->mod_env_stage_tick, voice->config.mod_env_release_ticks);
+        if (voice->mod_env_stage == MSF2_ENV_RELEASE) {
+            voice->mod_env_stage_tick += elapsed_ticks;
+            voice->mod_env_level = linear_level(
+                voice->mod_env_release_start, 0u,
+                voice->mod_env_stage_tick, voice->config.mod_env_release_ticks);
+        }
+        return;
     }
+}
+
+static void advance_lfo_elapsed_before_final(uint32_t *phase,
+                                             uint32_t *wait_ticks,
+                                             uint32_t step,
+                                             uint32_t elapsed_ticks) {
+    uint32_t active_ticks;
+    if (elapsed_ticks <= *wait_ticks) {
+        *wait_ticks -= elapsed_ticks;
+        return;
+    }
+    active_ticks = elapsed_ticks - *wait_ticks;
+    *wait_ticks = 0u;
+    *phase += step * active_ticks;
 }
 
 static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
@@ -1202,38 +1415,40 @@ static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
     msf2_voice_state *voice = &runtime->voices[voice_index];
     const uint8_t dirty_groups =
         runtime->channels[voice->channel].dirty_groups;
-    uint32_t tick;
+    uint8_t groups;
+    msf2_result result;
     if (voice->stage == MSF2_VOICE_FREE || elapsed_ticks == 0u) return MSF2_OK;
     if (voice->periodic_groups == 0u) {
         return dirty_groups == 0u ? MSF2_OK :
             refresh_voice(runtime, voice_index, dirty_groups);
     }
-    /* The modulation envelope is a control-rate shadow, distinct from the
-     * sample-rate volume envelope inside the FPGA. Gain and pitch update every
-     * tick; filter updates every fourth tick to preserve the established MCU
-     * command-rate policy. LFO phase advances after emission, matching the C++
-     * oracle's first-tick phase convention. */
-    for (tick = 0u; tick < elapsed_ticks; ++tick) {
-        advance_modulation_envelope(voice);
-        if (tick + 1u == elapsed_ticks) {
-            uint8_t groups = dirty_groups |
-                (voice->periodic_groups &
-                 (MSF2_CONTROL_GROUP_GAIN | MSF2_CONTROL_GROUP_PITCH));
-            msf2_result result;
-            if ((voice->periodic_groups & MSF2_CONTROL_GROUP_FILTER) != 0u &&
-                (elapsed_ticks > 1u ||
-                 ((runtime->control_tick_index + tick) & 3u) == 0u)) {
-                groups |= MSF2_CONTROL_GROUP_FILTER;
-            }
-            result = groups == 0u ? MSF2_OK :
-                refresh_voice(runtime, voice_index, groups);
-            if (result != MSF2_OK) return result;
-        }
-        if (voice->mod_lfo_wait_ticks != 0u) --voice->mod_lfo_wait_ticks;
-        else voice->mod_lfo_phase += voice->config.mod_lfo_step;
-        if (voice->vib_lfo_wait_ticks != 0u) --voice->vib_lfo_wait_ticks;
-        else voice->vib_lfo_phase += voice->config.vib_lfo_step;
+    /* Fold elapsed logical time without replaying one loop iteration per
+     * millisecond. Envelope state crosses at most the finite stage boundaries.
+     * LFO state is first advanced through N-1 ticks so refresh observes the
+     * same phase as the old final loop iteration, then the last tick is applied
+     * after publication. */
+    advance_modulation_envelope_elapsed(voice, elapsed_ticks);
+    advance_lfo_elapsed_before_final(
+        &voice->mod_lfo_phase, &voice->mod_lfo_wait_ticks,
+        voice->config.mod_lfo_step, elapsed_ticks - 1u);
+    advance_lfo_elapsed_before_final(
+        &voice->vib_lfo_phase, &voice->vib_lfo_wait_ticks,
+        voice->config.vib_lfo_step, elapsed_ticks - 1u);
+    groups = dirty_groups |
+        (voice->periodic_groups &
+         (MSF2_CONTROL_GROUP_GAIN | MSF2_CONTROL_GROUP_PITCH));
+    if ((voice->periodic_groups & MSF2_CONTROL_GROUP_FILTER) != 0u &&
+        (elapsed_ticks > 1u ||
+         ((runtime->control_tick_index + elapsed_ticks - 1u) & 3u) == 0u)) {
+        groups |= MSF2_CONTROL_GROUP_FILTER;
     }
+    result = groups == 0u ? MSF2_OK :
+        refresh_voice(runtime, voice_index, groups);
+    if (result != MSF2_OK) return result;
+    if (voice->mod_lfo_wait_ticks != 0u) --voice->mod_lfo_wait_ticks;
+    else voice->mod_lfo_phase += voice->config.mod_lfo_step;
+    if (voice->vib_lfo_wait_ticks != 0u) --voice->vib_lfo_wait_ticks;
+    else voice->vib_lfo_phase += voice->config.vib_lfo_step;
     return MSF2_OK;
 }
 
@@ -1247,6 +1462,12 @@ static void clear_channel_dirty_groups(msf2_runtime *runtime) {
     for (channel = 0u; channel < MSF2_CHANNEL_COUNT; ++channel) {
         runtime->channels[channel].dirty_groups = 0u;
     }
+}
+
+static void mark_channel_dirty(msf2_channel_state *channel, uint8_t groups) {
+    if (groups == 0u) return;
+    channel->dirty_groups |= groups;
+    ++channel->dirty_revision;
 }
 
 static void reset_channel_state(msf2_channel_state *channel) {
@@ -1286,6 +1507,20 @@ msf2_result msf2_runtime_init(msf2_runtime *runtime, const msf2_view *view,
     return MSF2_OK;
 }
 
+static int32_t cached_preset_index(msf2_runtime *runtime,
+                                   uint16_t program, uint16_t bank) {
+    const uint8_t slot = (uint8_t)(((uint32_t)bank * 131u + program) & 15u);
+    msf2_preset_cache_entry *entry = &runtime->preset_cache[slot];
+    if (entry->valid != 0u && entry->program == program && entry->bank == bank) {
+        return entry->preset_index;
+    }
+    entry->preset_index = msf2_find_preset(runtime->view, program, bank);
+    entry->bank = bank;
+    entry->program = (uint8_t)program;
+    entry->valid = 1u;
+    return entry->preset_index;
+}
+
 msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
                                  uint16_t program, uint16_t bank, uint8_t note,
                                  uint8_t velocity, uint8_t *started_layers) {
@@ -1293,13 +1528,15 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
     msf2_layers layers;
     uint8_t layer;
     uint8_t exclusive[MSF2_MAX_LAYERS] = {0u, 0u, 0u, 0u};
+    uint16_t layer_generators[MSF2_MAX_LAYERS][MSF2_GENERATOR_COUNT];
+    uint64_t layer_presence[MSF2_MAX_LAYERS];
     uint32_t note_instance;
     if (runtime == NULL || started_layers == NULL || channel >= MSF2_CHANNEL_COUNT ||
         note > 127u || velocity > 127u) return MSF2_ERR_ARGUMENT;
     *started_layers = 0u;
     if (velocity == 0u) return msf2_runtime_note_off(runtime, channel, note);
     ++runtime->stats.note_ons;
-    preset_index = msf2_find_preset(runtime->view, program, bank);
+    preset_index = cached_preset_index(runtime, program, bank);
     if (preset_index < 0) {
         ++runtime->stats.unmapped_notes;
         return MSF2_OK;
@@ -1314,12 +1551,14 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
      * Note On therefore releases all conflicting old voices before publishing
      * its first replacement START. */
     for (layer = 0u; layer < layers.count; ++layer) {
-        uint16_t gen[MSF2_GENERATOR_COUNT];
-        uint64_t presence;
-        if (msf2_decode_generators(runtime->view, layers.zone_index[layer], gen,
-                                   &presence) != MSF2_OK) return MSF2_ERR_RECORD;
-        exclusive[layer] = has_generator(presence, 57u) ?
-            (uint8_t)clamp_i32(signed_amount(gen[57]), 0, 127) : 0u;
+        if (msf2_decode_generators(runtime->view, layers.zone_index[layer],
+                                   layer_generators[layer],
+                                   &layer_presence[layer]) != MSF2_OK) {
+            return MSF2_ERR_RECORD;
+        }
+        exclusive[layer] = has_generator(layer_presence[layer], 57u) ?
+            (uint8_t)clamp_i32(
+                signed_amount(layer_generators[layer][57]), 0, 127) : 0u;
     }
     for (layer = 0u; layer < layers.count; ++layer) {
         if (exclusive[layer] != 0u) {
@@ -1341,13 +1580,14 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
     note_instance = ++runtime->next_note_instance;
     if (note_instance == 0u) note_instance = ++runtime->next_note_instance;
     for (layer = 0u; layer < layers.count; ++layer) {
-        uint16_t gen[MSF2_GENERATOR_COUNT];
-        uint64_t presence;
+        uint16_t *gen = layer_generators[layer];
+        const uint64_t presence = layer_presence[layer];
         msf2_note_params params;
         uint16_t voice_index;
         msf2_voice_state *voice;
         uint16_t previous_generation;
-        uint8_t programs[3];
+        int64_t pitch_sums[4];
+        int64_t gain_sums[3];
         int64_t pitch;
         int64_t attenuation;
         int64_t pan;
@@ -1369,17 +1609,17 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         voice->exclusive_class = exclusive[layer];
         voice->note_instance = note_instance;
         voice->allocation_stamp = ++runtime->allocation_stamp;
-        if (msf2_decode_generators(runtime->view, voice->candidate, gen, &presence) !=
-                MSF2_OK ||
-            msf2_materialize_note(runtime->view, voice->candidate, note, &params) !=
-                MSF2_OK) {
+        if (materialize_note_decoded(runtime->view, voice->candidate, note,
+                                     gen, presence, &params) != MSF2_OK) {
             abandon_unpublished_voice(runtime, voice_index);
             return MSF2_ERR_RECORD;
         }
         runtime_config_from_generators(gen, presence, note, &voice->config);
-        voice->periodic_groups = voice_periodic_groups(runtime, voice);
+        cache_candidate_programs(runtime->view, voice);
         voice->effective_velocity = has_generator(presence, 47u) ?
             (int8_t)clamp_i32(signed_amount(gen[47]), 0, 127) : -1;
+        cache_note_static_modulation(runtime, voice);
+        voice->periodic_groups = voice_periodic_groups(runtime, voice);
         voice->base_phase_increment = params.phase_inc;
         voice->base_gain = (uint16_t)ratio_scaled_q24(0x4000u, 1u,
             -(int64_t)clamp_i32(has_generator(presence, 48u) ?
@@ -1403,15 +1643,16 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         /* Apply note-static and current channel modulation to the initial
          * phase/gain fields. Continuing LFO/envelope values are emitted by the
          * immediate first control update below and subsequent timer ticks. */
-        candidate_programs(runtime->view, voice->candidate, programs);
-        pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1) +
+        destination_sums_q16(runtime, voice, 1u, pitch_sums);
+        pitch = pitch_sums[0] +
             runtime->channels[channel].generator_offsets_q16[51] +
             runtime->channels[channel].generator_offsets_q16[52];
         voice->phase_increment = phase_with_cents(voice->base_phase_increment, pitch);
-        attenuation = destination_sum_q16(runtime, voice, programs[0], 48u, 0) +
+        destination_sums_q16(runtime, voice, 0u, gain_sums);
+        attenuation = gain_sums[1] +
             (runtime->channels[channel].soft != 0u ?
                  INT64_C(30) * MSF2_MOD_ONE : 0);
-        pan = destination_sum_q16(runtime, voice, programs[0], 17u, 0);
+        pan = gain_sums[2];
         gains_with_modulation(voice->base_gain, voice->pan, attenuation, pan,
                               &voice->gain_l, &voice->gain_r);
         params.phase_inc = voice->phase_increment;
@@ -1563,7 +1804,7 @@ msf2_result msf2_runtime_control_change(msf2_runtime *runtime, uint8_t channel,
     } else if (controller >= 123u) {
         return msf2_runtime_all_notes_off(runtime, channel);
     }
-    state->dirty_groups |= MSF2_CONTROL_GROUP_ALL;
+    mark_channel_dirty(state, MSF2_CONTROL_GROUP_ALL);
     /* Ordinary controller changes are consumed by the next active-voice
        control update. Lifecycle controllers above remain immediate. */
     return MSF2_OK;
@@ -1578,7 +1819,7 @@ msf2_result msf2_runtime_set_pitch_bend_range(msf2_runtime *runtime,
     }
     runtime->channels[channel].pitch_bend_range_semitones = semitones;
     runtime->channels[channel].pitch_bend_range_cents = cents;
-    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_PITCH;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_PITCH);
     return MSF2_OK;
 }
 
@@ -1589,7 +1830,7 @@ msf2_result msf2_runtime_set_generator_offset(msf2_runtime *runtime,
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT ||
         generator >= MSF2_GENERATOR_COUNT) return MSF2_ERR_ARGUMENT;
     runtime->channels[channel].generator_offsets_q16[generator] = value_q16;
-    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_ALL);
     return MSF2_OK;
 }
 
@@ -1599,7 +1840,7 @@ msf2_result msf2_runtime_pitch_bend(msf2_runtime *runtime, uint8_t channel,
     if (value < -8192) value = -8192;
     if (value > 8191) value = 8191;
     runtime->channels[channel].pitch_bend = value;
-    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_PITCH;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_PITCH);
     return MSF2_OK;
 }
 
@@ -1609,7 +1850,7 @@ msf2_result msf2_runtime_channel_pressure(msf2_runtime *runtime, uint8_t channel
         return MSF2_ERR_ARGUMENT;
     }
     runtime->channels[channel].channel_pressure = value;
-    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_ALL);
     return MSF2_OK;
 }
 
@@ -1618,7 +1859,7 @@ msf2_result msf2_runtime_key_pressure(msf2_runtime *runtime, uint8_t channel,
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT || note > 127u ||
         value > 127u) return MSF2_ERR_ARGUMENT;
     runtime->channels[channel].key_pressure[note] = value;
-    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_ALL);
     return MSF2_OK;
 }
 
@@ -1696,6 +1937,76 @@ msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
     return MSF2_OK;
 }
 
+void msf2_runtime_capture_control_snapshot(
+    const msf2_runtime *runtime, msf2_control_voice_snapshot *voices,
+    uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT]) {
+    uint16_t voice;
+    unsigned channel;
+    if (runtime == NULL || voices == NULL || channel_dirty_revisions == NULL) {
+        return;
+    }
+    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
+        const msf2_voice_state *state = &runtime->voices[voice];
+        voices[voice].generation = state->generation;
+        voices[voice].active = state->stage != MSF2_VOICE_FREE;
+        voices[voice].released = state->stage == MSF2_VOICE_RELEASED;
+    }
+    for (channel = 0u; channel < MSF2_CHANNEL_COUNT; ++channel) {
+        channel_dirty_revisions[channel] =
+            runtime->channels[channel].dirty_revision;
+    }
+}
+
+msf2_result msf2_runtime_advance_control_slice(
+    msf2_runtime *runtime, const msf2_control_voice_snapshot *voices,
+    uint16_t first_voice, uint16_t voice_count, uint32_t elapsed_ticks) {
+    uint16_t offset;
+    const uint64_t release_elapsed =
+        (uint64_t)MSF2_CONTROL_TICK_SAMPLES * elapsed_ticks;
+    if (runtime == NULL || voices == NULL || elapsed_ticks == 0u ||
+        first_voice > runtime->voice_capacity ||
+        voice_count > runtime->voice_capacity - first_voice) {
+        return MSF2_ERR_ARGUMENT;
+    }
+    for (offset = 0u; offset < voice_count; ++offset) {
+        const uint16_t voice = (uint16_t)(first_voice + offset);
+        const msf2_control_voice_snapshot *snapshot = &voices[voice];
+        msf2_voice_state *state = &runtime->voices[voice];
+        msf2_result result;
+        if (snapshot->active == 0u || state->stage == MSF2_VOICE_FREE ||
+            state->generation != snapshot->generation) {
+            continue;
+        }
+        if (snapshot->released != 0u && state->stage == MSF2_VOICE_RELEASED) {
+            if (release_elapsed >= state->release_samples) {
+                reclaim_voice(runtime, voice);
+                continue;
+            }
+            state->release_samples -= (uint32_t)release_elapsed;
+        }
+        result = advance_voice_modulation_elapsed(runtime, voice, elapsed_ticks);
+        if (result != MSF2_OK) return result;
+    }
+    return MSF2_OK;
+}
+
+void msf2_runtime_complete_control(
+    msf2_runtime *runtime, uint32_t elapsed_ticks,
+    const uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT]) {
+    unsigned channel;
+    if (runtime == NULL || channel_dirty_revisions == NULL ||
+        elapsed_ticks == 0u) {
+        return;
+    }
+    runtime->control_tick_index += elapsed_ticks;
+    for (channel = 0u; channel < MSF2_CHANNEL_COUNT; ++channel) {
+        if (runtime->channels[channel].dirty_revision ==
+            channel_dirty_revisions[channel]) {
+            runtime->channels[channel].dirty_groups = 0u;
+        }
+    }
+}
+
 msf2_result msf2_runtime_all_sound_off(msf2_runtime *runtime, uint8_t channel) {
     uint16_t active = 0u;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
@@ -1764,7 +2075,7 @@ msf2_result msf2_runtime_reset_controllers(msf2_runtime *runtime,
     uint16_t active;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
     reset_channel_state(&runtime->channels[channel]);
-    runtime->channels[channel].dirty_groups = MSF2_CONTROL_GROUP_ALL;
+    mark_channel_dirty(&runtime->channels[channel], MSF2_CONTROL_GROUP_ALL);
     for (active = 0u; active < runtime->active_count; ++active) {
         const uint16_t voice = runtime->active_voice_indices[active];
         msf2_voice_state *state = &runtime->voices[voice];

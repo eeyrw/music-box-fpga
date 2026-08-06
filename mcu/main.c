@@ -74,7 +74,8 @@ static app_usb_audio_diagnostics usb_audio_diagnostics = {
 };
 
 #define APP_USB_MIDI_PACKET_BUDGET 8u
-#define APP_CONTROL_MIDI_PACKET_BUDGET 4u
+#define APP_CONTROL_MIDI_PACKET_BUDGET 16u
+#define APP_CONTROL_MIDI_TIME_BUDGET_US 1000u
 #define APP_CONTROL_CORE_READY UINT32_C(0x434f5245)
 static _Atomic uint32_t usb_midi_budget_hit_count;
 
@@ -89,6 +90,9 @@ typedef struct app_runtime_timing {
     _Atomic uint32_t maximum_midi_packet_us;
     _Atomic uint32_t maximum_midi_ingress_us;
     _Atomic uint32_t maximum_synth_us;
+    _Atomic uint32_t maximum_synth_monitor_us;
+    _Atomic uint32_t maximum_synth_control_us;
+    _Atomic uint32_t maximum_command_flush_us;
     _Atomic uint32_t maximum_uart_us;
     _Atomic uint32_t maximum_loop_us;
     _Atomic uint32_t maximum_control_loop_us;
@@ -232,10 +236,13 @@ static void debug_uart_print_status(void) {
         spi.queue_high_water, spi.enqueue_timeouts);
     debug_uart_queue_printf(
         "CONTROL last_ms=%" PRIu32 " max_interval_ms=%" PRIu32
-        " completed_ticks=%" PRIu32 " fault=%d\r\n",
+        " completed_ticks=%" PRIu32 " jobs=%" PRIu32
+        " max_job_ms=%" PRIu32 " fault=%d\r\n",
         diagnostics->control_last_update_ms,
         diagnostics->control_maximum_interval_ms,
         diagnostics->control_completed_ticks,
+        diagnostics->control_completed_jobs,
+        diagnostics->control_maximum_job_duration_ms,
         atomic_load_explicit(&app_control_fault, memory_order_acquire));
     debug_uart_queue_printf(
         "VOICES active=%u maximum=%u evaluations=%" PRIu32
@@ -281,7 +288,7 @@ static void debug_uart_print_help(void) {
         "  t timing, T reset timing, w START, r START DDR, R DDR[0]\r\n");
 #endif
     debug_uart_queue_text(
-        "  a STOP all MCU-owned voices, n/o C4, f FLUSH\r\n");
+        "  a STOP all, l RELEASE all MCU-owned voices, n/o C4, f FLUSH\r\n");
 }
 
 static void debug_uart_print_midi_status(void) {
@@ -318,6 +325,8 @@ static void debug_uart_print_timing(void) {
         "TIMING max_us i2s=%" PRIu32 " tusb=%" PRIu32
         " midi_ingress=%" PRIu32 " midi_control=%" PRIu32
         " midi_packet=%" PRIu32 " synth=%" PRIu32 " spi=%" PRIu32
+        " synth_monitor=%" PRIu32 " synth_control=%" PRIu32
+        " command_flush=%" PRIu32
         " uart=%" PRIu32 " loop=%" PRIu32
         " control_loop=%" PRIu32
         " loop_over_1ms=%" PRIu32 "\r\n",
@@ -334,6 +343,12 @@ static void debug_uart_print_timing(void) {
         atomic_load_explicit(&runtime_timing.maximum_synth_us,
                              memory_order_relaxed),
         spi.maximum_dma_us,
+        atomic_load_explicit(&runtime_timing.maximum_synth_monitor_us,
+                             memory_order_relaxed),
+        atomic_load_explicit(&runtime_timing.maximum_synth_control_us,
+                             memory_order_relaxed),
+        atomic_load_explicit(&runtime_timing.maximum_command_flush_us,
+                             memory_order_relaxed),
         atomic_load_explicit(&runtime_timing.maximum_uart_us,
                              memory_order_relaxed),
         atomic_load_explicit(&runtime_timing.maximum_loop_us,
@@ -547,6 +562,15 @@ static void debug_uart_handle_character(void *context, int character) {
                     memory_order_relaxed);
                 atomic_store_explicit(&runtime_timing.maximum_synth_us, 0u,
                                       memory_order_relaxed);
+                atomic_store_explicit(
+                    &runtime_timing.maximum_synth_monitor_us, 0u,
+                    memory_order_relaxed);
+                atomic_store_explicit(
+                    &runtime_timing.maximum_synth_control_us, 0u,
+                    memory_order_relaxed);
+                atomic_store_explicit(
+                    &runtime_timing.maximum_command_flush_us, 0u,
+                    memory_order_relaxed);
                 atomic_store_explicit(&runtime_timing.maximum_uart_us, 0u,
                                       memory_order_relaxed);
                 atomic_store_explicit(&runtime_timing.maximum_loop_us, 0u,
@@ -568,6 +592,10 @@ static void debug_uart_handle_character(void *context, int character) {
             case 'a':
                 debug_uart_queue_printf("MIDI all-sound-off result=%d\r\n",
                                         app_midi_all_sound_off());
+                break;
+            case 'l':
+                debug_uart_queue_printf("MIDI release-all result=%d\r\n",
+                                        app_midi_release_all());
                 break;
             case 'n':
                 debug_uart_queue_printf("MIDI note-on result=%d\r\n",
@@ -675,12 +703,16 @@ static int service_usb_midi_ingress(void) {
 static int service_control_midi(void) {
     uint8_t packet[4];
     unsigned budget = APP_CONTROL_MIDI_PACKET_BUDGET;
+    const uint32_t batch_start_us = time_us_32();
     while (budget-- != 0u && midi_ingress_queue_pop(&usb_midi_ingress, packet)) {
         const uint32_t packet_start_us = diagnostic_time_us();
         const int result = dispatch_midi_packet(packet);
         update_maximum(&runtime_timing.maximum_midi_packet_us,
                        diagnostic_time_us() - packet_start_us);
         if (result < 0) return result;
+        if (time_us_32() - batch_start_us >= APP_CONTROL_MIDI_TIME_BUDGET_US) {
+            break;
+        }
     }
     return 0;
 }
@@ -888,8 +920,9 @@ static void app_control_core_main(void) {
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_SYNTH, 0);
             stage_start_us = diagnostic_time_us();
             result = app_synth_monitor_transport(millisecond_count);
-            update_maximum(&runtime_timing.maximum_synth_us,
-                           diagnostic_time_us() - stage_start_us);
+            elapsed_us = diagnostic_time_us() - stage_start_us;
+            update_maximum(&runtime_timing.maximum_synth_us, elapsed_us);
+            update_maximum(&runtime_timing.maximum_synth_monitor_us, elapsed_us);
             if (result != 0) {
                 atomic_store_explicit(&app_control_fault, result,
                                       memory_order_release);
@@ -910,13 +943,18 @@ static void app_control_core_main(void) {
             if (result == 0 && app_synth_session_ready()) {
                 result = app_synth_service(millisecond_count);
             }
+            elapsed_us = diagnostic_time_us() - stage_start_us;
+            update_maximum(&runtime_timing.maximum_synth_us, elapsed_us);
+            update_maximum(&runtime_timing.maximum_synth_control_us, elapsed_us);
+            stage_start_us = diagnostic_time_us();
             if (result == 0 &&
                 millisecond_count != command_flush_millisecond) {
                 command_flush_millisecond = millisecond_count;
                 result = app_synth_flush_commands();
             }
-            update_maximum(&runtime_timing.maximum_synth_us,
-                           diagnostic_time_us() - stage_start_us);
+            elapsed_us = diagnostic_time_us() - stage_start_us;
+            update_maximum(&runtime_timing.maximum_synth_us, elapsed_us);
+            update_maximum(&runtime_timing.maximum_command_flush_us, elapsed_us);
             if (result != 0) {
                 atomic_store_explicit(&app_control_fault, result,
                                       memory_order_release);

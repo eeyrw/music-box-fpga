@@ -319,6 +319,14 @@ coalescing, not replay: a late caller preserves envelope and LFO phase without
 sending obsolete intermediate SPI commands. It has no scan cursor, pending-tick
 transaction, or completion state.
 
+The RP2040 integration uses the separate snapshot/slice API when it needs to
+interleave lifecycle MIDI with a large control pass. It captures per-slot
+generation and per-channel dirty revision, processes fixed slot-ID ranges, and
+commits the logical tick only after every range completes. A reused generation
+is skipped; a channel revision changed after capture prevents that dirty family
+from being cleared. This firmware scheduling state does not change the
+synchronous `msf2_runtime_advance_control` contract above.
+
 [`../../mcu/synth_controller.c`](../../mcu/synth_controller.c) is the production
 firmware integration with static storage, Bank Select/Program Change state, and
 MIDI event adapters. The same file implements command batching and hands copied

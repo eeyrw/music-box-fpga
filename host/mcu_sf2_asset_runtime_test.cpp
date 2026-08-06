@@ -278,6 +278,111 @@ int main(int argc, char** argv) {
               c_tick_runtime.control_tick_index == 1,
           "pure-C sample accumulator did not produce one 1 ms control tick");
 
+  msf2_runtime c_bulk_runtime{};
+  msf2_runtime c_step_runtime{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_bulk_channels{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_step_channels{};
+  std::array<msf2_voice_state, 4> c_bulk_voices{};
+  std::array<msf2_voice_state, 4> c_step_voices{};
+  std::array<uint16_t, 4> c_bulk_free{};
+  std::array<uint16_t, 4> c_step_free{};
+  RecordingSink c_bulk_sink;
+  RecordingSink c_step_sink;
+  require(msf2_runtime_init(&c_bulk_runtime, &c_view, c_bulk_channels.data(),
+                            c_bulk_voices.data(), c_bulk_free.data(), 4,
+                            record_c_command, &c_bulk_sink) == MSF2_OK &&
+              msf2_runtime_init(&c_step_runtime, &c_view, c_step_channels.data(),
+                                c_step_voices.data(), c_step_free.data(), 4,
+                                record_c_command, &c_step_sink) == MSF2_OK &&
+              msf2_runtime_note_on(&c_bulk_runtime, 0, cell.program, cell.bank,
+                                   cell.key, cell.velocity, &c_layers) == MSF2_OK &&
+              msf2_runtime_note_on(&c_step_runtime, 0, cell.program, cell.bank,
+                                   cell.key, cell.velocity, &c_layers) == MSF2_OK,
+          "elapsed-control equivalence setup failed");
+  require(c_bulk_runtime.active_count == c_step_runtime.active_count &&
+              c_bulk_runtime.active_count != 0,
+          "elapsed-control equivalence layer mismatch");
+  for (uint16_t position = 0; position < c_bulk_runtime.active_count; ++position) {
+    auto& bulk_voice = c_bulk_voices[c_bulk_runtime.active_voice_indices[position]];
+    auto& step_voice = c_step_voices[c_step_runtime.active_voice_indices[position]];
+    bulk_voice.periodic_groups = MSF2_CONTROL_GROUP_ALL;
+    bulk_voice.mod_lfo_phase = 1000;
+    bulk_voice.vib_lfo_phase = 2000;
+    bulk_voice.mod_lfo_wait_ticks = 3;
+    bulk_voice.vib_lfo_wait_ticks = 5;
+    bulk_voice.config.mod_lfo_step = 12345;
+    bulk_voice.config.vib_lfo_step = 54321;
+    bulk_voice.mod_env_stage = 1;
+    bulk_voice.mod_env_stage_tick = 0;
+    bulk_voice.mod_env_wait_ticks = 2;
+    bulk_voice.mod_env_level = 0;
+    bulk_voice.config.mod_env_attack_ticks = 3;
+    bulk_voice.config.mod_env_hold_ticks = 2;
+    bulk_voice.config.mod_env_decay_ticks = 4;
+    bulk_voice.config.mod_env_sustain_level = 12000;
+    step_voice = bulk_voice;
+  }
+  require(msf2_runtime_advance_control(&c_bulk_runtime, 17) == MSF2_OK,
+          "bulk elapsed-control advance failed");
+  for (int tick = 0; tick < 17; ++tick) {
+    require(msf2_runtime_advance_control(&c_step_runtime, 1) == MSF2_OK,
+            "single-step elapsed-control advance failed");
+  }
+  for (uint16_t position = 0; position < c_bulk_runtime.active_count; ++position) {
+    const auto& bulk_voice =
+        c_bulk_voices[c_bulk_runtime.active_voice_indices[position]];
+    const auto& step_voice =
+        c_step_voices[c_step_runtime.active_voice_indices[position]];
+    require(bulk_voice.mod_lfo_phase == step_voice.mod_lfo_phase &&
+                bulk_voice.vib_lfo_phase == step_voice.vib_lfo_phase &&
+                bulk_voice.mod_lfo_wait_ticks == step_voice.mod_lfo_wait_ticks &&
+                bulk_voice.vib_lfo_wait_ticks == step_voice.vib_lfo_wait_ticks &&
+                bulk_voice.mod_env_stage == step_voice.mod_env_stage &&
+                bulk_voice.mod_env_stage_tick == step_voice.mod_env_stage_tick &&
+                bulk_voice.mod_env_wait_ticks == step_voice.mod_env_wait_ticks &&
+                bulk_voice.mod_env_level == step_voice.mod_env_level &&
+                bulk_voice.phase_increment == step_voice.phase_increment &&
+                bulk_voice.gain_l == step_voice.gain_l &&
+                bulk_voice.gain_r == step_voice.gain_r &&
+                bulk_voice.filter_enable == step_voice.filter_enable &&
+                bulk_voice.filter_b0 == step_voice.filter_b0 &&
+                bulk_voice.filter_b1 == step_voice.filter_b1 &&
+                bulk_voice.filter_b2 == step_voice.filter_b2 &&
+                bulk_voice.filter_a1 == step_voice.filter_a1 &&
+                bulk_voice.filter_a2 == step_voice.filter_a2,
+            "bulk elapsed-control state differs from repeated single ticks");
+  }
+  require(c_bulk_runtime.control_tick_index == c_step_runtime.control_tick_index,
+          "bulk elapsed-control tick index differs from repeated single ticks");
+  for (uint16_t position = 0; position < c_bulk_runtime.active_count; ++position) {
+    auto& bulk_voice = c_bulk_voices[c_bulk_runtime.active_voice_indices[position]];
+    auto& step_voice = c_step_voices[c_step_runtime.active_voice_indices[position]];
+    bulk_voice.mod_env_stage = 6;
+    bulk_voice.mod_env_stage_tick = 0;
+    bulk_voice.mod_env_release_start = 20000;
+    bulk_voice.mod_env_level = 20000;
+    bulk_voice.config.mod_env_release_ticks = 7;
+    step_voice = bulk_voice;
+  }
+  require(msf2_runtime_advance_control(&c_bulk_runtime, 12) == MSF2_OK,
+          "bulk release-envelope advance failed");
+  for (int tick = 0; tick < 12; ++tick) {
+    require(msf2_runtime_advance_control(&c_step_runtime, 1) == MSF2_OK,
+            "single-step release-envelope advance failed");
+  }
+  for (uint16_t position = 0; position < c_bulk_runtime.active_count; ++position) {
+    const auto& bulk_voice =
+        c_bulk_voices[c_bulk_runtime.active_voice_indices[position]];
+    const auto& step_voice =
+        c_step_voices[c_step_runtime.active_voice_indices[position]];
+    require(bulk_voice.mod_env_stage == step_voice.mod_env_stage &&
+                bulk_voice.mod_env_stage_tick == step_voice.mod_env_stage_tick &&
+                bulk_voice.mod_env_level == step_voice.mod_env_level &&
+                bulk_voice.mod_lfo_phase == step_voice.mod_lfo_phase &&
+                bulk_voice.vib_lfo_phase == step_voice.vib_lfo_phase,
+            "bulk release-envelope state differs from repeated single ticks");
+  }
+
   msf2_runtime c_active_runtime{};
   std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_active_channels{};
   std::array<msf2_voice_state, 4> c_active_voices{};
@@ -317,16 +422,65 @@ int main(int argc, char** argv) {
     const uint16_t voice = c_active_runtime.active_voice_indices[position];
     c_active_voices[voice].periodic_groups = MSF2_CONTROL_GROUP_GAIN;
   }
+  std::array<msf2_control_voice_snapshot, 4> control_snapshot{};
+  std::array<uint32_t, MSF2_CHANNEL_COUNT> dirty_revisions{};
   const uint32_t evaluations_before_periodic =
+      c_active_runtime.stats.control_voice_evaluations;
+  msf2_runtime_capture_control_snapshot(
+      &c_active_runtime, control_snapshot.data(), dirty_revisions.data());
+  require(msf2_runtime_advance_control_slice(
+              &c_active_runtime, control_snapshot.data(), 0u, 2u, 5u) ==
+              MSF2_OK &&
+              msf2_runtime_control_change(&c_active_runtime, 0, 7, 65) ==
+                  MSF2_OK &&
+              msf2_runtime_advance_control_slice(
+                  &c_active_runtime, control_snapshot.data(), 2u, 2u, 5u) ==
+                  MSF2_OK,
+          "split control update failed");
+  msf2_runtime_complete_control(&c_active_runtime, 5u,
+                                dirty_revisions.data());
+  require(c_active_runtime.stats.control_voice_evaluations ==
+                  evaluations_before_periodic + c_active_runtime.active_count &&
+              c_active_runtime.control_tick_index == 15 &&
+              c_active_channels[0].dirty_groups == MSF2_CONTROL_GROUP_ALL,
+          "split control update lost a concurrent controller change");
+  const uint32_t evaluations_before_dirty_catchup =
       c_active_runtime.stats.control_voice_evaluations;
   require(msf2_runtime_advance_control(&c_active_runtime, 5u) == MSF2_OK &&
               c_active_runtime.stats.control_voice_evaluations ==
-                  evaluations_before_periodic + c_active_runtime.active_count &&
-              c_active_runtime.control_tick_index == 15 &&
+                  evaluations_before_dirty_catchup +
+                      c_active_runtime.active_count &&
+              c_active_runtime.control_tick_index == 20 &&
+              c_active_channels[0].dirty_groups == 0,
+          "control update did not catch up a concurrent controller change");
+
+  msf2_runtime_capture_control_snapshot(
+      &c_active_runtime, control_snapshot.data(), dirty_revisions.data());
+  require(msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
+              msf2_runtime_note_on(&c_active_runtime, 0, cell.program,
+                                   cell.bank, cell.key, cell.velocity,
+                                   &c_layers) == MSF2_OK,
+          "voice reuse setup failed");
+  for (uint16_t position = 0; position < c_active_runtime.active_count;
+       ++position) {
+    c_active_voices[c_active_runtime.active_voice_indices[position]]
+        .periodic_groups = MSF2_CONTROL_GROUP_GAIN;
+  }
+  const uint32_t evaluations_before_stale_slice =
+      c_active_runtime.stats.control_voice_evaluations;
+  require(msf2_runtime_advance_control_slice(
+              &c_active_runtime, control_snapshot.data(), 0u, 4u, 5u) ==
+              MSF2_OK,
+          "stale split control update failed");
+  msf2_runtime_complete_control(&c_active_runtime, 5u,
+                                dirty_revisions.data());
+  require(c_active_runtime.stats.control_voice_evaluations ==
+                  evaluations_before_stale_slice &&
+              c_active_runtime.control_tick_index == 25 &&
               msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
               c_active_runtime.active_count == 0 &&
               c_active_runtime.free_count == c_active_runtime.voice_capacity,
-          "periodic dependency update or O(1) reclaim failed");
+          "stale control snapshot modified a reused voice generation");
 
   const auto before_unmapped = runtime.stats().unmapped_notes;
   (void)runtime.note_on(0, 127, 16383, cell.key, cell.velocity);

@@ -27,6 +27,7 @@
 #ifndef APP_CONTROL_UPDATE_PERIOD_MS
 #define APP_CONTROL_UPDATE_PERIOD_MS 5u
 #endif
+#define APP_CONTROL_VOICE_SLICE 16u
 
 _Static_assert(APP_VOICE_COUNT > 0u,
                "firmware must allocate at least one FPGA voice");
@@ -94,6 +95,15 @@ static command_batch app_command_batch;
 static uint32_t app_transport_monitor_millisecond;
 static uint32_t app_transport_diagnostics_millisecond;
 static uint8_t app_transport_monitor_consecutive_failures;
+static struct {
+    uint32_t start_millisecond;
+    uint32_t target_millisecond;
+    uint32_t elapsed_ticks;
+    uint16_t voice_cursor;
+    uint8_t active;
+    msf2_control_voice_snapshot voices[APP_VOICE_COUNT];
+    uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT];
+} app_control_job;
 
 static int app_command_sink(void *context, const uint32_t *words,
                             uint8_t word_count);
@@ -105,8 +115,11 @@ static msf2_result app_reset_local_session(void) {
                                app_voices, app_free_stack, APP_VOICE_COUNT,
                                app_command_sink, NULL);
     if (result == MSF2_OK) result = midi_policy_init(&app_midi, &app_runtime);
+    app_control_job.active = 0u;
     app_diagnostics.control_voice_evaluations = 0u;
     app_diagnostics.controller_voice_updates = 0u;
+    app_diagnostics.control_completed_jobs = 0u;
+    app_diagnostics.control_maximum_job_duration_ms = 0u;
     app_diagnostics.active_voices = 0u;
     app_diagnostics.maximum_active_voices = 0u;
     return result;
@@ -348,22 +361,62 @@ int app_fpga_debug_flush(void) {
  * directly from the wrapping millisecond counter. Only active voices are
  * visited by the runtime. */
 int app_synth_service(uint32_t millisecond_count) {
-    const uint32_t elapsed_ticks =
-        millisecond_count - app_last_control_millisecond;
+    uint16_t slice_count;
     msf2_result result;
     if (app_diagnostics.fpga_session_ready == 0u) {
+        app_control_job.active = 0u;
         app_last_control_millisecond = millisecond_count;
         return 0;
     }
-    if (elapsed_ticks < APP_CONTROL_UPDATE_PERIOD_MS) return 0;
-    app_last_control_millisecond = millisecond_count;
-    app_diagnostics.control_last_update_ms = millisecond_count;
-    if (elapsed_ticks > app_diagnostics.control_maximum_interval_ms) {
-        app_diagnostics.control_maximum_interval_ms = elapsed_ticks;
+    if (app_control_job.active == 0u) {
+        const uint32_t elapsed_ticks =
+            millisecond_count - app_last_control_millisecond;
+        if (elapsed_ticks < APP_CONTROL_UPDATE_PERIOD_MS) return 0;
+        app_control_job.target_millisecond = millisecond_count;
+        app_control_job.start_millisecond = millisecond_count;
+        app_control_job.elapsed_ticks = elapsed_ticks;
+        app_control_job.voice_cursor = 0u;
+        app_control_job.active = 1u;
+        msf2_runtime_capture_control_snapshot(
+            &app_runtime, app_control_job.voices,
+            app_control_job.channel_dirty_revisions);
+        if (app_runtime.active_count == 0u) {
+            app_control_job.voice_cursor = APP_VOICE_COUNT;
+        }
     }
-    result = msf2_runtime_advance_control(&app_runtime, elapsed_ticks);
+    slice_count = (uint16_t)(APP_VOICE_COUNT - app_control_job.voice_cursor);
+    if (slice_count > APP_CONTROL_VOICE_SLICE) {
+        slice_count = APP_CONTROL_VOICE_SLICE;
+    }
+    result = slice_count == 0u ? MSF2_OK :
+        msf2_runtime_advance_control_slice(
+            &app_runtime, app_control_job.voices,
+            app_control_job.voice_cursor, slice_count,
+            app_control_job.elapsed_ticks);
     if (result != MSF2_OK) return -(int)result;
-    app_diagnostics.control_completed_ticks += elapsed_ticks;
+    app_control_job.voice_cursor =
+        (uint16_t)(app_control_job.voice_cursor + slice_count);
+    if (app_control_job.voice_cursor != APP_VOICE_COUNT) return 0;
+    msf2_runtime_complete_control(
+        &app_runtime, app_control_job.elapsed_ticks,
+        app_control_job.channel_dirty_revisions);
+    app_last_control_millisecond = app_control_job.target_millisecond;
+    app_diagnostics.control_last_update_ms =
+        app_control_job.target_millisecond;
+    if (app_control_job.elapsed_ticks >
+        app_diagnostics.control_maximum_interval_ms) {
+        app_diagnostics.control_maximum_interval_ms =
+            app_control_job.elapsed_ticks;
+    }
+    app_diagnostics.control_completed_ticks += app_control_job.elapsed_ticks;
+    ++app_diagnostics.control_completed_jobs;
+    {
+        const uint32_t duration =
+            millisecond_count - app_control_job.start_millisecond;
+        if (duration > app_diagnostics.control_maximum_job_duration_ms) {
+            app_diagnostics.control_maximum_job_duration_ms = duration;
+        }
+    }
     app_diagnostics.control_voice_evaluations =
         app_runtime.stats.control_voice_evaluations;
     app_diagnostics.controller_voice_updates =
@@ -371,6 +424,7 @@ int app_synth_service(uint32_t millisecond_count) {
     app_diagnostics.active_voices = app_runtime.stats.active_voices;
     app_diagnostics.maximum_active_voices =
         app_runtime.stats.maximum_active_voices;
+    app_control_job.active = 0u;
     return 0;
 }
 

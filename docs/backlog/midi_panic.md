@@ -158,6 +158,75 @@ its local ownership table after an MCU-only recovery. A reset request cannot be
 considered complete merely because it was written into the normal ordered
 command FIFO.
 
+### PANIC-008: Voice ID Versus Generation Needs A Contract Decision
+
+A physical voice ID identifies one FPGA slot. The slot can serve only one
+audible voice instance at a time, but it is reused for many successive note
+lifetimes. Generation currently distinguishes those lifetimes: a runtime
+command for an older occupant is rejected after a new START replaces the same
+slot. This protects the new note from a late PITCH, GAIN, RELEASE, or STOP.
+
+That protection is not automatically necessary merely because SPI and FPGA
+execution are asynchronous. If all of the following invariants are proved,
+voice ID alone is sufficient at the external command boundary during one MCU
+session:
+
+- exactly one owner serializes every lifecycle and parameter command;
+- the MCU command batch, DMA queue, SPI bridge, command FIFO, parser, and state
+  store preserve that order without retry or replay;
+- slot reuse is ordered after every already-produced command for the previous
+  occupant;
+- a sliced or deferred MCU calculation validates that the slot still belongs
+  to its captured note before it publishes a command;
+- cancellation and transport recovery cannot reinsert an older command after
+  a replacement START.
+
+The RP2040 now captures voice generation in each sliced control job and skips a
+slot if it was freed or reused before that slice executes. Core 1 is the sole
+MSF2/SPI command producer, and the DMA transport is FIFO ordered. Those facts
+make generation potentially redundant for correctly produced commands, but do
+not yet prove every invariant above. Hardware has also observed nonzero stale
+rejections on RELEASE. Until the rejected command is attributed to an exact
+producer and state transition, removing FPGA generation validation would turn
+an observable rejected command into a command that could affect the current
+slot occupant.
+
+Generation is also not a recovery protocol. It makes an MCU-only reset worse
+if used without a session-reset operation: the new MCU cannot discover the old
+generation and therefore cannot stop the preserved voice. Per-voice generation
+readback could make reconciliation possible, but reading 512 mutable records is
+expensive and races with renderer state changes unless accompanied by a frozen
+snapshot. It is more mechanism than recovery requires.
+
+The design decision must compare four explicit alternatives:
+
+| Alternative | Normal stale-command protection | MCU-only recovery | Cost and risk |
+| --- | --- | --- | --- |
+| Keep current per-voice generation only | Yes | Impossible for unknown voices | Current incomplete behavior |
+| Remove generation and rely on ordered single ownership | Only through proved producer/order invariants | A forced command by voice ID is possible | Simplest wire format, but an invariant violation can affect a reused note |
+| Keep generation plus out-of-band session reset/epoch | Yes | Bounded and atomic | Preferred candidate; adds one recovery operation and acknowledgement |
+| Add readable per-voice state/generation snapshot | Yes | Reconciliation is possible | Largest interface and verification burden; snapshot atomicity is required |
+
+An unconditional `FORCE_STOP voice_id` is a narrower temporary operation, but
+512 such commands still have latency proportional to polyphony and can race a
+queued START unless paired with queue cancellation. A single out-of-band
+`RENDER_SESSION_RESET` remains the preferred recovery boundary. It may retain
+per-voice generation for normal commands while deliberately ignoring it during
+whole-session invalidation.
+
+Before deciding whether generation remains in the long-term command protocol:
+
+1. Attribute every stale rejection with opcode, voice ID, requested generation,
+   current generation/active state, and command sequence or session epoch.
+2. Add self-checking tests that delay a parameter calculation across STOP and
+   slot reuse, fill every transport queue, FLUSH a partial transaction, and
+   recover each side independently.
+3. Prove or disprove the single-owner FIFO invariants at every queue boundary.
+4. Measure the RTL/state cost of generation validation separately from the
+   session-reset design; do not remove it merely to simplify MCU cleanup.
+5. Select the session reset and acknowledgement contract before changing normal
+   voice-command semantics.
+
 ## Proposed Ownership And Dependency Order
 
 Keep MIDI semantics in the host. Do not add MIDI channels, sustain state, or
@@ -181,6 +250,9 @@ controller parsing to each RTL voice merely to support panic.
 8. Add the explicit render-session reset described above, with a monotonically
    changing readable epoch so MCU/FPGA ownership can be reconciled after either
    side restarts.
+9. Resolve PANIC-008 from attributed stale-command evidence and queue-ordering
+   proofs; until then, retain generation on normal runtime commands and bypass
+   it only in the future whole-session reset operation.
 
 An RTL implementation may use a global kill epoch plus background state-RAM
 invalidation, or a bounded state sweep combined with an immediate output mute.

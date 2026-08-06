@@ -165,6 +165,101 @@ participate in lifecycle handling. UART `s` reports active/maximum voices,
 evaluation and emitted-update counts, and the current static/gain/pitch/filter
 dependency distribution.
 
+The second optimization stage changes both the amount of work and its
+scheduling. A control job captures all 512 slot generations plus the 16 channel
+dirty revisions, then processes 16 slot IDs per Core 1 iteration. Inactive IDs
+are cheap skips. A slot that is freed or reused after capture is skipped by its
+generation check, and a controller event arriving during the job remains dirty
+for the next job because its revision no longer matches the snapshot. Lifecycle
+MIDI remains immediate between slices. Unlike the first sliced prototype,
+control service now advances even while the cross-core MIDI queue is nonempty;
+dense MIDI therefore cannot prevent a partially completed modulation job from
+making progress.
+
+The MSF2 arithmetic was reduced independently of slicing:
+
+- each voice caches its three modulation program IDs, first-term offsets, term
+  counts, and note-static prefix counts at Note On;
+- gain, pitch, and filter each traverse their program once and accumulate all
+  required destinations, instead of rescanning the same terms three or four
+  times;
+- the at-most-six-term SGM programs evaluate key/velocity-only prefix terms
+  once at Note On and retain ten destination sums in SRAM; control updates scan
+  only the controller-dependent suffix;
+- the common divisor-one `2^x` phase/gain scaling path uses a split Q32
+  multiply and shifts instead of the general 64-bit divide/remainder path;
+- elapsed modulation time is genuinely coalesced: LFO wait/phase uses closed
+  form arithmetic, while the modulation envelope crosses at most its finite
+  stage boundaries. A 169 ms late update no longer runs a 169-iteration loop
+  for every active voice;
+- biquad construction computes one Q30 reciprocal of `a0` and derives all five
+  coefficients with signed rounded multiplies/shifts, replacing five software
+  64-bit divisions while retaining the documented one-LSB coefficient bound;
+- a 16-entry immutable preset lookup cache avoids repeated full-table scans,
+  and each selected layer decodes its generator bitmap once for exclusive
+  class, materialization, and continuing runtime configuration instead of three
+  times.
+
+A focused regression compares one 17-tick coalesced update with 17 single-tick
+updates after forcing Delay, Attack, Hold, Decay, mod-LFO wait, and vibrato-LFO
+wait transitions. LFO state, modulation-envelope state, final pitch/gain/filter
+state, and the logical tick index must match exactly. A second comparison
+advances Release beyond its configured duration. A separate split-job test
+changes CC7 midway through a snapshot and reuses a voice generation before its
+old slice, proving dirty preservation and stale-snapshot rejection.
+
+Detailed-diagnostics hardware measurements on the 10-second
+`polyphony_stress_512.mid` workload found the original synchronous
+`app_synth_service` reached 60,294 us. After the program-scan and slicing work,
+a four-voice slice reached 166 us but a queue-empty scheduling condition could
+starve an in-progress job for 651 ms. Removing that condition and moving to
+16-slot slices reduced the observed job maximum first to 189 ms. Static-term
+caching and closed-form elapsed-time advancement subsequently reduced it to
+114 ms under dense Note On traffic. With timing stages separated, an
+intermediate run measured a 215 us maximum for a lightly loaded 16-slot
+slice, 5 us for command flush, and 166 us for the low-rate FPGA monitor. That
+number is not a 512-voice worst case: a later test found that sending UART `T`
+without keeping the Debug Probe serial port open could delay delivery of the
+reset byte until after playback. Only runs that first observed the `TIMING
+reset` reply with the port continuously open are accepted below.
+
+The accepted full-diagnostic run after closed-form elapsed advancement,
+single-reciprocal filter coefficients, preset caching, and generator-decode
+deduplication measured a 3,471 us maximum 16-slot control slice, 212 us command
+flush, 314 us FPGA monitor, 4,755 us MIDI packet dispatch, and 115 ms maximum
+control-job wall duration. The slice maximum is dominated by a filter-heavy
+range and must not be multiplied as though every one of the 32 ranges had the
+same mix. It nevertheless proves that the remaining worst path is still
+filter calculation rather than SPI submission.
+
+A 64-entry exact-key runtime filter cache was tested and rejected. It reached
+45,302 hits and 64,742 misses (about 41% hits), while the maximum slice worsened
+from 3,471 us to 4,561 us. Average reuse does not justify a worse real-time
+miss path, so the cache is not present in production code. A future focused
+experiment may instead generate a direct integer cutoff-angle table and an
+even-resonance table, eliminating the general exponent conversion without
+cache collisions. That option costs roughly 50 KiB of firmware table and must
+pass the existing one-LSB filter regression plus a hardware A/B before
+acceptance.
+
+The remaining 115 ms wall-clock job maximum is not 115 ms of continuous synth
+calculation. The same stress run measured individual multi-layer MIDI packet
+dispatches as high as roughly 4.8 ms; one MIDI batch is still handled before
+each control slice. The 256-packet queue reached its limit and drained without
+overflow, while SPI DMA remained at two of sixteen frames and SPI/command errors
+remained zero. Further work must reduce or cache Note On materialization and
+choose a bounded MIDI/control service ratio. Merely increasing SPI bandwidth or
+making slices smaller does not address that cost.
+
+The resulting production ELF was programmed through the Debug Probe on
+2026-08-07 after an FPGA cold restart and SD SoundFont reload. OpenOCD completed
+program, verify, and reset successfully. The post-boot UART status reported
+FPGA `ready=1`, `sf2_size=324800670`, idle SPI DMA, zero SPI errors and enqueue
+timeouts, zero control fault, and zero active voices. The FPGA retained a
+cumulative stale-generation count of 13,681 from preceding tests; it is the
+startup baseline for this boot and was not cleared or attributed to the new
+firmware. The MCU did not write FPGA DDR during this qualification.
+
 The repository's 10-second `polyphony_stress_512.mid` hardware run reached all
 512 active voices after this first stage. The MIDI queue still reached 256 but
 drained to zero, SPI DMA stayed at two of sixteen, and the final maximum control
@@ -436,9 +531,11 @@ most eight complete four-byte USB-MIDI event packets per loop into a 256-entry
 atomic single-producer/single-consumer queue. It never calls the MSF2 runtime or
 waits for SPI. Core 1 exclusively owns MIDI semantic dispatch, the MSF2 runtime,
 command batching, SPI DMA submission, and the Debug Probe UART. It
-drains at most four MIDI packets per loop, forcing synth timebase service and an
-SPI flush between dense MIDI batches. TinyUSB mounted/ready state is exported
-to Core 1 only through atomic snapshots; Core 1 never calls TinyUSB.
+drains at most 16 MIDI packets per loop but stops a batch after at least one
+packet when its measured 1 ms budget has expired. It then advances one synth
+control slice regardless of remaining MIDI queue depth and performs the pending
+SPI flush. TinyUSB mounted/ready state is exported to Core 1 only through atomic
+snapshots; Core 1 never calls TinyUSB.
 
 Core 1 also owns an FPGA-session monitor. While online it reads only
 `PLATFORM_STATUS` every 100 ms; command-error diagnostics are sampled every
@@ -481,14 +578,16 @@ handling, and voice stealing inspect active voices rather than scanning 512
 slots. The free stack remains the constant-time source of unused voice IDs.
 
 Core 1 compares the wrapping millisecond counter directly with the previous
-control publication time. At the default five-millisecond interval,
-`msf2_runtime_advance_control` visits every currently active voice once,
-advances its envelope and LFO through the complete elapsed interval, and emits
-only the newest gain, pitch, and filter state. A late call therefore preserves
-logical time without replaying obsolete intermediate SPI updates. There is no
-pending-tick transaction, full-table cursor, or sliced-scan completion state.
-UART status reports the last publication time, maximum observed interval, and
-total completed logical ticks. Lifecycle MIDI commands remain immediate.
+completed control publication time. At the default five-millisecond interval,
+it captures a fixed generation snapshot and processes 16 of the 512 slot IDs
+per invocation. The job carries its target millisecond and complete elapsed
+interval until every captured slot has been considered. Only then does it
+advance the global logical tick and conditionally clear channel dirty groups.
+A late job preserves logical time without replaying obsolete intermediate SPI
+updates; LFO and modulation-envelope state advance directly to the newest
+state. UART status reports the last publication time, maximum observed
+interval, completed logical ticks/jobs, and maximum job wall duration.
+Lifecycle MIDI commands remain immediate between slices.
 
 The command sink groups complete commands into `0xa5` frames of at most 63
 words, submitting a full frame immediately and an incomplete tail at the next
@@ -542,7 +641,8 @@ The UART accepts single-character commands:
 | `d` | Dump I2S state and FPGA render, FIFO, compressor, memory, and sample-window diagnostics. |
 | `m` | Print TinyUSB MIDI readiness, RX callbacks, packet count, and last packet. |
 | `u` | Print UAC2 silence/discard reasons, TinyUSB short writes, PIO RX stalls, ring overruns, and lost frames. |
-| `a` | Send immediate `VOICE_STOP` commands for every voice generation currently owned by this MCU runtime. |
+| `a` | Send immediate `VOICE_STOP` commands for every voice generation currently owned by this MCU runtime; use this to clear sound before a test. |
+| `l` | Send `VOICE_RELEASE` for every non-released voice currently owned by this MCU runtime, bypassing key and pedal holds but retaining each SoundFont release envelope. |
 | `n`, `o` | Send channel-0 C4 Note On or Note Off through the normal MSF2/`0xa5` path. |
 | `f` | Send the dedicated `0xa6` FLUSH transaction. |
 
@@ -848,9 +948,9 @@ selects the requested percussion program inside bank 128. Other channels retain
 normal 14-bit bank selection.
 
 Core 0 reads at most eight USB-MIDI packets per loop and publishes them to the
-256-packet cross-core SPSC queue. Core 1 consumes at most four packets per loop,
-so Note On materialization cannot monopolize the control core for a full
-16-event USB burst. If the SPSC queue is full, Core 0 leaves the next packet in
+256-packet cross-core SPSC queue. Core 1 consumes at most 16 packets per loop
+and also enforces a measured 1 ms batch budget after each complete packet. If
+the SPSC queue is full, Core 0 leaves the next packet in
 TinyUSB instead of reading and then dropping it; the USB OUT path supplies the
 backpressure.
 Queue depth, high-water mark, overflow count, and the last complete packet are
@@ -903,6 +1003,10 @@ immediately stops every voice owned by the current MCU session, but it is not a
 recovery mechanism for unknown voices left by an earlier crashed session. Until
 a readable ownership/reconciliation protocol exists, resetting the MCU without
 also resetting the FPGA synth state can leave such old voices unreachable.
+UART `l` similarly releases all currently owned voices and cannot bypass the
+generation check. Blindly sending 512 RELEASE commands with an unknown
+generation would only increase the FPGA stale-generation counter; an explicit
+RTL render-session reset/kill operation is required for cross-session cleanup.
 
 Before FLUSH, the firmware reads `VERSION`, `PLATFORM_STATUS`, and
 `PLATFORM_SF2_SIZE` through the `0x5a` request / `0x5b` fetch mailbox. Startup

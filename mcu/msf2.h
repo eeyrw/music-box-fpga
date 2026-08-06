@@ -131,6 +131,7 @@ typedef struct msf2_channel_state {
     uint8_t soft;
     /* Parameter families dirtied by event-driven channel state. */
     uint8_t dirty_groups;
+    uint32_t dirty_revision;
     int32_t generator_offsets_q16[MSF2_GENERATOR_COUNT];
 } msf2_channel_state;
 
@@ -187,6 +188,14 @@ typedef struct msf2_voice_state {
     /* Immutable image identity plus monotonic allocation metadata. */
     uint32_t preset_index;
     uint32_t candidate;
+    /* Immutable modulation-program lookup cached at Note On. The MSF2 image
+     * remains authoritative; these ranges avoid reparsing candidate/program
+     * records during every control-rate voice update. */
+    uint32_t modulation_first_terms[3];
+    uint16_t modulation_term_counts[3];
+    uint16_t modulation_note_static_counts[3];
+    uint8_t modulation_programs[3];
+    int64_t modulation_static_sums_q16[10];
     /* Remaining FPGA volume-envelope release lifetime and packed release step. */
     uint32_t release_samples;
     uint32_t release_step;
@@ -238,6 +247,19 @@ typedef struct msf2_runtime_stats {
     uint16_t maximum_active_voices;
 } msf2_runtime_stats;
 
+typedef struct msf2_control_voice_snapshot {
+    uint16_t generation;
+    uint8_t active;
+    uint8_t released;
+} msf2_control_voice_snapshot;
+
+typedef struct msf2_preset_cache_entry {
+    int32_t preset_index;
+    uint16_t bank;
+    uint8_t program;
+    uint8_t valid;
+} msf2_preset_cache_entry;
+
 typedef struct msf2_runtime {
     /* Runtime descriptor over caller-owned channel, voice, and free-stack
      * arrays. The object performs no allocation and reads no wall clock. */
@@ -253,6 +275,7 @@ typedef struct msf2_runtime {
     uint32_t allocation_stamp;
     uint32_t control_tick_index;
     uint32_t pending_tick_samples;
+    msf2_preset_cache_entry preset_cache[16];
     msf2_command_sink command_sink;
     void *command_context;
     msf2_runtime_stats stats;
@@ -328,6 +351,15 @@ msf2_result msf2_runtime_control_tick(msf2_runtime *runtime);
  * publishing only each voice's newest parameter state. */
 msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
                                          uint32_t elapsed_ticks);
+void msf2_runtime_capture_control_snapshot(
+    const msf2_runtime *runtime, msf2_control_voice_snapshot *voices,
+    uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT]);
+msf2_result msf2_runtime_advance_control_slice(
+    msf2_runtime *runtime, const msf2_control_voice_snapshot *voices,
+    uint16_t first_voice, uint16_t voice_count, uint32_t elapsed_ticks);
+void msf2_runtime_complete_control(
+    msf2_runtime *runtime, uint32_t elapsed_ticks,
+    const uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT]);
 msf2_result msf2_runtime_all_sound_off(msf2_runtime *runtime, uint8_t channel);
 msf2_result msf2_runtime_all_notes_off(msf2_runtime *runtime, uint8_t channel);
 /* Enters Release for every voice owned by this runtime, ignoring pedal holds.
