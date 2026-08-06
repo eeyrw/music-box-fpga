@@ -234,6 +234,17 @@ static void debug_uart_print_status(void) {
         diagnostics->control_completed_ticks,
         atomic_load_explicit(&app_control_fault, memory_order_acquire));
     debug_uart_queue_printf(
+        "VOICES active=%u maximum=%u evaluations=%" PRIu32
+        " updates=%" PRIu32 "\r\n",
+        diagnostics->active_voices, diagnostics->maximum_active_voices,
+        diagnostics->control_voice_evaluations,
+        diagnostics->controller_voice_updates);
+    debug_uart_queue_printf(
+        "VOICE DEPS static=%u gain=%u pitch=%u filter=%u\r\n",
+        diagnostics->static_voices, diagnostics->periodic_gain_voices,
+        diagnostics->periodic_pitch_voices,
+        diagnostics->periodic_filter_voices);
+    debug_uart_queue_printf(
         "FPGA COMMAND errors=%" PRIu32 " stale=%" PRIu32
         " monitor_failures=%" PRIu32 "\r\n",
         diagnostics->command_error_count,

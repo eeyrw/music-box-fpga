@@ -632,9 +632,6 @@ msf2_result msf2_pack_start(uint16_t voice, uint16_t generation,
 }
 
 #define MSF2_MOD_ONE INT32_C(65536)
-#define MSF2_GAIN_GROUP 1u
-#define MSF2_PITCH_GROUP 2u
-#define MSF2_FILTER_GROUP 4u
 #define MSF2_ENV_DELAY 1u
 #define MSF2_ENV_ATTACK 2u
 #define MSF2_ENV_HOLD 3u
@@ -811,6 +808,50 @@ static void candidate_programs(const msf2_view *view, uint32_t candidate,
     programs[0] = record_value[0];
     programs[1] = record_value[1];
     programs[2] = record_value[2];
+}
+
+static int program_has_destination(const msf2_view *view, uint8_t program_id,
+                                   uint16_t destination) {
+    const uint8_t *program;
+    uint32_t first;
+    uint16_t count;
+    uint16_t local;
+    if (program_id == UINT8_MAX) return 0;
+    program = record(view, 5u, program_id);
+    first = read_u32(program);
+    count = read_u16(program + 4);
+    for (local = 0u; local < count; ++local) {
+        if (read_u16(record(view, 6u, first + local) + 2) == destination) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint8_t voice_periodic_groups(const msf2_runtime *runtime,
+                                     const msf2_voice_state *voice) {
+    uint8_t programs[3];
+    uint8_t groups = 0u;
+    candidate_programs(runtime->view, voice->candidate, programs);
+    if (voice->config.mod_lfo_to_volume != 0 ||
+        program_has_destination(runtime->view, programs[0], 13u)) {
+        groups |= MSF2_CONTROL_GROUP_GAIN;
+    }
+    if (voice->config.mod_lfo_to_pitch != 0 ||
+        voice->config.vib_lfo_to_pitch != 0 ||
+        voice->config.mod_env_to_pitch != 0 ||
+        program_has_destination(runtime->view, programs[1], 5u) ||
+        program_has_destination(runtime->view, programs[1], 6u) ||
+        program_has_destination(runtime->view, programs[1], 7u)) {
+        groups |= MSF2_CONTROL_GROUP_PITCH;
+    }
+    if (voice->config.mod_lfo_to_filter_fc != 0 ||
+        voice->config.mod_env_to_filter_fc != 0 ||
+        program_has_destination(runtime->view, programs[2], 10u) ||
+        program_has_destination(runtime->view, programs[2], 11u)) {
+        groups |= MSF2_CONTROL_GROUP_FILTER;
+    }
+    return groups;
 }
 
 static uint32_t phase_with_cents(uint32_t base, int64_t cents_q16) {
@@ -1019,6 +1060,7 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     int32_t env_q16;
     msf2_result result;
     if (voice->stage == MSF2_VOICE_FREE) return MSF2_OK;
+    ++runtime->stats.control_voice_evaluations;
     /* Re-evaluate only MCU-owned destinations. Each result is compared with
      * the last emitted value, so stationary controllers and envelope plateaus
      * consume no command bandwidth. */
@@ -1027,7 +1069,7 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     vib_lfo = voice->vib_lfo_wait_ticks == 0u ? lfo_q16(voice->vib_lfo_phase) : 0;
     env_q16 = (int32_t)(((int64_t)voice->mod_env_level * MSF2_MOD_ONE +
                          32767 / 2) / 32767);
-    if ((groups & MSF2_PITCH_GROUP) != 0u) {
+    if ((groups & MSF2_CONTROL_GROUP_PITCH) != 0u) {
         int64_t pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1) +
             runtime->channels[voice->channel].generator_offsets_q16[51] +
             runtime->channels[voice->channel].generator_offsets_q16[52];
@@ -1050,7 +1092,7 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
             ++runtime->stats.controller_voice_updates;
         }
     }
-    if ((groups & MSF2_GAIN_GROUP) != 0u) {
+    if ((groups & MSF2_CONTROL_GROUP_GAIN) != 0u) {
         int64_t attenuation;
         int64_t pan;
         uint16_t gain_l;
@@ -1074,7 +1116,7 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
             ++runtime->stats.controller_voice_updates;
         }
     }
-    if ((groups & MSF2_FILTER_GROUP) != 0u) {
+    if ((groups & MSF2_CONTROL_GROUP_FILTER) != 0u) {
         int64_t cutoff = (int64_t)voice->config.initial_filter_fc * MSF2_MOD_ONE +
             destination_sum_q16(runtime, voice, programs[2], 8u, 1);
         msf2_voice_state calculated = *voice;
@@ -1158,8 +1200,14 @@ static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
                                                      uint16_t voice_index,
                                                      uint32_t elapsed_ticks) {
     msf2_voice_state *voice = &runtime->voices[voice_index];
+    const uint8_t dirty_groups =
+        runtime->channels[voice->channel].dirty_groups;
     uint32_t tick;
     if (voice->stage == MSF2_VOICE_FREE || elapsed_ticks == 0u) return MSF2_OK;
+    if (voice->periodic_groups == 0u) {
+        return dirty_groups == 0u ? MSF2_OK :
+            refresh_voice(runtime, voice_index, dirty_groups);
+    }
     /* The modulation envelope is a control-rate shadow, distinct from the
      * sample-rate volume envelope inside the FPGA. Gain and pitch update every
      * tick; filter updates every fourth tick to preserve the established MCU
@@ -1168,13 +1216,17 @@ static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
     for (tick = 0u; tick < elapsed_ticks; ++tick) {
         advance_modulation_envelope(voice);
         if (tick + 1u == elapsed_ticks) {
-            uint8_t groups = MSF2_GAIN_GROUP | MSF2_PITCH_GROUP;
+            uint8_t groups = dirty_groups |
+                (voice->periodic_groups &
+                 (MSF2_CONTROL_GROUP_GAIN | MSF2_CONTROL_GROUP_PITCH));
             msf2_result result;
-            if (elapsed_ticks > 1u ||
-                ((runtime->control_tick_index + tick) & 3u) == 0u) {
-                groups |= MSF2_FILTER_GROUP;
+            if ((voice->periodic_groups & MSF2_CONTROL_GROUP_FILTER) != 0u &&
+                (elapsed_ticks > 1u ||
+                 ((runtime->control_tick_index + tick) & 3u) == 0u)) {
+                groups |= MSF2_CONTROL_GROUP_FILTER;
             }
-            result = refresh_voice(runtime, voice_index, groups);
+            result = groups == 0u ? MSF2_OK :
+                refresh_voice(runtime, voice_index, groups);
             if (result != MSF2_OK) return result;
         }
         if (voice->mod_lfo_wait_ticks != 0u) --voice->mod_lfo_wait_ticks;
@@ -1188,6 +1240,13 @@ static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
 static msf2_result advance_voice_modulation(msf2_runtime *runtime,
                                             uint16_t voice_index) {
     return advance_voice_modulation_elapsed(runtime, voice_index, 1u);
+}
+
+static void clear_channel_dirty_groups(msf2_runtime *runtime) {
+    unsigned channel;
+    for (channel = 0u; channel < MSF2_CHANNEL_COUNT; ++channel) {
+        runtime->channels[channel].dirty_groups = 0u;
+    }
 }
 
 static void reset_channel_state(msf2_channel_state *channel) {
@@ -1318,6 +1377,7 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
             return MSF2_ERR_RECORD;
         }
         runtime_config_from_generators(gen, presence, note, &voice->config);
+        voice->periodic_groups = voice_periodic_groups(runtime, voice);
         voice->effective_velocity = has_generator(presence, 47u) ?
             (int8_t)clamp_i32(signed_amount(gen[47]), 0, 127) : -1;
         voice->base_phase_increment = params.phase_inc;
@@ -1503,6 +1563,7 @@ msf2_result msf2_runtime_control_change(msf2_runtime *runtime, uint8_t channel,
     } else if (controller >= 123u) {
         return msf2_runtime_all_notes_off(runtime, channel);
     }
+    state->dirty_groups |= MSF2_CONTROL_GROUP_ALL;
     /* Ordinary controller changes are consumed by the next active-voice
        control update. Lifecycle controllers above remain immediate. */
     return MSF2_OK;
@@ -1517,6 +1578,7 @@ msf2_result msf2_runtime_set_pitch_bend_range(msf2_runtime *runtime,
     }
     runtime->channels[channel].pitch_bend_range_semitones = semitones;
     runtime->channels[channel].pitch_bend_range_cents = cents;
+    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_PITCH;
     return MSF2_OK;
 }
 
@@ -1527,6 +1589,7 @@ msf2_result msf2_runtime_set_generator_offset(msf2_runtime *runtime,
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT ||
         generator >= MSF2_GENERATOR_COUNT) return MSF2_ERR_ARGUMENT;
     runtime->channels[channel].generator_offsets_q16[generator] = value_q16;
+    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
     return MSF2_OK;
 }
 
@@ -1536,6 +1599,7 @@ msf2_result msf2_runtime_pitch_bend(msf2_runtime *runtime, uint8_t channel,
     if (value < -8192) value = -8192;
     if (value > 8191) value = 8191;
     runtime->channels[channel].pitch_bend = value;
+    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_PITCH;
     return MSF2_OK;
 }
 
@@ -1545,6 +1609,7 @@ msf2_result msf2_runtime_channel_pressure(msf2_runtime *runtime, uint8_t channel
         return MSF2_ERR_ARGUMENT;
     }
     runtime->channels[channel].channel_pressure = value;
+    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
     return MSF2_OK;
 }
 
@@ -1553,6 +1618,7 @@ msf2_result msf2_runtime_key_pressure(msf2_runtime *runtime, uint8_t channel,
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT || note > 127u ||
         value > 127u) return MSF2_ERR_ARGUMENT;
     runtime->channels[channel].key_pressure[note] = value;
+    runtime->channels[channel].dirty_groups |= MSF2_CONTROL_GROUP_ALL;
     return MSF2_OK;
 }
 
@@ -1584,6 +1650,7 @@ msf2_result msf2_runtime_advance_samples(msf2_runtime *runtime,
     ticks = (uint32_t)(elapsed / MSF2_CONTROL_TICK_SAMPLES);
     if (runtime->stats.active_voices == 0u) {
         runtime->control_tick_index += ticks;
+        clear_channel_dirty_groups(runtime);
         return MSF2_OK;
     }
     while (ticks-- != 0u) {
@@ -1594,6 +1661,7 @@ msf2_result msf2_runtime_advance_samples(msf2_runtime *runtime,
             if (result != MSF2_OK) return result;
         }
         ++runtime->control_tick_index;
+        clear_channel_dirty_groups(runtime);
     }
     return MSF2_OK;
 }
@@ -1624,6 +1692,7 @@ msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
         ++active;
     }
     runtime->control_tick_index += elapsed_ticks;
+    clear_channel_dirty_groups(runtime);
     return MSF2_OK;
 }
 
@@ -1695,6 +1764,7 @@ msf2_result msf2_runtime_reset_controllers(msf2_runtime *runtime,
     uint16_t active;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
     reset_channel_state(&runtime->channels[channel]);
+    runtime->channels[channel].dirty_groups = MSF2_CONTROL_GROUP_ALL;
     for (active = 0u; active < runtime->active_count; ++active) {
         const uint16_t voice = runtime->active_voice_indices[active];
         msf2_voice_state *state = &runtime->voices[voice];

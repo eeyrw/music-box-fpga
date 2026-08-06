@@ -18,6 +18,14 @@ typedef struct {
     uint32_t control_last_update_ms;
     uint32_t control_maximum_interval_ms;
     uint32_t control_completed_ticks;
+    uint32_t control_voice_evaluations;
+    uint32_t controller_voice_updates;
+    uint16_t active_voices;
+    uint16_t maximum_active_voices;
+    uint16_t static_voices;
+    uint16_t periodic_gain_voices;
+    uint16_t periodic_pitch_voices;
+    uint16_t periodic_filter_voices;
     uint32_t command_error_count;
     uint32_t stale_generation_count;
     uint32_t transport_monitor_failures;

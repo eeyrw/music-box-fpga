@@ -148,6 +148,42 @@ interval of at least one millisecond at the `-100 dB` threshold. The stale
 counter continued to rise as a warning during the workload, confirming that
 continued MIDI service no longer depends on it remaining constant.
 
+A later dense-event trace reached the 256-packet MCU queue limit with no SPI
+error and only two of sixteen SPI DMA frames occupied. OpenOCD runtime-state
+sampling showed 392 peak active voices and roughly 2.09 million emitted
+controller updates; the UART control interval peaked at 74 ms. The four-byte
+USB-MIDI/SPSC transfer is therefore not the bottleneck. The expensive work is
+one MIDI event expanding into layered MSF2 voices plus periodic per-active-voice
+gain, pitch, and filter evaluation.
+
+The first optimization stage makes those evaluations dependency-driven. START
+already contains every static parameter. A voice is periodically evaluated only
+for parameter families that use mod-LFO, vibrato-LFO, or modulation-envelope
+destinations. Channel CC, pressure, pitch, RPN, or NRPN changes mark parameter
+families dirty for one subsequent pass; unchanged static voices otherwise only
+participate in lifecycle handling. UART `s` reports active/maximum voices,
+evaluation and emitted-update counts, and the current static/gain/pitch/filter
+dependency distribution.
+
+The repository's 10-second `polyphony_stress_512.mid` hardware run reached all
+512 active voices after this first stage. The MIDI queue still reached 256 but
+drained to zero, SPI DMA stayed at two of sixteen, and the final maximum control
+interval was 54 ms. At the end all 512 voices had periodic pitch dependencies,
+162 had gain dependencies, 100 had filter dependencies, and none was fully
+static. The final run performed 447,899 expensive voice evaluations and emitted
+104,208 parameter updates. This explains the bounded improvement: dependency
+filtering removes many gain/filter calculations, but this workload still
+requires a pitch calculation for every active voice.
+
+The first run increased FPGA underrun and render deadline-miss counters from
+zero to 12,157 and 14,008. The final run increased those cumulative values to
+32,748 and 29,746, deltas of 20,591 and 15,738. Thus dependency-driven MCU work
+does not qualify the complete system at the synthetic 512-voice workload;
+FPGA render/memory throughput is a separate observed limit. The 12-second USB
+WAV was complete and FFmpeg found no one-millisecond interval below `-100 dB`,
+but those counter failures remain authoritative even when the recording does
+not contain exact-zero gaps.
+
 ## Wiring
 
 Both boards use 3.3 V logic. Power the Pico from USB and connect a verified
@@ -788,8 +824,11 @@ Queue depth, high-water mark, overflow count, and the last complete packet are
 atomic diagnostic snapshots printed by UART command `m`.
 Continuous controls, pitch bend, channel pressure, key pressure, RPN tuning,
 and NRPN generator offsets update channel state only; affected voice gain,
-pitch, and filter commands are calculated during the next active-voice control
-update. Inactive capacity therefore adds no controller cost. Note On/Off, pedal
+pitch, and filter families are marked dirty and calculated once during the next
+active-voice control update. Independently, only voices whose MSF2 programs use
+time-varying LFO or modulation-envelope destinations receive periodic family
+updates. Inactive capacity and static active voices therefore add no expensive
+modulation evaluation cost. Note On/Off, pedal
 transitions, CC120, CC123-127, and System Reset
 remain lifecycle operations and retain their immediate generation-aware
 semantics.

@@ -228,6 +228,25 @@ int app_synth_init(void) {
 }
 
 const app_synth_diagnostics *app_synth_get_diagnostics(void) {
+    uint16_t active;
+    app_diagnostics.static_voices = 0u;
+    app_diagnostics.periodic_gain_voices = 0u;
+    app_diagnostics.periodic_pitch_voices = 0u;
+    app_diagnostics.periodic_filter_voices = 0u;
+    for (active = 0u; active < app_runtime.active_count; ++active) {
+        const msf2_voice_state *voice =
+            &app_runtime.voices[app_runtime.active_voice_indices[active]];
+        if (voice->periodic_groups == 0u) ++app_diagnostics.static_voices;
+        if ((voice->periodic_groups & MSF2_CONTROL_GROUP_GAIN) != 0u) {
+            ++app_diagnostics.periodic_gain_voices;
+        }
+        if ((voice->periodic_groups & MSF2_CONTROL_GROUP_PITCH) != 0u) {
+            ++app_diagnostics.periodic_pitch_voices;
+        }
+        if ((voice->periodic_groups & MSF2_CONTROL_GROUP_FILTER) != 0u) {
+            ++app_diagnostics.periodic_filter_voices;
+        }
+    }
     return &app_diagnostics;
 }
 
@@ -311,6 +330,13 @@ int app_synth_service(uint32_t millisecond_count) {
     result = msf2_runtime_advance_control(&app_runtime, elapsed_ticks);
     if (result != MSF2_OK) return -(int)result;
     app_diagnostics.control_completed_ticks += elapsed_ticks;
+    app_diagnostics.control_voice_evaluations =
+        app_runtime.stats.control_voice_evaluations;
+    app_diagnostics.controller_voice_updates =
+        app_runtime.stats.controller_voice_updates;
+    app_diagnostics.active_voices = app_runtime.stats.active_voices;
+    app_diagnostics.maximum_active_voices =
+        app_runtime.stats.maximum_active_voices;
     return 0;
 }
 

@@ -13,6 +13,10 @@ extern "C" {
 #define MSF2_GENERATOR_COUNT 61u
 #define MSF2_CHANNEL_COUNT 16u
 #define MSF2_MIDI_VALUE_COUNT 128u
+#define MSF2_CONTROL_GROUP_GAIN 1u
+#define MSF2_CONTROL_GROUP_PITCH 2u
+#define MSF2_CONTROL_GROUP_FILTER 4u
+#define MSF2_CONTROL_GROUP_ALL 7u
 
 typedef enum msf2_result {
     MSF2_OK = 0,
@@ -125,6 +129,8 @@ typedef struct msf2_channel_state {
     uint8_t sustain;
     uint8_t sostenuto;
     uint8_t soft;
+    /* Parameter families dirtied by event-driven channel state. */
+    uint8_t dirty_groups;
     int32_t generator_offsets_q16[MSF2_GENERATOR_COUNT];
 } msf2_channel_state;
 
@@ -173,6 +179,8 @@ typedef struct msf2_voice_state {
     uint8_t key_released;
     uint8_t sustain_held;
     uint8_t sostenuto_held;
+    /* Families whose LFO or modulation-envelope inputs change with time. */
+    uint8_t periodic_groups;
     uint16_t generation;
     /* Dense active-list position. Valid only while stage is not FREE. */
     uint16_t active_position;
@@ -225,6 +233,7 @@ typedef struct msf2_runtime_stats {
     uint32_t stolen_voices;
     uint32_t unmapped_notes;
     uint32_t controller_voice_updates;
+    uint32_t control_voice_evaluations;
     uint16_t active_voices;
     uint16_t maximum_active_voices;
 } msf2_runtime_stats;

@@ -341,6 +341,15 @@ in 1 ms asset-profile units, while only the final replaceable FPGA parameter
 state is published, equivalent to the PC real-time host's default 5 ms batch
 plus command coalescing behavior. Empty capacity has no scan cost.
 
+Active capacity alone is not treated as a reason to recompute parameters.
+At Note On, the runtime classifies gain, pitch, and filter families from the
+candidate program's LFO/modulation-envelope destinations and copied generator
+depths. Static START values are not periodically revisited. MIDI channel-state
+changes set one-pass dirty family bits, while genuinely time-varying families
+remain periodic. The runtime still advances logical time and release lifetime,
+but calls the expensive term/LUT/filter evaluator only for the union of periodic
+and dirty families.
+
 The SPI HAL must keep chip select asserted across the complete transaction and
 must copy the stack-owned byte buffer before an asynchronous enqueue returns.
 The example
@@ -383,9 +392,11 @@ queues installation rather than acknowledging active-state commit. Modulation
 updates begin on the next scheduled control pass, after installation has had a
 bounded interval to complete.
 
-Each control tick advances the modulation envelope and mod/vibrato LFO state,
-updates gain and pitch, evaluates filter state every fourth tick, suppresses
+For voices with time-varying dependencies, control service advances the
+modulation envelope and mod/vibrato LFO state, updates the required gain/pitch
+families, evaluates a required filter family on its cadence, suppresses
 unchanged commands, and reclaims released voices after their sample lifetime.
+Static voices skip modulation evaluation until a channel event dirties a family.
 `msf2_runtime_release_all` emits generation-matched RELEASE commands for all
 voices owned by the current runtime, irrespective of pedal holds. It cannot
 release FPGA voices whose generations were lost before runtime initialization.

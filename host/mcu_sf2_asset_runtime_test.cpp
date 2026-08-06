@@ -297,13 +297,36 @@ int main(int argc, char** argv) {
                 c_active_voices[voice].stage != MSF2_VOICE_FREE &&
                 c_active_voices[voice].active_position == position,
             "dense active-voice index lost its reverse position");
+    c_active_voices[voice].periodic_groups = 0;
   }
+  const uint32_t evaluations_before_static =
+      c_active_runtime.stats.control_voice_evaluations;
   require(msf2_runtime_advance_control(&c_active_runtime, 5u) == MSF2_OK &&
-              c_active_runtime.control_tick_index == 5 &&
+              c_active_runtime.stats.control_voice_evaluations ==
+                  evaluations_before_static,
+          "static voices performed periodic modulation evaluation");
+  require(msf2_runtime_control_change(&c_active_runtime, 0, 7, 64) == MSF2_OK &&
+              c_active_channels[0].dirty_groups == MSF2_CONTROL_GROUP_ALL &&
+              msf2_runtime_advance_control(&c_active_runtime, 5u) == MSF2_OK &&
+              c_active_runtime.stats.control_voice_evaluations ==
+                  evaluations_before_static + c_active_runtime.active_count &&
+              c_active_channels[0].dirty_groups == 0,
+          "controller dirty groups did not produce exactly one channel refresh");
+  for (uint16_t position = 0; position < c_active_runtime.active_count;
+       ++position) {
+    const uint16_t voice = c_active_runtime.active_voice_indices[position];
+    c_active_voices[voice].periodic_groups = MSF2_CONTROL_GROUP_GAIN;
+  }
+  const uint32_t evaluations_before_periodic =
+      c_active_runtime.stats.control_voice_evaluations;
+  require(msf2_runtime_advance_control(&c_active_runtime, 5u) == MSF2_OK &&
+              c_active_runtime.stats.control_voice_evaluations ==
+                  evaluations_before_periodic + c_active_runtime.active_count &&
+              c_active_runtime.control_tick_index == 15 &&
               msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
               c_active_runtime.active_count == 0 &&
               c_active_runtime.free_count == c_active_runtime.voice_capacity,
-          "active-only control update or O(1) reclaim failed");
+          "periodic dependency update or O(1) reclaim failed");
 
   const auto before_unmapped = runtime.stats().unmapped_notes;
   (void)runtime.note_on(0, 127, 16383, cell.key, cell.velocity);
