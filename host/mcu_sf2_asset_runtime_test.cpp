@@ -140,39 +140,61 @@ int main(int argc, char** argv) {
   require_same_command_shape(sink, c_sink, "Note On");
   require(layers != 0 && !sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "compiled runtime did not emit START first");
-  const uint16_t first_voice = uint16_t((sink.commands.front().words[0] >> 14) & 0x3ffu);
-  const uint16_t first_generation = uint16_t(sink.commands.front().words[1]);
-  require(first_generation == 1, "first START generation is not one");
+  std::array<uint16_t, render::kNumVoices> first_generations{};
+  uint16_t first_start_count = 0;
+  for (const auto& command : sink.commands) {
+    if (opcode(command) != 0x10) continue;
+    const uint16_t voice = uint16_t((command.words[0] >> 14) & 0x3ffu);
+    first_generations[voice] = uint16_t(command.words[1]);
+    require(first_generations[voice] == 1, "first START generation is not one");
+    ++first_start_count;
+  }
+  require(first_start_count == layers, "initial START count does not match layers");
 
   const size_t before_controller = sink.commands.size();
+  const size_t c_before_controller = c_sink.commands.size();
   runtime.control_change(0, 7, 0);
   require(msf2_runtime_control_change(&c_runtime, 0, 7, 0) == MSF2_OK,
           "pure-C CC7 failed");
-  require_same_command_shape(sink, c_sink, "CC7");
+  require(c_sink.commands.size() == c_before_controller,
+          "pure-C CC7 performed synchronous voice/SPI work");
   bool saw_gain = false;
   for (size_t index = before_controller; index < sink.commands.size(); ++index) {
     saw_gain |= opcode(sink.commands[index]) == 0x16;
   }
   require(saw_gain, "CC7 did not update active compiled voices");
+  require(msf2_runtime_advance_samples(&c_runtime, 48) == MSF2_OK,
+          "pure-C deferred CC7 tick failed");
+  bool c_saw_gain = false;
+  for (size_t index = c_before_controller; index < c_sink.commands.size(); ++index) {
+    c_saw_gain |= opcode(c_sink.commands[index]) == 0x16;
+  }
+  require(c_saw_gain, "pure-C deferred CC7 did not emit gain on the next tick");
+  runtime.advance_samples(48);
 
+  const size_t c_before_pitch = c_sink.commands.size();
   runtime.pitch_bend(0, 4096);
   require(msf2_runtime_pitch_bend(&c_runtime, 0, 4096) == MSF2_OK,
           "pure-C pitch bend failed");
-  require_same_command_shape(sink, c_sink, "pitch bend");
+  require(c_sink.commands.size() == c_before_pitch,
+          "pure-C pitch bend performed synchronous voice/SPI work");
   runtime.channel_pressure(0, 73);
   require(msf2_runtime_channel_pressure(&c_runtime, 0, 73) == MSF2_OK,
           "pure-C channel pressure failed");
-  require_same_command_shape(sink, c_sink, "channel pressure");
+  require(c_sink.commands.size() == c_before_pitch,
+          "pure-C channel pressure performed synchronous voice/SPI work");
   runtime.key_pressure(0, cell.key, 51);
   require(msf2_runtime_key_pressure(&c_runtime, 0, cell.key, 51) == MSF2_OK,
           "pure-C key pressure failed");
-  require_same_command_shape(sink, c_sink, "key pressure");
+  require(c_sink.commands.size() == c_before_pitch,
+          "pure-C key pressure performed synchronous voice/SPI work");
   for (int tick = 0; tick < 4; ++tick) {
     runtime.advance_samples(48);
     require(msf2_runtime_advance_samples(&c_runtime, 48) == MSF2_OK,
             "pure-C modulation tick failed");
   }
-  require_same_command_shape(sink, c_sink, "modulation ticks");
+  sink.commands.clear();
+  c_sink.commands.clear();
 
   runtime.control_change(0, 64, 127);
   require(msf2_runtime_control_change(&c_runtime, 0, 64, 127) == MSF2_OK,
@@ -205,9 +227,16 @@ int main(int argc, char** argv) {
   require_same_command_shape(sink, c_sink, "reused Note On");
   require(!sink.commands.empty() && opcode(sink.commands.front()) == 0x10,
           "reused compiled voice did not emit START");
-  require(((sink.commands.front().words[0] >> 14) & 0x3ffu) == first_voice &&
-              sink.commands.front().words[1] == uint32_t(first_generation + 1),
-          "reused voice generation did not advance");
+  uint16_t reused_start_count = 0;
+  for (const auto& command : sink.commands) {
+    if (opcode(command) != 0x10) continue;
+    const uint16_t voice = uint16_t((command.words[0] >> 14) & 0x3ffu);
+    require(first_generations[voice] != 0 &&
+                command.words[1] == uint32_t(first_generations[voice] + 1u),
+            "reused voice generation did not advance");
+    ++reused_start_count;
+  }
+  require(reused_start_count == layers, "reused START count does not match layers");
 
   RecordingSink steal_sink;
   host::McuSf2AssetRuntime one_voice(view, steal_sink, 1);
@@ -246,6 +275,33 @@ int main(int argc, char** argv) {
               msf2_runtime_advance_samples(&c_tick_runtime, 1) == MSF2_OK &&
               c_tick_runtime.control_tick_index == 1,
           "pure-C sample accumulator did not produce one 1 ms control tick");
+
+  msf2_runtime c_active_runtime{};
+  std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_active_channels{};
+  std::array<msf2_voice_state, 4> c_active_voices{};
+  std::array<uint16_t, 4> c_active_free{};
+  RecordingSink c_active_sink;
+  require(msf2_runtime_init(&c_active_runtime, &c_view, c_active_channels.data(),
+                            c_active_voices.data(), c_active_free.data(), 4,
+                            record_c_command, &c_active_sink) == MSF2_OK &&
+              msf2_runtime_note_on(&c_active_runtime, 0, cell.program, cell.bank,
+                                   cell.key, cell.velocity, &c_layers) == MSF2_OK &&
+              c_active_runtime.active_count == c_layers,
+          "pure-C runtime did not populate the dense active-voice index");
+  for (uint16_t position = 0; position < c_active_runtime.active_count;
+       ++position) {
+    const uint16_t voice = c_active_runtime.active_voice_indices[position];
+    require(voice < c_active_runtime.voice_capacity &&
+                c_active_voices[voice].stage != MSF2_VOICE_FREE &&
+                c_active_voices[voice].active_position == position,
+            "dense active-voice index lost its reverse position");
+  }
+  require(msf2_runtime_advance_control(&c_active_runtime, 5u) == MSF2_OK &&
+              c_active_runtime.control_tick_index == 5 &&
+              msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
+              c_active_runtime.active_count == 0 &&
+              c_active_runtime.free_count == c_active_runtime.voice_capacity,
+          "active-only control update or O(1) reclaim failed");
 
   const auto before_unmapped = runtime.stats().unmapped_notes;
   (void)runtime.note_on(0, 127, 16383, cell.key, cell.velocity);

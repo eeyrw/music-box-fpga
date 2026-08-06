@@ -123,7 +123,9 @@ typedef struct msf2_channel_state {
     uint8_t pitch_bend_range_semitones;
     uint8_t pitch_bend_range_cents;
     uint8_t sustain;
+    uint8_t sostenuto;
     uint8_t soft;
+    int32_t generator_offsets_q16[MSF2_GENERATOR_COUNT];
 } msf2_channel_state;
 
 typedef struct msf2_runtime_config {
@@ -168,7 +170,12 @@ typedef struct msf2_voice_state {
     uint8_t velocity;
     uint8_t exclusive_class;
     int8_t effective_velocity;
+    uint8_t key_released;
+    uint8_t sustain_held;
+    uint8_t sostenuto_held;
     uint16_t generation;
+    /* Dense active-list position. Valid only while stage is not FREE. */
+    uint16_t active_position;
     /* Immutable image identity plus monotonic allocation metadata. */
     uint32_t preset_index;
     uint32_t candidate;
@@ -231,6 +238,8 @@ typedef struct msf2_runtime {
     uint16_t *free_stack;
     uint16_t voice_capacity;
     uint16_t free_count;
+    uint16_t active_count;
+    uint16_t active_voice_indices[MSF2_MAX_VOICE_COUNT];
     uint32_t next_note_instance;
     uint32_t allocation_stamp;
     uint32_t control_tick_index;
@@ -276,11 +285,20 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
                                  uint8_t velocity, uint8_t *started_layers);
 msf2_result msf2_runtime_note_off(msf2_runtime *runtime, uint8_t channel,
                                   uint8_t note);
-/* Every CC is retained as a SoundFont modulation source. CC64, CC67, and CC120
- * additionally implement sustain, soft pedal, and All Sound Off policy. This
- * API does not interpret RPN/NRPN selector/data-entry sequences. */
+/* Every CC is retained as a SoundFont modulation source. Pedals, Reset All
+ * Controllers, All Sound Off, and All Notes Off channel modes are interpreted.
+ * RPN/NRPN selection remains in the MIDI policy layer and uses the setters
+ * below after decoding Data Entry. */
 msf2_result msf2_runtime_control_change(msf2_runtime *runtime, uint8_t channel,
                                         uint8_t controller, uint8_t value);
+msf2_result msf2_runtime_set_pitch_bend_range(msf2_runtime *runtime,
+                                               uint8_t channel,
+                                               uint8_t semitones,
+                                               uint8_t cents);
+msf2_result msf2_runtime_set_generator_offset(msf2_runtime *runtime,
+                                               uint8_t channel,
+                                               uint8_t generator,
+                                               int32_t value_q16);
 msf2_result msf2_runtime_pitch_bend(msf2_runtime *runtime, uint8_t channel,
                                     int16_t value);
 msf2_result msf2_runtime_channel_pressure(msf2_runtime *runtime, uint8_t channel,
@@ -297,7 +315,18 @@ msf2_result msf2_runtime_advance_samples(msf2_runtime *runtime,
 /* Convenience entry for a serialized 1 ms timer callback in the reference
  * profile. It is exactly equivalent to advance_samples(runtime, 48). */
 msf2_result msf2_runtime_control_tick(msf2_runtime *runtime);
+/* Advances a complete control interval while visiting only active voices and
+ * publishing only each voice's newest parameter state. */
+msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
+                                         uint32_t elapsed_ticks);
 msf2_result msf2_runtime_all_sound_off(msf2_runtime *runtime, uint8_t channel);
+msf2_result msf2_runtime_all_notes_off(msf2_runtime *runtime, uint8_t channel);
+/* Enters Release for every voice owned by this runtime, ignoring pedal holds.
+ * Already released voices are left unchanged. This cannot address FPGA voices
+ * whose generation was lost before runtime initialization. */
+msf2_result msf2_runtime_release_all(msf2_runtime *runtime);
+msf2_result msf2_runtime_reset_controllers(msf2_runtime *runtime,
+                                            uint8_t channel);
 
 #ifdef __cplusplus
 }

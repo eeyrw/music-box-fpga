@@ -29,12 +29,27 @@ static void tick_by(i2s_clock_monitor *monitor, uint32_t *count,
 }
 
 int main(void) {
-    static const uint8_t boundary_jitter[8] = {
+    static const uint8_t boundary_jitter[16] = {
         46u, 50u, 47u, 49u, 48u, 48u, 48u, 48u,
+        49u, 47u, 50u, 46u, 48u, 48u, 48u, 48u,
     };
     i2s_clock_monitor monitor;
     uint32_t count = UINT32_MAX - 200u;
     size_t index;
+
+    i2s_clock_monitor_init(&monitor, count);
+    count += 768u;
+    i2s_clock_monitor_advance(&monitor, count, 16u);
+    if (expect_valid("delayed 16 ms acquisition", &monitor, true) != 0) {
+        return 1;
+    }
+
+    i2s_clock_monitor_init(&monitor, count);
+    count += 752u;
+    i2s_clock_monitor_advance(&monitor, count, 16u);
+    if (expect_valid("delayed 16 ms rejects 47 kHz", &monitor, false) != 0) {
+        return 1;
+    }
 
     i2s_clock_monitor_init(&monitor, count);
     for (index = 0u; index < 4u; ++index) {
@@ -54,6 +69,18 @@ int main(void) {
         return 1;
     }
 
+    i2s_clock_monitor_init(&monitor, count);
+    for (index = 0u; index < 8u; ++index) {
+        count += 29u;
+        i2s_clock_monitor_advance_us(&monitor, count, 600u);
+        count += 67u;
+        i2s_clock_monitor_advance_us(&monitor, count, 1400u);
+    }
+    if (expect_valid("main-loop phase jitter uses real time", &monitor,
+                     true) != 0) {
+        return 1;
+    }
+
     i2s_clock_monitor_tick(&monitor, count);
     i2s_clock_monitor_tick(&monitor, count);
     i2s_clock_monitor_tick(&monitor, count);
@@ -69,19 +96,19 @@ int main(void) {
         return 1;
     }
 
-    for (index = 0u; index < 8u; ++index) {
+    for (index = 0u; index < 16u; ++index) {
         tick_by(&monitor, &count, 44u);
     }
     if (expect_valid("reject 44.1 kHz cadence", &monitor, false) != 0) return 1;
 
-    for (index = 0u; index < 8u; ++index) {
+    for (index = 0u; index < 16u; ++index) {
         tick_by(&monitor, &count, 47u);
     }
     if (expect_valid("reject sustained 47 kHz", &monitor, false) != 0) {
         return 1;
     }
 
-    for (index = 0u; index < 8u; ++index) {
+    for (index = 0u; index < 16u; ++index) {
         tick_by(&monitor, &count, 48u);
     }
     if (expect_valid("reconnected 48 kHz", &monitor, true) != 0) return 1;
@@ -94,7 +121,7 @@ int main(void) {
      * at its LRCLK synchronization entry, and reacquiring the source rate. */
     i2s_clock_monitor_init(&monitor, count);
     if (expect_valid("post-resync acquisition", &monitor, false) != 0) return 1;
-    for (index = 0u; index < 8u; ++index) {
+    for (index = 0u; index < 16u; ++index) {
         tick_by(&monitor, &count, 48u);
     }
     if (expect_valid("post-resync stable source", &monitor, true) != 0) return 1;
@@ -102,7 +129,7 @@ int main(void) {
         return 1;
     }
 
-    for (index = 0u; index < 8u; ++index) {
+    for (index = 0u; index < 16u; ++index) {
         tick_by(&monitor, &count, 49u);
     }
     if (expect_valid("reject sustained 49 kHz", &monitor, false) != 0) {

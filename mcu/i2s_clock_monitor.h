@@ -10,8 +10,8 @@
 typedef struct i2s_clock_monitor {
     uint32_t previous_frame_count;
     uint32_t window_frame_count;
-    uint8_t window_tick_count;
-    uint8_t stopped_tick_count;
+    uint32_t window_elapsed_us;
+    uint32_t stopped_elapsed_us;
     bool initialized;
     bool valid;
     bool seen_valid;
@@ -22,6 +22,11 @@ void i2s_clock_monitor_init(i2s_clock_monitor *monitor,
                             uint32_t frame_count);
 void i2s_clock_monitor_tick(i2s_clock_monitor *monitor,
                             uint32_t frame_count);
+void i2s_clock_monitor_advance(i2s_clock_monitor *monitor,
+                               uint32_t frame_count, uint32_t elapsed_ms);
+void i2s_clock_monitor_advance_us(i2s_clock_monitor *monitor,
+                                  uint32_t frame_count,
+                                  uint32_t elapsed_us);
 bool i2s_clock_monitor_valid(const i2s_clock_monitor *monitor);
 /* True after a previously valid source stopped and a valid 48 kHz cadence has
  * returned. The hardware owner must then restart its frame synchronizer and

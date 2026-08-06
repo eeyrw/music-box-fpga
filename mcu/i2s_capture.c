@@ -8,6 +8,8 @@
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 
+#include <stdatomic.h>
+
 #define I2S_RING_FRAME_COUNT 2048u
 #define I2S_RING_BYTE_BITS 13u
 
@@ -22,6 +24,9 @@ static uint32_t capture_read_count;
 static i2s_clock_monitor capture_clock_monitor;
 static volatile bool capture_clock_valid;
 static volatile bool capture_resync_pending;
+static _Atomic uint32_t capture_rx_stalls;
+static _Atomic uint32_t capture_overruns;
+static _Atomic uint32_t capture_lost_frames;
 
 _Static_assert((I2S_RING_FRAME_COUNT & (I2S_RING_FRAME_COUNT - 1u)) == 0u,
                "I2S DMA ring frame count must be a power of two");
@@ -175,10 +180,19 @@ void i2s_capture_init(void) {
 }
 
 void i2s_capture_tick_1ms(void) {
-    /* This runs from the regular 1 ms alarm callback, not from USB EP0. The
-     * control-request callback can therefore answer immediately even when the
-     * external clock is absent or stopped at either logic level. */
-    i2s_clock_monitor_tick(&capture_clock_monitor, capture_write_count());
+    i2s_capture_advance_ms(1u);
+}
+
+void i2s_capture_advance_ms(uint32_t elapsed_ms) {
+    i2s_capture_advance_us(elapsed_ms * 1000u);
+}
+
+void i2s_capture_advance_us(uint32_t elapsed_us) {
+    /* This runs from the main loop using a real timer interval, not from USB
+     * EP0 or the 1 ms alarm ISR. The control request therefore never waits for
+     * GPIO activity, and scheduling phase does not distort the measured rate. */
+    i2s_clock_monitor_advance_us(&capture_clock_monitor,
+                                 capture_write_count(), elapsed_us);
     if (i2s_clock_monitor_recovery_ready(&capture_clock_monitor)) {
         /* Hardware reset is deferred out of this timer IRQ. USB callbacks and
          * ring reads run in the main context, so the reset cannot change their
@@ -191,6 +205,13 @@ void i2s_capture_tick_1ms(void) {
 }
 
 void i2s_capture_task(void) {
+    const uint32_t rx_stall_mask =
+        1u << (PIO_FDEBUG_RXSTALL_LSB + capture_state_machine);
+    if ((capture_pio->fdebug & rx_stall_mask) != 0u) {
+        capture_pio->fdebug = rx_stall_mask;
+        atomic_fetch_add_explicit(&capture_rx_stalls, 1u,
+                                  memory_order_relaxed);
+    }
     if (capture_resync_pending) i2s_capture_restart_hardware();
 }
 
@@ -199,7 +220,11 @@ size_t i2s_capture_available(void) {
     /* The producer is allowed to lap the consumer. Retain the newest 2048
      * stereo frames, because DMA has already overwritten anything older. */
     if (available > I2S_RING_FRAME_COUNT) {
-        capture_read_count += available - I2S_RING_FRAME_COUNT;
+        const uint32_t lost = available - I2S_RING_FRAME_COUNT;
+        capture_read_count += lost;
+        atomic_fetch_add_explicit(&capture_overruns, 1u, memory_order_relaxed);
+        atomic_fetch_add_explicit(&capture_lost_frames, lost,
+                                  memory_order_relaxed);
         return I2S_RING_FRAME_COUNT;
     }
     return (size_t)available;
@@ -225,4 +250,22 @@ void i2s_capture_discard(void) {
 
 bool i2s_capture_clock_valid(void) {
     return capture_clock_valid;
+}
+
+uint32_t i2s_capture_rx_stall_count(void) {
+    return atomic_load_explicit(&capture_rx_stalls, memory_order_relaxed);
+}
+
+uint32_t i2s_capture_overrun_count(void) {
+    return atomic_load_explicit(&capture_overruns, memory_order_relaxed);
+}
+
+uint32_t i2s_capture_lost_frame_count(void) {
+    return atomic_load_explicit(&capture_lost_frames, memory_order_relaxed);
+}
+
+void i2s_capture_reset_diagnostics(void) {
+    atomic_store_explicit(&capture_rx_stalls, 0u, memory_order_relaxed);
+    atomic_store_explicit(&capture_overruns, 0u, memory_order_relaxed);
+    atomic_store_explicit(&capture_lost_frames, 0u, memory_order_relaxed);
 }

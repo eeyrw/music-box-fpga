@@ -778,11 +778,12 @@ static int64_t destination_sum_q16(const msf2_runtime *runtime,
     uint32_t first;
     uint16_t count;
     uint16_t local;
-    int64_t sum = 0;
+    int64_t sum = runtime->channels[voice->channel]
+                      .generator_offsets_q16[destination];
     /* Programs and terms remain in immutable MSF2 storage. Only scalar source
      * state and final sums are copied into SRAM, bounding per-tick work by the
      * verified term_count in the image. */
-    if (program_id == UINT8_MAX) return 0;
+    if (program_id == UINT8_MAX) return sum;
     program = record(runtime->view, 5u, program_id);
     first = read_u32(program);
     count = read_u16(program + 4);
@@ -900,10 +901,31 @@ static msf2_result emit_short(msf2_runtime *runtime, uint8_t opcode,
 }
 
 static void reclaim_voice(msf2_runtime *runtime, uint16_t voice) {
+    uint16_t position;
+    uint16_t replacement;
     if (runtime->voices[voice].stage == MSF2_VOICE_FREE) return;
+    position = runtime->voices[voice].active_position;
+    --runtime->active_count;
+    replacement = runtime->active_voice_indices[runtime->active_count];
+    runtime->active_voice_indices[position] = replacement;
+    runtime->voices[replacement].active_position = position;
     runtime->voices[voice].stage = MSF2_VOICE_FREE;
     runtime->free_stack[runtime->free_count++] = voice;
     --runtime->stats.active_voices;
+}
+
+static void activate_voice(msf2_runtime *runtime, uint16_t voice) {
+    runtime->voices[voice].active_position = runtime->active_count;
+    runtime->active_voice_indices[runtime->active_count++] = voice;
+    ++runtime->stats.active_voices;
+    if (runtime->stats.active_voices > runtime->stats.maximum_active_voices) {
+        runtime->stats.maximum_active_voices = runtime->stats.active_voices;
+    }
+}
+
+static void abandon_unpublished_voice(msf2_runtime *runtime, uint16_t voice) {
+    runtime->voices[voice].stage = MSF2_VOICE_FREE;
+    runtime->free_stack[runtime->free_count++] = voice;
 }
 
 static msf2_result stop_voice(msf2_runtime *runtime, uint16_t voice) {
@@ -928,6 +950,8 @@ static msf2_result release_voice(msf2_runtime *runtime, uint16_t voice) {
                         state->release_step, 1);
     if (result != MSF2_OK) return result;
     state->stage = MSF2_VOICE_RELEASED;
+    state->sustain_held = 0u;
+    state->sostenuto_held = 0u;
     state->mod_env_stage = MSF2_ENV_RELEASE;
     state->mod_env_stage_tick = 0u;
     state->mod_env_release_start = state->mod_env_level;
@@ -946,13 +970,17 @@ static msf2_result allocate_voice(msf2_runtime *runtime, uint16_t *voice) {
         *voice = runtime->free_stack[--runtime->free_count];
         return MSF2_OK;
     }
-    for (index = 1u; index < runtime->voice_capacity; ++index) {
-        const msf2_voice_state *candidate = &runtime->voices[index];
+    victim = runtime->active_voice_indices[0];
+    for (index = 1u; index < runtime->active_count; ++index) {
+        const uint16_t candidate_index = runtime->active_voice_indices[index];
+        const msf2_voice_state *candidate = &runtime->voices[candidate_index];
         const msf2_voice_state *selected = &runtime->voices[victim];
         if ((candidate->stage == MSF2_VOICE_RELEASED &&
              selected->stage != MSF2_VOICE_RELEASED) ||
             (candidate->stage == selected->stage &&
-             candidate->allocation_stamp < selected->allocation_stamp)) victim = index;
+             candidate->allocation_stamp < selected->allocation_stamp)) {
+            victim = candidate_index;
+        }
     }
     if (stop_voice(runtime, victim) != MSF2_OK) return MSF2_ERR_SINK;
     --runtime->free_count;
@@ -1000,7 +1028,9 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     env_q16 = (int32_t)(((int64_t)voice->mod_env_level * MSF2_MOD_ONE +
                          32767 / 2) / 32767);
     if ((groups & MSF2_PITCH_GROUP) != 0u) {
-        int64_t pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1);
+        int64_t pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1) +
+            runtime->channels[voice->channel].generator_offsets_q16[51] +
+            runtime->channels[voice->channel].generator_offsets_q16[52];
         uint32_t phase;
         pitch += multiply_q16(mod_lfo,
             (int64_t)voice->config.mod_lfo_to_pitch * MSF2_MOD_ONE +
@@ -1090,17 +1120,7 @@ static msf2_result refresh_voice(msf2_runtime *runtime, uint16_t voice_index,
     return MSF2_OK;
 }
 
-static msf2_result advance_voice_modulation(msf2_runtime *runtime,
-                                            uint16_t voice_index) {
-    msf2_voice_state *voice = &runtime->voices[voice_index];
-    uint8_t groups = MSF2_GAIN_GROUP | MSF2_PITCH_GROUP;
-    msf2_result result;
-    if (voice->stage == MSF2_VOICE_FREE) return MSF2_OK;
-    /* The modulation envelope is a control-rate shadow, distinct from the
-     * sample-rate volume envelope inside the FPGA. Gain and pitch update every
-     * tick; filter updates every fourth tick to preserve the established MCU
-     * command-rate policy. LFO phase advances after emission, matching the C++
-     * oracle's first-tick phase convention. */
+static void advance_modulation_envelope(msf2_voice_state *voice) {
     if (voice->mod_env_stage == MSF2_ENV_DELAY) {
         if (voice->mod_env_wait_ticks != 0u) --voice->mod_env_wait_ticks;
         if (voice->mod_env_wait_ticks == 0u) voice->mod_env_stage = MSF2_ENV_ATTACK;
@@ -1132,14 +1152,50 @@ static msf2_result advance_voice_modulation(msf2_runtime *runtime,
         voice->mod_env_level = linear_level(voice->mod_env_release_start, 0u,
             voice->mod_env_stage_tick, voice->config.mod_env_release_ticks);
     }
-    if ((runtime->control_tick_index & 3u) == 0u) groups |= MSF2_FILTER_GROUP;
-    result = refresh_voice(runtime, voice_index, groups);
-    if (result != MSF2_OK) return result;
-    if (voice->mod_lfo_wait_ticks != 0u) --voice->mod_lfo_wait_ticks;
-    else voice->mod_lfo_phase += voice->config.mod_lfo_step;
-    if (voice->vib_lfo_wait_ticks != 0u) --voice->vib_lfo_wait_ticks;
-    else voice->vib_lfo_phase += voice->config.vib_lfo_step;
+}
+
+static msf2_result advance_voice_modulation_elapsed(msf2_runtime *runtime,
+                                                     uint16_t voice_index,
+                                                     uint32_t elapsed_ticks) {
+    msf2_voice_state *voice = &runtime->voices[voice_index];
+    uint32_t tick;
+    if (voice->stage == MSF2_VOICE_FREE || elapsed_ticks == 0u) return MSF2_OK;
+    /* The modulation envelope is a control-rate shadow, distinct from the
+     * sample-rate volume envelope inside the FPGA. Gain and pitch update every
+     * tick; filter updates every fourth tick to preserve the established MCU
+     * command-rate policy. LFO phase advances after emission, matching the C++
+     * oracle's first-tick phase convention. */
+    for (tick = 0u; tick < elapsed_ticks; ++tick) {
+        advance_modulation_envelope(voice);
+        if (tick + 1u == elapsed_ticks) {
+            uint8_t groups = MSF2_GAIN_GROUP | MSF2_PITCH_GROUP;
+            msf2_result result;
+            if (elapsed_ticks > 1u ||
+                ((runtime->control_tick_index + tick) & 3u) == 0u) {
+                groups |= MSF2_FILTER_GROUP;
+            }
+            result = refresh_voice(runtime, voice_index, groups);
+            if (result != MSF2_OK) return result;
+        }
+        if (voice->mod_lfo_wait_ticks != 0u) --voice->mod_lfo_wait_ticks;
+        else voice->mod_lfo_phase += voice->config.mod_lfo_step;
+        if (voice->vib_lfo_wait_ticks != 0u) --voice->vib_lfo_wait_ticks;
+        else voice->vib_lfo_phase += voice->config.vib_lfo_step;
+    }
     return MSF2_OK;
+}
+
+static msf2_result advance_voice_modulation(msf2_runtime *runtime,
+                                            uint16_t voice_index) {
+    return advance_voice_modulation_elapsed(runtime, voice_index, 1u);
+}
+
+static void reset_channel_state(msf2_channel_state *channel) {
+    *channel = (msf2_channel_state){0};
+    channel->cc[7] = 127u;
+    channel->cc[10] = 64u;
+    channel->cc[11] = 127u;
+    channel->pitch_bend_range_semitones = 2u;
 }
 
 msf2_result msf2_runtime_init(msf2_runtime *runtime, const msf2_view *view,
@@ -1162,11 +1218,7 @@ msf2_result msf2_runtime_init(msf2_runtime *runtime, const msf2_view *view,
     runtime->command_sink = sink;
     runtime->command_context = sink_context;
     for (channel = 0u; channel < MSF2_CHANNEL_COUNT; ++channel) {
-        channels[channel] = (msf2_channel_state){0};
-        channels[channel].cc[7] = 127u;
-        channels[channel].cc[10] = 64u;
-        channels[channel].cc[11] = 127u;
-        channels[channel].pitch_bend_range_semitones = 2u;
+        reset_channel_state(&channels[channel]);
     }
     for (voice = 0u; voice < voice_capacity; ++voice) {
         voices[voice] = (msf2_voice_state){0};
@@ -1212,15 +1264,18 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
     }
     for (layer = 0u; layer < layers.count; ++layer) {
         if (exclusive[layer] != 0u) {
-            uint16_t current;
-            for (current = 0u; current < runtime->voice_capacity; ++current) {
+            uint16_t active = 0u;
+            while (active < runtime->active_count) {
+                const uint16_t current = runtime->active_voice_indices[active];
                 msf2_voice_state *old = &runtime->voices[current];
-                if (old->stage != MSF2_VOICE_FREE &&
+                if (
                     old->exclusive_class == exclusive[layer] &&
                     old->preset_index == (uint32_t)preset_index) {
                     msf2_result result = release_voice(runtime, current);
                     if (result != MSF2_OK) return result;
+                    if (old->stage == MSF2_VOICE_FREE) continue;
                 }
+                ++active;
             }
         }
     }
@@ -1258,7 +1313,10 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         if (msf2_decode_generators(runtime->view, voice->candidate, gen, &presence) !=
                 MSF2_OK ||
             msf2_materialize_note(runtime->view, voice->candidate, note, &params) !=
-                MSF2_OK) return MSF2_ERR_RECORD;
+                MSF2_OK) {
+            abandon_unpublished_voice(runtime, voice_index);
+            return MSF2_ERR_RECORD;
+        }
         runtime_config_from_generators(gen, presence, note, &voice->config);
         voice->effective_velocity = has_generator(presence, 47u) ?
             (int8_t)clamp_i32(signed_amount(gen[47]), 0, 127) : -1;
@@ -1286,7 +1344,9 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
          * phase/gain fields. Continuing LFO/envelope values are emitted by the
          * immediate first control update below and subsequent timer ticks. */
         candidate_programs(runtime->view, voice->candidate, programs);
-        pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1);
+        pitch = destination_sum_q16(runtime, voice, programs[1], 0u, 1) +
+            runtime->channels[channel].generator_offsets_q16[51] +
+            runtime->channels[channel].generator_offsets_q16[52];
         voice->phase_increment = phase_with_cents(voice->base_phase_increment, pitch);
         attenuation = destination_sum_q16(runtime, voice, programs[0], 48u, 0) +
             (runtime->channels[channel].soft != 0u ?
@@ -1305,13 +1365,16 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         voice->filter_a2 = params.filter_a2;
         result = msf2_pack_start(voice_index, voice->generation, &params, words,
                                  &word_count);
-        if (result != MSF2_OK) return result;
-        result = emit_command(runtime, words, word_count);
-        if (result != MSF2_OK) return result;
-        ++runtime->stats.active_voices;
-        if (runtime->stats.active_voices > runtime->stats.maximum_active_voices) {
-            runtime->stats.maximum_active_voices = runtime->stats.active_voices;
+        if (result != MSF2_OK) {
+            abandon_unpublished_voice(runtime, voice_index);
+            return result;
         }
+        result = emit_command(runtime, words, word_count);
+        if (result != MSF2_OK) {
+            abandon_unpublished_voice(runtime, voice_index);
+            return result;
+        }
+        activate_voice(runtime, voice_index);
         ++runtime->stats.started_voices;
         result = advance_voice_modulation(runtime, voice_index);
         if (result != MSF2_OK) return result;
@@ -1323,43 +1386,62 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
 msf2_result msf2_runtime_note_off(msf2_runtime *runtime, uint8_t channel,
                                   uint8_t note) {
     uint32_t oldest = UINT32_MAX;
-    uint16_t voice;
+    uint16_t active;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT || note > 127u) {
         return MSF2_ERR_ARGUMENT;
     }
     ++runtime->stats.note_offs;
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
+    for (active = 0u; active < runtime->active_count; ++active) {
+        const uint16_t voice = runtime->active_voice_indices[active];
         const msf2_voice_state *state = &runtime->voices[voice];
-        if (state->stage == MSF2_VOICE_ACTIVE && state->channel == channel &&
-            state->note == note && state->note_instance < oldest) {
+        if (state->stage != MSF2_VOICE_FREE &&
+            state->stage != MSF2_VOICE_RELEASED && state->channel == channel &&
+            state->note == note && state->key_released == 0u &&
+            state->note_instance < oldest) {
             oldest = state->note_instance;
         }
     }
     if (oldest == UINT32_MAX) return MSF2_OK;
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
+    active = 0u;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
         msf2_voice_state *state = &runtime->voices[voice];
         msf2_result result;
-        if (state->stage != MSF2_VOICE_ACTIVE || state->channel != channel ||
-            state->note_instance != oldest) continue;
-        if (runtime->channels[channel].sustain != 0u) {
+        if (state->stage == MSF2_VOICE_RELEASED || state->channel != channel ||
+            state->note_instance != oldest || state->key_released != 0u) {
+            ++active;
+            continue;
+        }
+        state->key_released = 1u;
+        if (runtime->channels[channel].sustain != 0u ||
+            state->sostenuto_held != 0u) {
+            state->sustain_held = runtime->channels[channel].sustain;
             state->stage = MSF2_VOICE_SUSTAIN_HELD;
+            ++active;
             continue;
         }
         result = release_voice(runtime, voice);
         if (result != MSF2_OK) return result;
+        if (state->stage != MSF2_VOICE_FREE) ++active;
     }
     return MSF2_OK;
 }
 
-static msf2_result refresh_channel(msf2_runtime *runtime, uint8_t channel) {
-    uint16_t voice;
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
-        if (runtime->voices[voice].stage != MSF2_VOICE_FREE &&
-            runtime->voices[voice].channel == channel) {
-            msf2_result result = refresh_voice(runtime, voice,
-                MSF2_GAIN_GROUP | MSF2_PITCH_GROUP | MSF2_FILTER_GROUP);
+static msf2_result release_deferred_voices(msf2_runtime *runtime,
+                                           uint8_t channel) {
+    uint16_t active = 0u;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        msf2_voice_state *state = &runtime->voices[voice];
+        if (state->channel == channel && state->key_released != 0u &&
+            state->stage == MSF2_VOICE_SUSTAIN_HELD &&
+            runtime->channels[channel].sustain == 0u &&
+            state->sostenuto_held == 0u) {
+            msf2_result result = release_voice(runtime, voice);
             if (result != MSF2_OK) return result;
+            if (state->stage == MSF2_VOICE_FREE) continue;
         }
+        ++active;
     }
     return MSF2_OK;
 }
@@ -1374,22 +1456,80 @@ msf2_result msf2_runtime_control_change(msf2_runtime *runtime, uint8_t channel,
     if (controller == 64u) {
         uint8_t sustain = value >= 64u;
         if (state->sustain != 0u && sustain == 0u) {
-            uint16_t voice;
-            for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
-                if (runtime->voices[voice].stage == MSF2_VOICE_SUSTAIN_HELD &&
-                    runtime->voices[voice].channel == channel) {
-                    msf2_result result = release_voice(runtime, voice);
-                    if (result != MSF2_OK) return result;
+            uint16_t active;
+            for (active = 0u; active < runtime->active_count; ++active) {
+                const uint16_t voice = runtime->active_voice_indices[active];
+                if (runtime->voices[voice].channel == channel) {
+                    runtime->voices[voice].sustain_held = 0u;
                 }
             }
         }
         state->sustain = sustain;
+        if (sustain == 0u) {
+            msf2_result result = release_deferred_voices(runtime, channel);
+            if (result != MSF2_OK) return result;
+        }
+    } else if (controller == 66u) {
+        uint8_t sostenuto = value >= 64u;
+        uint16_t active;
+        if (state->sostenuto == 0u && sostenuto != 0u) {
+            for (active = 0u; active < runtime->active_count; ++active) {
+                const uint16_t voice = runtime->active_voice_indices[active];
+                msf2_voice_state *voice_state = &runtime->voices[voice];
+                if (voice_state->channel == channel &&
+                    voice_state->stage != MSF2_VOICE_FREE &&
+                    voice_state->stage != MSF2_VOICE_RELEASED &&
+                    voice_state->key_released == 0u) {
+                    voice_state->sostenuto_held = 1u;
+                }
+            }
+        } else if (state->sostenuto != 0u && sostenuto == 0u) {
+            for (active = 0u; active < runtime->active_count; ++active) {
+                const uint16_t voice = runtime->active_voice_indices[active];
+                if (runtime->voices[voice].channel == channel) {
+                    runtime->voices[voice].sostenuto_held = 0u;
+                }
+            }
+        }
+        state->sostenuto = sostenuto;
+        if (sostenuto == 0u) {
+            msf2_result result = release_deferred_voices(runtime, channel);
+            if (result != MSF2_OK) return result;
+        }
     } else if (controller == 67u) {
         state->soft = value >= 64u;
     } else if (controller == 120u) {
         return msf2_runtime_all_sound_off(runtime, channel);
+    } else if (controller == 121u) {
+        return msf2_runtime_reset_controllers(runtime, channel);
+    } else if (controller >= 123u) {
+        return msf2_runtime_all_notes_off(runtime, channel);
     }
-    return refresh_channel(runtime, channel);
+    /* Ordinary controller changes are consumed by the next active-voice
+       control update. Lifecycle controllers above remain immediate. */
+    return MSF2_OK;
+}
+
+msf2_result msf2_runtime_set_pitch_bend_range(msf2_runtime *runtime,
+                                               uint8_t channel,
+                                               uint8_t semitones,
+                                               uint8_t cents) {
+    if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT || cents > 99u) {
+        return MSF2_ERR_ARGUMENT;
+    }
+    runtime->channels[channel].pitch_bend_range_semitones = semitones;
+    runtime->channels[channel].pitch_bend_range_cents = cents;
+    return MSF2_OK;
+}
+
+msf2_result msf2_runtime_set_generator_offset(msf2_runtime *runtime,
+                                               uint8_t channel,
+                                               uint8_t generator,
+                                               int32_t value_q16) {
+    if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT ||
+        generator >= MSF2_GENERATOR_COUNT) return MSF2_ERR_ARGUMENT;
+    runtime->channels[channel].generator_offsets_q16[generator] = value_q16;
+    return MSF2_OK;
 }
 
 msf2_result msf2_runtime_pitch_bend(msf2_runtime *runtime, uint8_t channel,
@@ -1398,7 +1538,7 @@ msf2_result msf2_runtime_pitch_bend(msf2_runtime *runtime, uint8_t channel,
     if (value < -8192) value = -8192;
     if (value > 8191) value = 8191;
     runtime->channels[channel].pitch_bend = value;
-    return refresh_channel(runtime, channel);
+    return MSF2_OK;
 }
 
 msf2_result msf2_runtime_channel_pressure(msf2_runtime *runtime, uint8_t channel,
@@ -1407,41 +1547,38 @@ msf2_result msf2_runtime_channel_pressure(msf2_runtime *runtime, uint8_t channel
         return MSF2_ERR_ARGUMENT;
     }
     runtime->channels[channel].channel_pressure = value;
-    return refresh_channel(runtime, channel);
+    return MSF2_OK;
 }
 
 msf2_result msf2_runtime_key_pressure(msf2_runtime *runtime, uint8_t channel,
                                       uint8_t note, uint8_t value) {
-    uint16_t voice;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT || note > 127u ||
         value > 127u) return MSF2_ERR_ARGUMENT;
     runtime->channels[channel].key_pressure[note] = value;
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
-        if (runtime->voices[voice].stage != MSF2_VOICE_FREE &&
-            runtime->voices[voice].channel == channel &&
-            runtime->voices[voice].note == note) {
-            msf2_result result = refresh_voice(runtime, voice,
-                MSF2_GAIN_GROUP | MSF2_PITCH_GROUP | MSF2_FILTER_GROUP);
-            if (result != MSF2_OK) return result;
-        }
-    }
     return MSF2_OK;
 }
 
 msf2_result msf2_runtime_advance_samples(msf2_runtime *runtime,
                                          uint32_t samples) {
-    uint16_t voice;
+    uint16_t active;
     uint64_t elapsed;
     uint32_t ticks;
     if (runtime == NULL) return MSF2_ERR_ARGUMENT;
 
     /* Release lifetime is measured in audio samples, independently of the
        1 ms modulation tick. Subtract it before a slot can be reused. */
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
+    active = 0u;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
         msf2_voice_state *state = &runtime->voices[voice];
-        if (state->stage != MSF2_VOICE_RELEASED) continue;
-        if (samples >= state->release_samples) reclaim_voice(runtime, voice);
-        else state->release_samples -= samples;
+        if (state->stage == MSF2_VOICE_RELEASED) {
+            if (samples >= state->release_samples) {
+                reclaim_voice(runtime, voice);
+                continue;
+            }
+            state->release_samples -= samples;
+        }
+        ++active;
     }
 
     elapsed = (uint64_t)runtime->pending_tick_samples + samples;
@@ -1452,9 +1589,9 @@ msf2_result msf2_runtime_advance_samples(msf2_runtime *runtime,
         return MSF2_OK;
     }
     while (ticks-- != 0u) {
-        for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
+        for (active = 0u; active < runtime->active_count; ++active) {
+            const uint16_t voice = runtime->active_voice_indices[active];
             msf2_result result;
-            if (runtime->voices[voice].stage == MSF2_VOICE_FREE) continue;
             result = advance_voice_modulation(runtime, voice);
             if (result != MSF2_OK) return result;
         }
@@ -1467,15 +1604,109 @@ msf2_result msf2_runtime_control_tick(msf2_runtime *runtime) {
     return msf2_runtime_advance_samples(runtime, MSF2_CONTROL_TICK_SAMPLES);
 }
 
+msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
+                                         uint32_t elapsed_ticks) {
+    uint16_t active = 0u;
+    const uint64_t release_elapsed =
+        (uint64_t)MSF2_CONTROL_TICK_SAMPLES * elapsed_ticks;
+    if (runtime == NULL || elapsed_ticks == 0u) return MSF2_ERR_ARGUMENT;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        msf2_voice_state *state = &runtime->voices[voice];
+        msf2_result result;
+        if (state->stage == MSF2_VOICE_RELEASED) {
+            if (release_elapsed >= state->release_samples) {
+                reclaim_voice(runtime, voice);
+                continue;
+            }
+            state->release_samples -= (uint32_t)release_elapsed;
+        }
+        result = advance_voice_modulation_elapsed(runtime, voice, elapsed_ticks);
+        if (result != MSF2_OK) return result;
+        ++active;
+    }
+    runtime->control_tick_index += elapsed_ticks;
+    return MSF2_OK;
+}
+
 msf2_result msf2_runtime_all_sound_off(msf2_runtime *runtime, uint8_t channel) {
-    uint16_t voice;
+    uint16_t active = 0u;
     if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
-    for (voice = 0u; voice < runtime->voice_capacity; ++voice) {
-        if (runtime->voices[voice].stage != MSF2_VOICE_FREE &&
-            runtime->voices[voice].channel == channel) {
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        if (runtime->voices[voice].channel == channel) {
             msf2_result result = stop_voice(runtime, voice);
             if (result != MSF2_OK) return result;
+            continue;
         }
+        ++active;
+    }
+    return MSF2_OK;
+}
+
+msf2_result msf2_runtime_all_notes_off(msf2_runtime *runtime, uint8_t channel) {
+    uint16_t active = 0u;
+    if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        msf2_voice_state *state = &runtime->voices[voice];
+        if (state->channel != channel || state->stage == MSF2_VOICE_FREE ||
+            state->stage == MSF2_VOICE_RELEASED || state->key_released != 0u) {
+            ++active;
+            continue;
+        }
+        state->key_released = 1u;
+        state->sustain_held = runtime->channels[channel].sustain;
+        if (state->sustain_held != 0u || state->sostenuto_held != 0u) {
+            state->stage = MSF2_VOICE_SUSTAIN_HELD;
+        } else {
+            msf2_result result = release_voice(runtime, voice);
+            if (result != MSF2_OK) return result;
+            if (state->stage == MSF2_VOICE_FREE) continue;
+        }
+        ++active;
+    }
+    return MSF2_OK;
+}
+
+msf2_result msf2_runtime_release_all(msf2_runtime *runtime) {
+    uint16_t active = 0u;
+    if (runtime == NULL) return MSF2_ERR_ARGUMENT;
+    while (active < runtime->active_count) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        msf2_voice_state *state = &runtime->voices[voice];
+        if (state->stage == MSF2_VOICE_FREE ||
+            state->stage == MSF2_VOICE_RELEASED) {
+            ++active;
+            continue;
+        }
+        state->key_released = 1u;
+        state->sustain_held = 0u;
+        state->sostenuto_held = 0u;
+        {
+            msf2_result result = release_voice(runtime, voice);
+            if (result != MSF2_OK) return result;
+        }
+        if (state->stage != MSF2_VOICE_FREE) ++active;
+    }
+    return MSF2_OK;
+}
+
+msf2_result msf2_runtime_reset_controllers(msf2_runtime *runtime,
+                                            uint8_t channel) {
+    uint16_t active;
+    if (runtime == NULL || channel >= MSF2_CHANNEL_COUNT) return MSF2_ERR_ARGUMENT;
+    reset_channel_state(&runtime->channels[channel]);
+    for (active = 0u; active < runtime->active_count; ++active) {
+        const uint16_t voice = runtime->active_voice_indices[active];
+        msf2_voice_state *state = &runtime->voices[voice];
+        if (state->channel != channel || state->stage == MSF2_VOICE_FREE) continue;
+        state->sustain_held = 0u;
+        state->sostenuto_held = 0u;
+    }
+    {
+        msf2_result result = release_deferred_voices(runtime, channel);
+        if (result != MSF2_OK) return result;
     }
     return MSF2_OK;
 }

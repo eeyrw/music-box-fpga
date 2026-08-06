@@ -31,8 +31,8 @@ host on 2026-08-05:
   capture cadence and reports invalid without a usable FPGA clock;
 - repeated AudioStreaming alternate-setting changes no longer wedge TinyUSB or
   produce Linux `-110` control-transfer timeouts;
-- the capture-only ELF containing the stream-resynchronization and rolling
-  clock-validation changes was written through the persistent OpenOCD server,
+- an earlier I2S-isolation ELF containing the stream-resynchronization and
+  rolling clock-validation changes was written through the persistent OpenOCD server,
   re-enumerated successfully, and reported a 48,000 Hz momentary rate in ALSA
   without new Clock Validity, `-110`, or XRUN kernel messages;
 - the later stopped-clock recovery ELF was also written through OpenOCD,
@@ -41,10 +41,11 @@ host on 2026-08-05:
   silence, so this proves clocking, packet delivery, and non-wedging behavior,
   but not sample or channel correctness.
 
-The verified capture used the capture-only build described below, so it did not
-initialize or drive SPI. The existing 30 MHz FPGA SPI result was obtained with
-the CH347 path; it establishes a tested ceiling for the current FPGA image, not
-yet an RP2040 signal-integrity result.
+That historical capture isolated I2S and did not initialize or drive SPI. The
+production firmware no longer has a reduced-function build: every image embeds
+MSF2, accepts MIDI, initializes SPI, and exposes I2S through UAC2. The existing
+30 MHz FPGA SPI result was obtained with the CH347 path; it establishes a tested
+ceiling for the current FPGA image, not yet an RP2040 signal-integrity result.
 
 During the final 2026-08-05 check, PipeWire retained the ALSA capture device and
 kept alternate setting 1 active. The current-source hardware check therefore
@@ -64,6 +65,51 @@ fault-injection test.
 
 The `0xcafe` vendor ID is a development identity. Replace it with an assigned
 VID/PID before distributing a product.
+
+The 2026-08-06 dual-core/DMA hardware pass additionally verified the production
+SGM-backed image against the live FPGA mailbox (`VERSION=0x000f0000`, SF2 size
+`324800670`), with zero SPI, command-format, I2S underrun, sample-drop, and
+deadline-miss errors. During a ten-second Butterfly MIDI run, Core 0 stayed
+below 343 us, one Core 1 MIDI packet peaked at 2.277 ms, a four-packet control
+batch at 6.548 ms, and one SPI DMA frame at 111 us. The 16-frame DMA queue
+reached only two entries and never overflowed.
+
+A follow-up 2026-08-06 direct-ALSA investigation found that the audible gaps
+were UAC2 silence substitution, not FPGA render underruns. The original
+eight-millisecond Clock Validity monitor compared a hardware millisecond count
+with DMA progress sampled later at an arbitrary main-loop phase. Under MIDI/SPI
+load it falsely invalidated the stable I2S source and deliberately emitted
+zero-filled USB packets. One 15-second capture contained 62 exact-zero runs of
+at least one millisecond, totaling 958 ms; UART counted 874 clock-invalid
+packets, zero capture-ring underflows, zero TinyUSB short writes, and zero PIO
+RX stalls. Giving only the I2S DMA channel high priority did not fix the issue
+and was reverted.
+
+The production monitor now measures DMA progress against the actual
+microsecond interval between main-loop samples. Its 16 ms window allows for the
+joined eight-word PIO RX FIFO's occupancy elasticity while still rejecting a
+sustained 47 or 49 kHz source. The same 15-second capture with ten seconds of
+Butterfly MIDI then reported 15,005 USB callbacks, 14,999 live packets, zero
+clock-invalid packets, zero underflows, zero short writes, zero PIO RX stalls,
+and a 59-frame minimum ring fill. The resulting
+`build/butter_fly_usb_timebased_clock.wav` had only the expected two-millisecond
+stream-open silence and no later exact-zero run of one millisecond or longer.
+The post-capture UART/FPGA check kept render underrun, sample-drop, and deadline
+miss counters at zero. Core 0 peaked at 493 us with no loop over one
+millisecond; SPI DMA peaked at 113 us, its queue high-water mark remained 2 of
+16, and both SPI error and queue-overflow counts remained zero.
+
+After the active-voice/control-path refactor, the default production ELF was
+programmed again through the Debug Probe on 2026-08-06. OpenOCD identified the
+replacement `ZB25VQ128` as 16 MiB, completed erase/program/verify with
+`Verified OK`, and reset both RP2040 cores. The device re-enumerated as
+`cafe:4018`; ALSA exposed USB MIDI at `hw:1,0,0` and UAC2 capture at `hw:1,0`.
+The live UART snapshots reported a valid I2S clock, idle SPI DMA, zero SPI
+errors, zero enqueue timeouts, a 5 ms maximum control-update interval, and no
+latched control fault. FPGA render underrun, sample-drop, and deadline-miss
+counters remained zero. `STALE_GENERATION_COUNT=1623` was an existing FPGA
+cumulative value accepted as the startup health baseline, not a post-boot
+increase.
 
 ## Wiring
 
@@ -105,13 +151,14 @@ The Pico is the SPI controller and the FPGA is the target.
 | `spi_cs_n` | Pico -> FPGA | GP17 | 22 | 2 | `H13` |
 | `spi_sclk` | Pico -> FPGA | GP18 | 24 | 14 | `J20` |
 | `spi_mosi` | Pico -> FPGA | GP19 | 25 | 3 | `G18` |
-| `spi_miso` | FPGA -> Pico | not used | not connected | 4 | `G17` |
+| `spi_miso` | FPGA -> Pico | GP16 | 21 | 4 | `G17` |
 | ground | common | GND | 23 is convenient | verified board ground | n/a |
 
 `J20` is the clock-capable FPGA input selected by the current XDC. Do not use
-the older header-pin-1 SCLK connection. The firmware does not read MISO because
-the MSF2 control path sends complete command transactions and requires no
-register response.
+the older header-pin-1 SCLK connection. MISO is required by production firmware:
+the RP2040 uses the split-phase register mailbox to verify FPGA interface
+version, platform status, and the loaded SF2 byte count before enabling synth
+control.
 
 SPI is mode 0, MSB first. CS remains asserted across the complete transaction.
 The default RP2040 system clock is 120 MHz and the requested SPI ceiling is
@@ -119,6 +166,23 @@ The default RP2040 system clock is 120 MHz and the requested SPI ceiling is
 realizable rate at or below the request if a different clock configuration
 cannot generate it exactly. Thirty megahertz is not a protocol requirement and
 may be reduced for initial wiring or signal-integrity work.
+
+### Debug Probe UART To Pico
+
+The Debug Probe's independent UART is used for firmware diagnostics and does
+not share the USB MIDI/audio device. Connect only the signals and ground; do not
+connect the probe's 3.3 V pin to the USB-powered Pico.
+
+| Signal | Direction | Debug Probe | Pico GPIO | Pico physical pin |
+| --- | --- | --- | ---: | ---: |
+| debug output | Pico -> Probe | `RX` | GP0 / UART0 TX | 1 |
+| debug command | Probe -> Pico | `TX` | GP1 / UART0 RX | 2 |
+| ground | common | `GND` | GND | 3 is convenient |
+
+The port is `115200 8N1`, with no hardware flow control. The RP2040 datasheet
+GPIO function table identifies GPIO0 as UART0 TX and GPIO1 as UART0 RX. On the
+host, the Debug Probe UART normally appears under
+`/dev/serial/by-id/usb-Raspberry_Pi_Debug_Probe_*if01`.
 
 ## Build Inputs
 
@@ -132,8 +196,10 @@ The build uses:
 Generate or verify the MSF2 image first:
 
 ```bash
-make mcu-sf2-asset SF2=assets/soundfonts/MT6276.sf2
-make verify-mcu-sf2-asset SF2=assets/soundfonts/MT6276.sf2
+make mcu-sf2-asset \
+  SF2='/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2'
+make verify-mcu-sf2-asset \
+  SF2='/home/yuan/下载/SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2'
 ```
 
 The firmware does not contain a placeholder parser waiting for a future asset.
@@ -144,27 +210,31 @@ starts accepting MIDI. The build fails if the selected file does not exist, and
 firmware startup fails closed if its header, profile, whole-image CRC, directory,
 or records are invalid.
 
-The image used for the 2026-08-05 Pico build is
+The image used for the current 2026-08-06 Pico build is
 `build/assets/wavetable.msf2`, SHA-256
-`d77d47916e4603fae7cfca3af7331f43fad10d8921393110a350aa0800988735`.
+`a9416d5ddd42a7b1e6247a6a5c60ac298d1a552b673d3b9fa5b5ec80bc84b888`.
+It was generated from `SGM-v2.01-NicePianosGuitarsBass-V1.2.sf2`, source
+SHA-256 `1b999795b8006c323e490596eb8c41acc0c50598748cb8bee9e71d75b54a6088`.
 Its manifest reports:
 
 | Field | Value |
 | --- | ---: |
-| compact image bytes | 11,564 |
-| source SF2 bytes | 1,525,780 |
-| selected presets | 130 |
-| zones | 258 |
-| generators | 1,049 |
-| sample descriptors | 74 |
-| modulation programs / terms | 3 / 8 |
+| compact image bytes | 626,604 |
+| source SF2 bytes | 324,800,670 |
+| source SF2 CRC32 | `0xb291edf2` |
+| selected presets | 285 |
+| zones | 15,714 |
+| generators | 109,811 |
+| sample descriptors | 1,824 |
+| modulation programs / terms | 36 / 114 |
 
 MSF2 is control metadata, not a duplicate PCM store. Its sample records contain
 addresses, lengths, loops, rates, pitches, and generator/modulator inputs. The
 corresponding source SF2 sample words remain in the WTSF image loaded into FPGA
-DDR3. Consequently, embedding and parsing MSF2 is already implemented, while
-cross-checking the embedded MSF2 source identity against the FPGA's currently
-loaded WTSF identity is still open.
+DDR3. Firmware now cross-checks source byte size against
+`PLATFORM_SF2_SIZE` before accepting MIDI. The FPGA platform window does not yet
+publish the WTSF source CRC32, so a complete cross-device CRC identity check
+remains open.
 
 Configure and build the firmware:
 
@@ -175,21 +245,6 @@ cmake -S mcu -B build/mcu -G Ninja \
   -DMSF2_IMAGE=build/assets/wavetable.msf2
 cmake --build build/mcu --parallel
 ```
-
-For I2S-to-USB isolation testing, build without MSF2 or SPI:
-
-```bash
-cmake -S mcu -B build/mcu-capture -G Ninja \
-  -DPICO_BOARD=pico \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DAPP_USB_CAPTURE_ONLY=1
-cmake --build build/mcu-capture --parallel
-```
-
-This mode does not require an `MSF2_IMAGE`, does not link the MSF2 runtime, and
-does not configure or drive the SPI pins. The composite MIDI endpoints remain
-enumerated for descriptor compatibility, but incoming MIDI packets are only
-drained and have no FPGA side effect.
 
 The main outputs are:
 
@@ -202,12 +257,7 @@ The main outputs are:
 
 The default firmware manages all 512 FPGA mono voices. Linked SoundFont stereo
 regions consume two mono voices. The embedded MSF2 image affects flash usage and
-therefore changes with the selected SoundFont/preset set; use
-`arm-none-eabi-size build/mcu/music_box_mcu.elf` for the exact build footprint.
-The verified 512-voice build uses 72,060 bytes of text and 96,224 bytes of BSS.
-The voice-state array is 77,824 bytes and its free stack is 1,024 bytes, leaving
-174,112 bytes outside static BSS in the RP2040's 264 KiB SRAM for stacks and
-other runtime use.
+therefore changes with the selected SoundFont/preset set.
 
 ### Build-Time Options
 
@@ -216,14 +266,18 @@ other runtime use.
 | `APP_SYS_CLOCK_KHZ` | `120000` | RP2040 system clock in kHz. |
 | `APP_FPGA_SPI_HZ` | `30000000` | Requested maximum SPI command rate. |
 | `APP_VOICE_COUNT` | `512` | MCU-managed mono voices; valid range is 1 through 512. |
+| `APP_CONTROL_UPDATE_PERIOD_MS` | `5` | FPGA gain/pitch/filter publication period; logical modulation time still advances in 1 ms units. |
+| `APP_ENABLE_DETAILED_DIAGNOSTICS` | `0` | Set to `1` for per-stage timing probes, normal-packet counters, last-START capture, and read-only DDR sampling commands. |
 | `APP_I2S_BCLK_PIN` | `8` | GPIO receiving FPGA BCLK. |
 | `APP_I2S_LRCLK_PIN` | `9` | GPIO receiving FPGA LRCLK. |
 | `APP_I2S_DATA_PIN` | `10` | GPIO receiving FPGA serial data. |
-| `APP_USB_CAPTURE_ONLY` | `0` | Set to `1` for UAC2/I2S testing without MSF2 or SPI. |
+| `APP_DEBUG_UART_BAUD` | `115200` | Debug Probe UART baud rate. |
+| `APP_DEBUG_UART_TX_PIN` | `0` | Pico debug output (UART0 TX). |
+| `APP_DEBUG_UART_RX_PIN` | `1` | Pico debug command input (UART0 RX). |
 | `MSF2_IMAGE` | `build/assets/wavetable.msf2` | Metadata image embedded into RP2040 flash. |
 
-SPI uses the `pico` board defaults: GP17 CS, GP18 SCLK, GP19 TX, and unused GP16
-RX. Changing SPI pins currently requires changing the board defaults or the
+SPI uses the `pico` board defaults: GP17 CS, GP18 SCLK, GP19 TX, and GP16 RX.
+Changing SPI pins currently requires changing the board defaults or the
 firmware source; the three I2S pins are explicit CMake options.
 
 The post-build step extracts the compiled configuration descriptor and checks
@@ -273,7 +327,7 @@ Program an ELF, not a UF2, through the Debug Probe:
   -f interface/cmsis-dap.cfg \
   -f target/rp2040.cfg \
   -c 'adapter speed 5000' \
-  -c 'program build/mcu-capture/music_box_mcu.elf verify reset exit'
+  -c 'program build/mcu/music_box_mcu.elf verify reset exit'
 ```
 
 The successful probe text identifies `zbit zb25vq128`, `16384 KiB`, then ends
@@ -287,25 +341,115 @@ monitor state observed during a halt as live I2S behavior.
 Startup proceeds in this order:
 
 1. switch the RP2040 system clock to the configured frequency;
-2. initialize SPI mode 0 and deassert CS, except in capture-only builds;
-3. start PIO and DMA I2S capture;
-4. validate the embedded MSF2 image and initialize 512 voice slots, except in
-   capture-only builds;
-5. start the 1 ms control timer;
-6. initialize the TinyUSB device stack;
-7. service USB MIDI and, in the full build, MSF2 control work from one
-   serialized main loop.
+2. initialize the 115200-baud UART0 debug console on GP0/GP1;
+3. initialize SPI mode 0, including GP16 MISO, and deassert CS;
+4. start PIO and DMA I2S capture;
+5. validate the embedded MSF2 image, wait up to 30 seconds for the FPGA register
+   mailbox and loaded asset, verify interface version `0x000f0000` and SF2 byte
+   size, then send FLUSH and initialize 512 voice slots;
+6. print the handshake values and SPI counters;
+7. start the 1 ms control timer;
+8. initialize the TinyUSB device stack;
+9. enable the watchdog, launch Core 1 with an explicit 8 KiB stack, and wait for
+   its FIFO ready token;
+10. enter the independent Core 0 and Core 1 service loops.
 
-The timer interrupt only increments a pending-tick counter. All MIDI and MSF2
-state mutation occurs in the main loop, so it does not race the timer ISR.
-Command writes are synchronous and retain CS for the entire stack-backed frame.
+The timer interrupt only increments one wrapping global millisecond counter.
+No MSF2, SPI, UART, USB, or I2S work runs in that ISR.
 
-Clock setup failure, invalid MSF2 metadata, timer allocation failure, USB
-initialization failure, SPI sink failure, or an MSF2 runtime error enters a
-fatal loop that toggles the Pico LED every 100 ms. UART and USB stdio are both
-disabled; the production USB interfaces are not mixed with a debug CDC port.
-The watchdog resets a main-loop fault after two seconds so a failed firmware
-cannot leave Linux blocked indefinitely in a synchronous USB audio request.
+Core 0 owns the real-time capture boundary: PIO/DMA I2S service, I2S clock
+monitoring, TinyUSB, UAC2 callbacks, and USB-MIDI endpoint reads. It copies at
+most eight complete four-byte USB-MIDI event packets per loop into a 256-entry
+atomic single-producer/single-consumer queue. It never calls the MSF2 runtime or
+waits for SPI. Core 1 exclusively owns MIDI semantic dispatch, the MSF2 runtime,
+command batching, SPI DMA submission, and the Debug Probe UART. It
+drains at most four MIDI packets per loop, forcing synth timebase service and an
+SPI flush between dense MIDI batches. TinyUSB mounted/ready state is exported
+to Core 1 only through atomic snapshots; Core 1 never calls TinyUSB.
+
+The runtime maintains a dense list of active voice IDs plus a reverse position
+in each active voice. Allocation adds one ID, and reclaim removes it in constant
+time by moving the last ID into the vacated position. Capacity remains 512, but
+control updates, Note Off matching, pedals, channel modes, exclusive-class
+handling, and voice stealing inspect active voices rather than scanning 512
+slots. The free stack remains the constant-time source of unused voice IDs.
+
+Core 1 compares the wrapping millisecond counter directly with the previous
+control publication time. At the default five-millisecond interval,
+`msf2_runtime_advance_control` visits every currently active voice once,
+advances its envelope and LFO through the complete elapsed interval, and emits
+only the newest gain, pitch, and filter state. A late call therefore preserves
+logical time without replaying obsolete intermediate SPI updates. There is no
+pending-tick transaction, full-table cursor, or sliced-scan completion state.
+UART status reports the last publication time, maximum observed interval, and
+total completed logical ticks. Lifecycle MIDI commands remain immediate.
+
+The command sink groups complete commands into `0xa5` frames of at most 63
+words, submitting a full frame immediately and an incomplete tail at the next
+1 ms boundary. A 16-frame FIFO copies the serialized bytes before returning.
+Paired TX/RX DMA channels start together: TX feeds the SPI FIFO while RX drains
+MISO, and the RX-complete IRQ raises CS before starting the next frame. Normal
+Core 1 production does not wait for each command frame. If all 16 copied frames
+remain occupied, only Core 1 waits for DMA space, for at most 100 ms; Core 0 and
+USB/I2S continue independently. Register mailbox transactions and `0xa6` FLUSH
+first wait for this DMA queue to become idle because they share the SPI target.
+Register reads use one 12-byte request followed by CRC-protected 16-byte fetches;
+BUSY and corrupt fetch responses are retried without reissuing the register
+request. Once per 100 ms, when the command batch and DMA queue are empty, Core 1
+compares `COMMAND_ERROR_COUNT` and `STALE_GENERATION_COUNT` with their startup
+baselines. Three consecutive mailbox failures or any counter change enters the
+control fault state. This detects rejected command transactions; DMA completion
+alone proves only that bytes were clocked.
+
+Clock setup failure, invalid MSF2 metadata, initial FPGA handshake failure,
+timer allocation failure, or USB initialization failure enters a fatal loop
+that reports a reason over UART and toggles the Pico LED every 100 ms.
+UART stdio is enabled on GP0/GP1; USB stdio remains disabled so the production
+USB interfaces are not mixed with a debug CDC port.
+Core 0 feeds the two-second watchdog only while the Core 1 heartbeat is less
+than 500 ms old, so a reset distinguishes a Core 0 stall from a stale Core 1
+heartbeat. The production build does not write a stage breadcrumb on every
+service-loop phase. Detailed-diagnostics builds additionally retain Core 0/Core
+1 stages and the USB-MIDI packet count in watchdog scratch fields; fatal startup
+always stores the fatal marker.
+
+Runtime MIDI, command-sink, MSF2, or SPI-monitor failure does not deliberately
+reset the MCU. It latches `CONTROL fault`, stops consuming more MIDI or advancing
+the synth policy, and continues Core 0 USB/I2S service, Core 1 UART service, and
+both heartbeats. This fault quarantine preserves the current runtime's voice
+generations for diagnosis instead of rebooting and losing ownership. A full
+cross-core MIDI queue is handled before reading another TinyUSB packet, allowing
+USB endpoint backpressure rather than dropping a lifecycle event. The fault is
+not automatically cleared because a partially accepted FPGA transaction cannot
+be reconstructed without an acknowledgement protocol.
+
+The UART accepts single-character commands:
+
+| Command | Action |
+| --- | --- |
+| `?` | Print command help. |
+| `s` | Print startup handshake values and SPI transaction/error counters. |
+| `v`, `p`, `z` | Read `VERSION`, `PLATFORM_STATUS`, or `PLATFORM_SF2_SIZE`. |
+| `c`, `e`, `g` | Read `CMD_FIFO_STATUS`, `COMMAND_ERROR_COUNT`, or `STALE_GENERATION_COUNT`. |
+| `d` | Dump I2S state and FPGA render, FIFO, compressor, memory, and sample-window diagnostics. |
+| `m` | Print TinyUSB MIDI readiness, RX callbacks, packet count, and last packet. |
+| `u` | Print UAC2 silence/discard reasons, TinyUSB short writes, PIO RX stalls, ring overruns, and lost frames. |
+| `a` | Send immediate `VOICE_STOP` commands for every voice generation currently owned by this MCU runtime. |
+| `n`, `o` | Send channel-0 C4 Note On or Note Off through the normal MSF2/`0xa5` path. |
+| `f` | Send the dedicated `0xa6` FLUSH transaction. |
+
+With `APP_ENABLE_DETAILED_DIAGNOSTICS=1`, `t`/`T` print or reset per-stage
+timing maxima, `w` prints the last START payload, and `r`/`R` perform read-only
+DDR sampling through the FPGA debug aperture. The default production build does
+not read a timer around every service stage, count every normal audio packet,
+capture START payloads, or compile the DDR sampling commands. Permanent fault
+counters, underflow/overrun indicators, SPI errors, and watchdog state remain.
+The I2S producer runs whenever its external clock is present, including while
+the host leaves AudioStreaming alternate setting 0 selected. Consequently,
+`ring_overruns` and `lost_frames` normally increase after the 2,048-frame ring
+fills with no open host capture stream. Judge capture-path loss only from the
+counter delta while alternate setting 1 is actively consuming audio; the
+absolute value after idle time is not a streaming failure.
 
 ## USB Composite Device
 
@@ -350,20 +494,22 @@ without USB mute or volume processing.
 
 Clock Source 3 is external because the sample cadence comes from FPGA BCLK, not
 USB SOF. Frequency and Clock Validity are read-only controls. Frequency `CUR`
-and `RANGE` both describe a fixed 48 kHz source. A timer samples the DMA producer
-once per millisecond. Clock Validity is evaluated over an eight-millisecond
-window and requires 382 through 386 captured frames around the nominal 384.
-This tolerates frames moving across individual timer boundaries without
-accepting a sustained 47 or 49 kHz source as the advertised fixed 48 kHz clock.
-A completely stopped producer invalidates after four 1 ms ticks. The USB EP0
-callback only returns this cached state, so a missing or stopped I2S clock
-cannot block a control request while waiting for GPIO activity.
+and `RANGE` both describe a fixed 48 kHz source. The global timer ISR only
+increments a millisecond counter. Core 0 notices each new count, samples DMA
+progress, and supplies the actual microsecond interval between those main-loop
+samples to the Clock Validity monitor. A 16 ms or longer window accepts nominal
+48 kHz within ten frames. This covers sampling-boundary jitter and up to eight
+frames of joined PIO RX FIFO occupancy change, while a sustained 47 or 49 kHz
+source differs by at least 16 frames in 16 ms and remains invalid. A completely
+stopped producer invalidates after four milliseconds. The USB EP0 callback only
+returns this cached state, so a missing or stopped I2S clock cannot block a
+control request while waiting for GPIO activity.
 
 If a source that was previously valid stops and later returns at a stable
 48 kHz cadence, the firmware does not trust the PIO's interrupted bit counter.
 It disables the state machine, aborts and rearms DMA, clears the RX FIFO and
 ring cursors, jumps back to the initial LRCLK synchronization sequence, and
-then measures a fresh eight-millisecond clock window. Clock Validity remains
+then measures a fresh 16-millisecond clock window. Clock Validity remains
 false and USB capture supplies silence throughout this recovery. This handles
 FPGA reset, cable removal, and a source restarting at an unrelated frame phase.
 
@@ -414,7 +560,7 @@ disconnected, or not yet driving I2S.
 
 ### Feedback Endpoint Decision
 
-The current capture-only UAC2 function intentionally has no feedback endpoint.
+The UAC2 capture function intentionally has no feedback endpoint.
 Feedback is direction-specific rather than a feature that every asynchronous
 UAC2 stream needs:
 
@@ -519,11 +665,11 @@ LRCLK transition, skips the Philips-I2S one-bit delay, then samples continuously
 in 32-bit groups on BCLK rising edges. The RX word contains left PCM in bits
 31:16 and right PCM in bits 15:0.
 
-After a previously valid clock has been absent for at least four timer ticks,
+After a previously valid clock has been absent for at least four milliseconds,
 the first subsequently stable 48 kHz window requests a complete PIO/DMA restart
-from the main loop. Recovery therefore takes approximately 16 ms after useful
-clocking returns: up to eight milliseconds to recognize the returned cadence,
-followed by restart and another eight milliseconds to validate frames captured
+from the main loop. Recovery therefore takes approximately 32 ms after useful
+clocking returns: up to 16 milliseconds to recognize the returned cadence,
+followed by restart and another 16 milliseconds to validate frames captured
 from the reacquired LRCLK boundary. The USB ring then accumulates its normal
 two-millisecond target before live PCM resumes.
 
@@ -534,10 +680,21 @@ other frame and measured about 24 kframes/s. Wrapping directly to `SET X` keeps
 bit alignment and produces one DMA word for every 48 kHz stereo frame.
 
 DMA stores words in an aligned 2,048-frame ring, about 42.7 ms at 48 kHz. Each
-DMA transfer is bounded to 2,048 frames; a highest-priority DMA IRQ reloads the
+DMA transfer is bounded to 2,048 frames; a highest-priority CPU IRQ reloads the
 next transfer so the hardware's finite `TRANS_COUNT` cannot expire after long
 uptime. If the producer laps the consumer, the oldest overwritten frames are
 discarded and reading resumes from the newest ring contents.
+
+RP2040 datasheet section 2.5 states that simultaneously requesting DMA channels
+are scheduled round-robin. The channel `HIGH_PRIORITY` bit (DMA control register,
+datasheet page 113) changes internal issue order but not the DMA master's bus
+priority. PIO section 3.5.3 documents the joined eight-entry FIFO and explicitly
+conditions its maximum throughput on DMA not being slowed by contention; the
+`FDEBUG.RXSTALL` sticky flag records a blocking PUSH stalled on a full RX FIFO.
+Firmware reports that flag through UART `u`. Hardware A/B testing observed no
+RX stall and no capture-ring underflow, so the fixed configuration leaves all
+three DMA channels at their default priority; the gap fix is accurate clock
+measurement, not priority tuning.
 
 This recovery detects stopped/restarted clocks through DMA progress. It cannot
 prove signal integrity or PCM correctness: a BCLK glitch that still yields the
@@ -564,18 +721,46 @@ host-to-device bulk OUT endpoint and supports:
 - Control Change;
 - Program Change and Bank Select through CC0/CC32;
 - channel pressure;
-- 14-bit pitch bend.
+- 14-bit pitch bend;
+- sustain, sostenuto, and soft pedals;
+- CC120 All Sound Off, CC121 Reset All Controllers, and CC123 through CC127
+  All Notes Off behavior;
+- RPN pitch-bend sensitivity, fine tuning, and coarse tuning;
+- SoundFont NRPN generator offsets through NRPN MSB 120;
+- MIDI System Reset (`0xff`), which stops voices and restores channel policy.
 
-System messages and SysEx are ignored because the MSF2 runtime has no matching
-action. RPN/NRPN selector and data-entry sequences are not interpreted. The
-MIDI IN endpoint is present in the standard bidirectional MIDI descriptor, but
-the firmware currently emits no device-to-host MIDI messages.
+Other system messages and SysEx are ignored because the MSF2 runtime has no
+matching action. The MIDI IN endpoint is present in the standard bidirectional
+MIDI descriptor, but the firmware currently emits no device-to-host MIDI
+messages.
+
+MIDI channel 10 (zero-based channel 9) always selects SoundFont bank 128.
+CC0/CC32 cannot move that channel to a melodic bank; Program Change still
+selects the requested percussion program inside bank 128. Other channels retain
+normal 14-bit bank selection.
+
+Core 0 reads at most eight USB-MIDI packets per loop and publishes them to the
+256-packet cross-core SPSC queue. Core 1 consumes at most four packets per loop,
+so Note On materialization cannot monopolize the control core for a full
+16-event USB burst. If the SPSC queue is full, Core 0 leaves the next packet in
+TinyUSB instead of reading and then dropping it; the USB OUT path supplies the
+backpressure.
+Queue depth, high-water mark, overflow count, and the last complete packet are
+atomic diagnostic snapshots printed by UART command `m`.
+Continuous controls, pitch bend, channel pressure, key pressure, RPN tuning,
+and NRPN generator offsets update channel state only; affected voice gain,
+pitch, and filter commands are calculated during the next active-voice control
+update. Inactive capacity therefore adds no controller cost. Note On/Off, pedal
+transitions, CC120, CC123-127, and System Reset
+remain lifecycle operations and retain their immediate generation-aware
+semantics.
 
 The embedded MSF2 sidecar is validated at startup and supplies preset lookup,
 zone selection, SoundFont generator conversion, controller/modulator state,
 and a fixed-capacity 512-voice allocator. Up to four matching layers may start
-for one Note On. The 1 ms runtime tick updates MCU-owned modulation state and
-emits FPGA commands; FPGA-owned phase, volume envelope, filter state, mixing,
+for one Note On. MCU-owned modulation time advances in 1 ms units and publishes
+the newest gain/pitch/filter state every 5 ms; FPGA-owned phase, volume envelope,
+filter state, mixing,
 effects, and PCM rendering remain on the FPGA.
 
 Each SPI command transaction is:
@@ -590,10 +775,33 @@ remaining   command words, each high byte first
 CRC covers the count and command words but not opcode `0xa5`. The command
 semantics are defined in `../command_stream.md`; the SPI envelope is defined in
 `../design/transport/spi_command_stream.md`.
+The firmware appends complete commands to a pending frame and normally sends
+one multi-command transaction rather than one transaction per command. No
+command is split: if the next command would exceed the 63-word payload limit,
+the current frame is sent first and the complete command begins a new frame.
 
-The firmware validates the MSF2 image itself but does not yet compare its source
-identity against the WTSF/SF2 image loaded into FPGA DDR3. That cross-device
-bundle check remains a deployment requirement.
+At startup the firmware also sends the fixed `a6 00 aa d7` FLUSH transaction.
+This cancels an unpublished bridge transaction and clears the FPGA command FIFO
+and parser before new MCU-owned commands are issued. It does not stop voices
+that the FPGA had already accepted; normal System Reset expands voice STOPs
+through the generation-aware runtime.
+
+FLUSH does not transfer ownership of voices accepted before an MCU reset. The
+runtime can STOP only generations it has started and still tracks. UART `a`
+immediately stops every voice owned by the current MCU session, but it is not a
+recovery mechanism for unknown voices left by an earlier crashed session. Until
+a readable ownership/reconciliation protocol exists, resetting the MCU without
+also resetting the FPGA synth state can leave such old voices unreachable.
+
+Before FLUSH, the firmware reads `VERSION`, `PLATFORM_STATUS`, and
+`PLATFORM_SF2_SIZE` through the `0x5a` request / `0x5b` fetch mailbox. Startup
+fails closed if the interface version differs, the platform reports an error,
+the FPGA does not report `ASSET_LOADED` within 30 seconds, or its SF2 size does
+not match the source identity recorded in embedded MSF2 metadata.
+
+The startup size comparison catches a missing or differently sized WTSF/SF2
+image. A future FPGA source-CRC register is still required for a complete
+cross-device identity check when two source files have the same byte count.
 
 ## Linux Verification
 
@@ -652,24 +860,32 @@ rather than assuming card 2.
 | Audio device lists but recording cannot install parameters | Check Clock Validity first; Linux rejects stream setup while the external UAC2 clock is invalid. |
 | I2S is present but Clock Validity stays false | Check for 48 kHz LRCLK and 1.536 MHz BCLK. A 24 kHz producer indicates an old firmware whose PIO re-synchronized every frame. |
 | `ep 81 was already available` or repeated `-110` after reopening capture | Verify the firmware includes `rp2040_usb_iso_fix.c`; reset and reflash the current ELF. |
+| Pico enters fatal blink before USB enumerates | Check all four SPI wires, especially GP16 MISO, FPGA MIG/SD loader status, and MSF2/WTSF size identity; startup waits at most 30 seconds. |
 | MIDI transfer succeeds but FPGA is silent | Check Pico-to-FPGA SPI wiring, FPGA `asset_loaded`, selected MSF2/WTSF identity, and FPGA command diagnostics. |
-| Pico LED toggles every 100 ms | Fatal firmware error: clock, MSF2 validation, timer, USB initialization, SPI sink, or runtime failure. |
-| Intermittent MIDI/audio USB failures | Check USB power/cable first, then main-loop stalls and synchronous SPI command burst duration. |
+| Pico LED toggles every 100 ms | Fatal startup error: clock, MSF2 validation, initial FPGA handshake, timer, or USB initialization. |
+| UART `s` reports nonzero `CONTROL fault` | Core 1 quarantined MIDI after a runtime, SPI enqueue, or FPGA command-health failure. USB/I2S remains live; inspect command counters before resetting either side. |
+| UART `u` reports a large ring-overrun count before recording starts | Expected when I2S is running but the host is not consuming UAC2 audio. Measure the counter delta during an active direct-ALSA capture. |
+| Intermittent MIDI/audio USB failures | Use UART `u`, `m`, and `d`; use `t` only in a detailed-diagnostics build. Distinguish deliberate clock-invalid silence, capture-ring underflow/overrun, TinyUSB short writes, PIO RX stalls, MIDI/SPI pressure, and FPGA underrun/drop/deadline counters. |
 | I2S channels swapped or shifted | Confirm Philips I2S, LRCLK low for left, one-bit delay, 16-bit slots, and rising-edge sampling. |
 
 ## Source And Verification Map
 
 | Source | Responsibility |
 | --- | --- |
-| `mcu/main.c` | Clock/SPI/USB initialization, MIDI dispatch, UAC2 controls, main loop, fatal handling. |
+| `mcu/main.c` | Clock/USB initialization, MIDI packet dispatch, UAC2 controls, two core loops, watchdog, and startup fatal handling. |
+| `mcu/debug_console.c` | Nonblocking budgeted UART RX and queued UART TX. |
 | `mcu/usb_descriptors.c` | Device, UAC2, MIDI, endpoint, entity, and string descriptors. |
 | `mcu/tusb_config.h` | TinyUSB class buffers and exact audio parser boundary. |
 | `mcu/i2s_capture.c` | Philips-I2S PIO program, DMA ring, producer accounting, and deferred PIO/DMA frame resynchronization. |
-| `mcu/i2s_clock_monitor.c` | Eight-millisecond 48 kHz validation, four-millisecond stopped-clock detection, and recovery-ready state. |
+| `mcu/i2s_clock_monitor.c` | Actual-time 16-millisecond 48 kHz validation, four-millisecond stopped-clock detection, and recovery-ready state. |
 | `mcu/rp2040_usb_iso_fix.c` | TinyUSB 0.18 RP2040 isochronous reactivation backport. |
 | `mcu/usb_audio_rate_match.c` | Stream-open resynchronization and 47/48/49-frame asynchronous packet policy. |
-| `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader and fixed-capacity runtime. |
-| `mcu/msf2_example.c` | 512-voice integration, MIDI policy, command packing, synchronous SPI sink. |
+| `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader, dense active-voice index, allocator, MIDI voice semantics, and coalesced control update. |
+| `mcu/midi_policy.c` | Bank/program state, RPN/NRPN, channel modes, pedals, and System Reset. |
+| `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing and `0xa6` FLUSH framing. |
+| `mcu/synth_controller.c` | Production 512-voice integration, startup identity checks, 5 ms publication, command batching, and 100 ms FPGA command-health monitoring. |
+| `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |
+| `mcu/spi_dma_queue.c` | Bounded copied-frame FIFO owned by the RP2040 SPI DMA transport. |
 | `mcu/check_usb_descriptor.sh` | Post-link structural validation of compiled USB descriptors. |
 
 Run the focused MCU checks and normal project gates after changes:
@@ -677,6 +893,7 @@ Run the focused MCU checks and normal project gates after changes:
 ```bash
 make test-mcu-usb-audio-rate
 make test-mcu-i2s-clock
+make test-mcu-firmware
 make test-mcu-sf2-asset
 cmake --build build/mcu --parallel
 make lint
@@ -694,7 +911,7 @@ The stopped-clock recovery acceptance test is intentionally deferred. When the
 hardware setup is available, run capture before interrupting the source, keep
 the interruption longer than the four-millisecond loss threshold, then restore
 48 kHz I2S without coordinating its frame phase. Acceptance requires continued
-USB responsiveness, silence during the approximately 18-millisecond reacquire
+USB responsiveness, silence during the approximately 34-millisecond worst-case reacquire
 interval, correctly aligned stereo PCM afterward, and no new `-110`, Clock
 Validity, XRUN, or DMA failure messages in the kernel log.
 

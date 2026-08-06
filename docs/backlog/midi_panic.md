@@ -8,7 +8,7 @@ command or RTL contract. Current behavior remains defined by
 
 Status reviewed against MIDI 1.0 Detailed Specification 4.2.1, the real-time
 MIDI host, both MCU policies, the command scheduler, and production RTL on
-2026-08-03.
+2026-08-06.
 
 ## Terminology And Required MIDI Semantics
 
@@ -38,11 +38,16 @@ especially Channel Mode Messages pages 24-25, System Reset, and Appendix A-5.
 | Operation | Runtime-parsed SF2 policy | Compiled MCU asset policy | RTL operation |
 | --- | --- | --- | --- |
 | CC120 All Sound Off | Implemented per channel | Implemented per channel | Expanded into generation-matched `VOICE_STOP` commands |
-| CC123 All Notes Off | Implemented per channel with pedal deferral | Not implemented | Expanded into `VOICE_RELEASE` when applicable |
-| CC124-127 mode messages | Perform All Notes Off; mode state is not modeled | Not implemented | No mode or channel semantics |
-| CC121 Reset All Controllers | Implemented per channel | Not implemented | Reflected through later per-voice updates only |
-| System Reset `0xff` | Not decoded as a host control event | Not decoded | No operation |
+| CC123 All Notes Off | Implemented per channel with pedal deferral | Implemented per channel with pedal deferral | Expanded into `VOICE_RELEASE` when applicable |
+| CC124-127 mode messages | Perform All Notes Off; mode state is not modeled | Perform All Notes Off; mode state is not modeled | No mode or channel semantics |
+| CC121 Reset All Controllers | Implemented per channel | Implemented per channel | Reflected through later per-voice updates only |
+| System Reset `0xff` | Not decoded as a host control event | Stops voices and resets channel policy | Expanded STOPs; no atomic global operation |
 | Global emergency silence | Host may send CC120 over all 16 channels | Shutdown loops over all 16 channels | No global or atomic operation |
+
+The RP2040 UART `a` command now expands immediate STOPs across the dense set of
+voices owned by the current MCU runtime. It is useful for current-session
+silence, but remains generation-matched and therefore cannot stop a voice whose
+generation was lost in an earlier MCU reset.
 
 The real-time host gives note-off and CC120/CC123/CC124-127 events lifecycle
 queue treatment. At normal shutdown it stops MIDI input, expands CC120 over all
@@ -81,23 +86,19 @@ may also contain staged or FIFO-resident START commands. A voice can therefore
 start after an operator has requested panic unless input, host queues, bridge
 staging, the command FIFO, and active state are coordinated.
 
-### PANIC-003: MCU Policies Are Not MIDI-Equivalent
+### PANIC-003: MCU Policy Equivalence Requires Ongoing Regression
 
-The runtime-parsed SF2 policy implements CC120, CC121, CC123, and the All Notes
-Off aspect of CC124-127. The compiled MCU asset policy implements only CC120
-among those messages. A MIDI file or live input can therefore behave
-differently when `--mcu-asset` is selected.
+Both policies implement CC120, CC121, CC123, and the All Notes Off aspect of
+CC124-127. The compiled firmware also has focused pedal, controller reset,
+RPN/NRPN, and System Reset tests. Future channel-mode changes must continue to
+update both policies and their exact command regressions together.
 
-The compiled policy also requires focused tests proving that CC120 stops
-active, sustain-held, and released voices on only the addressed channel.
+### PANIC-004: System Reset Is Not Atomic Panic
 
-### PANIC-004: System Reset Policy Is Undefined
-
-The live byte decoder accepts channel voice messages but does not surface MIDI
-System Reset `0xff`. The project must explicitly choose either to ignore it, as
-permitted for devices that do not use system real-time messages, or implement
-the complete reset behavior. It must not be treated as an alias for CC120
-without documenting the omitted reset semantics.
+The RP2040 USB-MIDI decoder handles System Reset `0xff` by stopping every owned
+voice and restoring controller, bank, program, RPN, and NRPN defaults. This is a
+standards-facing reset policy, but it still expands to per-voice commands and
+therefore does not solve the bounded global panic requirement.
 
 ### PANIC-005: Effect And Output Tail Policy Is Undefined
 
@@ -112,13 +113,30 @@ global effect history. The project needs two explicit policies:
 - operator emergency panic: guarantee bounded silence, which may clear shared
   effect history and buffered output.
 
+### PANIC-006: MCU Reset Loses Voice Ownership
+
+The FPGA preserves active voices across SPI `0xa6` FLUSH, while the RP2040
+runtime initializes a new generation table after reset. The command protocol
+requires an exact generation match and exposes no readable per-voice generation
+table. Consequently, neither a 512-slot MCU scan nor current-session UART `a`
+can address voices accepted before the reset.
+
+The RP2040 now quarantines runtime transport errors instead of deliberately
+rebooting: it stops consuming MIDI, retains its current generation table, keeps
+USB/I2S and UART alive, and compares FPGA command-error/stale-generation counts
+with their startup baselines every 100 ms. This prevents a local queue-pressure
+fault from unnecessarily creating orphan voices, but it does not solve power
+loss, manual reset, firmware update, watchdog reset, or missing transaction
+acknowledgement. The bounded global RTL operation proposed below remains the
+required recovery mechanism.
+
 ## Proposed Ownership And Dependency Order
 
 Keep MIDI semantics in the host. Do not add MIDI channels, sustain state, or
 controller parsing to each RTL voice merely to support panic.
 
-1. Bring `McuSf2AssetRuntime` to semantic parity for CC121, CC123, and the All
-   Notes Off aspect of CC124-127, including sustain behavior.
+1. Keep the two MCU policies in semantic parity for controller and channel-mode
+   behavior, including combined sustain/sostenuto sequences.
 2. Add a scheduler panic API that first blocks new Note On submission and
    atomically abandons unsent host commands with explicit diagnostics.
 3. Choose and document an out-of-band FPGA emergency operation. A normal A5
@@ -129,7 +147,7 @@ controller parsing to each RTL voice merely to support panic.
    bounded global silence independent of the active-voice count.
 5. Define whether emergency silence clears the output FIFO, compressor
    lookahead, chorus, and reverb. Preserve the narrower CC120 behavior.
-6. Decide whether MIDI System Reset is ignored or implemented completely.
+6. Keep MIDI System Reset distinct from the future bounded emergency operation.
 7. Add operator entry points only after host queue cancellation and RTL
    acknowledgement are both observable.
 
@@ -164,4 +182,3 @@ is released.
 - Hardware qualification measures panic-to-silence latency at maximum
   polyphony and with host, bridge, command FIFO, renderer, and output buffers
   deliberately occupied.
-

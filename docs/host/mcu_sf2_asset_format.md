@@ -298,30 +298,52 @@ sample and loop addresses, layer order, and command framing are exact.
 ## Pure-C Runtime Integration
 
 The public runtime API in [`../../mcu/msf2.h`](../../mcu/msf2.h) uses
-caller-owned channel, voice, and
-free-stack arrays. `msf2_runtime_init` binds those arrays, the validated image,
+caller-owned channel, voice, and free-stack arrays. The runtime object also
+contains a dense active-voice ID array; each active voice stores its reverse
+position so reclaim can replace it with the last active ID in constant time.
+`msf2_runtime_init` binds the caller-owned arrays, the validated image,
 and a bounded command sink. MIDI handlers call the corresponding
 `msf2_runtime_note_on`, `msf2_runtime_note_off`, control-change, pitch-bend, or
 pressure entry point. The runtime never reads a system clock. Firmware advances
 time through `msf2_runtime_advance_samples`; the function accumulates partial
 intervals and executes one control tick for every 48 elapsed output samples.
-At 48 kHz this is exactly 1 ms. A serialized 1 ms timer callback may instead
-call the convenience entry `msf2_runtime_control_tick`, which is exactly one
-48-sample advance. MIDI and timer calls must not concurrently mutate one runtime
+At 48 kHz this is exactly 1 ms. A serialized integration may instead call the
+convenience entry `msf2_runtime_control_tick`, which is exactly one 48-sample
+advance. MIDI and time-service calls must not concurrently mutate one runtime
 instance.
 
-[`../../mcu/msf2_example.c`](../../mcu/msf2_example.c) is a compiled firmware
-integration example with static storage, serialized timer service, Bank
-Select/Program Change state, and MIDI event adapters. The same file implements
-the complete synchronous SPI command sink. Firmware supplies:
+`msf2_runtime_advance_control` accepts the number of elapsed logical ticks,
+visits only the dense active set once, advances each voice through the complete
+interval, and emits only the final gain, pitch, and filter state. This is time
+coalescing, not replay: a late caller preserves envelope and LFO phase without
+sending obsolete intermediate SPI commands. It has no scan cursor, pending-tick
+transaction, or completion state.
+
+[`../../mcu/synth_controller.c`](../../mcu/synth_controller.c) is the production
+firmware integration with static storage, Bank Select/Program Change state, and
+MIDI event adapters. The same file implements command batching and hands copied
+frames to the board's asynchronous SPI DMA queue. Firmware supplies:
 
 - linker symbols for the compact-v2 image start and end;
 - `platform_spi_write_mode0_cs0` for a complete SPI mode-0, MSB-first transfer;
-- `platform_irq_save` and `platform_irq_restore` for timer-counter handoff;
-- a 1 ms timer that calls `app_synth_1ms_timer_isr`.
+- `platform_irq_save` and `platform_irq_restore` for transport synchronization;
+- a 1 ms timer ISR that only increments a wrapping global counter;
+- a Core 0 USB/I2S loop that sends complete USB-MIDI packets through an atomic
+  SPSC queue;
+- a Core 1 control loop that passes the observed counter to
+  `app_synth_service`, batches commands, and owns SPI.
+
+The production integration accumulates every elapsed counter delta. A late
+control loop advances all logical milliseconds in one active-only pass and
+emits only current command values. The RP2040 integration uses a 5 ms
+publication threshold by default. Internal envelope/LFO phase still advances
+in 1 ms asset-profile units, while only the final replaceable FPGA parameter
+state is published, equivalent to the PC real-time host's default 5 ms batch
+plus command coalescing behavior. Empty capacity has no scan cost.
 
 The SPI HAL must keep chip select asserted across the complete transaction and
-must consume or copy the stack-owned byte buffer before returning. The example
+must copy the stack-owned byte buffer before an asynchronous enqueue returns.
+The example
 emits the command frame defined by
 [`../command_stream.md`](../command_stream.md#spi-command-transaction):
 
@@ -333,16 +355,33 @@ CRC-16/CCITT-FALSE covers `word_count` followed by every big-endian command-word
 byte; it does not cover opcode `0xa5`. The command sink rejects empty, oversized,
 or internally inconsistent commands before calling the HAL. HAL failures return
 through `MSF2_ERR_SINK` to the MIDI or control-service caller.
+The integration batches complete commands into frames of at most 63 words and
+flushes before a command would cross that limit. Full frames are submitted
+immediately and an incomplete tail is submitted on a 1 ms boundary. Paired
+SPI TX/RX DMA and a bounded copied-frame queue keep normal command transport
+asynchronous. If the copied queue stays full, only the control core applies
+bounded producer backpressure; mailbox or FLUSH operations wait for the queue
+to drain first.
 
-The example forwards MIDI CC values as SoundFont modulation sources and applies
-runtime policy for sustain, soft pedal, and All Sound Off. Bank Select and
-Program Change remain application state. RPN/NRPN selector and data-entry
-sequencing is explicitly not implemented; raw selector CC forwarding is not a
-complete RPN/NRPN mapping.
+The production integration forwards MIDI CC values as SoundFont modulation
+sources and applies runtime policy for sustain, sostenuto, soft pedal, channel
+modes, and System Reset. Bank Select and Program Change remain application
+state. The MIDI policy layer interprets RPN pitch-bend sensitivity/fine/coarse
+tuning and SoundFont NRPN generator offsets, then updates explicit runtime
+controller state.
+
+Continuous controller, pitch-bend, pressure, RPN, and NRPN entry points only
+update channel state. They do not synchronously walk every active voice or emit
+a 512-voice SPI burst from USB-MIDI dispatch; the next active-only control pass
+materializes the newest gain, pitch, and filter values. Lifecycle operations
+remain immediate. MIDI channel 10 is fixed to SoundFont bank 128.
 
 Each control tick advances the modulation envelope and mod/vibrato LFO state,
 updates gain and pitch, evaluates filter state every fourth tick, suppresses
 unchanged commands, and reclaims released voices after their sample lifetime.
+`msf2_runtime_release_all` emits generation-matched RELEASE commands for all
+voices owned by the current runtime, irrespective of pedal holds. It cannot
+release FPGA voices whose generations were lost before runtime initialization.
 The allocator takes free slots in constant time. At capacity it first prefers a
 released voice, then the oldest voice in the selected lifecycle stage, emits
 `VOICE_STOP`, increments the 16-bit generation, and publishes the replacement
