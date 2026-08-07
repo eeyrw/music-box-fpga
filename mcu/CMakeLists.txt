@@ -62,6 +62,7 @@ target_compile_options(msf2 PRIVATE -Wall -Wextra -Werror -Wpedantic)
 target_include_directories(msf2 PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
 add_executable(music_box_mcu
+    audio_session_defaults.c
     i2s_clock_monitor.c
     command_batch.c
     debug_console.c
@@ -86,6 +87,7 @@ target_sources(music_box_mcu PRIVATE
     "${MSF2_IMAGE_OBJECT}"
 )
 set_source_files_properties(
+    audio_session_defaults.c
     i2s_clock_monitor.c
     command_batch.c
     debug_console.c

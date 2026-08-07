@@ -285,6 +285,10 @@ compressor at a 20 cB (-2 dBFS) threshold, 4:1 ratio, 0 ms attack, and 5000 ms
 release; set master gain to 0 dB; and select the `hall` reverb preset. Master
 gain accepts `-120..0` dB. Reverb choices are `off`, `studio`, `hall`, and
 `reverb-max`; compressor state is selected with `--compressor on|off`.
+The production MCU independently enables the same compressor preset after every
+acknowledged render-session reset; it leaves the RTL reset defaults of 0 dB
+master gain and disabled chorus/reverb unchanged. This host tool may override
+those session settings for direct control and hardware experiments.
 `--dry-run` prints the encoded command words and transaction without opening a
 CH347 device. Hardware runs decode the compressor status (enable, delay priming,
 active gain reduction, and delay fill level) and spatial-effect status (enables,

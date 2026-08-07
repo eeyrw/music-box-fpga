@@ -522,8 +522,8 @@ Startup proceeds in this order:
 4. start PIO and DMA I2S capture;
 5. validate the embedded MSF2 image, wait up to 30 seconds for the FPGA register
    mailbox and loaded asset, verify interface version `0x00100000` and SF2 byte
-   size, then complete an acknowledged render-session reset and initialize 512
-   voice slots;
+   size, then complete an acknowledged render-session reset, enable the default
+   compressor, and initialize 512 voice slots;
 6. print the handshake values and SPI counters;
 7. start the 1 ms control timer;
 8. initialize the TinyUSB device stack;
@@ -1015,8 +1015,11 @@ At startup and after FPGA reconnect, firmware reads `RENDER_SESSION_EPOCH`,
 sends fixed frame `a7 00 99 e6`, and polls until the epoch changes. Before this
 operation it abandons unpublished command batching and waits for the finite SPI
 DMA queue to drain. Only after acknowledgement does it rebuild the local voice
-ownership table and accept MIDI. This makes MCU-only recovery independent of
-the generations owned by the preceding session.
+ownership table, synchronously enables the -2 dBFS, 4:1 compressor with 0 ms
+attack and 5000 ms release, and accepts MIDI. A failure to apply this MCU-owned
+session default leaves the session offline. This makes MCU-only recovery
+independent of the generations and audio configuration owned by the preceding
+session.
 
 UART `a` and the reset-session System Exclusive command use the same operation
 as operator panic. They block and discard MIDI
@@ -1024,7 +1027,9 @@ ingress while reset is in progress; failure or timeout leaves ingress blocked
 until a later successful operator reset or reboot. The narrower UART `f` still
 sends state-preserving `a6 00 aa d7` FLUSH. MIDI System Reset and CC120 retain
 their standards-facing per-voice/channel behavior and do not clear shared effect
-history. UART `l` similarly releases only currently owned voices.
+history. Because render-session reset clears the FPGA effects state, UART `a`
+and the System Exclusive command also reapply the default compressor before
+resuming ingress. UART `l` similarly releases only currently owned voices.
 
 Before session reset, the firmware reads `VERSION`, `PLATFORM_STATUS`, and
 `PLATFORM_SF2_SIZE` through the `0x5a` request / `0x5b` fetch mailbox. Startup
@@ -1126,6 +1131,7 @@ rather than assuming card 2.
 | `mcu/midi_policy.c` | Bank/program state, RPN/NRPN, channel modes, pedals, and System Reset. |
 | `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing, `0xa6` FLUSH, and acknowledged `0xa7` session reset. |
 | `mcu/transport_health_policy.c` | Classifies command counters and reachable/loading/ready/incompatible FPGA session observations. |
+| `mcu/audio_session_defaults.c` | MCU-owned global audio defaults reapplied after each render-session reset. |
 | `mcu/synth_controller.c` | Production 512-voice integration, startup/recovery identity checks, 5 ms publication, command batching, and low-rate FPGA session monitoring. |
 | `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |
 | `mcu/spi_dma_queue.c` | Bounded copied-frame FIFO owned by the RP2040 SPI DMA transport. |

@@ -304,6 +304,10 @@ test-mcu-i2s-clock:
 test-mcu-firmware:
 	mkdir -p $(BUILD_DIR)
 	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
+		mcu/audio_session_defaults.c mcu/audio_session_defaults_test.c \
+		-o $(BUILD_DIR)/audio_session_defaults_test
+	$(BUILD_DIR)/audio_session_defaults_test
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
 		mcu/midi_ingress_queue.c mcu/midi_ingress_queue_test.c \
 		-o $(BUILD_DIR)/midi_ingress_queue_test
 	$(BUILD_DIR)/midi_ingress_queue_test

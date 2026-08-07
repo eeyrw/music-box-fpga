@@ -2,6 +2,7 @@
 
 #include "msf2.h"
 #include "synth_controller.h"
+#include "audio_session_defaults.h"
 #include "command_batch.h"
 #include "fpga_spi_transport.h"
 #include "midi_policy.h"
@@ -136,6 +137,7 @@ static int app_mark_session_offline(void) {
 
 static int app_perform_render_session_reset(void) {
     msf2_result local_result;
+    uint32_t default_words[AUDIO_SESSION_DEFAULT_WORD_COUNT];
 
     app_diagnostics.fpga_session_ready = 0u;
     app_control_job.active = 0u;
@@ -155,6 +157,10 @@ static int app_perform_render_session_reset(void) {
         app_diagnostics.session_reset_result = -(int)local_result;
         return app_diagnostics.session_reset_result;
     }
+    audio_session_defaults_build(default_words);
+    app_diagnostics.session_reset_result = fpga_spi_send_commands(
+        app_spi_write, NULL, default_words, AUDIO_SESSION_DEFAULT_WORD_COUNT);
+    if (app_diagnostics.session_reset_result != 0) return -1;
     ++app_diagnostics.session_reset_count;
     app_diagnostics.fpga_session_ready = 1u;
     return 0;
