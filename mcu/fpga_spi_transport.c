@@ -87,6 +87,36 @@ int fpga_spi_flush(fpga_spi_write_fn write, void *context) {
     return write(context, frame, sizeof(frame));
 }
 
+int fpga_spi_reset_session(fpga_spi_write_fn write,
+                           fpga_spi_exchange_fn exchange, void *context,
+                           uint16_t epoch_address, uint32_t *new_epoch,
+                           unsigned poll_limit, unsigned fetch_limit) {
+    static const uint8_t frame[4] = {UINT8_C(0xa7), 0u, UINT8_C(0x99),
+                                     UINT8_C(0xe6)};
+    uint32_t previous_epoch;
+    unsigned attempt;
+
+    if (write == NULL || exchange == NULL || new_epoch == NULL ||
+        poll_limit == 0u || fetch_limit == 0u) {
+        return -1;
+    }
+    if (fpga_spi_read_register(write, exchange, context, epoch_address,
+                               &previous_epoch, fetch_limit) != 0) {
+        return -1;
+    }
+    if (write(context, frame, sizeof(frame)) != 0) return -1;
+    for (attempt = 0u; attempt < poll_limit; ++attempt) {
+        uint32_t observed_epoch;
+        if (fpga_spi_read_register(write, exchange, context, epoch_address,
+                                   &observed_epoch, fetch_limit) == 0 &&
+            observed_epoch != previous_epoch) {
+            *new_epoch = observed_epoch;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int fpga_spi_read_register(fpga_spi_write_fn write,
                            fpga_spi_exchange_fn exchange, void *context,
                            uint16_t address, uint32_t *data,

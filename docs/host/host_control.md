@@ -41,7 +41,7 @@ replacement, filter replacement, RELEASE, and STOP. `CommandFanout` sends identi
 RTL and the C++ reference. No C++ voice-register adapter exists.
 
 Global status and board control are handled by the Python CH347 transport.
-They are not used for voice configuration; version 15 has no register-based
+They are not used for voice configuration; version 16 has no register-based
 command submission path.
 
 ## SPI Transactions
@@ -351,7 +351,7 @@ python3 tools/ch347_tool.py voice-smoke \
   --voice 0 --base 0 --length 48000 --phase-inc 0x100
 ```
 
-`info` exposes the exact interface value, currently `0x000f0000`; automation
+`info` exposes the exact interface value, currently `0x00100000`; automation
 must reject another version before interpreting current fields. The remaining
 commands cover platform readiness, decoded state, acknowledged DDR access, and
 the atomic `0xa5` mono voice path without duplicating that policy in C++.

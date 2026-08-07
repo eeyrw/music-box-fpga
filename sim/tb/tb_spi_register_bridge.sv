@@ -23,6 +23,8 @@ module tb_spi_register_bridge;
   logic cmd_ready;
   logic cmd_flush_req;
   logic cmd_flush_ack;
+  logic session_reset_req;
+  logic session_reset_ack;
   logic [31:0] registers [0:63];
   logic bus_allow;
   int bus_access_count = 0;
@@ -38,10 +40,14 @@ module tb_spi_register_bridge;
   logic [31:0] cmd_data_no_crc;
   logic cmd_flush_req_no_crc;
   logic cmd_flush_ack_no_crc;
+  logic session_reset_req_no_crc;
+  logic session_reset_ack_no_crc;
   logic [31:0] received_commands_no_crc [0:127];
   int received_count_no_crc = 0;
   int flush_count = 0;
   int flush_count_no_crc = 0;
+  int session_reset_count = 0;
+  int session_reset_count_no_crc = 0;
   int bus_access_count_no_crc = 0;
   int errors = 0;
   time last_spi_fall;
@@ -93,11 +99,15 @@ module tb_spi_register_bridge;
     .cmd_data(cmd_data_no_crc),
     .cmd_ready,
     .cmd_flush_req(cmd_flush_req_no_crc),
-    .cmd_flush_ack(cmd_flush_ack_no_crc)
+    .cmd_flush_ack(cmd_flush_ack_no_crc),
+    .session_reset_req(session_reset_req_no_crc),
+    .session_reset_ack(session_reset_ack_no_crc)
   );
 
   assign cmd_flush_ack = cmd_flush_req;
   assign cmd_flush_ack_no_crc = cmd_flush_req_no_crc;
+  assign session_reset_ack = session_reset_req;
+  assign session_reset_ack_no_crc = session_reset_req_no_crc;
 
   assign bus_ready = bus_allow && (bus_valid || bus_valid_no_crc);
   assign bus_error = bus_valid && (bus_address[15:8] != 8'h00);
@@ -123,6 +133,10 @@ module tb_spi_register_bridge;
       flush_count <= flush_count + 1;
     if (cmd_flush_req_no_crc)
       flush_count_no_crc <= flush_count_no_crc + 1;
+    if (session_reset_req)
+      session_reset_count <= session_reset_count + 1;
+    if (session_reset_req_no_crc)
+      session_reset_count_no_crc <= session_reset_count_no_crc + 1;
   end
 
   function automatic logic [15:0] crc16_byte(
@@ -335,6 +349,24 @@ module tb_spi_register_bridge;
       if (corrupt_crc)
         crc = crc ^ 16'h0001;
       begin_transaction(8'ha6);
+      spi_send_byte(flags);
+      spi_send_byte(crc[15:8]);
+      spi_send_byte(crc[7:0]);
+      end_transaction();
+    end
+  endtask
+
+  task automatic spi_session_reset(
+    input logic [7:0] flags,
+    input logic corrupt_crc
+  );
+    logic [15:0] crc;
+    begin
+      crc = crc16_byte(16'hffff, 8'ha7);
+      crc = crc16_byte(crc, flags);
+      if (corrupt_crc)
+        crc = crc ^ 16'h0001;
+      begin_transaction(8'ha7);
       spi_send_byte(flags);
       spi_send_byte(crc[15:8]);
       spi_send_byte(crc[7:0]);
@@ -601,6 +633,43 @@ module tb_spi_register_bridge;
     if (!spi_error || !spi_error_no_crc || flush_count != 1 ||
         flush_count_no_crc != 2) begin
       $error("flush reserved flags were not rejected");
+      errors++;
+    end
+
+    // Session reset has its own opcode and cancellation request. It shares the
+    // transaction framing with FLUSH but is not state-preserving downstream.
+    cmd_ready = 1'b0;
+    spi_command_stream3(32'h9900_0000, 32'h1500_0001, 32'h0000_0007,
+                        1'b0);
+    repeat (8) @(negedge clk);
+    if (!cmd_valid || !cmd_valid_no_crc) begin
+      $error("pre-session-reset command transaction was not staged");
+      errors++;
+    end
+    spi_session_reset(8'h00, 1'b0);
+    repeat (4) @(negedge clk);
+    cmd_ready = 1'b1;
+    repeat (8) @(negedge clk);
+    if (spi_error || spi_error_no_crc || cmd_valid || cmd_valid_no_crc ||
+        session_reset_count != 1 || session_reset_count_no_crc != 1 ||
+        received_count != 6 || received_count_no_crc != 9) begin
+      $error("session reset did not cancel staged publication");
+      errors++;
+    end
+
+    spi_session_reset(8'h00, 1'b1);
+    repeat (4) @(negedge clk);
+    if (!spi_error || spi_error_no_crc || session_reset_count != 1 ||
+        session_reset_count_no_crc != 2) begin
+      $error("session reset CRC configuration mismatch");
+      errors++;
+    end
+
+    spi_session_reset(8'h01, 1'b0);
+    repeat (4) @(negedge clk);
+    if (!spi_error || !spi_error_no_crc || session_reset_count != 1 ||
+        session_reset_count_no_crc != 2) begin
+      $error("session reset reserved flags were not rejected");
       errors++;
     end
 

@@ -11,6 +11,7 @@ typedef struct {
     int init_result;
     int last_spi_result;
     int flush_result;
+    int session_reset_result;
     uint32_t register_attempts;
     uint32_t version;
     uint32_t platform_status;
@@ -30,6 +31,8 @@ typedef struct {
     uint16_t periodic_filter_voices;
     uint32_t command_error_count;
     uint32_t stale_generation_count;
+    uint32_t session_epoch;
+    uint32_t session_reset_count;
     uint32_t transport_monitor_failures;
     uint32_t fpga_disconnect_count;
     uint32_t fpga_recovery_count;
@@ -54,6 +57,7 @@ int app_fpga_debug_write_register(uint16_t address, uint32_t data);
 int app_fpga_debug_read_ddr_line(uint32_t byte_address, uint32_t data[4]);
 #endif
 int app_fpga_debug_flush(void);
+int app_synth_render_session_reset(void);
 int app_synth_service(uint32_t millisecond_count);
 int app_synth_monitor_transport(uint32_t millisecond_count);
 int app_synth_session_ready(void);

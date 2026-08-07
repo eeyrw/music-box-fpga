@@ -1,7 +1,8 @@
 # SPI Command-Stream Throughput
 
-This document defines Smart Artix SPI opcode `0xa5` command traffic and opcode
-`0xa6` command recovery for interface version 15. It retains the version-10
+This document defines Smart Artix SPI opcode `0xa5` command traffic, opcode
+`0xa6` command recovery, and opcode `0xa7` session reset for interface version
+16. It retains the version-10
 command encoding behind the version-12 aligned length/CRC16 transaction header.
 Register timing and
 transport correctness are documented separately in
@@ -65,6 +66,14 @@ global audio configuration, effect history, and diagnostics. It cannot recall
 commands still queued by the host, so software must quiesce or clear its local
 producer before issuing FLUSH. The current recovery entry point is
 `tools/ch347_tool.py flush`.
+
+Version 16 adds the separate fixed frame `a7 00 99 e6`. A valid `0xa7`
+transaction cancels bridge staging like FLUSH, then holds command ingress closed
+until the common system has synchronously reset voice validity, render and audio
+pipeline state, effect/compressor history, the PCM FIFO, and I2S. Completion
+increments `RENDER_SESSION_EPOCH`; software must read a changed epoch before
+resuming command production. This operation deliberately does not change the
+state-preserving `0xa6` contract.
 
 The bridge cannot backpressure SPI after CS is asserted, so it receives the
 complete declared transaction into a 63-word synchronous block RAM. A valid

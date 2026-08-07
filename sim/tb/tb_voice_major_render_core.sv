@@ -215,6 +215,17 @@ module tb_voice_major_render_core;
     if (command_error_count != 0 || stale_generation_count != 0)
       $fatal(1, "replacement core reported a false stale write");
 
+    // Session reset clears runtime ownership while preserving the external
+    // sample image. A new START must reactivate the slot and render normally.
+    @(negedge clk);
+    rst = 1'b1;
+    repeat (3) @(posedge clk);
+    @(negedge clk);
+    rst = 1'b0;
+    configure_audio();
+    start_mono_voice();
+    render_and_read(32'd22, mix_t'(99), 1'b1);
+
     // The former in-band STREAM_FLUSH opcode is now unsupported.
     send_command_word(32'h7f00_0000);
     do @(posedge clk); while (command_error_count == 0);

@@ -57,3 +57,12 @@ uint32_t midi_ingress_queue_depth(const midi_ingress_queue *queue) {
 bool midi_ingress_queue_full(const midi_ingress_queue *queue) {
     return midi_ingress_queue_depth(queue) == MIDI_INGRESS_QUEUE_CAPACITY;
 }
+
+uint32_t midi_ingress_queue_discard_all(midi_ingress_queue *queue) {
+    const uint32_t read = atomic_load_explicit(&queue->read_count,
+                                                memory_order_relaxed);
+    const uint32_t write = atomic_load_explicit(&queue->write_count,
+                                                 memory_order_acquire);
+    atomic_store_explicit(&queue->read_count, write, memory_order_release);
+    return write - read;
+}

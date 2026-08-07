@@ -10,9 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = ROOT / "spec" / "mcu_asset_profiles.json"
-REGISTER_PATH = ROOT / "spec" / "register_map.json"
 GENERATED_HEADER_PATH = ROOT / "sim" / "harness" / "generated" / "mcu_asset_profile.h"
-REFERENCE_ID = "generic-le32-48k-tick48-v15"
+REFERENCE_ID = "generic-le32-48k-tick48-v1"
 
 
 def load_json(path: Path) -> dict:
@@ -20,16 +19,7 @@ def load_json(path: Path) -> dict:
         return json.load(source)
 
 
-def register_interface_version(register_spec: dict) -> int:
-    for peripheral in register_spec["device"]["peripherals"]:
-        for register in peripheral["registers"]:
-            if register["name"] == "VERSION":
-                return int(register["resetValue"], 0)
-    raise ValueError("register map has no VERSION register")
-
-
 def render_header(reference: dict) -> str:
-    command_version = int(reference["commandInterfaceVersion"], 0)
     return f"""// Generated from spec/mcu_asset_profiles.json. Do not edit by hand.
 #pragma once
 
@@ -37,7 +27,6 @@ def render_header(reference: dict) -> str:
 
 namespace render::mcu_asset_profile {{
 inline constexpr char kId[] = \"{reference['id']}\";
-constexpr uint32_t kCommandInterfaceVersion = 0x{command_version:08x}u;
 constexpr uint32_t kOutputSampleRate = {reference['outputSampleRate']}u;
 constexpr uint32_t kControlTickSamples = {reference['controlTickSamples']}u;
 }}  // namespace render::mcu_asset_profile
@@ -69,13 +58,6 @@ def main() -> int:
         for field in ("wordBits", "outputSampleRate", "controlTickSamples"):
             if not isinstance(profile.get(field), int) or profile[field] <= 0:
                 raise ValueError(f"{profile_id}: {field} must be a positive integer")
-        try:
-            int(profile["commandInterfaceVersion"], 0)
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                f"{profile_id}: commandInterfaceVersion must be an integer string"
-            ) from error
-
     reference = by_id.get(REFERENCE_ID)
     if reference is None:
         raise ValueError(f"missing reference profile: {REFERENCE_ID}")
@@ -94,14 +76,6 @@ def main() -> int:
                 f"{REFERENCE_ID}: expected {field}={value!r}, got {reference.get(field)!r}"
             )
 
-    profile_version = int(reference["commandInterfaceVersion"], 0)
-    register_version = register_interface_version(load_json(REGISTER_PATH))
-    if profile_version != register_version:
-        raise ValueError(
-            f"{REFERENCE_ID}: command interface 0x{profile_version:08x} does not match "
-            f"register map 0x{register_version:08x}"
-        )
-
     expected_header = render_header(reference)
     if args.generate:
         GENERATED_HEADER_PATH.write_text(expected_header, encoding="utf-8")
@@ -115,7 +89,7 @@ def main() -> int:
 
     print(
         f"PASS: {len(profiles)} MCU asset profile(s); reference {REFERENCE_ID} "
-        f"matches interface 0x{register_version:08x}; generated header is current"
+        "is command-interface independent; generated header is current"
     )
     return 0
 

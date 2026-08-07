@@ -90,7 +90,6 @@ struct McuSf2RuntimeConfig {
 
 struct McuSf2AssetProfile {
   std::string id;
-  uint32_t command_interface_version = 0;
   uint32_t sample_rate = 0;
   uint32_t control_tick_samples = 0;
 };

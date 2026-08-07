@@ -58,6 +58,7 @@ module block_voice_state_store (
       env_mem [0:NUM_VOICES-1];
   (* ram_style = "block" *) logic [DYNAMIC_MEM_WIDTH-1:0]
       dynamic_mem [0:NUM_VOICES-1];
+  logic [NUM_VOICES-1:0] voice_valid_q;
 
   typedef enum logic [2:0] {
     CONTROL_IDLE,
@@ -99,6 +100,7 @@ module block_voice_state_store (
   logic control_generation_match;
 
   logic snapshot_capture_q;
+  logic [VOICE_ID_WIDTH-1:0] snapshot_voice_q;
   block_voice_state_snapshot_t read_rsp_q;
   voice_playback_region_t region_read_data_q;
   voice_event_params_t event_read_data_q;
@@ -151,9 +153,11 @@ module block_voice_state_store (
   assign params_generation_match = check_generation_match;
   assign dynamic_generation_match = check_generation_match;
   assign control_voice = control_event_voice_q;
-  assign control_generation_match = control_dynamic_q.active &&
+  assign control_generation_match = voice_valid_q[control_voice] &&
+      control_dynamic_q.active &&
       (control_dynamic_q.generation == control_event_generation_q);
-  assign check_generation_match = check_current_active_q &&
+  assign check_generation_match = voice_valid_q[check_voice_q] &&
+      check_current_active_q &&
       (check_current_generation_q == check_generation_q);
 
   always_comb begin
@@ -308,6 +312,8 @@ module block_voice_state_store (
   always_ff @(posedge clk) begin
     if (rst) begin
       snapshot_capture_q <= 1'b0;
+      snapshot_voice_q <= '0;
+      voice_valid_q <= '0;
       state_read_rsp_valid <= 1'b0;
       control_state_q <= CONTROL_IDLE;
       check_state_q <= CHECK_IDLE;
@@ -320,6 +326,17 @@ module block_voice_state_store (
       stale_control_event_pulse <= 1'b0;
       stale_params_write_pulse <= 1'b0;
       stale_dynamic_write_pulse <= 1'b0;
+
+      if (install_fire)
+        voice_valid_q[install_voice] <= 1'b1;
+      if ((control_state_q == CONTROL_APPLY) && control_generation_match &&
+          ((control_event_kind_q == BLOCK_VOICE_STOP) ||
+           ((control_event_kind_q == BLOCK_VOICE_RELEASE) &&
+            (control_event_update_env_q.release_step_cb_q12_20 == '0))))
+        voice_valid_q[control_voice] <= 1'b0;
+      if ((check_state_q == CHECK_APPLY) && check_is_dynamic_q &&
+          dynamic_generation_match && !check_dynamic_q.active)
+        voice_valid_q[check_voice_q] <= 1'b0;
 
       unique case (control_state_q)
         CONTROL_IDLE: begin
@@ -394,13 +411,17 @@ module block_voice_state_store (
         default: check_state_q <= CHECK_IDLE;
       endcase
 
-      if (state_read_req_fire)
+      if (state_read_req_fire) begin
         snapshot_capture_q <= 1'b1;
+        snapshot_voice_q <= state_read_req_voice;
+      end
       if (snapshot_capture_q) begin
         read_rsp_q.region <= region_read_data_q;
         read_rsp_q.event_params <= event_read_data_q;
         read_rsp_q.env_params <= env_read_data_q;
         read_rsp_q.dynamic <= dynamic_read_data_q;
+        read_rsp_q.dynamic.active <=
+            dynamic_read_data_q.active && voice_valid_q[snapshot_voice_q];
         snapshot_capture_q <= 1'b0;
         state_read_rsp_valid <= 1'b1;
       end

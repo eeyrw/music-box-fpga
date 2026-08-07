@@ -1,7 +1,6 @@
 #include "mcu_sf2_asset.h"
 
 #include "generated/mcu_asset_profile.h"
-#include "generated/register_map.h"
 
 #include <algorithm>
 #include <array>
@@ -339,11 +338,8 @@ McuSf2RuntimeConfig mcu_sf2_runtime_config(const Region& region) {
 
 const McuSf2AssetProfile& reference_mcu_sf2_asset_profile() {
   static const McuSf2AssetProfile profile = {
-      mcu_asset_profile::kId, mcu_asset_profile::kCommandInterfaceVersion,
-      mcu_asset_profile::kOutputSampleRate, mcu_asset_profile::kControlTickSamples};
-  if (profile.command_interface_version != regs::kVersionValue) {
-    throw std::runtime_error("generated MCU asset profile interface mismatch");
-  }
+      mcu_asset_profile::kId, mcu_asset_profile::kOutputSampleRate,
+      mcu_asset_profile::kControlTickSamples};
   return profile;
 }
 
@@ -366,8 +362,8 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
                                          uint64_t source_size_bytes,
                                          const McuSf2AssetProfile& profile,
                                          const McuSf2AssetSelection& selection) {
-  if (profile.id.empty() || profile.command_interface_version == 0 ||
-      profile.sample_rate == 0 || profile.control_tick_samples == 0) {
+  if (profile.id.empty() || profile.sample_rate == 0 ||
+      profile.control_tick_samples == 0) {
     throw std::runtime_error("invalid MCU SF2 asset profile");
   }
   const Sf2SemanticData full_semantic = compile_sf2_semantics(sf2);
@@ -500,7 +496,6 @@ std::vector<uint8_t> build_mcu_sf2_asset(const Sf2Data& sf2,
   write_u16(image, 4, kMcuSf2AssetFormatVersion);
   write_u16(image, 6, uint16_t(kMcuSf2AssetHeaderSize));
   write_u32(image, 8, uint32_t(image.size()));
-  write_u32(image, 12, profile.command_interface_version);
   write_u32(image, 16, profile.sample_rate);
   write_u32(image, 20, profile.control_tick_samples);
   write_u64(image, 24, source_size_bytes);
@@ -539,8 +534,7 @@ McuSf2AssetView::McuSf2AssetView(const uint8_t* data, size_t size,
       read_u16(data + 6) != kMcuSf2AssetHeaderSize || read_u32(data + 8) != size) {
     throw std::runtime_error("invalid MCU SF2 compact asset header");
   }
-  if (read_u32(data + 12) != profile.command_interface_version ||
-      read_u32(data + 16) != profile.sample_rate ||
+  if (read_u32(data + 12) != 0 || read_u32(data + 16) != profile.sample_rate ||
       read_u32(data + 20) != profile.control_tick_samples ||
       read_u32(data + 56) != crc32_string(profile.id)) {
     throw std::runtime_error("MCU SF2 asset profile mismatch");

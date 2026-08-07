@@ -24,7 +24,7 @@ FDN_DELAY_LENGTHS = [1451, 1559, 1663, 1777, 1879, 1999, 2131, 2371]
 SV_OUT = Path("rtl/generated/synth_dsp_lut_pkg.sv")
 CPP_OUT = Path("sim/harness/generated/dsp_lut.h")
 MCU_MSF2_OUT = Path("mcu/generated/msf2_lut.h")
-MCU_MSF2_PROFILE = "generic-le32-48k-tick48-v15"
+MCU_MSF2_PROFILE = "generic-le32-48k-tick48-v1"
 
 
 def round_away(value):

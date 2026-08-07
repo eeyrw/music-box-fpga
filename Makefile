@@ -123,6 +123,7 @@ VIVADO_DESIGN_INPUTS := \
 FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/fractional_tick_gen.sv \
 	fpga/common/rtl/spi_register_bridge.sv \
+	fpga/common/rtl/render_session_reset_controller.sv \
 	fpga/common/rtl/wavetable_register_fabric.sv \
 	fpga/common/rtl/wavetable_common_status_regs.sv \
 	fpga/common/rtl/i2s_tx.sv \
@@ -306,6 +307,10 @@ test-mcu-firmware:
 		mcu/midi_ingress_queue.c mcu/midi_ingress_queue_test.c \
 		-o $(BUILD_DIR)/midi_ingress_queue_test
 	$(BUILD_DIR)/midi_ingress_queue_test
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
+		mcu/midi_sysex_reset.c mcu/midi_sysex_reset_test.c \
+		-o $(BUILD_DIR)/midi_sysex_reset_test
+	$(BUILD_DIR)/midi_sysex_reset_test
 	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic -Imcu \
 		mcu/command_batch.c mcu/command_batch_test.c \
 		-o $(BUILD_DIR)/command_batch_test
@@ -768,6 +773,12 @@ test-rtl-core:
 
 test-rtl-peripheral:
 	mkdir -p $(BUILD_DIR)
+	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
+		--Mdir $(BUILD_DIR)/session_reset_obj_dir \
+		--top-module tb_render_session_reset_controller \
+		fpga/common/rtl/render_session_reset_controller.sv \
+		sim/tb/tb_render_session_reset_controller.sv
+	$(BUILD_DIR)/session_reset_obj_dir/Vtb_render_session_reset_controller
 	$(VERILATOR) $(RTL_DEFINES) --binary $(VERILATOR_JOBS) --timing --Wall -Wno-fatal \
 		--Mdir $(BUILD_DIR)/register_fabric_obj_dir \
 		--top-module tb_wavetable_register_fabric \

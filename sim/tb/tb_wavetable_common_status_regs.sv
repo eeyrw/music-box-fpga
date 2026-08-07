@@ -30,6 +30,7 @@ module tb_wavetable_common_status_regs;
   logic [3:0] minimum_fifo_level;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+  logic [31:0] session_epoch;
   audio_diagnostics_t audio_diagnostics;
   sample_window_diagnostics_t sample_window_diagnostics;
   logic diagnostics_clear_pulse;
@@ -65,6 +66,7 @@ module tb_wavetable_common_status_regs;
     .minimum_fifo_level,
     .command_error_count,
     .stale_generation_count,
+    .session_epoch,
     .audio_diagnostics,
     .sample_window_diagnostics,
     .diagnostics_clear_pulse
@@ -134,6 +136,7 @@ module tb_wavetable_common_status_regs;
     minimum_fifo_level = '0;
     command_error_count = '0;
     stale_generation_count = '0;
+    session_epoch = 32'h1234_5678;
     audio_diagnostics = '0;
     sample_window_diagnostics = '0;
 
@@ -157,6 +160,7 @@ module tb_wavetable_common_status_regs;
     expect_read(REG_AUDIO_LEAD, 32'd47);
     expect_read(REG_COMMAND_ERROR_COUNT, 32'd3);
     expect_read(REG_STALE_GENERATION_COUNT, 32'd9);
+    expect_read(REG_RENDER_SESSION_EPOCH, 32'h1234_5678);
 
     @(negedge clk);
     render_latency_valid = 1'b1;

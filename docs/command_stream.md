@@ -1,11 +1,11 @@
 # Mono Voice-Major Control And Render Contract
 
 This document defines the version-10 command encoding retained by interface
-version 15 (`0x000f0000`). Version 12 added the aligned SPI length/CRC16
+version 16 (`0x00100000`). Version 12 added the aligned SPI length/CRC16
 transaction envelope; version 13 replaced only the register wire protocol with
 a split-phase mailbox, and version 14 removes register-based debug command
 injection. Version 15 replaces the former in-band flush command with a dedicated
-SPI transport operation. The old
+SPI transport operation, and version 16 adds out-of-band render-session reset. The old
 DEFINE_MONO/DEFINE_STEREO plus prepared/active START protocol is not part of
 this interface.
 
@@ -32,8 +32,8 @@ host MIDI/SF2 policy
 
 There is one control plane in simulation and hardware. Test harnesses and the
 production host send the same command words through the dedicated command
-stream; hardware maps command words to SPI opcode `0xa5` and recovery to SPI
-opcode `0xa6`. They do not install
+stream; hardware maps command words to SPI opcode `0xa5`, parser recovery to
+SPI opcode `0xa6`, and whole-session invalidation to SPI opcode `0xa7`. They do not install
 typed voice records through private simulation ports or register writes.
 
 ## Framing
@@ -180,7 +180,7 @@ control boundary. Commands arriving after rendering starts apply to a later
 block.
 
 The production command stream exposes ready/valid backpressure and is the only
-command ingress in version 15.
+command ingress in version 16.
 
 ## SPI Transport
 
@@ -220,6 +220,23 @@ The host must stop or clear its own command producer before issuing FLUSH;
 FLUSH cannot remove commands still queued in host memory. While the internal
 flush request awaits acknowledgement, new `0xa5` command transactions are
 rejected. Reserved byte values other than zero and CRC mismatches are rejected.
+
+Render-session reset is a distinct four-byte CS-delimited transaction:
+
+```text
+CS low -> 0xa7 -> 0x00 -> CRC16 -> CS high
+```
+
+CRC-16/CCITT-FALSE covers `0xa7, 0x00`, producing the fixed frame
+`a7 00 99 e6`. A valid request atomically cancels unpublished bridge staging,
+blocks new command transactions, clears the command FIFO/parser and every
+active voice, resets render scheduling and in-flight memory response state,
+clears chorus/reverb/compressor history and the PCM output FIFO, and resets the
+I2S serializer. Reset remains asserted until all pre-reset ordered-memory
+responses have been discarded. `RENDER_SESSION_EPOCH` increments afterward;
+software acknowledges completion by observing that changed
+value before allowing new Note On traffic. Reserved flags and CRC failures have
+no reset side effect. The narrower `0xa6` FLUSH semantics remain unchanged.
 
 `CMD_FIFO_STATUS[15:2]` exposes capacity for software preflight, but the current
 CH347 transport sends each complete command without reading it first. Register

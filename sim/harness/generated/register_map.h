@@ -7,7 +7,7 @@
 namespace render::regs {
 constexpr int kBusAddrWidth = 16;
 constexpr int kBusDataWidth = 32;
-constexpr uint32_t kVersionValue = 0x000f0000u;
+constexpr uint32_t kVersionValue = 0x00100000u;
 
 constexpr uint16_t kVersion = 0x9000u;
 constexpr uint16_t kSystemStatus = 0x9010u;
@@ -25,6 +25,7 @@ constexpr uint16_t kAudioFifoDiagnostics = 0x9088u;
 constexpr uint16_t kAudioLead = 0x908cu;
 constexpr uint16_t kCommandErrorCount = 0x9090u;
 constexpr uint16_t kStaleGenerationCount = 0x9094u;
+constexpr uint16_t kRenderSessionEpoch = 0x9098u;
 constexpr uint16_t kCompressorStatus = 0x910cu;
 constexpr uint16_t kCompressorGainReduction = 0x9110u;
 constexpr uint16_t kCompressorTargetGainReduction = 0x9114u;

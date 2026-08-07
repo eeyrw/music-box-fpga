@@ -4,8 +4,7 @@
 #include <cstdint>
 
 namespace render::mcu_asset_profile {
-inline constexpr char kId[] = "generic-le32-48k-tick48-v15";
-constexpr uint32_t kCommandInterfaceVersion = 0x000f0000u;
+inline constexpr char kId[] = "generic-le32-48k-tick48-v1";
 constexpr uint32_t kOutputSampleRate = 48000u;
 constexpr uint32_t kControlTickSamples = 48u;
 }  // namespace render::mcu_asset_profile

@@ -68,7 +68,7 @@ accumulator for system-path composition. Existing bare-core comparisons continue
 to use `render_sample()`, which preserves their direct PCM16 saturation and has
 no look-ahead delay.
 | `tb_wavetable_i2s_output` | Startup fill, FIFO flow, played/render counters, and underrun gating. |
-| `tb_spi_register_bridge` | Register frames, dedicated `0xa5` command stream, `0xa6` FLUSH cancellation, CRC, and backpressure errors. |
+| `tb_spi_register_bridge` | Register frames, dedicated `0xa5` command stream, `0xa6` FLUSH and `0xa7` session-reset cancellation, CRC, and backpressure errors. |
 | `tb_i2s_tx` | Exact I2S bit and channel timing. |
 
 Waveforms may aid diagnosis but are not pass criteria.

@@ -77,8 +77,9 @@ the fast routine fixture; it does not replace SGM signoff.
   allocation.
 - Permit the same compiled image reader and MCU policy core to run in host
   tests, the C++ reference path, and eventual MCU firmware.
-- Detect incompatible metadata, wave images, output profiles, and command
-  interface versions before enabling audio.
+- Detect incompatible metadata, wave images, and output profiles before
+  enabling audio. The MCU transport checks the FPGA command interface as a
+  separate startup contract.
 - Report image size, lookup fanout, worst-case work, and target-MCU timing as
   first-class build artifacts.
 
@@ -133,7 +134,7 @@ this backlog's first implementation.
 
 ```text
 development host
-  SF2 + output profile + command interface version
+  SF2 + output profile
     -> existing checked SF2 parser
     -> expanded preset/instrument semantic IR
     -> finite-domain precomputation and table deduplication
@@ -173,7 +174,6 @@ one exact output profile:
 
 - output sample rate;
 - control-tick numerator and denominator or exact tick length in samples;
-- command interface version;
 - fixed-point/compiler numeric-policy version;
 - file-attenuation compatibility policy;
 - pan-law version;
@@ -181,12 +181,12 @@ one exact output profile:
 - enabled SoundFont feature subset.
 
 The initial target-neutral reference profile is
-`generic-le32-48k-tick48-v15`, defined in
+`generic-le32-48k-tick48-v1`, defined in
 [`../../spec/mcu_asset_profiles.json`](../../spec/mcu_asset_profiles.json). It
 fixes 48 kHz output, a 48-sample/1 ms control tick, little-endian 32-bit words,
-command interface 13, and the current numeric policies. It deliberately leaves
-the MCU and metadata storage unspecified. Supporting several sample rates in
-one image is not a first-version requirement. Separate images are simpler,
+and the current numeric policies. It deliberately leaves the MCU, FPGA command
+interface, and metadata storage unspecified. Supporting several sample rates
+in one image is not a first-version requirement. Separate images are simpler,
 smaller, and make mismatch rejection unambiguous.
 
 Changing any profile field invalidates all fields derived from it. The compiler
@@ -222,7 +222,6 @@ The version-1 design should contain at least:
 | --- | --- |
 | magic and format version | Reject unrelated or unsupported images. |
 | header size and total size | Permit compatible extension and complete bounds checks. |
-| command interface version | Reject descriptors built for another command layout. |
 | compiler/numeric-policy version | Identify conversion and compatibility behavior. |
 | output sample rate and tick samples | Bind all derived timing values. |
 | source SF2 size and digest | Match the WTSF wave image. |
@@ -237,9 +236,11 @@ and optional CRC. Unknown optional sections may be skipped; unknown required
 sections reject the image.
 
 The current `MSF2` deployment image is format version 2 and is compact-only.
-Its 96-byte header records the reference profile, command interface, source
+Its 96-byte header records the reference profile, a reserved-zero word, source
 size and CRC32, complete image CRC32, SF2 sample span, preset-selection digest,
-and a seven-entry required-section directory. Older format versions are not
+and a seven-entry required-section directory. The profile describes only asset
+semantics; the MCU's FPGA transport implementation checks its own interface
+version independently. Older format versions and nonzero reserved words are not
 accepted.
 
 The compiler still constructs the semantic IR in host memory and uses it for
@@ -617,9 +618,9 @@ evidence only and cannot qualify MCU timing.
 
 ### Phase 0: Baseline And Target Selection
 
-- [x] Define the target-neutral `generic-le32-48k-tick48-v15` reference profile
-  with the current sample rate, control tick, SoundFont subset, numeric policy,
-  and command interface version.
+- [x] Define the target-neutral `generic-le32-48k-tick48-v1` reference profile
+  with the current sample rate, control tick, SoundFont subset, and numeric
+  policy.
 - [x] Add a reproducible SF2 baseline that reports compiled size, exhaustive
   preset/key/velocity selection fanout, and forced-cold/warm region lookup time.
 - [x] Retain the existing reproducible 128/256/512-voice MCU control benchmark
@@ -804,13 +805,13 @@ deadline.
 ### Layout And Compatibility
 
 Layout is separate from the numeric output profile. `compact-v2` uses
-`generic-le32-48k-tick48-v15` and must emit the same command words as the
+`generic-le32-48k-tick48-v1` and must emit the same command words as the
 dynamic host oracle:
 
 - the compiler emits only format version 2;
 - the host verifier and target runtime accept only version 2;
-- format, layout, source SF2 identity, preset-selection digest, numeric profile,
-  and command interface remain fail-closed header checks;
+- format, layout, source SF2 identity, preset-selection digest, and numeric
+  profile remain fail-closed header checks;
 - there is no MCU fallback from a rejected compact image to runtime SF2 parsing.
 
 No compact layout field is visible to the FPGA. Sample addresses, command

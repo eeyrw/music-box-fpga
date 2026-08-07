@@ -14,8 +14,8 @@
           {
             "name": "VERSION",
             "addressOffset": "0x0000",
-            "resetValue": "0x000f0000",
-            "description": "Read-only register and command interface version; current value 0x000f0000 identifies version 15."
+            "resetValue": "0x00100000",
+            "description": "Read-only register and command interface version; current value 0x00100000 identifies version 16."
           },
           {
             "name": "SYSTEM_STATUS",
@@ -133,6 +133,11 @@
             "name": "STALE_GENERATION_COUNT",
             "addressOffset": "0x0094",
             "description": "Saturating count of rejected stale-generation command/state updates since reset or diagnostic clear."
+          },
+          {
+            "name": "RENDER_SESSION_EPOCH",
+            "addressOffset": "0x0098",
+            "description": "Read-only render-session epoch. A successfully acknowledged out-of-band RENDER_SESSION_RESET increments this value after all prior render and audio state has been reset."
           },
           {
             "name": "COMPRESSOR_STATUS",

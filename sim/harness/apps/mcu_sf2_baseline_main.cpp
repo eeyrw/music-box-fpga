@@ -1,5 +1,4 @@
 #include "generated/mcu_asset_profile.h"
-#include "generated/register_map.h"
 #include "sf2_loader.h"
 
 #include <algorithm>
@@ -110,10 +109,6 @@ int main(int argc, char** argv) {
       std::cerr << "usage: mcu_sf2_baseline <soundfont.sf2>\n";
       return 2;
     }
-    if (render::regs::kVersionValue != render::mcu_asset_profile::kCommandInterfaceVersion) {
-      throw std::runtime_error("reference MCU asset profile requires command interface 13");
-    }
-
     const std::string path = argv[1];
     const uint64_t file_bytes = std::filesystem::file_size(path);
     const auto load_start = Clock::now();
@@ -179,10 +174,6 @@ int main(int argc, char** argv) {
               << "{\n"
               << "  \"schema\": \"mcu-sf2-baseline-v1\",\n"
               << "  \"profile\": \"" << kProfile << "\",\n"
-              << "  \"command_interface_version\": \"0x" << std::hex
-              << std::setw(8) << std::setfill('0')
-              << render::mcu_asset_profile::kCommandInterfaceVersion << std::dec
-              << std::setfill(' ') << "\",\n"
               << "  \"sample_rate\": " << kSampleRate << ",\n"
               << "  \"control_tick_samples\": " << kControlTickSamples << ",\n"
               << "  \"path\": " << json_string(path) << ",\n"

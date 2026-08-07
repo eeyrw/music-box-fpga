@@ -7,8 +7,7 @@
 #define MSF2_DIRECTORY_OFFSET 96u
 #define MSF2_SECTION_COUNT 7u
 #define MSF2_DIRECTORY_ENTRY_SIZE 16u
-#define MSF2_PROFILE_CRC32 UINT32_C(0xc0126f87)
-#define MSF2_COMMAND_INTERFACE UINT32_C(0x000f0000)
+#define MSF2_PROFILE_CRC32 UINT32_C(0xa7695a6c)
 #define MSF2_SAMPLE_RATE 48000u
 #define MSF2_CONTROL_TICK_SAMPLES 48u
 #define MSF2_VALID_DEPENDENCIES UINT16_C(0x001f)
@@ -370,8 +369,7 @@ msf2_result msf2_view_init(msf2_view *view, const void *raw, size_t size) {
         read_u16(data + 6) != MSF2_HEADER_SIZE || read_u32(data + 8) != size) {
         return MSF2_ERR_HEADER;
     }
-    if (read_u32(data + 12) != MSF2_COMMAND_INTERFACE ||
-        read_u32(data + 16) != MSF2_SAMPLE_RATE ||
+    if (read_u32(data + 12) != 0u || read_u32(data + 16) != MSF2_SAMPLE_RATE ||
         read_u32(data + 20) != MSF2_CONTROL_TICK_SAMPLES ||
         read_u32(data + 56) != MSF2_PROFILE_CRC32) return MSF2_ERR_PROFILE;
     if (read_u32(data + 36) != crc32_image(data, size)) return MSF2_ERR_CRC;

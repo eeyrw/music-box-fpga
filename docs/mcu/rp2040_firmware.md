@@ -67,12 +67,20 @@ The `0xcafe` vendor ID is a development identity. Replace it with an assigned
 VID/PID before distributing a product.
 
 The 2026-08-06 dual-core/DMA hardware pass additionally verified the production
-SGM-backed image against the live FPGA mailbox (`VERSION=0x000f0000`, SF2 size
+SGM-backed image against the live FPGA mailbox (`VERSION=0x00100000`, SF2 size
 `324800670`), with zero SPI, command-format, I2S underrun, sample-drop, and
 deadline-miss errors. During a ten-second Butterfly MIDI run, Core 0 stayed
 below 343 us, one Core 1 MIDI packet peaked at 2.277 ms, a four-packet control
 batch at 6.548 ms, and one SPI DMA frame at 111 us. The 16-frame DMA queue
 reached only two entries and never overflowed.
+
+The 2026-08-07 interface-version-16 pass additionally verified startup and
+manufacturer-specific SysEx render-session reset against the configuration-
+Flash FPGA image. Sustained Strings audio became exact digital silence after
+`f0 7d 4d 42 01 01 f7`, the session epoch changed, active voices cleared, and a
+new Note On produced normal audio after explicit I2S PIO/DMA resynchronization.
+SPI, command, stale-generation, enqueue-timeout, underrun, sample-drop, and
+deadline-error counts remained zero during the acceptance sequence.
 
 A follow-up 2026-08-06 direct-ALSA investigation found that the audible gaps
 were UAC2 silence substitution, not FPGA render underruns. The original
@@ -513,8 +521,9 @@ Startup proceeds in this order:
 3. initialize SPI mode 0, including GP16 MISO, and deassert CS;
 4. start PIO and DMA I2S capture;
 5. validate the embedded MSF2 image, wait up to 30 seconds for the FPGA register
-   mailbox and loaded asset, verify interface version `0x000f0000` and SF2 byte
-   size, then send FLUSH and initialize 512 voice slots;
+   mailbox and loaded asset, verify interface version `0x00100000` and SF2 byte
+   size, then complete an acknowledged render-session reset and initialize 512
+   voice slots;
 6. print the handshake values and SPI counters;
 7. start the 1 ms control timer;
 8. initialize the TinyUSB device stack;
@@ -637,11 +646,11 @@ The UART accepts single-character commands:
 | `?` | Print command help. |
 | `s` | Print startup handshake values and SPI transaction/error counters. |
 | `v`, `p`, `z` | Read `VERSION`, `PLATFORM_STATUS`, or `PLATFORM_SF2_SIZE`. |
-| `c`, `e`, `g` | Read `CMD_FIFO_STATUS`, `COMMAND_ERROR_COUNT`, or `STALE_GENERATION_COUNT`. |
+| `c`, `e`, `g`, `h` | Read `CMD_FIFO_STATUS`, `COMMAND_ERROR_COUNT`, `STALE_GENERATION_COUNT`, or `RENDER_SESSION_EPOCH`. |
 | `d` | Dump I2S state and FPGA render, FIFO, compressor, memory, and sample-window diagnostics. |
 | `m` | Print TinyUSB MIDI readiness, RX callbacks, packet count, and last packet. |
 | `u` | Print UAC2 silence/discard reasons, TinyUSB short writes, PIO RX stalls, ring overruns, and lost frames. |
-| `a` | Send immediate `VOICE_STOP` commands for every voice generation currently owned by this MCU runtime; use this to clear sound before a test. |
+| `a` | Block/discard MIDI ingress, abandon unpublished MCU commands, wait for SPI DMA to drain, issue `0xa7` render-session reset, and resume only after `RENDER_SESSION_EPOCH` changes. |
 | `l` | Send `VOICE_RELEASE` for every non-released voice currently owned by this MCU runtime, bypassing key and pedal holds but retaining each SoundFont release envelope. |
 | `n`, `o` | Send channel-0 C4 Note On or Note Off through the normal MSF2/`0xa5` path. |
 | `f` | Send the dedicated `0xa6` FLUSH transaction. |
@@ -936,9 +945,20 @@ host-to-device bulk OUT endpoint and supports:
 - RPN pitch-bend sensitivity, fine tuning, and coarse tuning;
 - SoundFont NRPN generator offsets through NRPN MSB 120;
 - MIDI System Reset (`0xff`), which stops voices and restores channel policy.
+- Music Box reset-session System Exclusive
+  `f0 7d 4d 42 01 01 f7`, which invokes the acknowledged FPGA/MCU session
+  reset described below.
 
-Other system messages and SysEx are ignored because the MSF2 runtime has no
-matching action. The MIDI IN endpoint is present in the standard bidirectional
+After a successful session reset, firmware also restarts the I2S capture
+PIO/DMA synchronizer and discards buffered capture frames. The FPGA reset pulse
+can restart the serializer bit phase without stopping BCLK long enough for the
+normal clock-loss detector, so explicit resynchronization prevents subsequent
+USB audio from using a stale 32-bit frame boundary.
+
+Other system messages and unrecognized SysEx are ignored because the MSF2
+runtime has no matching action. `0x7d` is the MIDI non-commercial manufacturer
+ID; `4d 42` identifies Music Box, followed by protocol version `01` and command
+`01`. The MIDI IN endpoint is present in the standard bidirectional
 MIDI descriptor, but the firmware currently emits no device-to-host MIDI
 messages.
 
@@ -991,24 +1011,22 @@ one multi-command transaction rather than one transaction per command. No
 command is split: if the next command would exceed the 63-word payload limit,
 the current frame is sent first and the complete command begins a new frame.
 
-At startup the firmware also sends the fixed `a6 00 aa d7` FLUSH transaction.
-This cancels an unpublished bridge transaction and clears the FPGA command FIFO
-and parser before new MCU-owned commands are issued. It does not stop voices
-that the FPGA had already accepted; normal System Reset expands voice STOPs
-through the generation-aware runtime.
+At startup and after FPGA reconnect, firmware reads `RENDER_SESSION_EPOCH`,
+sends fixed frame `a7 00 99 e6`, and polls until the epoch changes. Before this
+operation it abandons unpublished command batching and waits for the finite SPI
+DMA queue to drain. Only after acknowledgement does it rebuild the local voice
+ownership table and accept MIDI. This makes MCU-only recovery independent of
+the generations owned by the preceding session.
 
-FLUSH does not transfer ownership of voices accepted before an MCU reset. The
-runtime can STOP only generations it has started and still tracks. UART `a`
-immediately stops every voice owned by the current MCU session, but it is not a
-recovery mechanism for unknown voices left by an earlier crashed session. Until
-a readable ownership/reconciliation protocol exists, resetting the MCU without
-also resetting the FPGA synth state can leave such old voices unreachable.
-UART `l` similarly releases all currently owned voices and cannot bypass the
-generation check. Blindly sending 512 RELEASE commands with an unknown
-generation would only increase the FPGA stale-generation counter; an explicit
-RTL render-session reset/kill operation is required for cross-session cleanup.
+UART `a` and the reset-session System Exclusive command use the same operation
+as operator panic. They block and discard MIDI
+ingress while reset is in progress; failure or timeout leaves ingress blocked
+until a later successful operator reset or reboot. The narrower UART `f` still
+sends state-preserving `a6 00 aa d7` FLUSH. MIDI System Reset and CC120 retain
+their standards-facing per-voice/channel behavior and do not clear shared effect
+history. UART `l` similarly releases only currently owned voices.
 
-Before FLUSH, the firmware reads `VERSION`, `PLATFORM_STATUS`, and
+Before session reset, the firmware reads `VERSION`, `PLATFORM_STATUS`, and
 `PLATFORM_SF2_SIZE` through the `0x5a` request / `0x5b` fetch mailbox. Startup
 fails closed if the interface version differs, the platform reports an error,
 the FPGA does not report `ASSET_LOADED` within 30 seconds, or its SF2 size does
@@ -1106,7 +1124,7 @@ rather than assuming card 2.
 | `mcu/usb_audio_rate_match.c` | Stream-open resynchronization and 47/48/49-frame asynchronous packet policy. |
 | `mcu/msf2.c` | Pointer-bounded compact-v2 asset reader, dense active-voice index, allocator, MIDI voice semantics, and coalesced control update. |
 | `mcu/midi_policy.c` | Bank/program state, RPN/NRPN, channel modes, pedals, and System Reset. |
-| `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing and `0xa6` FLUSH framing. |
+| `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing, `0xa6` FLUSH, and acknowledged `0xa7` session reset. |
 | `mcu/transport_health_policy.c` | Classifies command counters and reachable/loading/ready/incompatible FPGA session observations. |
 | `mcu/synth_controller.c` | Production 512-voice integration, startup/recovery identity checks, 5 ms publication, command batching, and low-rate FPGA session monitoring. |
 | `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |

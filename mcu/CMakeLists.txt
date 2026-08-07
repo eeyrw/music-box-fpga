@@ -68,6 +68,7 @@ add_executable(music_box_mcu
     spi_dma_queue.c
     rp2040_spi_dma_transport.c
     midi_ingress_queue.c
+    midi_sysex_reset.c
     i2s_capture.c
     main.c
     rp2040_usb_iso_fix.c
@@ -91,6 +92,7 @@ set_source_files_properties(
     spi_dma_queue.c
     rp2040_spi_dma_transport.c
     midi_ingress_queue.c
+    midi_sysex_reset.c
     i2s_capture.c
     main.c
     fpga_spi_transport.c

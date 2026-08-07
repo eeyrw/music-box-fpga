@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x000f0000`. This register remains readable while the renderer core is held in reset. Version 15 replaces in-band command flush with the dedicated SPI `0xa6` recovery transaction. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x00100000`. This register remains readable while the renderer core is held in reset. Version 16 adds out-of-band render-session reset and epoch acknowledgement. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
@@ -30,6 +30,7 @@ updates, release, and stop use the transactional command stream documented in
 | `0x908c` | `AUDIO_LEAD` | RO | Live rendered-minus-played stereo-frame lead. |
 | `0x9090` | `COMMAND_ERROR_COUNT` | RO | Exact saturating malformed/unsupported command count. |
 | `0x9094` | `STALE_GENERATION_COUNT` | RO | Exact saturating stale-generation rejection count. |
+| `0x9098` | `RENDER_SESSION_EPOCH` | RO | Render-session epoch, incremented after each acknowledged `0xa7` reset. |
 | `0x910c` | `COMPRESSOR_STATUS` | RO | Enable, prime, active-reduction, and delay-fill state. |
 | `0x9110` | `COMPRESSOR_GAIN_REDUCTION` | RO | Current gain reduction, unsigned cB Q12.20. |
 | `0x9114` | `COMPRESSOR_TARGET_GAIN_REDUCTION` | RO | Current detector target, unsigned cB Q12.20. |
@@ -144,6 +145,12 @@ status registers at `0x9080` through `0x9094`.
 Version 15 removes the `0x7f` command-word FLUSH and adds the dedicated SPI
 `0xa6` FLUSH transaction. Register addresses and field meanings are otherwise
 unchanged.
+
+Version 16 adds the dedicated SPI `0xa7` render-session reset and the read-only
+`RENDER_SESSION_EPOCH` register. The epoch starts at zero after FPGA reset and
+increments only after the render core, voice validity, scheduler, effect and
+compressor history, output FIFO, and I2S state have received the session reset.
+It is not cleared by `DIAGNOSTIC_CONTROL.CLEAR`.
 
 ### Compressor Diagnostics
 

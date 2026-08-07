@@ -79,10 +79,10 @@ class Ch347TransportTest(unittest.TestCase):
         self.assertEqual(request[:8], bytes.fromhex("5a00900000000000"))
         self.assertEqual(int.from_bytes(request[8:], "big"), register_crc32(0x5A, 0, 0x9000, 0))
 
-        body = bytes.fromhex("00009000000f0000")
-        transfer = bytes(4) + body + register_crc32(0, 0, 0x9000, 0x000F0000).to_bytes(4, "big")
+        body = bytes.fromhex("0000900000100000")
+        transfer = bytes(4) + body + register_crc32(0, 0, 0x9000, 0x00100000).to_bytes(4, "big")
         response = decode_register_response(transfer)
-        self.assertEqual((response.address, response.data), (0x9000, 0x000F0000))
+        self.assertEqual((response.address, response.data), (0x9000, 0x00100000))
         with self.assertRaises(MailboxCrcError):
             decode_register_response(transfer[:-1] + bytes((transfer[-1] ^ 1,)))
 

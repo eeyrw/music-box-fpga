@@ -204,6 +204,30 @@ module tb_block_voice_state_store;
     if (!install_ready || !params_write_ready)
       $fatal(1, "host writes did not reopen after render");
 
+    // A render-session reset invalidates every slot without requiring the
+    // state RAM contents themselves to be synchronously cleared.
+    install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
+    @(negedge clk);
+    rst = 1'b1;
+    @(posedge clk);
+    @(negedge clk);
+    rst = 1'b0;
+    render_busy = 1'b1;
+    read_state(observed);
+    if (observed.dynamic.active)
+      $fatal(1, "reset allowed an installed voice to become active again");
+    changed_dynamic = initial_state.dynamic;
+    changed_dynamic.phase = 32'h0000_0a00;
+    write_dynamic(changed_dynamic, 1'b1);
+
+    render_busy = 1'b0;
+    install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
+    render_busy = 1'b1;
+    read_state(observed);
+    if (!observed.dynamic.active ||
+        observed.dynamic.generation != initial_state.dynamic.generation)
+      $fatal(1, "post-reset install did not reactivate voice slot");
+
     $display("PASS: block voice state banks and generation arbitration");
     $finish;
   end

@@ -27,6 +27,7 @@ module wavetable_common_status_regs #(
   input  logic [$clog2(OUTPUT_FIFO_DEPTH+1)-1:0] minimum_fifo_level,
   input  logic [31:0]              command_error_count,
   input  logic [31:0]              stale_generation_count,
+  input  logic [31:0]              session_epoch,
   input  synth_pkg::audio_diagnostics_t audio_diagnostics,
   input  synth_pkg::sample_window_diagnostics_t sample_window_diagnostics,
   output logic                     diagnostics_clear_pulse
@@ -49,6 +50,8 @@ module wavetable_common_status_regs #(
   localparam logic [15:0] ADDR_COMMAND_ERROR_COUNT = REG_COMMAND_ERROR_COUNT;
   localparam logic [15:0] ADDR_STALE_GENERATION_COUNT =
       REG_STALE_GENERATION_COUNT;
+  localparam logic [15:0] ADDR_RENDER_SESSION_EPOCH =
+      REG_RENDER_SESSION_EPOCH;
   localparam logic [15:0] ADDR_COMPRESSOR_STATUS = REG_COMPRESSOR_STATUS;
   localparam logic [15:0] ADDR_COMPRESSOR_GAIN_REDUCTION = REG_COMPRESSOR_GAIN_REDUCTION;
   localparam logic [15:0] ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION =
@@ -112,7 +115,8 @@ module wavetable_common_status_regs #(
       ADDR_MEM_RESPONSE_COUNT, ADDR_DIAGNOSTIC_CONTROL,
       ADDR_PIPELINE_LATENCY_MAX, ADDR_AUDIO_FIFO_DIAGNOSTICS,
       ADDR_AUDIO_LEAD, ADDR_COMMAND_ERROR_COUNT,
-      ADDR_STALE_GENERATION_COUNT, ADDR_COMPRESSOR_STATUS,
+      ADDR_STALE_GENERATION_COUNT, ADDR_RENDER_SESSION_EPOCH,
+      ADDR_COMPRESSOR_STATUS,
       ADDR_COMPRESSOR_GAIN_REDUCTION, ADDR_COMPRESSOR_TARGET_GAIN_REDUCTION,
       ADDR_COMPRESSOR_DETECTOR_PEAK, ADDR_COMPRESSOR_MAX_GAIN_REDUCTION,
       ADDR_COMPRESSOR_MAX_DETECTOR_PEAK, ADDR_COMPRESSOR_INPUT_FRAME_COUNT,
@@ -191,6 +195,7 @@ module wavetable_common_status_regs #(
       ADDR_AUDIO_LEAD: bus_rsp.rdata = audio_lead;
       ADDR_COMMAND_ERROR_COUNT: bus_rsp.rdata = command_error_count;
       ADDR_STALE_GENERATION_COUNT: bus_rsp.rdata = stale_generation_count;
+      ADDR_RENDER_SESSION_EPOCH: bus_rsp.rdata = session_epoch;
       ADDR_COMPRESSOR_STATUS: begin
         bus_rsp.rdata = {8'd0, audio_diagnostics.compressor.delay_level_frames,
                      5'd0, |audio_diagnostics.compressor.gain_reduction_cb_q12_20,

@@ -263,6 +263,15 @@ erased, programmed, and verified the image in 85 seconds, then booted it with
 post-boot register snapshot also showed DDR calibrated, SD High Speed active,
 and the complete SF2 loaded without SD, loader, retry, or recovery errors.
 
+On 2026-08-07 the same flow programmed and verified the interface-version-16
+render-session-reset image. The routed bitstream SHA-256 was
+`914c65fe436bf84d60c699bea4299f15c7d22ec290de657fec35146fa5fb625c` and the
+SPIx4 MCS SHA-256 was
+`ed12c59c5f9ecd014be733fdb8d3988d0510e85b19d08b22c50798bf4df063bc`.
+Flash boot again reported `DONE=1`, `DONE_PIN=1`, `EOS=1`, `CRC_ERROR=0`, and
+`IDCODE_ERROR=0`; the RP2040 subsequently read `VERSION=0x00100000` and the
+expected 324,800,670-byte asset identity.
+
 The same run exposed avoidable host-build overhead before hardware access.
 After converting the `.bit` and `.mcs` outputs to real dependency-tracked Make
 targets, a repeated unchanged `make vivado-cfgmem-image` fell from the earlier
@@ -363,7 +372,7 @@ maps `--device 0` to that path for convenience. The copied x64 vendor library is
 used by default from `third_party/ch347_linux/lib/x64/libch347.so`.
 
 `ch347_tool.py` reads the mailbox-backed status and exits nonzero when an
-operation fails. Confirm `VERSION == 0x000f0000` before interpreting current
+operation fails. Confirm `VERSION == 0x00100000` before interpreting current
 fields. If CH347 is connected to the host but not to a valid FPGA SPI target,
 MISO may read back as all ones and the version check will fail. The Python
 transport is unconditionally configured for the board's SPI mode 0.
@@ -585,8 +594,9 @@ frames. The sample-window counters closed exactly:
 The hard stop left 34 stale-generation commands while queued work from stopped
 voices drained; this is expected cleanup behavior for that stop method, not an
 SPI transport error. A final diagnostic clear returned all interval statistics
-to their idle values. This image was programmed only into volatile FPGA SRAM;
-the configuration Flash still contains the earlier persistent image.
+to their idle values. This v14 image was programmed only into volatile FPGA
+SRAM; at the time of this historical measurement, configuration Flash still
+contained the preceding persistent image.
 
 The repository's default 10-second `build/polyphony_stress_512.mid` was then
 played in full with a one-second tail against the same SF2 and 30 MHz CH347

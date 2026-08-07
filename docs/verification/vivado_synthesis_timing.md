@@ -43,7 +43,38 @@ Some board-level input/output delay constraints remain roadmap work. This note
 therefore establishes closure for the currently constrained internal design; it
 does not claim closure for every future external I/O interface.
 
-### Current 512-Voice Post-Synthesis Baseline
+### Render-Session Reset Implementation Signoff
+
+A forced Vivado 2025.2 implementation on 2026-08-07 covered interface version
+16, including the out-of-band SPI reset controller, ordered DDR response drain,
+reset epoch, and the resettable 512-voice validity bitmap. The physical voice
+state arrays remained block RAM; reset does not clear their storage contents.
+
+| Resource or post-route check | Result |
+| --- | ---: |
+| LUT | 27,438 / 32,600 (84.17%) |
+| FF | 27,040 / 65,200 (41.47%) |
+| DSP48E1 | 39 / 120 (32.50%) |
+| BRAM tiles | 46.5 / 75 (62.00%) |
+| Setup WNS / TNS / failing endpoints | +0.031 ns / 0 ns / 0 |
+| Hold WHS / THS / failing endpoints | +0.048 ns / 0 ns / 0 |
+| Routing | 49,534 / 49,534 fully routed; 0 errors |
+| DRC | 0 errors; 0 critical warnings; 125 warnings |
+
+This passes the repository's implementation gates, but the report analyzer
+classifies it as `REVIEW`: setup and hold margins are below 0.2 ns and LUT use
+is high. The worst setup cluster ends at the renderer descriptor-bank BRAM and
+is not introduced by the reset controller. Missing board I/O delays and the
+existing DRC/methodology warnings remain qualification work.
+
+The routed bitstream SHA-256 is
+`914c65fe436bf84d60c699bea4299f15c7d22ec290de657fec35146fa5fb625c`.
+The derived SPIx4 MCS SHA-256 is
+`ed12c59c5f9ecd014be733fdb8d3988d0510e85b19d08b22c50798bf4df063bc`;
+configuration-Flash erase, program, verify, and subsequent Flash boot all
+completed successfully.
+
+### Previous 512-Voice Post-Synthesis Baseline
 
 A fresh Vivado 2025.2 synthesis on 2026-07-31 used the Makefile defaults of
 `NUM_VOICES=512`, `BLOCK_WORK_ENTRIES=8`, and `MAX_BLOCK_FRAMES=16`.
@@ -119,10 +150,10 @@ percentage unchanged or higher. Remaining work must continue to measure both
 the DDR3 throughput tests and fresh synthesis. Storage attributes or a
 module-local LUT delta alone are not adequate acceptance criteria.
 
-The current `check_timing` section reports zero unconstrained internal endpoints,
-but also reports 9 input ports without input delay and 13 output ports without
-output delay. Those I/O warnings must be resolved against external device and
-board timing before claiming complete board-interface signoff.
+The 2026-08-07 `check_timing` section reports zero unconstrained internal
+endpoints, but also reports 3 input ports without input delay and 8 output ports
+without output delay. Those I/O warnings must be resolved against external
+device and board timing before claiming complete board-interface signoff.
 
 ### Current Methodology Warnings
 
@@ -132,13 +163,15 @@ The current post-route timing report carries these methodology results:
 | --- | ---: | --- |
 | `LUTAR-1` | 1 warning | A LUT participates in an asynchronous-reset path; inspect reset safety and recovery/removal timing |
 | `PDRC-190` | 12 warnings | Synchronizer registers are not placed optimally; identify each CDC chain before applying placement attributes |
-| `SYNTH-6` | 57 warnings | Some RAM timing structures may be suboptimal; inspect output-register and surrounding mux paths, but do not infer that BRAM mapping failed from this warning alone |
+| `SYNTH-6` | 53 warnings | Some RAM timing structures may be suboptimal; inspect output-register and surrounding mux paths, but do not infer that BRAM mapping failed from this warning alone |
+| `TIMING-9` | 1 warning | One CDC structure is not recognized by the methodology checker and needs board-level review |
+| `TIMING-18` | 1 warning | External input/output delays are incomplete |
 | `XDCB-5` | 1 warning | A constraint query is runtime-inefficient; this affects Tcl execution, not circuit timing directly |
 | `REQP-1959` | 16 advisories | SERDES reset-driver structure should be reviewed in the board/IP hierarchy |
 
 The report itself says its methodology section may not be up to date. Rerun
 `report_methodology` on the current routed design before assigning or waiving a
-specific warning. Do not combine these counts with the 127 DRC warnings in the
+specific warning. Do not combine these counts with the 125 DRC warnings in the
 JSON summary; they are different report sets.
 
 Zero unconstrained internal endpoints is the important internal coverage result,

@@ -250,12 +250,15 @@ an attached controller to observe loading. The RP2040 treats loss of
 `asset_loaded` as a new FPGA session, discards MIDI received during loading, and
 performs version/SF2 identity checks plus FLUSH before resuming control.
 
-An explicit software-requested render-session reset is still required. It must
-not redefine the state-preserving SPI FLUSH operation: the future RTL mechanism
-needs its own request, completion acknowledgement, and readable session epoch,
-and must clear command, voice, scheduler, effects, and buffered-audio state
-before software establishes new ownership. The detailed requirement and
-acceptance gates are tracked in
+Interface version 16 implements software-requested render-session reset through
+the dedicated SPI `0xa7` transaction. The bridge cancels unpublished command
+work and blocks new command ingress while synchronous session reset clears
+command, voice-valid, renderer, scheduler, effects, compressor, PCM FIFO, and
+I2S state. Reset remains asserted while pre-reset ordered DDR responses are
+discarded. `RENDER_SESSION_EPOCH` increments only after that drain completes and
+is the software-readable completion acknowledgement. The state-preserving
+`0xa6` FLUSH contract is unchanged. Host queue cancellation and hardware
+latency qualification remain tracked in
 [`../backlog/midi_panic.md`](../backlog/midi_panic.md).
 
 ## Next Hardware Work

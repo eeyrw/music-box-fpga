@@ -42,7 +42,7 @@ python3 tools/ch347_tool.py \
   --device "$CH347_DEVICE" --clock-hz "$CH347_CLOCK" snapshot --group all
 ```
 
-The current RTL must report `version=0x000f0000`. A successful asset wait shows
+The current RTL must report `version=0x00100000`. A successful asset wait shows
 DDR ready, SD initialized, `asset_loaded=1`, no platform error, and equal
 loaded/declared byte counts. Do not interpret current register fields when the
 version differs.

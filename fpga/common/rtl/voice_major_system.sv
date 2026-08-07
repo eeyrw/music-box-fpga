@@ -62,6 +62,10 @@ module voice_major_system #(
   logic spi_cmd_ready;
   logic spi_cmd_flush_req;
   logic spi_cmd_flush_ack;
+  logic spi_session_reset_req;
+  logic spi_session_reset_ack;
+  logic session_reset;
+  logic [31:0] session_epoch;
   logic core_reset;
 
   logic block_req_valid;
@@ -114,6 +118,7 @@ module voice_major_system #(
   logic [LINE_WORDS*16-1:0] ext_rsp_data_q;
   logic [15:0] memory_latency_q;
   logic memory_request_pending_q;
+  logic [3:0] memory_outstanding_q;
 
   initial begin
     if (LINE_WORDS != BLOCK_LINE_WORDS)
@@ -122,7 +127,7 @@ module voice_major_system #(
       $error("TARGET_LEVEL must hold at least one render block");
   end
 
-  assign core_reset = rst || core_rst;
+  assign core_reset = rst || core_rst || session_reset;
   assign platform_regs_bus_valid = platform_regs_bus_req.valid;
   assign platform_regs_bus_write = platform_regs_bus_req.write;
   assign platform_regs_bus_address = platform_regs_bus_req.address;
@@ -135,10 +140,10 @@ module voice_major_system #(
       OUTPUT_LEVEL_WIDTH'(TARGET_LEVEL - MAX_BLOCK_FRAMES);
   // One elastic response register decouples the board reader from the ordered
   // window interface. External backpressure prevents response overwrite.
-  assign ext_req_valid = line_req_valid;
+  assign ext_req_valid = line_req_valid && !session_reset;
   assign ext_req_addr = line_req.aligned_line_addr;
-  assign line_req_ready = ext_req_ready;
-  assign ext_rsp_ready = !ext_rsp_pending_q || line_rsp_ready;
+  assign line_req_ready = ext_req_ready && !session_reset;
+  assign ext_rsp_ready = session_reset || !ext_rsp_pending_q || line_rsp_ready;
   assign line_rsp_valid = ext_rsp_pending_q;
   assign line_rsp.words = ext_rsp_data_q;
 
@@ -161,7 +166,19 @@ module voice_major_system #(
     .cmd_data(spi_cmd_data),
     .cmd_ready(spi_cmd_ready),
     .cmd_flush_req(spi_cmd_flush_req),
-    .cmd_flush_ack(spi_cmd_flush_ack)
+    .cmd_flush_ack(spi_cmd_flush_ack),
+    .session_reset_req(spi_session_reset_req),
+    .session_reset_ack(spi_session_reset_ack)
+  );
+
+  render_session_reset_controller session_reset_controller (
+    .clk,
+    .rst,
+    .request(spi_session_reset_req),
+    .drain_complete(memory_outstanding_q == '0),
+    .acknowledge(spi_session_reset_ack),
+    .session_reset,
+    .session_epoch
   );
 
   wavetable_register_fabric #(
@@ -207,6 +224,7 @@ module voice_major_system #(
     .minimum_fifo_level,
     .command_error_count,
     .stale_generation_count,
+    .session_epoch,
     .audio_diagnostics,
     .sample_window_diagnostics,
     .diagnostics_clear_pulse
@@ -329,13 +347,26 @@ module voice_major_system #(
   );
 
   always_ff @(posedge clk) begin
-    if (core_reset) begin
+    if (rst || core_rst) begin
       ext_rsp_pending_q <= 1'b0;
       ext_rsp_data_q <= '0;
       memory_latency_q <= '0;
       memory_request_pending_q <= 1'b0;
+      memory_outstanding_q <= '0;
       mem_response_trace_pulse <= 1'b0;
       mem_response_trace_latency <= '0;
+    end else if (session_reset) begin
+      ext_rsp_pending_q <= 1'b0;
+      ext_rsp_data_q <= '0;
+      memory_latency_q <= '0;
+      mem_response_trace_pulse <= 1'b0;
+      mem_response_trace_latency <= '0;
+      if (ext_rsp_valid && ext_rsp_ready) begin
+        if (memory_outstanding_q != '0)
+          memory_outstanding_q <= memory_outstanding_q - 1'b1;
+        if (memory_outstanding_q <= 4'd1)
+          memory_request_pending_q <= 1'b0;
+      end
     end else begin
       mem_response_trace_pulse <= 1'b0;
       if (line_rsp_valid && line_rsp_ready)
@@ -345,7 +376,8 @@ module voice_major_system #(
         ext_rsp_data_q <= ext_rsp_data;
         mem_response_trace_pulse <= 1'b1;
         mem_response_trace_latency <= memory_latency_q;
-        memory_request_pending_q <= 1'b0;
+        if (memory_outstanding_q <= 4'd1)
+          memory_request_pending_q <= 1'b0;
       end
       if (ext_req_valid && ext_req_ready) begin
         memory_request_pending_q <= 1'b1;
@@ -353,6 +385,15 @@ module voice_major_system #(
       end else if (memory_request_pending_q && memory_latency_q != 16'hffff) begin
         memory_latency_q <= memory_latency_q + 1'b1;
       end
+      unique case ({ext_req_valid && ext_req_ready,
+                    ext_rsp_valid && ext_rsp_ready})
+        2'b10: memory_outstanding_q <= memory_outstanding_q + 1'b1;
+        2'b01: begin
+          if (memory_outstanding_q != '0)
+            memory_outstanding_q <= memory_outstanding_q - 1'b1;
+        end
+        default: memory_outstanding_q <= memory_outstanding_q;
+      endcase
     end
   end
 

@@ -622,6 +622,14 @@ int main(int argc, char** argv) {
       (void)invalid;
     }, "unsupported modulation transform was accepted");
 
+    std::vector<uint8_t> bad_reserved = image_a;
+    bad_reserved.at(12) = 1;
+    refresh_crc(bad_reserved);
+    require_failure([&] {
+      render::McuSf2AssetView invalid(bad_reserved.data(), bad_reserved.size());
+      (void)invalid;
+    }, "nonzero command-interface legacy field was accepted");
+
     render::McuSf2AssetProfile wrong_profile = render::reference_mcu_sf2_asset_profile();
     ++wrong_profile.control_tick_samples;
     require_failure([&] {

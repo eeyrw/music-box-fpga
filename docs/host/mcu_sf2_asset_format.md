@@ -65,7 +65,7 @@ section. All seven listed sections are mandatory, including empty sections.
 | 4 | 2 | u16 | format version | `2` |
 | 6 | 2 | u16 | header size | `96` |
 | 8 | 4 | u32 | total size | Exact image bytes including padding |
-| 12 | 4 | u32 | command interface | Selected profile and FPGA command-interface version |
+| 12 | 4 | u32 | reserved | Writer emits zero; readers require zero |
 | 16 | 4 | u32 | output sample rate | Samples per second |
 | 20 | 4 | u32 | control tick samples | Output samples per MCU tick |
 | 24 | 8 | u64 | source size | Exact source SF2 size in bytes |
@@ -82,10 +82,11 @@ section. All seven listed sections are mandatory, including empty sections.
 | 68 | 4 | u32 | selected preset count | Equal to presets section count |
 | 72 | 24 | bytes | reserved | Writer emits zero; v2 readers do not interpret |
 
-The reference profile `generic-le32-48k-tick48-v15` specifies 48 kHz, 48
-samples per tick, and command interface `0x000f0000`. A reader compares command
-interface, sample rate, tick length, and profile ID CRC with its expected
-profile; matching format version alone is insufficient.
+The reference profile `generic-le32-48k-tick48-v1` specifies 48 kHz and 48
+samples per tick. It is independent of the FPGA command and register interface;
+that compatibility is checked by MCU control code during the FPGA handshake.
+A reader compares sample rate, tick length, reserved fields, and profile ID CRC
+with its expected profile; matching format version alone is insufficient.
 
 ## CRC And Identity
 

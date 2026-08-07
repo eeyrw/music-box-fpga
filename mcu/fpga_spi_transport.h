@@ -15,6 +15,10 @@ typedef int (*fpga_spi_exchange_fn)(void *context, const uint8_t *tx_bytes,
 int fpga_spi_send_commands(fpga_spi_write_fn write, void *context,
                            const uint32_t *words, uint8_t word_count);
 int fpga_spi_flush(fpga_spi_write_fn write, void *context);
+int fpga_spi_reset_session(fpga_spi_write_fn write,
+                           fpga_spi_exchange_fn exchange, void *context,
+                           uint16_t epoch_address, uint32_t *new_epoch,
+                           unsigned poll_limit, unsigned fetch_limit);
 int fpga_spi_read_register(fpga_spi_write_fn write,
                            fpga_spi_exchange_fn exchange, void *context,
                            uint16_t address, uint32_t *data,

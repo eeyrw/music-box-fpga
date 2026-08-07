@@ -215,6 +215,13 @@ void i2s_capture_task(void) {
     if (capture_resync_pending) i2s_capture_restart_hardware();
 }
 
+void i2s_capture_request_resync(void) {
+    /* A short upstream reset can restart the I2S bit phase without lasting
+     * long enough for the clock monitor to classify the source as stopped. */
+    capture_clock_valid = false;
+    capture_resync_pending = true;
+}
+
 size_t i2s_capture_available(void) {
     uint32_t available = capture_write_count() - capture_read_count;
     /* The producer is allowed to lap the consumer. Retain the newest 2048

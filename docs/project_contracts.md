@@ -28,7 +28,8 @@ tables follow the same rule through `tools/gen_dsp_lut.py`.
 ## Command Quick Reference
 
 Commands are 32-bit words transported by SPI opcode `0xa5`; pending command
-recovery uses the separate opcode `0xa6` FLUSH transaction. The command header
+recovery uses `0xa6` FLUSH, while whole-session invalidation uses the separate
+`0xa7` RENDER_SESSION_RESET transaction. The command header
 contains the command opcode, 10-bit voice ID, flags, and payload length. The SPI
 transaction header, word byte order, word-count limit, and CRC16 are separate
 from command semantics; see the two linked contracts above.

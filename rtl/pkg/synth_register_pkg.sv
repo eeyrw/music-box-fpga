@@ -5,7 +5,7 @@
 package synth_register_pkg;
   localparam int REG_BUS_ADDR_WIDTH = 16;
   localparam int REG_BUS_DATA_WIDTH = 32;
-  localparam logic [31:0] REG_VERSION_VALUE = 32'h000f0000;
+  localparam logic [31:0] REG_VERSION_VALUE = 32'h00100000;
 
   localparam logic [15:0] REG_VERSION = 16'h9000;
   localparam logic [15:0] REG_SYSTEM_STATUS = 16'h9010;
@@ -23,6 +23,7 @@ package synth_register_pkg;
   localparam logic [15:0] REG_AUDIO_LEAD = 16'h908c;
   localparam logic [15:0] REG_COMMAND_ERROR_COUNT = 16'h9090;
   localparam logic [15:0] REG_STALE_GENERATION_COUNT = 16'h9094;
+  localparam logic [15:0] REG_RENDER_SESSION_EPOCH = 16'h9098;
   localparam logic [15:0] REG_COMPRESSOR_STATUS = 16'h910c;
   localparam logic [15:0] REG_COMPRESSOR_GAIN_REDUCTION = 16'h9110;
   localparam logic [15:0] REG_COMPRESSOR_TARGET_GAIN_REDUCTION = 16'h9114;

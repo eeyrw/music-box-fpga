@@ -12,11 +12,14 @@ typedef struct capture {
 
 typedef struct mailbox_capture {
     capture request;
+    capture session_reset;
     uint16_t address;
     uint32_t data;
     unsigned exchanges;
     int malformed_fetch;
     uint8_t response_operation;
+    uint32_t epoch_after_reset;
+    int hold_epoch;
 } mailbox_capture;
 
 static int capture_write(void *context, const uint8_t *bytes, size_t byte_count) {
@@ -61,6 +64,13 @@ static uint32_t reference_crc32(const uint8_t *bytes, size_t size) {
 static int mailbox_write(void *context, const uint8_t *bytes,
                          size_t byte_count) {
     mailbox_capture *mailbox = context;
+    if (byte_count == 4u && bytes[0] == UINT8_C(0xa7)) {
+        int result = capture_write(&mailbox->session_reset, bytes, byte_count);
+        if (result == 0 && mailbox->hold_epoch == 0) {
+            mailbox->data = mailbox->epoch_after_reset;
+        }
+        return result;
+    }
     return capture_write(&mailbox->request, bytes, byte_count);
 }
 
@@ -95,12 +105,15 @@ int main(void) {
     static const uint8_t payload[9] = {2u, 0x10u, 0u, 0u, 1u,
                                        0x12u, 0x34u, 0x56u, 0x78u};
     static const uint8_t flush[4] = {0xa6u, 0u, 0xaau, 0xd7u};
+    static const uint8_t session_reset[4] = {0xa7u, 0u, 0x99u, 0xe6u};
     static const uint32_t malformed[2] = {UINT32_C(0x10000002), 0u};
     capture output = {{0}, 0u, 0u};
-    mailbox_capture mailbox = {{{0}, 0u, 0u}, UINT16_C(0x9050),
-                               UINT32_C(0x12345678), 0u, 0, 0u};
+    mailbox_capture mailbox = {{{0}, 0u, 0u}, {{0}, 0u, 0u},
+                               UINT16_C(0x9050), UINT32_C(0x12345678),
+                               0u, 0, 0u, 0u, 0};
     uint16_t crc;
     uint32_t register_data;
+    uint32_t session_epoch;
 
     if (fpga_spi_send_commands(capture_write, &output, words, 2u) != 0 ||
         output.writes != 1u || output.size != 12u || output.bytes[0] != 0xa5u ||
@@ -125,6 +138,34 @@ int main(void) {
         fputs("SPI transport accepted invalid arguments\n", stderr);
         return 1;
     }
+    mailbox.address = UINT16_C(0x9098);
+    mailbox.data = UINT32_C(7);
+    mailbox.epoch_after_reset = UINT32_C(8);
+    mailbox.exchanges = 0u;
+    mailbox.malformed_fetch = 0;
+    mailbox.response_operation = 0u;
+    if (fpga_spi_reset_session(mailbox_write, mailbox_exchange, &mailbox,
+                               mailbox.address, &session_epoch, 3u, 3u) != 0 ||
+        session_epoch != UINT32_C(8) || mailbox.session_reset.writes != 1u ||
+        mailbox.session_reset.size != sizeof(session_reset) ||
+        memcmp(mailbox.session_reset.bytes, session_reset,
+               sizeof(session_reset)) != 0) {
+        fputs("SPI render-session reset acknowledgement failed\n", stderr);
+        return 1;
+    }
+    mailbox.data = UINT32_C(8);
+    mailbox.epoch_after_reset = UINT32_C(9);
+    mailbox.hold_epoch = 1;
+    mailbox.exchanges = 0u;
+    if (fpga_spi_reset_session(mailbox_write, mailbox_exchange, &mailbox,
+                               mailbox.address, &session_epoch, 2u, 2u) == 0) {
+        fputs("SPI render-session reset accepted unchanged epoch\n", stderr);
+        return 1;
+    }
+    mailbox.hold_epoch = 0;
+    mailbox.address = UINT16_C(0x9050);
+    mailbox.data = UINT32_C(0x12345678);
+    mailbox.exchanges = 0u;
     if (fpga_spi_read_register(mailbox_write, mailbox_exchange, &mailbox,
                                mailbox.address, &register_data, 3u) != 0 ||
         register_data != mailbox.data || mailbox.exchanges != 2u ||
@@ -166,6 +207,6 @@ int main(void) {
         fputs("SPI register mailbox accepted corrupt response CRC\n", stderr);
         return 1;
     }
-    puts("PASS: FPGA SPI command, FLUSH, and register mailbox transport");
+    puts("PASS: FPGA SPI command, FLUSH, session reset, and register mailbox transport");
     return 0;
 }

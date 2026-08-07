@@ -8,7 +8,9 @@ command or RTL contract. Current behavior remains defined by
 
 Status reviewed against MIDI 1.0 Detailed Specification 4.2.1, the real-time
 MIDI host, both MCU policies, the command scheduler, and production RTL on
-2026-08-06.
+2026-08-07. Interface version 16 implements the FPGA/RP2040 render-session reset
+path and has passed functional board qualification. Desktop-host integration,
+maximum-load latency measurement, and audible-pop qualification remain open.
 
 ## Terminology And Required MIDI Semantics
 
@@ -42,12 +44,11 @@ especially Channel Mode Messages pages 24-25, System Reset, and Appendix A-5.
 | CC124-127 mode messages | Perform All Notes Off; mode state is not modeled | Perform All Notes Off; mode state is not modeled | No mode or channel semantics |
 | CC121 Reset All Controllers | Implemented per channel | Implemented per channel | Reflected through later per-voice updates only |
 | System Reset `0xff` | Not decoded as a host control event | Stops voices and resets channel policy | Expanded STOPs; no atomic global operation |
-| Global emergency silence | Host may send CC120 over all 16 channels | Shutdown loops over all 16 channels | No global or atomic operation |
+| Global emergency silence | Host may send CC120 over all 16 channels | UART `a` cancels MCU queues and performs acknowledged `0xa7` reset | Atomic render/audio session reset |
 
-The RP2040 UART `a` command now expands immediate STOPs across the dense set of
-voices owned by the current MCU runtime. It is useful for current-session
-silence, but remains generation-matched and therefore cannot stop a voice whose
-generation was lost in an earlier MCU reset.
+The RP2040 UART `a` command and the Music Box reset-session SysEx invoke the
+out-of-band `0xa7` operation. They do not expand generation-matched STOPs and
+therefore also clear voices whose ownership was lost across an MCU restart.
 
 The real-time host gives note-off and CC120/CC123/CC124-127 events lifecycle
 queue treatment. At normal shutdown it stops MIDI input, expands CC120 over all
@@ -67,24 +68,27 @@ unchanged.
 
 ## Open Defects And Risks
 
-### PANIC-001: No Bounded Global RTL Silence
+### PANIC-001: Bounded Global RTL Silence Implemented; Hardware Timing Open
 
 Current CC120 cost scales with the number of active voices. Up to 512
 generation-matched STOP commands may span multiple 63-word SPI transactions
 and execute serially. Silence latency therefore depends on scheduler backlog,
 USB/SPI latency, renderer control availability, and active polyphony.
 
-There is no RTL operation that makes all voices inaudible at one defined frame
-boundary. Reset is not an acceptable run-time substitute.
+Interface version 16 adds the dedicated out-of-band `0xa7` operation. It asserts
+reset on the complete render/audio path independent of voice count, then keeps
+that reset asserted while discarding any pre-reset ordered DDR responses before
+acknowledgement. Physical panic-to-I2S silence latency still requires
+maximum-load board qualification.
 
-### PANIC-002: Queued Starts Can Survive A Host Panic
+### PANIC-002: MCU Queued Starts Cancelled; Desktop Host Work Open
 
-The scheduler prioritizes lifecycle commands but keeps them FIFO-ordered.
-CC120 invalidates replaceable updates for each stopped voice, but it does not
-atomically discard already queued START, RELEASE, or STOP commands. The FPGA
-may also contain staged or FIFO-resident START commands. A voice can therefore
-start after an operator has requested panic unless input, host queues, bridge
-staging, the command FIFO, and active state are coordinated.
+The RP2040 UART panic path and fixed System Exclusive command
+`f0 7d 4d 42 01 01 f7` block/discard MIDI ingress, abandon the unpublished
+command batch, wait for the finite DMA queue to drain, then issue `0xa7`.
+Bridge staging and the FPGA command FIFO/parser are cancelled by that request.
+The desktop scheduler still needs equivalent producer blocking and queue
+cancellation before it exposes a panic entry point.
 
 ### PANIC-003: MCU Policy Equivalence Requires Ongoing Regression
 
@@ -100,7 +104,7 @@ voice and restoring controller, bank, program, RPN, and NRPN defaults. This is a
 standards-facing reset policy, but it still expands to per-voice commands and
 therefore does not solve the bounded global panic requirement.
 
-### PANIC-005: Effect And Output Tail Policy Is Undefined
+### PANIC-005: Effect And Output Tail Policy Implemented; Pop Testing Open
 
 Stopping all oscillator voices does not necessarily silence samples already in
 the audio FIFO, compressor lookahead, chorus history, or reverb delay lines.
@@ -113,21 +117,18 @@ global effect history. The project needs two explicit policies:
 - operator emergency panic: guarantee bounded silence, which may clear shared
   effect history and buffered output.
 
-### PANIC-006: MCU Reset Loses Voice Ownership
+Interface version 16 implements that split: CC120 retains the channel-scoped
+policy, while `0xa7` resets the effects, compressor, output FIFO, and I2S path.
+Whether the abrupt transition produces an audible pop remains part of physical
+panic-to-silence qualification; this revision intentionally does not add a
+release or output ramp.
 
-The FPGA preserves active voices across SPI `0xa6` FLUSH, while the RP2040
-runtime initializes a new generation table after reset. The command protocol
-requires an exact generation match and exposes no readable per-voice generation
-table. Consequently, neither a 512-slot MCU scan nor current-session UART `a`
-can address voices accepted before the reset.
+### PANIC-006: MCU Reset Voice Ownership Recovery Implemented
 
-The RP2040 now detects an FPGA-only cold restart through low-rate platform
-status monitoring, discards MIDI during SD loading, and creates a fresh local
-voice session after the FPGA reports the expected loaded asset. This handles
-the case where FPGA reset already erased the render state. It does not solve an
-MCU-only reset, firmware update, watchdog reset, or missing transaction
-acknowledgement while the FPGA preserves active voices. The bounded global RTL
-operation proposed below remains the required recovery mechanism.
+SPI `0xa6` still preserves active FPGA voices and their generations. Startup,
+watchdog recovery, and FPGA reconnect now use `0xa7` plus the changing session
+epoch before rebuilding the MCU generation table. An MCU cannot resume MIDI
+after a reset timeout, so an unacknowledged old session is not silently reused.
 
 The two counters have different fault semantics. A command-error increase
 enters quarantine. Two consecutive mailbox failures instead mark the FPGA
@@ -142,21 +143,18 @@ on per-layer RELEASE, including after a short key press, so FPGA-side lifecycle
 attribution remains open even though it no longer causes global MIDI
 quarantine.
 
-### PANIC-007: No Explicit Render-Session Reset
+### PANIC-007: Render-Session Reset Implemented In FPGA And RP2040
 
-The FPGA has no software-requested operation that establishes a completely new
-render session without a board reset. A future register or out-of-band command
-must atomically block command acceptance, discard bridge/parser/FIFO contents,
-invalidate every voice generation, reset the renderer and scheduler, clear
-effect history and the audio FIFO according to an explicit policy, and then
-acknowledge completion with a new readable session epoch.
+SPI `0xa7` is a CRC-protected out-of-band request. It blocks command acceptance,
+discards bridge/parser/FIFO contents, invalidates every voice through a resettable
+valid bitmap, and synchronously resets the renderer, scheduler, memory response
+holding state, effects, compressor, audio FIFO, and I2S serializer. The reset
+controller increments `RENDER_SESSION_EPOCH` only after applying the reset.
 
-This is broader than MIDI CC120 and different from emergency output mute. It is
-also different from SPI `0xa6` FLUSH, whose state-preserving contract must not
-change. The MCU must use the acknowledged render-session reset before rebuilding
-its local ownership table after an MCU-only recovery. A reset request cannot be
-considered complete merely because it was written into the normal ordered
-command FIFO.
+The RP2040 reads the old epoch, sends `0xa7`, and remains stopped until it reads
+a changed epoch. Startup, reconnect recovery, and UART `a` use this path before
+rebuilding local ownership. Failure or timeout leaves MIDI ingress blocked for
+operator panic. SPI `0xa6` remains state-preserving.
 
 ### PANIC-008: Voice ID Versus Generation Needs A Contract Decision
 
@@ -204,13 +202,13 @@ The design decision must compare four explicit alternatives:
 | --- | --- | --- | --- |
 | Keep current per-voice generation only | Yes | Impossible for unknown voices | Current incomplete behavior |
 | Remove generation and rely on ordered single ownership | Only through proved producer/order invariants | A forced command by voice ID is possible | Simplest wire format, but an invariant violation can affect a reused note |
-| Keep generation plus out-of-band session reset/epoch | Yes | Bounded and atomic | Preferred candidate; adds one recovery operation and acknowledgement |
+| Keep generation plus out-of-band session reset/epoch | Yes | Bounded and atomic | Selected and implemented in interface version 16 |
 | Add readable per-voice state/generation snapshot | Yes | Reconciliation is possible | Largest interface and verification burden; snapshot atomicity is required |
 
 An unconditional `FORCE_STOP voice_id` is a narrower temporary operation, but
 512 such commands still have latency proportional to polyphony and can race a
 queued START unless paired with queue cancellation. A single out-of-band
-`RENDER_SESSION_RESET` remains the preferred recovery boundary. It may retain
+`RENDER_SESSION_RESET` is the selected recovery boundary. It retains
 per-voice generation for normal commands while deliberately ignoring it during
 whole-session invalidation.
 
@@ -236,7 +234,7 @@ controller parsing to each RTL voice merely to support panic.
    behavior, including combined sustain/sostenuto sequences.
 2. Add a scheduler panic API that first blocks new Note On submission and
    atomically abandons unsent host commands with explicit diagnostics.
-3. Choose and document an out-of-band FPGA emergency operation. A normal A5
+3. Maintain the implemented out-of-band FPGA emergency operation. A normal A5
    opcode alone is insufficient because it remains ordered behind pending
    commands. Do not overload A6 FLUSH with voice-state changes.
 4. Make the emergency operation cancel unpublished bridge staging and command
@@ -244,20 +242,49 @@ controller parsing to each RTL voice merely to support panic.
    bounded global silence independent of the active-voice count.
 5. Define whether emergency silence clears the output FIFO, compressor
    lookahead, chorus, and reverb. Preserve the narrower CC120 behavior.
-6. Keep MIDI System Reset distinct from the future bounded emergency operation.
+6. Keep MIDI System Reset distinct from the bounded emergency operation.
 7. Add operator entry points only after host queue cancellation and RTL
    acknowledgement are both observable.
-8. Add the explicit render-session reset described above, with a monotonically
-   changing readable epoch so MCU/FPGA ownership can be reconciled after either
-   side restarts.
+8. Extend the implemented render-session reset and monotonically changing epoch
+   to desktop-host recovery without changing its FPGA contract.
 9. Resolve PANIC-008 from attributed stale-command evidence and queue-ordering
    proofs; until then, retain generation on normal runtime commands and bypass
-   it only in the future whole-session reset operation.
+   it only in the whole-session reset operation.
 
-An RTL implementation may use a global kill epoch plus background state-RAM
-invalidation, or a bounded state sweep combined with an immediate output mute.
-The selected design must prove that stale state cannot reappear after the mute
-is released.
+The implemented RTL uses a resettable per-voice validity bitmap in front of the
+state RAM. Reset invalidates all slots in one clock without resetting the BRAM
+contents; every snapshot and generation check is gated by the bitmap, so stale
+RAM state cannot reappear after reset is released.
+
+## 2026-08-07 Hardware Qualification
+
+The interface-version-16 image was implemented, written to the Smart Artix
+configuration Flash, verified, and booted from Flash. The boot status reported
+`DONE=1`, `DONE_PIN=1`, `EOS=1`, `CRC_ERROR=0`, and `IDCODE_ERROR=0`. The RP2040
+then completed its production startup handshake with `VERSION=0x00100000`, the
+expected SGM source size of 324,800,670 bytes, and no SPI, command-format, stale,
+enqueue-timeout, underrun, sample-drop, or render-deadline errors.
+
+A USB-MIDI test selected zero-based General MIDI program 48 (Strings Ensemble
+1), held C4 without Note Off, and captured three separate UAC2 intervals:
+
+| Interval | Overall peak | Overall RMS | Result |
+| --- | ---: | ---: | --- |
+| Sustained Strings before SysEx | -17.232910 dBFS | -27.782813 dBFS | Continuous nonzero audio |
+| After `f0 7d 4d 42 01 01 f7` | `-inf` | `-inf` | Exact digital silence |
+| New Strings Note On after reset | -17.427844 dBFS | -28.528334 dBFS | Normal audio resumed |
+
+The first SysEx changed the session epoch from 13 to 14 and cleared the MCU
+active-voice set. A final cleanup SysEx changed it to 15 and left active voices
+at zero. The test also exposed that the short FPGA I2S reset can restart serial
+bit phase without satisfying the MCU's 4 ms clock-loss detector. Firmware now
+explicitly restarts its PIO/DMA frame synchronizer after startup or operator
+session reset; the post-reset Note On above verifies recovery without full-scale
+frame-misalignment data.
+
+This establishes functional silence, acknowledgement, and post-reset recovery.
+It does not establish a worst-case frame count from SysEx receipt to silence or
+whether the abrupt FIFO/effect reset produces an audible pop.
 
 ## Acceptance Gates
 

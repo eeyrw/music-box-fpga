@@ -1,6 +1,7 @@
 #include "debug_console.h"
 #include "i2s_capture.h"
 #include "midi_ingress_queue.h"
+#include "midi_sysex_reset.h"
 #include "rp2040_spi_dma_transport.h"
 #include "synth_controller.h"
 #include "usb_audio_config.h"
@@ -43,7 +44,9 @@ static _Atomic uint32_t usb_midi_available_event_count;
 static _Atomic uint32_t usb_midi_packet_count;
 static _Atomic uint32_t usb_midi_offline_discard_count;
 static _Atomic uint32_t usb_midi_last_packet;
+static _Atomic bool usb_midi_panic_active;
 static midi_ingress_queue usb_midi_ingress;
+static midi_sysex_reset_parser usb_midi_sysex_parser;
 static _Atomic bool usb_midi_mounted_snapshot;
 static _Atomic bool usb_device_ready_snapshot;
 static _Atomic bool i2s_clock_valid_snapshot;
@@ -213,17 +216,19 @@ static void debug_uart_print_status(void) {
     rp2040_spi_diagnostics spi;
     rp2040_spi_get_diagnostics(&spi);
     debug_uart_queue_printf(
-        "SPI init=%d last=%d flush=%d attempts=%" PRIu32 "\r\n",
+        "SPI init=%d last=%d flush=%d reset=%d attempts=%" PRIu32 "\r\n",
         diagnostics->init_result, diagnostics->last_spi_result,
-        diagnostics->flush_result, diagnostics->register_attempts);
+        diagnostics->flush_result, diagnostics->session_reset_result,
+        diagnostics->register_attempts);
     debug_uart_queue_printf(
         "FPGA version=%08" PRIx32 " status=%08" PRIx32
         " sf2_size=%" PRIu32 " ready=%u disconnects=%" PRIu32
-        " recoveries=%" PRIu32 "\r\n",
+        " recoveries=%" PRIu32 " epoch=%" PRIu32 " resets=%" PRIu32 "\r\n",
         diagnostics->version, diagnostics->platform_status,
         diagnostics->sf2_size, diagnostics->fpga_session_ready,
         diagnostics->fpga_disconnect_count,
-        diagnostics->fpga_recovery_count);
+        diagnostics->fpga_recovery_count, diagnostics->session_epoch,
+        diagnostics->session_reset_count);
     debug_uart_queue_printf(
         "SPI writes=%" PRIu32 " exchanges=%" PRIu32
         " bytes=%" PRIu32 " errors=%" PRIu32
@@ -281,14 +286,33 @@ static void debug_uart_print_help(void) {
     debug_uart_queue_text(
         "  z PLATFORM_SF2_SIZE, c CMD_FIFO_STATUS, d FPGA/I2S diagnostics\r\n");
     debug_uart_queue_text(
-        "  e COMMAND_ERROR_COUNT, g STALE_GENERATION_COUNT, u USB audio\r\n");
+        "  e COMMAND_ERROR_COUNT, g STALE_GENERATION_COUNT, h SESSION_EPOCH\r\n");
     debug_uart_queue_text("  m MIDI, u USB audio\r\n");
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
     debug_uart_queue_text(
         "  t timing, T reset timing, w START, r START DDR, R DDR[0]\r\n");
 #endif
     debug_uart_queue_text(
-        "  a STOP all, l RELEASE all MCU-owned voices, n/o C4, f FLUSH\r\n");
+        "  a FPGA panic/reset, l RELEASE all MCU-owned voices, n/o C4, f FLUSH\r\n");
+}
+
+static int app_operator_panic(void) {
+    int result;
+    uint32_t discarded;
+
+    atomic_store_explicit(&usb_midi_panic_active, true, memory_order_release);
+    midi_sysex_reset_parser_init(&usb_midi_sysex_parser);
+    discarded = midi_ingress_queue_discard_all(&usb_midi_ingress);
+    result = app_synth_render_session_reset();
+    discarded += midi_ingress_queue_discard_all(&usb_midi_ingress);
+    atomic_fetch_add_explicit(&usb_midi_offline_discard_count, discarded,
+                              memory_order_relaxed);
+    if (result == 0) {
+        i2s_capture_request_resync();
+        atomic_store_explicit(&usb_midi_panic_active, false,
+                              memory_order_release);
+    }
+    return result;
 }
 
 static void debug_uart_print_midi_status(void) {
@@ -444,11 +468,13 @@ static void debug_uart_dump_fpga(void) {
     debug_uart_read_register("SAMPLE_DROP_COUNT", UINT16_C(0x9028));
     debug_uart_read_register("DEADLINE_MISS_COUNT", UINT16_C(0x902c));
     debug_uart_read_register("CURRENT_SAMPLE", UINT16_C(0x9030));
+    debug_uart_read_register("CMD_FIFO_STATUS", UINT16_C(0x9034));
     debug_uart_read_register("MEM_RESPONSE_COUNT", UINT16_C(0x9038));
     debug_uart_read_register("AUDIO_FIFO_DIAG", UINT16_C(0x9088));
     debug_uart_read_register("AUDIO_LEAD", UINT16_C(0x908c));
     debug_uart_read_register("COMPRESSOR_STATUS", UINT16_C(0x910c));
     debug_uart_read_register("COMPRESSOR_PEAK", UINT16_C(0x9118));
+    debug_uart_read_register("COMPRESSOR_MAX_PEAK", UINT16_C(0x9120));
     debug_uart_read_register("COMPRESSOR_INPUTS", UINT16_C(0x9124));
     debug_uart_read_register("COMPRESSOR_OUTPUTS", UINT16_C(0x9128));
     debug_uart_read_register("WINDOW_REQUESTS", UINT16_C(0x9160));
@@ -543,6 +569,10 @@ static void debug_uart_handle_character(void *context, int character) {
                 debug_uart_read_register("STALE_GENERATION_COUNT",
                                          UINT16_C(0x9094));
                 break;
+            case 'h':
+                debug_uart_read_register("RENDER_SESSION_EPOCH",
+                                         UINT16_C(0x9098));
+                break;
             case 'm': debug_uart_print_midi_status(); break;
             case 'u': debug_uart_print_usb_audio(); break;
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
@@ -590,8 +620,8 @@ static void debug_uart_handle_character(void *context, int character) {
             case 'R': debug_uart_dump_ddr_zero(); break;
 #endif
             case 'a':
-                debug_uart_queue_printf("MIDI all-sound-off result=%d\r\n",
-                                        app_midi_all_sound_off());
+                debug_uart_queue_printf("FPGA render-session reset result=%d\r\n",
+                                        app_operator_panic());
                 break;
             case 'l':
                 debug_uart_queue_printf("MIDI release-all result=%d\r\n",
@@ -637,13 +667,17 @@ static void service_i2s_clock_monitor(uint32_t millisecond_count) {
 
 static int dispatch_midi_packet(const uint8_t packet[4]) {
     /* USB-MIDI 1.0 packets are [Cable/CIN, status, data1, data2]. There is one
-     * embedded cable, so routing needs no cable lookup. System/SysEx packets
-     * have no MSF2 synth action; all MIDI channel voice messages are handled. */
+     * embedded cable, so routing needs no cable lookup. */
+    const midi_sysex_action sysex_action =
+        midi_sysex_reset_process_usb_packet(&usb_midi_sysex_parser, packet);
     const uint8_t status = packet[1];
     const uint8_t channel = status & 0x0fu;
     const uint8_t data_1 = packet[2] & 0x7fu;
     const uint8_t data_2 = packet[3] & 0x7fu;
 
+    if (sysex_action == MIDI_SYSEX_ACTION_RESET_SESSION) {
+        return app_operator_panic();
+    }
     if (status == 0xffu) return app_midi_system_reset();
 
     switch (status & 0xf0u) {
@@ -691,7 +725,13 @@ static int service_usb_midi_ingress(void) {
                  ((uint32_t)packet[2] << 16) | ((uint32_t)packet[3] << 24);
         atomic_store_explicit(&usb_midi_last_packet, packed,
                               memory_order_release);
-        if (!midi_ingress_queue_push(&usb_midi_ingress, packet)) break;
+        if (atomic_load_explicit(&usb_midi_panic_active,
+                                 memory_order_acquire)) {
+            atomic_fetch_add_explicit(&usb_midi_offline_discard_count, 1u,
+                                      memory_order_relaxed);
+        } else if (!midi_ingress_queue_push(&usb_midi_ingress, packet)) {
+            break;
+        }
     }
     if (tud_midi_available() != 0u) {
         atomic_fetch_add_explicit(&usb_midi_budget_hit_count, 1u,
@@ -1010,9 +1050,11 @@ int main(void) {
            previous_spi_writes);
     set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_LOOP, 0);
     midi_ingress_queue_init(&usb_midi_ingress);
+    midi_sysex_reset_parser_init(&usb_midi_sysex_parser);
     rp2040_spi_bus_init();
     i2s_capture_init();
     result = app_synth_init();
+    if (result == 0) i2s_capture_request_resync();
     debug_uart_print_status();
     if (result != 0) fatal_blink("synth-init", result);
     app_i2s_time_cursor_us = time_us_32();

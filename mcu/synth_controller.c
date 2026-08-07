@@ -19,11 +19,13 @@
 #endif
 #define APP_MAX_COMMAND_PAYLOAD_WORDS 16u
 #define APP_MAX_COMMAND_WORDS (1u + APP_MAX_COMMAND_PAYLOAD_WORDS)
-#define APP_FPGA_INTERFACE_VERSION UINT32_C(0x000f0000)
+#define APP_FPGA_INTERFACE_VERSION UINT32_C(0x00100000)
 #define APP_FPGA_PLATFORM_STATUS_ADDRESS UINT16_C(0x9040)
 #define APP_FPGA_SF2_SIZE_ADDRESS UINT16_C(0x9050)
 #define APP_FPGA_COMMAND_ERROR_ADDRESS UINT16_C(0x9090)
 #define APP_FPGA_STALE_GENERATION_ADDRESS UINT16_C(0x9094)
+#define APP_FPGA_SESSION_EPOCH_ADDRESS UINT16_C(0x9098)
+#define APP_FPGA_SESSION_RESET_POLL_LIMIT 32u
 #ifndef APP_CONTROL_UPDATE_PERIOD_MS
 #define APP_CONTROL_UPDATE_PERIOD_MS 5u
 #endif
@@ -132,6 +134,32 @@ static int app_mark_session_offline(void) {
     return app_reset_local_session() == MSF2_OK ? 0 : -(int)MSF2_ERR_SINK;
 }
 
+static int app_perform_render_session_reset(void) {
+    msf2_result local_result;
+
+    app_diagnostics.fpga_session_ready = 0u;
+    app_control_job.active = 0u;
+    command_batch_init(&app_command_batch);
+    if (platform_spi_wait_idle(UINT32_C(100000)) != 0) {
+        app_diagnostics.session_reset_result = -1;
+        return -1;
+    }
+    app_diagnostics.session_reset_result = fpga_spi_reset_session(
+        app_spi_write, app_spi_exchange, NULL,
+        APP_FPGA_SESSION_EPOCH_ADDRESS, &app_diagnostics.session_epoch,
+        APP_FPGA_SESSION_RESET_POLL_LIMIT, 8u);
+    if (app_diagnostics.session_reset_result != 0) return -1;
+
+    local_result = app_reset_local_session();
+    if (local_result != MSF2_OK) {
+        app_diagnostics.session_reset_result = -(int)local_result;
+        return app_diagnostics.session_reset_result;
+    }
+    ++app_diagnostics.session_reset_count;
+    app_diagnostics.fpga_session_ready = 1u;
+    return 0;
+}
+
 static int app_send_command_words(void *context, const uint32_t *words,
                                   uint8_t word_count) {
     (void)context;
@@ -182,6 +210,7 @@ int app_synth_init(void) {
         .init_result = -(int)MSF2_ERR_SINK,
         .last_spi_result = -1,
         .flush_result = -1,
+        .session_reset_result = -1,
     };
     command_batch_init(&app_command_batch);
     result = msf2_view_init(&app_view, app_msf2_image_start, image_size);
@@ -243,12 +272,11 @@ int app_synth_init(void) {
         break;
     }
     if (attempt == 30000u) return app_diagnostics.init_result;
-    app_diagnostics.flush_result = fpga_spi_flush(app_spi_write, NULL);
-    if (app_diagnostics.flush_result != 0) {
+    if (app_perform_render_session_reset() != 0) {
         app_diagnostics.init_result = -(int)MSF2_ERR_SINK;
         return app_diagnostics.init_result;
     }
-    result = app_reset_local_session();
+    result = MSF2_OK;
     if (result == MSF2_OK &&
         fpga_spi_read_register(app_spi_write, app_spi_exchange, NULL,
                                APP_FPGA_COMMAND_ERROR_ADDRESS,
@@ -357,6 +385,10 @@ int app_fpga_debug_flush(void) {
     return app_diagnostics.flush_result;
 }
 
+int app_synth_render_session_reset(void) {
+    return app_perform_render_session_reset();
+}
+
 /* Call regularly from the single-owner control core. Logical time is derived
  * directly from the wrapping millisecond counter. Only active voices are
  * visited by the runtime. */
@@ -439,6 +471,7 @@ int app_synth_monitor_transport(uint32_t millisecond_count) {
     int version_result = 0;
     int status_result = -1;
     int result;
+    uint8_t recovered_session = 0u;
     if (millisecond_count - app_transport_monitor_millisecond < 100u) return 0;
     if (app_command_batch.word_count != 0u) return 0;
     if (platform_spi_wait_idle(UINT32_C(1000)) != 0) return 0;
@@ -492,9 +525,9 @@ int app_synth_monitor_transport(uint32_t millisecond_count) {
         if (sf2_size != (uint32_t)app_view.source_size_bytes) {
             return -(int)MSF2_ERR_PROFILE;
         }
-        result = fpga_spi_flush(app_spi_write, NULL);
-        app_diagnostics.flush_result = result;
-        if (result != 0 || app_reset_local_session() != MSF2_OK) return 0;
+        result = app_perform_render_session_reset();
+        if (result != 0) return 0;
+        recovered_session = 1u;
         app_last_control_millisecond = millisecond_count;
     }
     app_transport_diagnostics_millisecond = millisecond_count;
@@ -507,10 +540,9 @@ int app_synth_monitor_transport(uint32_t millisecond_count) {
             APP_FPGA_STALE_GENERATION_ADDRESS, &stale_generations, 8u);
     }
     if (result != 0) return 0;
-    if (app_diagnostics.fpga_session_ready == 0u) {
+    if (recovered_session != 0u) {
         app_diagnostics.command_error_count = command_errors;
         app_diagnostics.stale_generation_count = stale_generations;
-        app_diagnostics.fpga_session_ready = 1u;
         ++app_diagnostics.fpga_recovery_count;
         return 0;
     }

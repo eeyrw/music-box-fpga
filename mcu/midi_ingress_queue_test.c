@@ -34,6 +34,16 @@ int main(void) {
         fputs("drained MIDI queue remained full\n", stderr);
         return 1;
     }
+    if (!midi_ingress_queue_push(
+            &queue, (const uint8_t[4]){0x09u, 0x90u, 60u, 100u}) ||
+        !midi_ingress_queue_push(
+            &queue, (const uint8_t[4]){0x08u, 0x80u, 60u, 0u}) ||
+        midi_ingress_queue_discard_all(&queue) != 2u ||
+        midi_ingress_queue_depth(&queue) != 0u ||
+        midi_ingress_queue_pop(&queue, packet)) {
+        fputs("queue panic discard failed\n", stderr);
+        return 1;
+    }
     queue.write_count = UINT32_MAX - 1u;
     queue.read_count = UINT32_MAX - 1u;
     if (!midi_ingress_queue_push(
@@ -43,6 +53,6 @@ int main(void) {
         fputs("queue counters failed across uint32 wrap\n", stderr);
         return 1;
     }
-    puts("PASS: dual-core MIDI ingress SPSC queue");
+    puts("PASS: dual-core MIDI ingress SPSC queue and panic discard");
     return 0;
 }
