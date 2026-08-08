@@ -433,6 +433,11 @@ class RtlDriver : public render::CommandWordSink {
     return dut_.stale_generation_count;
   }
   uint16_t active_voice_count() const { return dut_.active_voice_count; }
+  std::vector<render::VoiceCompletion> take_voice_completions() {
+    std::vector<render::VoiceCompletion> completions;
+    completions.swap(completions_);
+    return completions;
+  }
 #if RENDER_RTL_EFFECTS_ENABLE
   uint16_t effects_max_processing_cycles() const {
     return dut_.effects_max_processing_cycles;
@@ -494,6 +499,7 @@ class RtlDriver : public render::CommandWordSink {
 #endif
     dut_.core_clk = 1;
     dut_.eval();
+    capture_completion();
     context_.timeInc(1);
     dut_.core_clk = 0;
     dut_.eval();
@@ -521,6 +527,7 @@ class RtlDriver : public render::CommandWordSink {
       }
       dut_.ddr_clk = 1;
       dut_.eval();
+      if (ddr_cycle == 2) capture_completion();
       if (ddr_cycle == 2 && dut_.debug_plan_valid) {
         window_analyzer_.observe(dut_.debug_plan_voice,
                                  dut_.debug_plan_first,
@@ -535,6 +542,14 @@ class RtlDriver : public render::CommandWordSink {
     dut_.eval();
 #endif
     ++cycles_;
+  }
+
+  void capture_completion() {
+    if (!dut_.completion_event_valid) return;
+    completions_.push_back(
+        {uint16_t(dut_.completion_event_voice),
+         uint16_t(dut_.completion_event_generation),
+         uint8_t(dut_.completion_event_reason)});
   }
 
   template <typename Valid, typename Ready>
@@ -576,6 +591,7 @@ class RtlDriver : public render::CommandWordSink {
   uint32_t first_output_frame_index_ = 0;
   uint16_t first_output_active_voices_ = 0;
   WindowPrefetchAnalyzer window_analyzer_;
+  std::vector<render::VoiceCompletion> completions_;
 #if RENDER_RTL_EFFECTS_ENABLE
   std::vector<std::pair<int16_t, int16_t>> effect_samples_;
   uint64_t effect_output_frames_ = 0;
@@ -664,13 +680,21 @@ int main(int argc, char** argv) {
     render::WavWriter wav(wav_path, args.sample_rate);
 
     uint32_t frame = 0;
+    uint32_t next_completion_frame = 0;
+    const uint32_t completion_period_frames =
+        uint32_t(std::max(1, args.sample_rate / 1000));
     uint64_t nonzero_words = 0;
     const uint32_t end_frame = uint32_t(inputs.sample_count);
     const auto render_start = Clock::now();
     while (frame < end_frame && !render::interrupt_requested()) {
+      if (frame == next_completion_frame) {
+        mcu.consume_voice_completions(driver.take_voice_completions(), frame);
+        next_completion_frame += completion_period_frames;
+      }
       timeline.advance_to(int(frame));
-      const uint32_t boundary = render::next_rtl_render_boundary(
+      uint32_t boundary = render::next_rtl_render_boundary(
           frame, end_frame, driver.configured_max_block_frames());
+      boundary = std::min(boundary, next_completion_frame);
       auto samples = driver.render_block(frame, boundary - frame);
       for (const auto& sample : samples) {
         wav.write_stereo(sample.first, sample.second);

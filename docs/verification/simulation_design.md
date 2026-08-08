@@ -130,6 +130,17 @@ render timing. Normal requests use the configured maximum block length; MIDI
 and control events are applied at the following block boundary instead of
 splitting renderer work into event-sized blocks.
 
+Voice-slot completion follows the same FPGA-authoritative contract as the board
+firmware. `McuModel` never frees a slot from a software estimate of the volume
+Release duration. Once a voice enters Release it stops advancing the MCU shadow
+envelope and stops publishing dynamic updates for that voice. Every 1 ms,
+`render-rtl-*` consumes the Verilated core's direct `(voice, generation,
+reason)` completion pulses. Only an event matching the generation currently
+owned by `McuModel` reclaims the slot; an old event after voice replacement is
+ignored. The simulation connection intentionally does not instantiate or
+transact through SPI. `render-reference` performs the same reconciliation
+against completion events emitted by `ReferenceSynth`.
+
 `render-rtl-qspi` uses the same RTL, commands, sample window, SF2 image, WAV
 output, and deadline accounting while replacing the DDR3 backend with the
 datasheet-based 100 MHz QSPI NOR transaction model. It writes
@@ -276,12 +287,18 @@ stereo and compatible hard-panned SF2 pairs are
 two mono regions and therefore consume two commands and two voices. START carries
 the 10-bit voice ID, 16-bit generation, independent Q1.15 left/right gains,
 Q24.8 phase increment and only the filter/envelope groups that are needed. START
-clears the phase accumulator to zero.
+clears the phase accumulator to zero. Note-static, current channel, and current
+modulation-envelope contributions to gain, phase, and filter cutoff are folded
+into START before it is published; the runtime must not depend on a corrective
+control command after installation.
 
 On Note Off, the MCU model sends `VOICE_RELEASE` with the release step calculated
 from the current region/controller state. Natural release completion is owned by
-the FPGA; the host does not send a redundant STOP. `VOICE_STOP` is reserved for
-immediate policy actions such as all-sound-off or voice replacement.
+the FPGA; the host does not send a redundant STOP. This remains a RELEASE when
+the calculated step is zero: the FPGA interprets zero as immediate release
+completion and clears active state itself. `VOICE_STOP` is reserved for explicit
+immediate policy actions such as all-sound-off; voice replacement uses a
+new-generation START without a preceding STOP.
 
 Volume-envelope duration preparation can use a coarse MCU policy tick or one
 sample per tick. In both modes the command builder converts the selected
@@ -294,8 +311,9 @@ control-rate policy and send only changed gain/phase or filter commands.
 There are three distinct volume-envelope representations in the render flow:
 
 - `McuModel` maintains a control-rate shadow envelope using floating-point Q1.15
-  interpolation. It supports voice lifecycle and stealing policy and schedules
-  modulation updates, but it is not multiplied into the PCM output.
+  interpolation only while a voice is unreleased. It schedules modulation and
+  provides a level score for emergency stealing, but it neither predicts
+  Release completion nor frees the voice slot.
 - `CommandVoiceControl` converts the host-prepared durations and levels into the
   integer START and RELEASE fields consumed by the synthesizer.
 - The FPGA owns the audible envelope. `ReferenceSynth` is its C++ integer model;

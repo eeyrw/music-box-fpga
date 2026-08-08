@@ -2,6 +2,7 @@
 
 #include "command_control.h"
 
+#include <array>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -15,6 +16,7 @@ class ReferenceSynth : public CommandWordSink {
   void write_command_words(CommandWordView words) override;
   std::pair<int32_t, int32_t> render_mix();
   std::pair<int16_t, int16_t> render_sample();
+  std::vector<VoiceCompletion> take_voice_completions();
 
  private:
   struct VoiceConfig {
@@ -82,6 +84,7 @@ class ReferenceSynth : public CommandWordSink {
   const std::vector<int16_t>& memory_;
   std::vector<VoiceConfig> voices_;
   std::vector<EnvelopeState> envelopes_;
+  std::vector<VoiceCompletion> completions_;
   uint32_t sample_counter_ = 0;
   RenderDiagnostics* diagnostics_ = nullptr;
 };

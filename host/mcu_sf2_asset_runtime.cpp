@@ -114,10 +114,6 @@ void McuSf2AssetRuntime::stop_voice(uint16_t voice) {
 void McuSf2AssetRuntime::release_voice(uint16_t voice) {
   VoiceState& state = voices_[voice];
   if (state.stage == VoiceStage::kFree || state.stage == VoiceStage::kReleased) return;
-  if (state.release_step == 0) {
-    stop_voice(voice);
-    return;
-  }
   emit_short(kReleaseOpcode, voice, state.generation, state.release_step, true);
   state.stage = VoiceStage::kReleased;
   state.mod_env_stage = kEnvRelease;
@@ -415,8 +411,18 @@ uint16_t McuSf2AssetRuntime::note_on(uint8_t channel, uint16_t program,
     const uint8_t effective_velocity = region.effective_velocity >= 0
         ? uint8_t(region.effective_velocity) : velocity;
     const auto programs = asset_.candidate_programs(matched[layer]);
-    const int64_t pitch_q16 = destination_sum_q16(
+    const int32_t initial_env_q16 = int32_t(
+        (int64_t(state.mod_env_level) * render::kMcuModulationOne +
+         render::kQ15Full / 2) /
+        render::kQ15Full);
+    int64_t pitch_q16 = destination_sum_q16(
         matched[layer], programs.pitch, 0, channel, note, effective_velocity);
+    pitch_q16 += multiply_q16(
+        initial_env_q16,
+        int64_t(state.runtime_config.mod_env_to_pitch) *
+                render::kMcuModulationOne +
+            destination_sum_q16(matched[layer], programs.pitch, 7, channel,
+                                note, effective_velocity));
     state.base_phase_increment = region.phase_inc;
     state.phase_increment = render::mcu_sf2_phase_increment(region.phase_inc, pitch_q16);
     const int64_t attenuation_q16 = destination_sum_q16(
@@ -432,10 +438,32 @@ uint16_t McuSf2AssetRuntime::note_on(uint8_t channel, uint16_t program,
     state.gain_r = uint16_t(gains.second);
     region.gain_l = state.gain_l;
     region.gain_r = state.gain_r;
+    int64_t cutoff_q16 =
+        int64_t(state.runtime_config.initial_filter_fc) *
+            render::kMcuModulationOne +
+        destination_sum_q16(matched[layer], programs.filter, 8, channel, note,
+                            effective_velocity);
+    cutoff_q16 += multiply_q16(
+        initial_env_q16,
+        int64_t(state.runtime_config.mod_env_to_filter_fc) *
+                render::kMcuModulationOne +
+            destination_sum_q16(matched[layer], programs.filter, 11, channel,
+                                note, effective_velocity));
+    const int cutoff = int(
+        (cutoff_q16 + (cutoff_q16 >= 0 ? 32768 : -32768)) /
+        render::kMcuModulationOne);
+    const auto initial_filter = render::mcu_sf2_filter_config(
+        cutoff, state.runtime_config.initial_filter_q,
+        int(asset_.sample_rate()));
+    region.filter_enable = initial_filter.enable;
+    region.filter_b0 = initial_filter.b0;
+    region.filter_b1 = initial_filter.b1;
+    region.filter_b2 = initial_filter.b2;
+    region.filter_a1 = initial_filter.a1;
+    region.filter_a2 = initial_filter.a2;
     const auto command = render::build_voice_start_command(
         voice, state.generation, state.phase_increment, region);
-    state.filter = {region.filter_enable, region.filter_b0, region.filter_b1,
-                    region.filter_b2, region.filter_a1, region.filter_a2};
+    state.filter = initial_filter;
     state.filter_valid = true;
     mark_exclusive(voice, true);
     ++stats_.active_voices;

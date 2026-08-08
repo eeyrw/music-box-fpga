@@ -274,13 +274,25 @@ int main() {
       const uint64_t dirty_after_release =
           active_diagnostics.control_dirty_group_evaluations;
       active_mcu.control_tick();
-      if (active_diagnostics.control_active_voices != 0 ||
+      active_mcu.consume_voice_completions({}, 47);
+      if (active_diagnostics.control_active_voices != 1 ||
           active_diagnostics.control_max_active_voices != 1 ||
           active_diagnostics.control_tick_count != 3 ||
           active_diagnostics.control_dirty_group_evaluations !=
               dirty_after_release ||
           active_diagnostics.control_emitted_commands < 2) {
-        throw std::runtime_error("bounded active-set control diagnostics mismatch");
+        throw std::runtime_error(
+            "MCU estimated release completion reclaimed an owned voice");
+      }
+      active_mcu.consume_voice_completions({{0, 2, 0}}, 48);
+      if (active_diagnostics.control_active_voices != 1) {
+        throw std::runtime_error(
+            "stale completion reclaimed a newer voice generation");
+      }
+      active_mcu.consume_voice_completions({{0, 1, 0}}, 50);
+      if (active_diagnostics.control_active_voices != 0) {
+        throw std::runtime_error(
+            "matching completion did not reclaim the voice");
       }
     }
     render::Sf2Data sf2 = render::load_sf2(write_percussion_sf2());
@@ -774,7 +786,7 @@ int main() {
     mod_region.phase_inc = render::kPhaseFracScale;
     mod_region.gain_l = 0x4000;
     mod_region.gain_r = 0x4000;
-    mod_region.mod_lfo_step = 0x4000;
+    mod_region.mod_lfo_step = 0x1000;
     mod_region.mod_lfo_to_pitch = 1200;
     mod_region.mod_lfo_to_filter_fc = -1200;
     mod_region.initial_filter_fc = 6900;
@@ -791,11 +803,20 @@ int main() {
       throw std::runtime_error("mod LFO did not start its ramp at zero excursion");
     }
     mod_mcu.control_tick();
-    if (mod_sink.last_phase_inc <= mod_region.phase_inc) {
-      throw std::runtime_error("mod LFO pitch generator did not raise runtime phase increment on the next tick");
+    if (mod_sink.last_phase_inc != mod_region.phase_inc ||
+        mod_sink.filter_count != 0) {
+      throw std::runtime_error(
+          "first control tick did not preserve the initial zero LFO phase");
     }
+    mod_mcu.control_tick();
+    if (mod_sink.last_phase_inc <= mod_region.phase_inc) {
+      throw std::runtime_error(
+          "mod LFO pitch generator did not raise phase after phase advance");
+    }
+    for (int tick = 0; tick < 3; ++tick) mod_mcu.control_tick();
     if (mod_sink.filter_count == 0) {
-      throw std::runtime_error("mod LFO filter generator did not issue runtime filter updates");
+      throw std::runtime_error(
+          "mod LFO filter generator did not update at its four-tick period");
     }
 
     render::Region velocity_filter_region;
@@ -964,6 +985,7 @@ int main() {
       throw std::runtime_error("default vibrato LFO did not start at zero excursion");
     }
     default_vibrato_mcu.control_tick();
+    default_vibrato_mcu.control_tick();
     if (default_vibrato_sink.last_phase_inc <= render::kPhaseFracScale) {
       throw std::runtime_error("CC1 default modulator did not add vibrato pitch depth");
     }
@@ -982,6 +1004,7 @@ int main() {
     custom_mod_mcu.handle_event(mod_wheel);
     render::NoteEvent custom_mod_note = default_vibrato_note;
     custom_mod_mcu.handle_event(custom_mod_note);
+    custom_mod_mcu.control_tick();
     custom_mod_mcu.control_tick();
     double custom_mod_cents = 200.0 * (127.0 / 128.0);
     uint32_t custom_mod_phase = uint32_t(std::round(double(render::kPhaseFracScale) *
@@ -1005,6 +1028,7 @@ int main() {
     tremolo_note.velocity = 127;
     tremolo_note.phase_inc = render::kPhaseFracScale;
     tremolo_mcu.handle_event(tremolo_note);
+    tremolo_mcu.control_tick();
     tremolo_mcu.control_tick();
     int tremolo_boosted_base = int(std::round(double(tremolo_region.base_gain) *
                                               std::pow(10.0, 100.0 / 200.0)));
@@ -1124,6 +1148,12 @@ int main() {
     poly_pressure.note = 60;
     poly_pressure.value = 127;
     poly_pressure_mcu.handle_event(poly_pressure);
+    if (poly_pressure_sink.last_phase_inc != render::kPhaseFracScale) {
+      throw std::runtime_error(
+          "key pressure changed pitch while vibrato LFO was at zero");
+    }
+    poly_pressure_mcu.control_tick();
+    poly_pressure_mcu.control_tick();
     double poly_pressure_cents = 200.0 * (127.0 / 128.0);
     uint32_t poly_pressure_phase = uint32_t(std::round(double(render::kPhaseFracScale) *
                                                        std::pow(2.0, poly_pressure_cents / 1200.0)));

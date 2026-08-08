@@ -1,92 +1,95 @@
-# SPI Voice Active Status
+# SPI Voice Completion Log
 
-Interface version 17 makes FPGA voice activity authoritative. The FPGA exposes
-the current 512-bit `voice_valid` state through one fixed SPI transaction. This
-is a sampled state interface, not a completion-event queue: it has no pending
-bits, sequence numbers, acknowledgements, or per-voice records.
+Interface version 18 makes FPGA voice completion authoritative. The FPGA records
+each completed `(voice, generation)` in a 512-entry log implemented as one
+true-dual-port BRAM. The renderer writes on
+the 100 MHz system-clock port and the SPI response streams synchronous reads
+from the 30 MHz SCLK port.
 
-A bit remains set while its FPGA slot is active, including during a nonzero
-release envelope. Natural sample/envelope termination, a generation-matched
-`VOICE_STOP`, or a zero-step `VOICE_RELEASE` clears it. Render-session reset
-clears all bits.
+## Completion Events
+
+The state store emits exactly one event when an active generation becomes
+inactive:
+
+| Reason | Meaning |
+| ---: | --- |
+| `0` | renderer writeback reports natural sample or envelope completion |
+| `1` | generation-matched `VOICE_STOP` completes immediately |
+| `2` | generation-matched `VOICE_RELEASE` has a zero release step |
+
+Each 32-bit BRAM word is
+`{generation[15:0], voice[8:0], 1'b0, reason[1:0], 4'b0}`. Generation remains
+16 bits because it is the identity that prevents an old completion from freeing
+a newer replacement in the same slot. A new-generation START may replace a
+voice immediately at 512-voice capacity; it does not wait for a completion read.
+
+The producer sequence and MCU consumer sequence are unsigned 16-bit counters.
+Only their modulo difference is used, and the live log occupancy never exceeds
+512, so wraparound is unambiguous.
 
 ## Transaction
 
-Opcode `0x5c` is one fixed 88-byte SPI mode-0 transaction under one assertion
-of CS. All multi-byte integers and bitmap words are big-endian on the wire.
+Opcode `0x5d` is one fixed 93-byte SPI mode-0 transaction under one assertion
+of CS. All multi-byte fields and event words are big-endian. At 30 MHz it takes
+24.8 microseconds, or about 2.48 percent of SPI wire time when polled every
+millisecond.
 
 | Bytes | MOSI request | MISO response |
 | ---: | --- | --- |
-| `0..3` | opcode followed by three reserved zero bytes | ignored |
-| `4..11` | eight zero turnaround bytes | ignored |
-| `12..83` | zero | response words `0..17` |
-| `84..87` | zero | CRC32 over response bytes `12..83` |
+| `0` | opcode `0x5d` | ignored |
+| `1..2` | next consumer sequence | ignored |
+| `3..4` | CRC16-CCITT over bytes `0..2` | ignored |
+| `5..12` | eight zero turnaround bytes | ignored |
+| `13..88` | zero | 76-byte response payload |
+| `89..92` | zero | CRC32 over bytes `13..88` |
 
-The fixed turnaround gives the 100 MHz bridge time to snapshot the bitmap and
-cross a snapshot toggle into the SCLK domain. The 72-byte response payload is
-then shifted directly in the SCLK domain. CRC32 is accumulated one byte at a
-time as those payload bits are transmitted, finalized with the last payload
-byte, and shifted during the final four bytes. At 30 MHz the complete frame
-takes about 23.5 microseconds.
+The response payload is:
 
-The response words are:
-
-| Word | Meaning |
+| Bytes | Meaning |
 | ---: | --- |
-| `0` | status, protocol version `1`, flags `0`, reserved `0`; one byte each |
-| `1` | render-session epoch |
-| `2..17` | current 512-bit active bitmap |
-| `18` | response CRC32 |
+| `13` | status: `0` success, `1` invalid sequence |
+| `14` | response version `1` |
+| `15` | flags; bit 0 is sticky log overflow, all other bits zero |
+| `16` | item count, `0..16` |
+| `17..20` | render-session epoch |
+| `21..22` | FPGA write sequence captured for this response |
+| `23..24` | response start sequence, equal to the request sequence |
+| `25..88` | sixteen 32-bit event positions; unused positions are zero |
+| `89..92` | response CRC32 |
 
-Bitmap word 2 maps voice 0 to bit 0 and voice 31 to bit 31; word 17 maps voice
-480 to bit 0 and voice 511 to bit 31. Status `0` is success and status `1`
-means the three request-reserved bytes were nonzero.
+For a valid response, `count` is exactly
+`min(uint16(write_sequence - start_sequence), 16)`. The turnaround covers the
+request crossing into the system-clock domain and the stable response metadata
+crossing back. BRAM payload reads then occur directly in the SCLK domain, so no
+wide snapshot or 512-bit shift register is required.
 
-## MCU Reconciliation
+## Acknowledgement And Recovery
 
-The RP2040 reads the bitmap once per millisecond after pending command traffic
-has reached the SPI transport. For each locally owned slot whose FPGA bit is
-zero, it returns that slot to the allocator's free stack. MCU elapsed time never
-predicts release completion.
+The request sequence acknowledges every event before that sequence and asks for
+events beginning at it. A valid query advances the FPGA acknowledgement only to
+the requested sequence, not beyond the returned batch. Therefore repeating the
+same request after a bad response CRC returns the same events. The MCU advances
+its sequence by `count` only after the complete response validates.
 
-A newly emitted START receives a one-millisecond landing guard. This guard only
-prevents a status sample taken before that queued START reaches the FPGA from
-freeing the new local generation; it is not a release-duration estimate.
+The FPGA never overwrites an entry at or after its acknowledged sequence. If a
+new completion arrives while all 512 entries remain unacknowledged, it sets the
+sticky overflow flag instead of silently losing ownership information. The MCU
+must reset the render session on overflow, epoch mismatch, an invalid event, or
+an impossible sequence/count combination. Session reset clears the log and both
+sequences; normal transport errors retain the consumer sequence for retry.
 
-At full 512-voice capacity, allocation does not wait for a status round trip.
-The MCU selects a victim and sends a new-generation START, which atomically
-replaces the FPGA slot. If the old slot was still active its bitmap bit remains
-set; if it had just become inactive, the landing guard protects the replacement
-until START is installed.
+The MCU polls once per millisecond after queued command writes are idle. It
+returns a local voice to the free stack only when both the event voice and the
+16-bit generation match the currently owned voice. A completion for a free slot
+or an older generation is consumed but cannot affect the current owner. The MCU
+does not estimate release duration and does not send a redundant STOP after a
+normal release.
 
-Generation remains part of the command and dynamic-state contracts. It rejects
-late runtime commands and renderer writeback after a slot has been replaced.
-The wide `generation_tag` shadow discussed in the renderer optimization plan
-was a former duplicate of dynamic RAM state and has already been removed; that
-resource optimization does not remove the 16-bit per-voice generation itself.
+## Implementation Status
 
-## Implementation And Hardware Qualification
-
-The bridge holds one 576-bit payload snapshot, a 575-bit transmit shift
-register, and a streaming 32-bit CRC accumulator. It does not build or retain a
-second complete response frame. In the 2026-08-08 Smart Artix implementation,
-the `spi_bridge` hierarchy used 1,896 LUTs and 2,123 flip-flops after physical
-optimization, down from the initial status implementation's approximately
-2,259 LUTs and 3,294 flip-flops.
-
-The fresh post-route design used 28,798 of 32,600 LUTs and 28,249 of 65,200
-flip-flops. All 50,899 routable nets were routed, DRC reported no errors, and
-setup/hold timing passed with WNS `+0.008 ns`, TNS `0`, WHS `+0.035 ns`, and THS
-`0`. The setup margin is valid but too narrow to treat later RTL changes as
-timing-neutral; every production RTL change still requires a fresh
-implementation.
-
-FPGA and RP2040 hardware were programmed from that build and the requested
-`debussy_bergamasque_03.mid` file was played completely at 30 MHz SPI. The run
-reached 143 simultaneous voices and ended with zero active voices after 5,944
-FPGA-authoritative reclaims. UART diagnostics reported 373,118 status polls,
-378,397 total SPI exchanges, 33,445,700 transferred bytes, and zero SPI errors,
-status failures, bitmap/local-state errors, stale commands, command errors, or
-DMA enqueue timeouts. This qualifies the implemented polling path under that
-real MIDI workload; it is not a maximum-rate synthetic command-stream
-qualification.
+The fresh post-route implementation uses 28,614 of 32,600 LUTs (87.77
+percent), 27,555 flip-flops, 39 DSPs, and 47 BRAM tiles. All 50,800 routable
+nets are fully routed, DRC has no errors, and timing passes with WNS `+0.159 ns`
+and WHS `+0.058 ns`. The completion log is inferred as one 512-by-32 true
+dual-port RAMB18 and uses about 197 LUTs and 76 flip-flops; the complete SPI
+bridge uses about 1,494 LUTs and 1,303 flip-flops.

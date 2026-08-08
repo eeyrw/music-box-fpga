@@ -87,13 +87,6 @@ int db_decay(int start, int target, int tick, int ticks) {
   return clamp_q15(int(std::round(s * std::pow(t / s, x))));
 }
 
-int db_release(int start, int tick, int ticks) {
-  if (tick >= ticks) return 0;
-  if (start <= 0) return 0;
-  double x = double(std::max(1, tick)) / double(std::max(1, ticks));
-  return clamp_q15(int(std::round(double(start) * std::pow(1.0 / double(std::max(1, start)), x))));
-}
-
 int linear_release(int start, int tick, int ticks) {
   return linear_ramp(start, 0, tick, ticks);
 }
@@ -288,6 +281,27 @@ void McuModel::deactivate_voice(int voice) {
   if (diagnostics_) diagnostics_->control_active_voices = uint32_t(active_voice_count_);
 }
 
+void McuModel::consume_voice_completions(
+    const std::vector<VoiceCompletion>& completions, uint32_t sample) {
+  current_sample_ = sample;
+  for (const VoiceCompletion& completion : completions) {
+    if (completion.voice >= kNumVoices || completion.reason > 2) {
+      throw std::runtime_error("invalid FPGA voice completion");
+    }
+    VoiceState& voice = voices_[completion.voice];
+    if (voice.state == ENV_SILENT ||
+        voice.generation != completion.generation) {
+      continue;
+    }
+    voice.state = ENV_SILENT;
+    voice.level = 0;
+    voice.sustain_held = false;
+    voice.sostenuto_held = false;
+    voice.mod_env_state = ENV_SILENT;
+    deactivate_voice(completion.voice);
+  }
+}
+
 void McuModel::record_emitted_commands(uint64_t count) {
   if (diagnostics_) diagnostics_->control_emitted_commands += count;
 }
@@ -313,6 +327,10 @@ void McuModel::control_tick() {
   int active_index = 0;
   while (active_index < active_voice_count_) {
     const int v = active_voices_[active_index];
+    if (voices_[v].state == ENV_RELEASE) {
+      ++active_index;
+      continue;
+    }
     int next = voices_[v].level;
     if (voices_[v].state == ENV_DELAY) {
       if (voices_[v].ticks_remaining > 0) --voices_[v].ticks_remaining;
@@ -339,16 +357,6 @@ void McuModel::control_tick() {
         voices_[v].env_stage_tick = 0;
         voices_[v].state = ENV_SUSTAIN;
       }
-    } else if (voices_[v].state == ENV_RELEASE) {
-      const Region& r = regions_.at(voices_[v].region);
-      voices_[v].env_stage_tick += 1;
-      next = db_release(voices_[v].release_start, voices_[v].env_stage_tick, r.release_ticks);
-      if (voices_[v].env_stage_tick >= r.release_ticks) {
-        next = 0;
-        voices_[v].state = ENV_SILENT;
-        voices_[v].sustain_held = false;
-        voices_[v].mod_env_state = ENV_SILENT;
-      }
     }
 
     if (voices_[v].state != ENV_SILENT || voices_[v].level != 0) {
@@ -359,11 +367,7 @@ void McuModel::control_tick() {
       if ((control_tick_index_ % update_rates_.filter_ticks) == 0) periodic_groups |= kDirtyFilter;
       update_voice_modulation(v, periodic_groups, true);
     }
-    if (voices_[v].state == ENV_SILENT && voices_[v].level == 0) {
-      deactivate_voice(v);
-    } else {
-      ++active_index;
-    }
+    ++active_index;
   }
   control_tick_index_ += 1;
   if (diagnostics_) {
@@ -923,6 +927,8 @@ void McuModel::note_on(const NoteEvent& event) {
   voices_[slot].sostenuto_held = false;
   voices_[slot].key_released = false;
   voices_[slot].note_instance = note_instance;
+  voices_[slot].generation = uint16_t(voices_[slot].generation + 1u);
+  if (voices_[slot].generation == 0) voices_[slot].generation = 1;
   voices_[slot].tremolo_attenuation_cb_q16 = 0;
   voices_[slot].mod_lfo_phase = 0;
   voices_[slot].vib_lfo_phase = 0;
@@ -945,15 +951,40 @@ void McuModel::note_on(const NoteEvent& event) {
     voices_[slot].mod_env_state = r.mod_env_hold_ticks > 0 ? ENV_HOLD : ENV_DECAY;
   }
   const ChannelState& channel = channels_[event.channel & 0x0f];
-  const int64_t initial_pitch_q16 =
+  const int32_t initial_env_q16 = int32_t(
+      (int64_t(voices_[slot].mod_env_level) * kMcuModulationOne +
+       kQ15Full / 2) / kQ15Full);
+  int64_t initial_pitch_q16 =
       channel.generator_offsets_q16[kGenFineTune] +
       channel.generator_offsets_q16[kGenCoarseTune] +
       modulator_sum_q16(r, voices_[slot], channel, 0);
+  initial_pitch_q16 += multiply_q16(
+      initial_env_q16,
+      integer_to_q16(r.mod_env_to_pitch) +
+          modulator_sum_q16(r, voices_[slot], channel, kGenModEnvToPitch));
   uint32_t phase_inc = modulated_phase_inc(event.phase_inc,
                                             q16_to_double(initial_pitch_q16));
   auto initial_gains = runtime_gains(r, voices_[slot], channel);
   r.gain_l = initial_gains.first;
   r.gain_r = initial_gains.second;
+  int64_t initial_filter_q16 = integer_to_q16(r.initial_filter_fc) +
+      channel.generator_offsets_q16[kGenInitialFilterFc] +
+      modulator_sum_q16(r, voices_[slot], channel, kGenInitialFilterFc);
+  initial_filter_q16 += multiply_q16(
+      initial_env_q16,
+      integer_to_q16(r.mod_env_to_filter_fc) +
+          channel.generator_offsets_q16[kGenModEnvToFilterFc] +
+          modulator_sum_q16(r, voices_[slot], channel,
+                            kGenModEnvToFilterFc));
+  const FilterConfig initial_filter = filter_for(
+      round_q16_to_int(initial_filter_q16), r.initial_filter_q,
+      r.output_sample_rate);
+  r.filter_enable = initial_filter.enable;
+  r.filter_b0 = initial_filter.b0;
+  r.filter_b1 = initial_filter.b1;
+  r.filter_b2 = initial_filter.b2;
+  r.filter_a1 = initial_filter.a1;
+  r.filter_a2 = initial_filter.a2;
   sink_.start_voice(slot, phase_inc, r);
   record_emitted_commands();
   runtime_gain_valid_[slot] = true;
@@ -964,12 +995,11 @@ void McuModel::note_on(const NoteEvent& event) {
   runtime_filter_valid_[slot] = true;
   last_runtime_filter_[slot] = {r.filter_enable, r.filter_b0, r.filter_b1,
                                 r.filter_b2, r.filter_a1, r.filter_a2};
-  update_voice_modulation(slot, kDirtyAll, true);
 }
 
 int McuModel::first_free_or_steal_slot() {
   for (int v = 0; v < kNumVoices; ++v) {
-    if (voices_[v].state == ENV_SILENT) return v;
+    if (active_positions_[v] < 0) return v;
   }
   auto steal_score = [&](int v) -> uint64_t {
     const VoiceState& voice = voices_[v];

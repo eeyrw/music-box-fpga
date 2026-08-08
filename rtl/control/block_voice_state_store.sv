@@ -40,6 +40,11 @@ module block_voice_state_store (
 
   output logic                                      stale_params_write_pulse,
   output logic                                      stale_dynamic_write_pulse,
+  output logic                                      completion_event_valid,
+  output logic [synth_pkg::VOICE_ID_WIDTH-1:0]      completion_event_voice,
+  output logic [synth_pkg::VOICE_GENERATION_WIDTH-1:0]
+                                                    completion_event_generation,
+  output logic [1:0]                                completion_event_reason,
   output logic [synth_pkg::NUM_VOICES-1:0]          voice_active_bitmap
 );
   import synth_pkg::*;
@@ -323,22 +328,38 @@ module block_voice_state_store (
       stale_control_event_pulse <= 1'b0;
       stale_params_write_pulse <= 1'b0;
       stale_dynamic_write_pulse <= 1'b0;
+      completion_event_valid <= 1'b0;
+      completion_event_voice <= '0;
+      completion_event_generation <= '0;
+      completion_event_reason <= '0;
     end else begin
       control_event_done_pulse <= 1'b0;
       stale_control_event_pulse <= 1'b0;
       stale_params_write_pulse <= 1'b0;
       stale_dynamic_write_pulse <= 1'b0;
+      completion_event_valid <= 1'b0;
 
       if (install_fire)
         voice_valid_q[install_voice] <= 1'b1;
       if ((control_state_q == CONTROL_APPLY) && control_generation_match &&
           ((control_event_kind_q == BLOCK_VOICE_STOP) ||
            ((control_event_kind_q == BLOCK_VOICE_RELEASE) &&
-            (control_event_update_env_q.release_step_cb_q12_20 == '0))))
+            (control_event_update_env_q.release_step_cb_q12_20 == '0)))) begin
         voice_valid_q[control_voice] <= 1'b0;
+        completion_event_valid <= 1'b1;
+        completion_event_voice <= control_voice;
+        completion_event_generation <= control_dynamic_q.generation;
+        completion_event_reason <=
+            control_event_kind_q == BLOCK_VOICE_STOP ? 2'd1 : 2'd2;
+      end
       if ((check_state_q == CHECK_APPLY) && check_is_dynamic_q &&
-          dynamic_generation_match && !check_dynamic_q.active)
+          dynamic_generation_match && !check_dynamic_q.active) begin
         voice_valid_q[check_voice_q] <= 1'b0;
+        completion_event_valid <= 1'b1;
+        completion_event_voice <= check_voice_q;
+        completion_event_generation <= check_generation_q;
+        completion_event_reason <= 2'd0;
+      end
 
       unique case (control_state_q)
         CONTROL_IDLE: begin

@@ -157,6 +157,66 @@ fpga/smart_artix/vivado/scripts/
 build/fpga/smart_artix/vivado/
 ```
 
+### FPGA Development Command Line
+
+Run these commands from the repository root. Generated projects, reports,
+checkpoints, and bitstreams remain under `build/fpga/smart_artix/vivado/`.
+
+```bash
+# Functional gates before implementation.
+make lint
+make test
+
+# Optional project creation and synthesis-only iteration. Synthesis is not
+# timing signoff for a production RTL change.
+make vivado-project
+make vivado-synth
+
+# Required fresh post-route gate and report review.
+VIVADO_FORCE_REBUILD=1 make vivado-impl
+make vivado-summary
+make vivado-analyze
+
+# Build and load a volatile FPGA image over JTAG.
+make vivado-bitstream
+make vivado-program
+
+# Read back the currently configured volatile image.
+make vivado-readback
+```
+
+The default JTAG clock is 15 MHz. A board and adapter already qualified at 30
+MHz may use `VIVADO_HW_FREQUENCY=30000000 make vivado-program`. Persistent
+configuration flash requires an explicit confirmation:
+
+```bash
+make vivado-cfgmem-image
+CONFIRM_FLASH_PROGRAM=YES make vivado-flash-program
+make vivado-flash-readback
+```
+
+`vivado-summary` must report nonnegative WNS/WHS, zero failing endpoints, zero
+route errors, and zero DRC errors. `vivado-analyze` may still request review for
+small margins, high utilization, or incomplete board I/O constraints; those
+findings must be classified before treating the image as board signoff.
+
+Default output locations are:
+
+| Output | Default path |
+| --- | --- |
+| Vivado project | `build/fpga/smart_artix/vivado/smart_artix.xpr` |
+| post-synthesis checkpoint | `build/fpga/smart_artix/vivado/checkpoints/post_synth.dcp` |
+| post-route checkpoint | `build/fpga/smart_artix/vivado/checkpoints/post_route.dcp` |
+| synthesis reports and summary | `build/fpga/smart_artix/vivado/reports/post_synth_*` |
+| implementation reports and summary | `build/fpga/smart_artix/vivado/reports/post_route_*` |
+| volatile programming image | `build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit` |
+| persistent SPI x4 image | `build/fpga/smart_artix/vivado/flash/smart_artix_top_spi_x4.mcs` |
+| volatile configuration readback | `build/fpga/smart_artix/vivado/readback/smart_artix_top_readback.bin` |
+| full configuration-flash readback | `build/fpga/smart_artix/vivado/flash/w25q128jv_full_readback.bin` |
+| flow logs and journals | `build/fpga/smart_artix/vivado/logs/` |
+
+All of these are generated artifacts and must not be committed.
+
 Use `make vivado-project`, `make vivado-synth`, `make vivado-impl`, and
 `make vivado-bitstream` for offline implementation. Hardware targets are
 `make vivado-program`, `make vivado-readback`, `make vivado-flash-readback`,

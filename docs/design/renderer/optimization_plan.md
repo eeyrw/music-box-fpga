@@ -466,9 +466,9 @@ select 和 512x16 generation shadow。control generation 比较走多拍 dynamic
 组合查询 512x16 LUTRAM。这里删除的是重复的 generation shadow，不是命令协议和 dynamic
 RAM 中用于拒绝 stale command/writeback 的 16-bit generation。
 
-接口版本 17 后，state store 又把 512 个 `voice_valid_q` 位直接导出为 SPI `0x5c` active
-bitmap。它同时服务 renderer 扫描和 MCU 生命周期同步，不复制 generation，也不恢复旧的
-group priority select。该 bitmap 是当前状态采样，不是 completion FIFO。
+state store 在 voice 结束时输出 `(voice, generation, reason)` completion event。板级 SPI
+bridge 将事件写入 true-dual-port BRAM log，MCU 按 generation 精确回收 slot；renderer 仍按
+固定顺序扫描 dynamic state，不依赖 completion log。
 
 ### 7.3 Block consistency
 

@@ -122,6 +122,7 @@ VIVADO_DESIGN_INPUTS := \
 
 FPGA_COMMON_RTL_SOURCES := \
 	fpga/common/rtl/fractional_tick_gen.sv \
+	fpga/common/rtl/spi_completion_log.sv \
 	fpga/common/rtl/spi_register_bridge.sv \
 	fpga/common/rtl/render_session_reset_controller.sv \
 	fpga/common/rtl/wavetable_register_fabric.sv \

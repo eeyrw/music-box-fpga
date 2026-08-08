@@ -57,7 +57,36 @@ void require_same_command_shape(const RecordingSink& expected,
              std::abs(int64_t(int16_t(left >> 16)) - int16_t(right >> 16)) <= 1;
     };
     bool numeric_ok = true;
-    if (command_opcode == 0x18) {
+    if (command_opcode == 0x10) {
+      numeric_ok = a.words[0] == b.words[0] && a.words[2] == b.words[2] &&
+                   a.words[3] == b.words[3];
+      size_t word = 4;
+      const uint8_t flags = uint8_t((a.words[0] >> 8) & 0x3fu);
+      if ((flags & 0x03u) != 0u) {
+        numeric_ok = numeric_ok && a.words[word] == b.words[word] &&
+                     a.words[word + 1] == b.words[word + 1];
+        word += 2;
+      }
+      numeric_ok = numeric_ok &&
+                   std::abs(int64_t(a.words[word]) - b.words[word]) <= 1;
+      ++word;
+      numeric_ok = numeric_ok && close_u16_pair(a.words[word], b.words[word]);
+      ++word;
+      if ((flags & 0x04u) != 0u) {
+        numeric_ok = numeric_ok &&
+                     close_s16_pair(a.words[word], b.words[word]) &&
+                     close_s16_pair(a.words[word + 1], b.words[word + 1]) &&
+                     std::abs(int64_t(int16_t(a.words[word + 2])) -
+                              int16_t(b.words[word + 2])) <= 1 &&
+                     ((a.words[word + 2] ^ b.words[word + 2]) &
+                      0x00010000u) == 0;
+        word += 3;
+      }
+      while (numeric_ok && word < a.length) {
+        numeric_ok = a.words[word] == b.words[word];
+        ++word;
+      }
+    } else if (command_opcode == 0x18) {
       numeric_ok = std::abs(int64_t(a.words[2]) - b.words[2]) <= 1;
     } else if (command_opcode == 0x16) {
       numeric_ok = close_u16_pair(a.words[2], b.words[2]);
@@ -87,6 +116,17 @@ struct PlayableCell {
 };
 
 PlayableCell first_playable(const render::McuSf2AssetView& view) {
+  const int32_t piano_index = view.find_preset(0, 0);
+  if (piano_index >= 0) {
+    const auto piano = view.preset(size_t(piano_index));
+    for (uint32_t local = 0; local < piano.zone_count; ++local) {
+      const auto zone = view.zone(piano.first_zone + local);
+      if (60 >= zone.key_low && 60 <= zone.key_high &&
+          100 >= zone.velocity_low && 100 <= zone.velocity_high) {
+        return {0, 0, 60, 100};
+      }
+    }
+  }
   for (size_t preset_index = 0; preset_index < view.preset_count(); ++preset_index) {
     const auto preset = view.preset(preset_index);
     for (int key = 0; key < 128; ++key) {

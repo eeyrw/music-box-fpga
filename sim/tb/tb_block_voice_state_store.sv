@@ -36,9 +36,31 @@ module tb_block_voice_state_store;
   voice_dynamic_state_t dynamic_write_data;
   logic stale_params_write_pulse;
   logic stale_dynamic_write_pulse;
+  logic completion_event_valid;
+  logic [VOICE_ID_WIDTH-1:0] completion_event_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] completion_event_generation;
+  logic [1:0] completion_event_reason;
   logic [NUM_VOICES-1:0] voice_active_bitmap;
+  logic [7:0] completion_count;
+  logic [VOICE_ID_WIDTH-1:0] last_completion_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] last_completion_generation;
+  logic [1:0] last_completion_reason;
 
   always #5 clk <= ~clk;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      completion_count <= '0;
+      last_completion_voice <= '0;
+      last_completion_generation <= '0;
+      last_completion_reason <= '0;
+    end else if (completion_event_valid) begin
+      completion_count <= completion_count + 1'b1;
+      last_completion_voice <= completion_event_voice;
+      last_completion_generation <= completion_event_generation;
+      last_completion_reason <= completion_event_reason;
+    end
+  end
 
   block_voice_state_store dut (.*);
 
@@ -209,6 +231,8 @@ module tb_block_voice_state_store;
     changed_dynamic.generation = 16'h0051;
     changed_dynamic.phase = 32'h0000_0900;
     write_dynamic(changed_dynamic, 1'b1);
+    if (completion_count != 0)
+      $fatal(1, "stale dynamic write emitted a completion");
     read_state(observed);
     if (!observed.dynamic.active ||
         observed.dynamic.generation != initial_state.dynamic.generation)
@@ -219,6 +243,10 @@ module tb_block_voice_state_store;
     write_dynamic(changed_dynamic, 1'b0);
     if (voice_active_bitmap[7])
       $fatal(1, "renderer completion did not clear active bitmap");
+    if (completion_count != 1 || last_completion_voice != 7 ||
+        last_completion_generation != 16'h0052 ||
+        last_completion_reason != 2'd0)
+      $fatal(1, "renderer completion event mismatch");
     read_state(observed);
     if (observed.dynamic.active)
       $fatal(1, "renderer completion did not remove inactive voice");
@@ -261,6 +289,19 @@ module tb_block_voice_state_store;
     send_control(BLOCK_VOICE_STOP, 32'd0);
     if (voice_active_bitmap[7])
       $fatal(1, "STOP did not clear active bitmap");
+    if (completion_count != 1 || last_completion_voice != 7 ||
+        last_completion_generation != 16'h0052 ||
+        last_completion_reason != 2'd1)
+      $fatal(1, "STOP completion event mismatch");
+
+    install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
+    send_control(BLOCK_VOICE_RELEASE, 32'd0);
+    if (voice_active_bitmap[7])
+      $fatal(1, "zero-step RELEASE did not clear active bitmap");
+    if (completion_count != 2 || last_completion_voice != 7 ||
+        last_completion_generation != 16'h0052 ||
+        last_completion_reason != 2'd2)
+      $fatal(1, "zero-step RELEASE completion event mismatch");
 
     $display("PASS: block voice state banks and generation arbitration");
     $finish;

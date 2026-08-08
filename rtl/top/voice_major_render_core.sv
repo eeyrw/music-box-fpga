@@ -41,6 +41,11 @@ module voice_major_render_core (
   input  logic [synth_pkg::BLOCK_BUFFER_ID_WIDTH-1:0]
                                                     block_release_buffer_id,
   output logic [synth_pkg::NUM_VOICES-1:0]          voice_active_bitmap,
+  output logic                                      completion_event_valid,
+  output logic [synth_pkg::VOICE_ID_WIDTH-1:0]      completion_event_voice,
+  output logic [synth_pkg::VOICE_GENERATION_WIDTH-1:0]
+                                                    completion_event_generation,
+  output logic [1:0]                                completion_event_reason,
   output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
@@ -133,6 +138,10 @@ module voice_major_render_core (
     .dynamic_write_data,
     .stale_params_write_pulse(stale_params_write),
     .stale_dynamic_write_pulse(stale_dynamic_write),
+    .completion_event_valid,
+    .completion_event_voice,
+    .completion_event_generation,
+    .completion_event_reason,
     .voice_active_bitmap
   );
 

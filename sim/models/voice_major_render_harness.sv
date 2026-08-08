@@ -57,6 +57,12 @@ module voice_major_render_harness (
   output logic [31:0]                              configured_window_words,
   output logic [31:0]                              configured_max_block_frames,
   output logic [15:0]                              active_voice_count,
+  output logic [synth_pkg::NUM_VOICES-1:0]         voice_active_bitmap,
+  output logic                                     completion_event_valid,
+  output logic [synth_pkg::VOICE_ID_WIDTH-1:0]     completion_event_voice,
+  output logic [synth_pkg::VOICE_GENERATION_WIDTH-1:0]
+                                                   completion_event_generation,
+  output logic [1:0]                               completion_event_reason,
   output synth_pkg::global_audio_config_t           audio_config,
   output logic [1:0]                               effect_clear,
 
@@ -184,7 +190,11 @@ module voice_major_render_harness (
     .block_release_valid,
     .block_release_ready,
     .block_release_buffer_id(block_release_buffer),
-    .voice_active_bitmap(),
+    .voice_active_bitmap,
+    .completion_event_valid,
+    .completion_event_voice,
+    .completion_event_generation,
+    .completion_event_reason,
     .sample_window_diagnostics
   );
 

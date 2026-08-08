@@ -23,6 +23,14 @@ int main(void) {
             return 1;
         }
     }
+    audio_session_compressor_build(words, 0);
+    if (words[0] != expected[0] || words[1] != (expected[1] & ~UINT32_C(1)) ||
+        words[2] != expected[2] || words[3] != expected[3] ||
+        words[4] != expected[4]) {
+        fputs("disabled compressor command changed fields other than enable\n",
+              stderr);
+        return 1;
+    }
     puts("PASS: MCU session defaults enable the documented compressor");
     return 0;
 }

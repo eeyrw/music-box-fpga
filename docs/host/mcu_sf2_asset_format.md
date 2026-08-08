@@ -405,8 +405,8 @@ For voices with time-varying dependencies, control service advances the
 modulation envelope and mod/vibrato LFO state, updates the required gain/pitch
 families, evaluates a required filter family on its cadence, suppresses
 unchanged commands. Elapsed MCU time never reclaims a released voice. The FPGA
-reports current slot activity through the version-17 active bitmap, and the MCU
-returns a locally owned slot to the free list only after observing its bit low.
+reports generation-tagged slot completion through the version-18 log, and the
+MCU returns a locally owned slot to the free list only after a matching event.
 Static voices skip modulation evaluation until a channel event dirties a family.
 `msf2_runtime_release_all` emits generation-matched RELEASE commands for all
 voices owned by the current runtime, irrespective of pedal holds. It cannot

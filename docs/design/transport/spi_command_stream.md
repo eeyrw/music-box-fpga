@@ -2,18 +2,12 @@
 
 This document defines Smart Artix SPI opcode `0xa5` command traffic, opcode
 `0xa6` command recovery, and opcode `0xa7` session reset for interface version
-17. It retains the version-10
-command encoding behind the version-12 aligned length/CRC16 transaction header.
+18. Commands use the aligned length/CRC16 transaction header.
 Register timing and
 transport correctness are documented separately in
 [`spi_register_mailbox.md`](spi_register_mailbox.md),
 [`spi_voice_status.md`](spi_voice_status.md), and
 [`../../backlog/spi_transport.md`](../../backlog/spi_transport.md).
-
-The status and workload assumptions were refreshed against the production RTL
-and CH347 host implementation on 2026-08-03. The RP2040 production path and
-voice-status polling were additionally exercised on connected hardware on
-2026-08-08.
 
 ## Current Configuration
 

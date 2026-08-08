@@ -74,6 +74,12 @@ struct NoteEvent {
   uint64_t note_instance = 0;
 };
 
+struct VoiceCompletion {
+  uint16_t voice = 0;
+  uint16_t generation = 0;
+  uint8_t reason = 0;
+};
+
 struct Sf2Modulator {
   uint16_t src = 0;
   uint16_t dest = 0;
@@ -264,6 +270,7 @@ struct VoiceState {
   bool key_released = false;
   bool sostenuto_held = false;
   uint64_t note_instance = 0;
+  uint16_t generation = 0;
 };
 
 enum EnvState {

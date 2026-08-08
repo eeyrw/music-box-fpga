@@ -26,7 +26,10 @@ module tb_spi_register_bridge;
   logic session_reset_req;
   logic session_reset_ack;
   logic [31:0] session_epoch;
-  logic [511:0] voice_active_bitmap;
+  logic completion_event_valid;
+  logic [8:0] completion_event_voice;
+  logic [15:0] completion_event_generation;
+  logic [1:0] completion_event_reason;
   logic [31:0] registers [0:63];
   logic bus_allow;
   int bus_access_count = 0;
@@ -105,7 +108,10 @@ module tb_spi_register_bridge;
     .session_reset_req(session_reset_req_no_crc),
     .session_reset_ack(session_reset_ack_no_crc),
     .session_epoch,
-    .voice_active_bitmap
+    .completion_event_valid,
+    .completion_event_voice,
+    .completion_event_generation,
+    .completion_event_reason
   );
 
   assign cmd_flush_ack = cmd_flush_req;
@@ -307,23 +313,45 @@ module tb_spi_register_bridge;
     end
   endtask
 
-  task automatic spi_completion_read(
-    output logic [607:0] response
+  task automatic spi_completion_log_read(
+    input logic [15:0] start_sequence,
+    output logic [639:0] response
   );
+    logic [15:0] crc;
     logic [31:0] word;
     begin
+      crc = crc16_byte(16'hffff, 8'h5d);
+      crc = crc16_byte(crc, start_sequence[15:8]);
+      crc = crc16_byte(crc, start_sequence[7:0]);
       response = '0;
-      begin_transaction(8'h5c);
-      spi_send_byte(8'h00);
-      spi_send_byte(8'h00);
-      spi_send_byte(8'h00);
+      begin_transaction(8'h5d);
+      spi_send_byte(start_sequence[15:8]);
+      spi_send_byte(start_sequence[7:0]);
+      spi_send_byte(crc[15:8]);
+      spi_send_byte(crc[7:0]);
       for (int byte_index = 0; byte_index < 8; byte_index++)
         spi_send_byte(8'h00);
-      for (int word_index = 0; word_index < 19; word_index++) begin
+      for (int word_index = 0; word_index < 20; word_index++) begin
         spi_read_word_bits(word);
-        response[607-word_index*32 -: 32] = word;
+        response[639-word_index*32 -: 32] = word;
       end
       end_transaction();
+    end
+  endtask
+
+  task automatic emit_completion(
+    input logic [8:0] voice,
+    input logic [15:0] generation,
+    input logic [1:0] reason
+  );
+    begin
+      @(negedge clk);
+      completion_event_voice = voice;
+      completion_event_generation = generation;
+      completion_event_reason = reason;
+      completion_event_valid = 1'b1;
+      @(negedge clk);
+      completion_event_valid = 1'b0;
     end
   endtask
 
@@ -400,7 +428,7 @@ module tb_spi_register_bridge;
 
   initial begin
     logic [95:0] mailbox_response;
-    logic [607:0] completion_response;
+    logic [639:0] completion_log_response;
     logic [31:0] response_crc;
     logic [31:0] completion_crc;
     int accesses_before;
@@ -413,45 +441,63 @@ module tb_spi_register_bridge;
     bus_allow = 1'b1;
     cmd_ready = 1'b1;
     session_epoch = 32'h1234_5678;
-    voice_active_bitmap = '0;
+    completion_event_valid = 1'b0;
+    completion_event_voice = '0;
+    completion_event_generation = '0;
+    completion_event_reason = '0;
     last_spi_fall = 0;
     max_miso_delay = 0;
     repeat (5) @(negedge clk);
     rst = 1'b0;
     repeat (5) @(negedge clk);
 
-    voice_active_bitmap[5] = 1'b1;
-    voice_active_bitmap[33] = 1'b1;
-    voice_active_bitmap[511] = 1'b1;
-    spi_completion_read(completion_response);
+    spi_completion_log_read(16'd0, completion_log_response);
     completion_crc = 32'hffff_ffff;
-    for (int word_index = 0; word_index < 18; word_index++) begin
+    for (int word_index = 0; word_index < 19; word_index++) begin
       logic [31:0] crc_word;
-      crc_word = completion_response[607-word_index*32 -: 32];
+      crc_word = completion_log_response[639-word_index*32 -: 32];
       completion_crc = crc32_byte(completion_crc, crc_word[31:24]);
       completion_crc = crc32_byte(completion_crc, crc_word[23:16]);
       completion_crc = crc32_byte(completion_crc, crc_word[15:8]);
       completion_crc = crc32_byte(completion_crc, crc_word[7:0]);
     end
     completion_crc = completion_crc ^ 32'hffff_ffff;
-    if (completion_response[607:576] != 32'h0001_0000 ||
-        completion_response[575:544] != session_epoch ||
-        !completion_response[517] ||
-        !completion_response[481] ||
-        !completion_response[63] ||
-        completion_response[31:0] != completion_crc) begin
-      $error("initial voice status snapshot mismatch");
+    if (completion_log_response[639:608] != 32'h0001_0000 ||
+        completion_log_response[607:576] != session_epoch ||
+        completion_log_response[575:544] != 32'd0 ||
+        completion_log_response[31:0] != completion_crc) begin
+      $error("empty completion log response mismatch: %0160x",
+             completion_log_response);
       errors++;
     end
 
-    voice_active_bitmap = '0;
-    voice_active_bitmap[44] = 1'b1;
-    spi_completion_read(completion_response);
-    if (completion_response[607:576] != 32'h0001_0000 ||
-        !completion_response[492] || |completion_response[543:493] ||
-        |completion_response[491:32]) begin
-      $error("voice status did not reflect the current bitmap: %0128x",
-             completion_response[543:32]);
+    emit_completion(9'd5, 16'h1234, 2'd0);
+    emit_completion(9'd511, 16'hbeef, 2'd2);
+    spi_completion_log_read(16'd0, completion_log_response);
+    if (completion_log_response[639:608] != 32'h0001_0002 ||
+        completion_log_response[575:560] != 16'd2 ||
+        completion_log_response[559:544] != 16'd0 ||
+        completion_log_response[543:512] != 32'h1234_0280 ||
+        completion_log_response[511:480] != 32'hbeef_ffa0) begin
+      $error("completion log event response mismatch: %0160x",
+             completion_log_response);
+      errors++;
+    end
+
+    // Repeating a sequence is idempotent until the host advances it.
+    spi_completion_log_read(16'd0, completion_log_response);
+    if (completion_log_response[639:608] != 32'h0001_0002 ||
+        completion_log_response[543:512] != 32'h1234_0280 ||
+        completion_log_response[511:480] != 32'hbeef_ffa0) begin
+      $error("completion log retry was not stable");
+      errors++;
+    end
+
+    spi_completion_log_read(16'd2, completion_log_response);
+    if (completion_log_response[639:608] != 32'h0001_0000 ||
+        completion_log_response[575:560] != 16'd2 ||
+        completion_log_response[559:544] != 16'd2) begin
+      $error("completion log acknowledge mismatch");
       errors++;
     end
 

@@ -89,7 +89,15 @@ int main(int argc, char** argv) {
     const auto render_start = Clock::now();
     int produced = 0;
     int input_frame = 0;
+    int next_completion_frame = 0;
+    const int completion_period_frames =
+        std::max(1, args.sample_rate / 1000);
     while (produced < target_output_frames && !render::interrupt_requested()) {
+      if (input_frame == next_completion_frame) {
+        mcu.consume_voice_completions(reference.take_voice_completions(),
+                                      uint32_t(input_frame));
+        next_completion_frame += completion_period_frames;
+      }
       timeline.advance_to(input_frame);
 
       std::pair<int16_t, int16_t> sample;

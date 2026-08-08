@@ -241,6 +241,24 @@ int main(void) {
         }
     }
 
+    activate_voice(&runtime, 0u, 0u, 64u, 6u);
+    voices[0].release_step = 0u;
+    {
+        const unsigned before = log.count;
+        if (midi_policy_note_off(&policy, 0u, 64u) != MSF2_OK ||
+            voices[0].stage != MSF2_VOICE_RELEASED ||
+            log.count != before + 1u || log.opcode[before] != 0x14u ||
+            saw_opcode_since(&log, before, 0x15u)) {
+            fputs("zero-step release was converted to MCU VOICE_STOP\n", stderr);
+            return 1;
+        }
+        if (msf2_runtime_complete_voice(&runtime, 0u) != MSF2_OK) {
+            fputs("zero-step FPGA release completion was not reclaimable\n",
+                  stderr);
+            return 1;
+        }
+    }
+
     puts("PASS: MCU MIDI policy and channel modes");
     return 0;
 }

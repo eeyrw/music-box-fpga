@@ -271,11 +271,27 @@ static void debug_uart_print_status(void) {
         diagnostics->stale_generation_count,
         diagnostics->transport_monitor_failures);
     debug_uart_queue_printf(
-        "FPGA VOICE STATUS polls=%" PRIu32 " reclaims=%" PRIu32
-        " failures=%" PRIu32 " state_errors=%" PRIu32 "\r\n",
-        diagnostics->voice_status_polls, diagnostics->voice_status_reclaims,
-        diagnostics->voice_status_failures,
-        diagnostics->voice_status_state_errors);
+        "FPGA COMPLETION polls=%" PRIu32 " events=%" PRIu32
+        " reclaims=%" PRIu32
+        " before_release=%" PRIu32 " after_release=%" PRIu32
+        " min_age_ms=%" PRIu32
+        " stale=%" PRIu32 " free=%" PRIu32
+        " failures=%" PRIu32 " overflow=%" PRIu32
+        " state_errors=%" PRIu32 " reasons=%" PRIu32 "/%" PRIu32
+        "/%" PRIu32 "\r\n",
+        diagnostics->completion_polls, diagnostics->completion_events,
+        diagnostics->completion_reclaims,
+        diagnostics->completion_reclaims_before_release,
+        diagnostics->completion_reclaims_after_release,
+        diagnostics->completion_minimum_reclaim_age_ms,
+        diagnostics->completion_generation_mismatches,
+        diagnostics->completion_free_mismatches,
+        diagnostics->completion_failures,
+        diagnostics->completion_overflows,
+        diagnostics->completion_state_errors,
+        diagnostics->completion_reason_counts[0],
+        diagnostics->completion_reason_counts[1],
+        diagnostics->completion_reason_counts[2]);
     debug_uart_queue_printf(
         "MIDI offline_discards=%" PRIu32 "\r\n",
         atomic_load_explicit(&usb_midi_offline_discard_count,
@@ -298,7 +314,8 @@ static void debug_uart_print_help(void) {
     debug_uart_queue_text(
         "  e COMMAND_ERROR_COUNT, g STALE_GENERATION_COUNT, h SESSION_EPOCH\r\n");
     debug_uart_queue_text("  m MIDI, u USB audio\r\n");
-    debug_uart_queue_text("  x toggle periodic SF2 modulation\r\n");
+    debug_uart_queue_text(
+        "  x toggle periodic SF2 modulation, k toggle compressor\r\n");
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
     debug_uart_queue_text(
         "  t timing, T reset timing, w START, r START DDR, R DDR[0]\r\n");
@@ -591,6 +608,15 @@ static void debug_uart_handle_character(void *context, int character) {
                     "SF2 periodic modulation enabled=%d\r\n",
                     app_synth_toggle_periodic_modulation());
                 break;
+            case 'k': {
+                const int enabled = !app_synth_compressor_enabled();
+                const int result = app_synth_set_compressor_enabled(enabled);
+                debug_uart_queue_printf(
+                    "FPGA compressor enabled=%d result=%d\r\n",
+                    result == 0 ? enabled : app_synth_compressor_enabled(),
+                    result);
+                break;
+            }
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
             case 't': debug_uart_print_timing(); break;
             case 'T':
@@ -960,6 +986,8 @@ static void fatal_blink(const char *reason, int result) {
 static void app_control_core_main(void) {
     uint32_t command_flush_millisecond = atomic_load_explicit(
         &app_millisecond_count, memory_order_relaxed);
+    uint32_t observed_session_resets =
+        app_synth_get_diagnostics()->session_reset_count;
     rp2040_spi_dma_init();
     multicore_fifo_push_blocking(APP_CONTROL_CORE_READY);
     while (true) {
@@ -976,6 +1004,12 @@ static void app_control_core_main(void) {
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_SYNTH, 0);
             stage_start_us = diagnostic_time_us();
             result = app_synth_monitor_transport(millisecond_count);
+            if (app_synth_get_diagnostics()->session_reset_count !=
+                observed_session_resets) {
+                observed_session_resets =
+                    app_synth_get_diagnostics()->session_reset_count;
+                i2s_capture_request_resync();
+            }
             elapsed_us = diagnostic_time_us() - stage_start_us;
             update_maximum(&runtime_timing.maximum_synth_us, elapsed_us);
             update_maximum(&runtime_timing.maximum_synth_monitor_us, elapsed_us);
@@ -985,7 +1019,7 @@ static void app_control_core_main(void) {
             }
 
             if (result == 0 && app_synth_session_ready()) {
-                result = app_synth_service_voice_status(millisecond_count);
+                result = app_synth_service_completions(millisecond_count);
             }
 
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_MIDI, 0);

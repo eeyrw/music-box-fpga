@@ -42,6 +42,10 @@ module tb_voice_major_render_core;
   logic block_release_valid;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
+  logic completion_event_valid;
+  logic [VOICE_ID_WIDTH-1:0] completion_event_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] completion_event_generation;
+  logic [1:0] completion_event_reason;
   logic [NUM_VOICES-1:0] voice_active_bitmap;
   sample_window_diagnostics_t sample_window_diagnostics;
 /* verilator lint_on UNUSEDSIGNAL */

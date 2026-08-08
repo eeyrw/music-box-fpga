@@ -96,7 +96,13 @@ module voice_major_system #(
   ordered_line_rsp_t line_rsp;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
-  logic [NUM_VOICES-1:0] voice_active_bitmap;
+  logic completion_event_valid;
+  logic [VOICE_ID_WIDTH-1:0] completion_event_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] completion_event_generation;
+  logic [1:0] completion_event_reason;
+/* verilator lint_off UNUSEDSIGNAL */
+  logic [NUM_VOICES-1:0] unused_voice_active_bitmap;
+/* verilator lint_on UNUSEDSIGNAL */
   logic diagnostics_clear_pulse;
   logic render_latency_valid;
   sample_window_diagnostics_t sample_window_diagnostics;
@@ -171,7 +177,10 @@ module voice_major_system #(
     .session_reset_req(spi_session_reset_req),
     .session_reset_ack(spi_session_reset_ack),
     .session_epoch,
-    .voice_active_bitmap
+    .completion_event_valid,
+    .completion_event_voice,
+    .completion_event_generation,
+    .completion_event_reason
   );
 
   render_session_reset_controller session_reset_controller (
@@ -270,7 +279,11 @@ module voice_major_system #(
     .block_release_valid,
     .block_release_ready,
     .block_release_buffer_id,
-    .voice_active_bitmap,
+    .voice_active_bitmap(unused_voice_active_bitmap),
+    .completion_event_valid,
+    .completion_event_voice,
+    .completion_event_generation,
+    .completion_event_reason,
     .sample_window_diagnostics
   );
 

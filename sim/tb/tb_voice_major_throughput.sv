@@ -164,6 +164,11 @@ module tb_voice_major_throughput;
     end
   end
 
+  logic completion_event_valid;
+  logic [VOICE_ID_WIDTH-1:0] completion_event_voice;
+  logic [VOICE_GENERATION_WIDTH-1:0] completion_event_generation;
+  logic [1:0] completion_event_reason;
+
   voice_major_render_core dut (.*);
 
   task automatic send_command_word(input logic [31:0] word);

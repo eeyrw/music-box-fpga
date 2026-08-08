@@ -69,6 +69,8 @@ class McuModel {
   void handle_event(const NoteEvent& event);
   void control_tick();
   void set_current_sample(uint32_t sample) { current_sample_ = sample; }
+  void consume_voice_completions(const std::vector<VoiceCompletion>& completions,
+                                 uint32_t sample);
   bool region_in_use(int region) const;
 
  private:

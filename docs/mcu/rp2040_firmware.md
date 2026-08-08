@@ -133,9 +133,19 @@ individual command, but the MCU escalated it into permanent control quarantine.
 The exact producer of the original two stale commands was not encoded in the
 counter. As a separate ordering hardening, Note On no longer publishes redundant
 gain/pitch modulation immediately behind START. START acceptance queues FPGA
-state installation rather than acknowledging active-state commit, and START
-already contains initial gain, pitch, and filter values. Normal modulation now
-begins at the next control service.
+state installation rather than acknowledging active-state commit. Note On folds
+the current note-static, channel, and modulation-envelope contributions into the
+initial gain, pitch, and filter fields carried by START. Normal continuing
+modulation begins at the next control service.
+
+An equivalence regression exposed that the first implementation of this
+hardening still packed the region's unmodulated base filter into START and only
+corrected it at a later control tick. With the default velocity-to-filter
+modulator in SGM this created a note-on coefficient step and made the pure-C,
+compiled-runtime, and RTL-direct policies disagree. Initial modulation is now
+calculated before START in all three paths. The SGM bank-0/program-0/key-60 test
+checks every START field within the fixed-point one-LSB contract and the higher
+level test compares the complete command trace and rendered PCM exactly.
 
 Post-fix hardware isolation started a four-layer C4 without increasing the
 stale counter, while its later Note Off increased the counter by four. A short
@@ -521,7 +531,7 @@ Startup proceeds in this order:
 3. initialize SPI mode 0, including GP16 MISO, and deassert CS;
 4. start PIO and DMA I2S capture;
 5. validate the embedded MSF2 image, wait up to 30 seconds for the FPGA register
-   mailbox and loaded asset, verify interface version `0x00110000` and SF2 byte
+   mailbox and loaded asset, verify interface version `0x00120000` and SF2 byte
    size, then complete an acknowledged render-session reset, enable the default
    compressor, and initialize 512 voice slots;
 6. print the handshake values and SPI counters;
@@ -543,7 +553,7 @@ command batching, SPI DMA submission, and the Debug Probe UART. It
 drains at most 16 MIDI packets per loop but stops a batch after at least one
 packet when its measured 1 ms budget has expired. It then advances one synth
 control slice regardless of remaining MIDI queue depth and performs the pending
-SPI flush. Every 1 ms it first performs a fixed 88-byte `0x5c` voice-status
+SPI flush. Every 1 ms it first performs a fixed 93-byte `0x5d` voice-completion
 exchange after the DMA queue is idle. TinyUSB mounted/ready state is exported to
 Core 1 only through atomic
 snapshots; Core 1 never calls TinyUSB.
@@ -586,9 +596,9 @@ in each active voice. Allocation adds one ID, and reclaim removes it in constant
 time by moving the last ID into the vacated position. Capacity remains 512, but
 control updates, Note Off matching, pedals, channel modes, and exclusive-class
 handling inspect active voices rather than scanning 512 slots. Released and
-stopped voices remain in this list until the FPGA active bitmap reports the slot
-inactive. The free stack remains the constant-time source of naturally
-unused voice IDs. At capacity, voice stealing immediately publishes an atomic
+stopped voices remain in this list until the FPGA reports the matching
+generation's completion. The free stack remains the constant-time source of
+naturally unused voice IDs. At capacity, voice stealing immediately publishes an atomic
 replacement START with a new generation instead of waiting for STOP/release.
 
 Core 1 compares the wrapping millisecond counter directly with the previous
@@ -652,7 +662,8 @@ The UART accepts single-character commands:
 | `s` | Print startup handshake values and SPI transaction/error counters. |
 | `v`, `p`, `z` | Read `VERSION`, `PLATFORM_STATUS`, or `PLATFORM_SF2_SIZE`. |
 | `c`, `e`, `g`, `h` | Read `CMD_FIFO_STATUS`, `COMMAND_ERROR_COUNT`, `STALE_GENERATION_COUNT`, or `RENDER_SESSION_EPOCH`. |
-| `x` | Toggle periodic SoundFont LFO/modulation-envelope publication for listening A/B tests. MIDI controller updates and FPGA-authoritative voice-status polling remain active; the selection survives render-session reset and returns to enabled after MCU reboot. |
+| `x` | Toggle periodic SoundFont LFO/modulation-envelope publication for listening A/B tests. MIDI controller updates and FPGA-authoritative completion polling remain active; the selection survives render-session reset and returns to enabled after MCU reboot. |
+| `k` | Toggle the FPGA look-ahead compressor for listening A/B tests. The selection survives render-session reset and returns to enabled after MCU reboot. |
 | `d` | Dump I2S state and FPGA render, FIFO, compressor, memory, and sample-window diagnostics. |
 | `m` | Print TinyUSB MIDI readiness, RX callbacks, packet count, and last packet. |
 | `u` | Print UAC2 silence/discard reasons, TinyUSB short writes, PIO RX stalls, ring overruns, and lost frames. |
@@ -1028,24 +1039,37 @@ independent of the generations and audio configuration owned by the preceding
 session.
 
 During normal playback, the FPGA is the sole authority for slot retirement.
-Every 1 ms the MCU reads the current 512-bit active bitmap with one `0x5c`
-exchange and reclaims locally owned slots whose bits are low. No MCU
-release-sample countdown can free a slot. UART `s` reports status polls,
-reclaims, transport failures, and unexpected local-state errors.
+Every 1 ms the MCU reads up to 16 `(voice, generation, reason)` entries with one
+fixed 93-byte `0x5d` exchange. It reclaims a locally owned slot only when both
+voice and generation match. No MCU release-sample countdown can free a slot.
+UART `s` reports completion polls, events, reclaims, generation/free
+mismatches, reason counts, overflow, transport failures, and state errors.
 
-A START receives a one-millisecond landing guard so a bitmap sampled before the
-queued command is installed cannot free its new local generation. At capacity,
-voice steal remains immediate: the MCU selects a victim and publishes an atomic
-new-generation START without waiting for STOP, release, or a status poll.
+A logical completion poll retries up to three complete exchanges. A corrupt CRC
+or malformed response leaves local ownership and the consumer sequence
+unchanged while another attempt is available. A different session epoch, log
+overflow, invalid event, or impossible sequence/count causes an immediate
+render-session reset. The MCU advances its 16-bit sequence only after the
+complete response validates, so retries are idempotent.
 
-The 2026-08-08 connected-hardware run programmed both devices and played
-`debussy_bergamasque_03.mid` completely at 30 MHz SPI. It reached 143 active
-voices and finished at `active=0` after 5,944 FPGA-authoritative reclaims.
-UART `s` reported 373,118 successful status polls, 378,397 total SPI exchanges,
-33,445,700 transferred bytes, and zero transport errors, status failures,
-local-state errors, stale commands, command errors, or DMA enqueue timeouts.
-This establishes lifecycle reconciliation under that real MIDI workload; an
-audible artifact assessment remains a separate listening result.
+Every completed render-session reset, including automatic reconnect recovery,
+also requests an RP2040 I2S capture restart. The restart discards buffered
+pre-reset frames and re-acquires LRCLK framing before USB capture resumes. This
+prevents a short FPGA I2S phase reset that is too brief for the clock monitor to
+classify as stopped from leaving the PIO receiver bit-shifted.
+
+Normal Note Off, pedal release, All Notes Off, exclusive-class replacement, and
+operator release-all always publish `VOICE_RELEASE`, including when its release
+step is zero. The FPGA owns the zero-step decision and immediately clears that
+generation's active state and emits completion reason `2`. The MCU emits `VOICE_STOP` only for
+explicit immediate-stop policy such as MIDI All Sound Off or System Reset; it
+does not translate a release into STOP.
+
+A completion for a free slot or an older generation is consumed without
+changing the current owner. At capacity, voice steal remains immediate: the MCU
+selects a victim and publishes an atomic new-generation START without waiting
+for STOP, release, or a completion poll. A later event for the replaced
+generation cannot free the new owner.
 
 UART `a` and the reset-session System Exclusive command use the same operation
 as operator panic. They block and discard MIDI

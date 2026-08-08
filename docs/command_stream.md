@@ -124,9 +124,9 @@ commands so changing pan or attenuation cannot accidentally change playback
 rate. Runtime pitch does not reload phase. RELEASE enters Release from the
 current envelope level; STOP immediately removes the voice.
 
-Interface version 17 exposes the current FPGA voice-active bitmap, including
+Interface version 18 exposes generation-tagged FPGA voice completion, including
 natural sample/envelope termination. Software must not return a normally
-released or stopped slot to the free stack until its active bit clears, as
+released or stopped slot to the free stack until the matching event arrives, as
 defined in
 [`design/transport/spi_voice_status.md`](design/transport/spi_voice_status.md).
 Allocator voice steal does not wait for that observation: a new-generation

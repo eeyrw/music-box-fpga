@@ -29,6 +29,17 @@ struct PlayableCell {
 };
 
 PlayableCell first_playable(const render::McuSf2AssetView& view) {
+  const int32_t piano_index = view.find_preset(0, 0);
+  if (piano_index >= 0) {
+    const auto piano = view.preset(size_t(piano_index));
+    for (uint32_t local = 0; local < piano.zone_count; ++local) {
+      const auto zone = view.zone(piano.first_zone + local);
+      if (60 >= zone.key_low && 60 <= zone.key_high &&
+          100 >= zone.velocity_low && 100 <= zone.velocity_high) {
+        return {0, 0, 60, 100};
+      }
+    }
+  }
   for (size_t preset_index = 0; preset_index < view.preset_count(); ++preset_index) {
     const auto preset = view.preset(preset_index);
     for (int key = 0; key < 128; ++key) {

@@ -134,9 +134,14 @@ void ReferenceSynth::write_command_words(CommandWordView words) {
     e.elapsed = 0;
     e.stage = EnvelopeState::kRelease;
     v.released = true;
-    if (e.release_step == 0) v.enable = false;
+    if (e.release_step == 0) {
+      v.enable = false;
+      completions_.push_back(
+          {uint16_t(voice), v.generation, uint8_t(2)});
+    }
   } else if (opcode == 0x15) {
     v.enable = false;
+    completions_.push_back({uint16_t(voice), v.generation, uint8_t(1)});
   } else if (opcode == 0x16) {
     v.gain_l = int16_t(words[2] & 0xffffu);
     v.gain_r = int16_t(words[2] >> 16);
@@ -291,6 +296,7 @@ std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
 
   for (int voice = 0; voice < int(voices_.size()); ++voice) {
     VoiceConfig& v = voices_[voice];
+    const bool enabled_before = v.enable;
     int16_t envelope_before = detailed ? v.envelope : 0;
     if (v.enable) advance_envelope(v, envelopes_[voice]);
     const bool silent_delay = envelopes_[voice].stage == EnvelopeState::kDelay;
@@ -307,7 +313,12 @@ std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
     bool done_l = (v.loop_mode == 0 || !loop_active) && ((v.phase >> kPhaseFracBits) >= v.length);
     bool done_r = !v.stereo || ((v.loop_mode == 0 || !loop_active) && ((v.phase_r >> kPhaseFracBits) >= v.length_r));
     bool voice_done = done_l && done_r;
-    if (!v.enable || !v.valid || voice_done) continue;
+    if (voice_done) v.enable = false;
+    if (enabled_before && !v.enable) {
+      completions_.push_back(
+          {uint16_t(voice), v.generation, uint8_t(0)});
+    }
+    if (!v.enable || !v.valid) continue;
 
     uint32_t frame_0 = done_l ? v.length - 1 : ((v.phase >> kPhaseFracBits) & kPhaseFrameMask);
     uint32_t frame_1 = frame_0;
@@ -440,6 +451,12 @@ std::pair<int32_t, int32_t> ReferenceSynth::render_mix() {
   }
   sample_counter_ += 1;
   return {accum_l, accum_r};
+}
+
+std::vector<VoiceCompletion> ReferenceSynth::take_voice_completions() {
+  std::vector<VoiceCompletion> completions;
+  completions.swap(completions_);
+  return completions;
 }
 
 std::pair<int16_t, int16_t> ReferenceSynth::render_sample() {

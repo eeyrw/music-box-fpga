@@ -1147,7 +1147,6 @@ static msf2_result release_voice(msf2_runtime *runtime, uint16_t voice) {
     if (state->stage == MSF2_VOICE_FREE || state->stage == MSF2_VOICE_RELEASED) {
         return MSF2_OK;
     }
-    if (state->release_step == 0u) return stop_voice(runtime, voice);
     result = emit_short(runtime, UINT8_C(0x14), voice, state->generation,
                         state->release_step, 1);
     if (result != MSF2_OK) return result;
@@ -1598,9 +1597,12 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         uint16_t previous_generation;
         int64_t pitch_sums[4];
         int64_t gain_sums[3];
+        int64_t filter_sums[3];
         int64_t pitch;
         int64_t attenuation;
         int64_t pan;
+        int64_t cutoff;
+        int32_t initial_env_q16;
         uint32_t words[17];
         uint8_t word_count;
         msf2_result result = allocate_voice(runtime, &voice_index);
@@ -1649,6 +1651,9 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
             voice->mod_env_stage = voice->mod_env_wait_ticks != 0u ?
                 MSF2_ENV_HOLD : MSF2_ENV_DECAY;
         }
+        initial_env_q16 = runtime->periodic_modulation_enabled != 0u ?
+            (int32_t)(((int64_t)voice->mod_env_level * MSF2_MOD_ONE +
+                       32767 / 2) / 32767) : 0;
         /* Apply note-static and current channel modulation to the initial
          * phase/gain fields. Continuing LFO/envelope values are emitted by the
          * immediate first control update below and subsequent timer ticks. */
@@ -1656,6 +1661,9 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         pitch = pitch_sums[0] +
             runtime->channels[channel].generator_offsets_q16[51] +
             runtime->channels[channel].generator_offsets_q16[52];
+        pitch += multiply_q16(initial_env_q16,
+            (int64_t)voice->config.mod_env_to_pitch * MSF2_MOD_ONE +
+            pitch_sums[3]);
         voice->phase_increment = phase_with_cents(voice->base_phase_increment, pitch);
         destination_sums_q16(runtime, voice, 0u, gain_sums);
         attenuation = gain_sums[1] +
@@ -1667,12 +1675,28 @@ msf2_result msf2_runtime_note_on(msf2_runtime *runtime, uint8_t channel,
         params.phase_inc = voice->phase_increment;
         params.gain_l = voice->gain_l;
         params.gain_r = voice->gain_r;
-        voice->filter_enable = params.filter_enable;
-        voice->filter_b0 = params.filter_b0;
-        voice->filter_b1 = params.filter_b1;
-        voice->filter_b2 = params.filter_b2;
-        voice->filter_a1 = params.filter_a1;
-        voice->filter_a2 = params.filter_a2;
+        destination_sums_q16(runtime, voice, 2u, filter_sums);
+        cutoff = (int64_t)voice->config.initial_filter_fc * MSF2_MOD_ONE +
+                 filter_sums[0];
+        cutoff += multiply_q16(initial_env_q16,
+            (int64_t)voice->config.mod_env_to_filter_fc * MSF2_MOD_ONE +
+            filter_sums[2]);
+        if (cutoff < INT64_C(1500) * MSF2_MOD_ONE) {
+            cutoff = INT64_C(1500) * MSF2_MOD_ONE;
+        }
+        if (cutoff > INT64_C(13500) * MSF2_MOD_ONE) {
+            cutoff = INT64_C(13500) * MSF2_MOD_ONE;
+        }
+        filter_from_cents(
+            (int32_t)((cutoff + (cutoff >= 0 ? 32768 : -32768)) /
+                      MSF2_MOD_ONE),
+            voice->config.initial_filter_q, voice);
+        params.filter_enable = voice->filter_enable;
+        params.filter_b0 = voice->filter_b0;
+        params.filter_b1 = voice->filter_b1;
+        params.filter_b2 = voice->filter_b2;
+        params.filter_a1 = voice->filter_a1;
+        params.filter_a2 = voice->filter_a2;
         result = msf2_pack_start(voice_index, voice->generation, &params, words,
                                  &word_count);
         if (result != MSF2_OK) {

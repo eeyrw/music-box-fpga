@@ -22,10 +22,12 @@ typedef struct mailbox_capture {
     int hold_epoch;
 } mailbox_capture;
 
-typedef struct voice_status_capture {
-    uint8_t request[FPGA_SPI_VOICE_STATUS_FRAME_BYTES];
-    int corrupt_crc;
-} voice_status_capture;
+typedef struct completion_capture {
+    uint8_t request[FPGA_SPI_COMPLETION_FRAME_BYTES];
+    unsigned corrupt_responses;
+    unsigned exchanges;
+    int empty_overflow;
+} completion_capture;
 
 static int capture_write(void *context, const uint8_t *bytes, size_t byte_count) {
     capture *output = context;
@@ -104,33 +106,50 @@ static int mailbox_exchange(void *context, const uint8_t *tx, uint8_t *rx,
     return 0;
 }
 
-static int voice_status_exchange(void *context, const uint8_t *tx, uint8_t *rx,
-                                 size_t byte_count) {
-    voice_status_capture *capture = context;
+static int completion_exchange(void *context, const uint8_t *tx, uint8_t *rx,
+                               size_t byte_count) {
+    completion_capture *capture = context;
+    const uint16_t start_sequence = (uint16_t)((uint16_t)tx[1] << 8 | tx[2]);
+    const uint32_t first_item = UINT32_C(0x12340280);
+    const uint32_t second_item = UINT32_C(0xbeefffa0);
     uint32_t crc;
-    unsigned word;
-    if (byte_count != FPGA_SPI_VOICE_STATUS_FRAME_BYTES) return -1;
+    if (byte_count != FPGA_SPI_COMPLETION_FRAME_BYTES) return -1;
+    ++capture->exchanges;
     memcpy(capture->request, tx, byte_count);
     memset(rx, 0, byte_count);
-    rx[12] = 0u;
-    rx[13] = 1u;
-    rx[16] = 0x12u;
-    rx[17] = 0x34u;
-    rx[18] = 0x56u;
-    rx[19] = 0x78u;
-    for (word = 0u; word < FPGA_SPI_VOICE_STATUS_WORDS; ++word) {
-        const uint32_t value = UINT32_C(0x01010101) * word;
-        rx[20u + word * 4u] = (uint8_t)(value >> 24);
-        rx[21u + word * 4u] = (uint8_t)(value >> 16);
-        rx[22u + word * 4u] = (uint8_t)(value >> 8);
-        rx[23u + word * 4u] = (uint8_t)value;
+    rx[13] = 0u;
+    rx[14] = 1u;
+    rx[15] = capture->empty_overflow != 0 ? 1u : 0u;
+    rx[16] = capture->empty_overflow != 0 ? 0u : 2u;
+    rx[17] = 0x12u;
+    rx[18] = 0x34u;
+    rx[19] = 0x56u;
+    rx[20] = 0x78u;
+    rx[21] = (uint8_t)((start_sequence +
+                        (capture->empty_overflow != 0 ? 0u : 2u)) >> 8);
+    rx[22] = (uint8_t)(start_sequence +
+                       (capture->empty_overflow != 0 ? 0u : 2u));
+    rx[23] = (uint8_t)(start_sequence >> 8);
+    rx[24] = (uint8_t)start_sequence;
+    if (capture->empty_overflow == 0) {
+        rx[25] = (uint8_t)(first_item >> 24);
+        rx[26] = (uint8_t)(first_item >> 16);
+        rx[27] = (uint8_t)(first_item >> 8);
+        rx[28] = (uint8_t)first_item;
+        rx[29] = (uint8_t)(second_item >> 24);
+        rx[30] = (uint8_t)(second_item >> 16);
+        rx[31] = (uint8_t)(second_item >> 8);
+        rx[32] = (uint8_t)second_item;
     }
-    crc = reference_crc32(rx + 12u, 72u);
-    rx[84] = (uint8_t)(crc >> 24);
-    rx[85] = (uint8_t)(crc >> 16);
-    rx[86] = (uint8_t)(crc >> 8);
-    rx[87] = (uint8_t)crc;
-    if (capture->corrupt_crc != 0) ++rx[87];
+    crc = reference_crc32(rx + 13u, 76u);
+    rx[89] = (uint8_t)(crc >> 24);
+    rx[90] = (uint8_t)(crc >> 16);
+    rx[91] = (uint8_t)(crc >> 8);
+    rx[92] = (uint8_t)crc;
+    if (capture->corrupt_responses != 0u) {
+        --capture->corrupt_responses;
+        ++rx[92];
+    }
     return 0;
 }
 
@@ -149,8 +168,9 @@ int main(void) {
     uint16_t crc;
     uint32_t register_data;
     uint32_t session_epoch;
-    voice_status_capture status_capture = {{0}, 0};
-    fpga_spi_voice_status voice_status;
+    completion_capture completion = {{0}, 0u, 0u, 0};
+    fpga_spi_completion_batch batch;
+    unsigned failed_completion_attempts;
 
     if (fpga_spi_send_commands(capture_write, &output, words, 2u) != 0 ||
         output.writes != 1u || output.size != 12u || output.bytes[0] != 0xa5u ||
@@ -217,21 +237,59 @@ int main(void) {
         fputs("SPI register mailbox read failed\n", stderr);
         return 1;
     }
-    if (fpga_spi_read_voice_status(voice_status_exchange, &status_capture,
-                                   &voice_status) != 0 ||
-        status_capture.request[0] != 0x5cu ||
-        memcmp(status_capture.request + 1u,
-               (uint8_t[FPGA_SPI_VOICE_STATUS_FRAME_BYTES - 1u]){0},
-               FPGA_SPI_VOICE_STATUS_FRAME_BYTES - 1u) != 0 ||
-        voice_status.session_epoch != UINT32_C(0x12345678) ||
-        voice_status.active_bitmap[15] != UINT32_C(0x0f0f0f0f)) {
-        fputs("SPI voice status bitmap read failed\n", stderr);
+    if (fpga_spi_read_completions(completion_exchange, &completion,
+                                  UINT16_C(0x3456), &batch) != 0 ||
+        completion.request[0] != 0x5du || completion.request[1] != 0x34u ||
+        completion.request[2] != 0x56u ||
+        ((uint16_t)completion.request[3] << 8 | completion.request[4]) !=
+            reference_crc(completion.request, 3u) ||
+        memcmp(completion.request + 5u,
+               (uint8_t[FPGA_SPI_COMPLETION_FRAME_BYTES - 5u]){0},
+               FPGA_SPI_COMPLETION_FRAME_BYTES - 5u) != 0 ||
+        batch.session_epoch != UINT32_C(0x12345678) || batch.count != 2u ||
+        batch.start_sequence != UINT16_C(0x3456) ||
+        batch.write_sequence != UINT16_C(0x3458) || batch.overflow != 0u ||
+        batch.items[0].generation != UINT16_C(0x1234) ||
+        batch.items[0].voice != 5u || batch.items[0].reason != 0u ||
+        batch.items[1].generation != UINT16_C(0xbeef) ||
+        batch.items[1].voice != 511u || batch.items[1].reason != 2u) {
+        fputs("SPI completion log read failed\n", stderr);
         return 1;
     }
-    status_capture.corrupt_crc = 1;
-    if (fpga_spi_read_voice_status(voice_status_exchange, &status_capture,
-                                   &voice_status) == 0) {
-        fputs("SPI voice status accepted corrupt response CRC\n", stderr);
+    completion.corrupt_responses = 1u;
+    if (fpga_spi_read_completions(completion_exchange, &completion,
+                                  UINT16_C(0x3456), &batch) == 0) {
+        fputs("SPI completion log accepted corrupt response CRC\n", stderr);
+        return 1;
+    }
+    completion.corrupt_responses = 2u;
+    completion.exchanges = 0u;
+    if (fpga_spi_read_completions_retry(
+            completion_exchange, &completion, UINT16_C(0x3456), &batch, 3u,
+            &failed_completion_attempts) != 0 ||
+        failed_completion_attempts != 2u || completion.exchanges != 3u ||
+        batch.session_epoch != UINT32_C(0x12345678)) {
+        fputs("SPI completion log did not recover after transient bad frames\n",
+              stderr);
+        return 1;
+    }
+    completion.corrupt_responses = 3u;
+    completion.exchanges = 0u;
+    if (fpga_spi_read_completions_retry(
+            completion_exchange, &completion, UINT16_C(0x3456), &batch, 3u,
+            &failed_completion_attempts) == 0 ||
+        failed_completion_attempts != 3u || completion.exchanges != 3u) {
+        fputs("SPI completion log accepted exhausted retries\n", stderr);
+        return 1;
+    }
+    completion.corrupt_responses = 0u;
+    completion.empty_overflow = 1;
+    if (fpga_spi_read_completions(completion_exchange, &completion,
+                                  UINT16_C(0x3456), &batch) != 0 ||
+        batch.overflow != 1u || batch.count != 0u ||
+        batch.start_sequence != UINT16_C(0x3456) ||
+        batch.write_sequence != UINT16_C(0x3456)) {
+        fputs("SPI completion log rejected empty overflow state\n", stderr);
         return 1;
     }
     mailbox.exchanges = 0u;
@@ -261,6 +319,6 @@ int main(void) {
         fputs("SPI register mailbox accepted corrupt response CRC\n", stderr);
         return 1;
     }
-    puts("PASS: FPGA SPI command, voice status, reset, and mailbox transport");
+    puts("PASS: FPGA SPI command, completion, reset, and mailbox transport");
     return 0;
 }

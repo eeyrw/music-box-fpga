@@ -1,6 +1,7 @@
 # Smart Artix integration RTL, relative to this directory. Vivado prepends the
 # generic synthesizable sources from ../../rtl/filelist.f at project load time.
 ../common/rtl/fractional_tick_gen.sv
+../common/rtl/spi_completion_log.sv
 ../common/rtl/spi_register_bridge.sv
 ../common/rtl/render_session_reset_controller.sv
 ../common/rtl/wavetable_register_fabric.sv

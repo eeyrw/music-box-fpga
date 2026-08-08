@@ -93,6 +93,19 @@ limit of about 349.53 seconds.
    waveform and enabled filter so a postponed phase or unintended filter
    warm-up cannot pass as an all-zero Delay-only test.
 
+## Confirmed Release-State Bug
+
+`block_voice_state_store` currently writes `ENV_RELEASE` into dynamic state as
+soon as it accepts a nonzero RELEASE command. That bypasses the envelope
+frontend's Attack-to-Release path, whose `q15_to_cb` conversion is selected only
+when it observes `released=1` while the prior dynamic stage is still
+`ENV_ATTACK`. A note released during Attack can therefore begin logarithmic
+Release from zero attenuation instead of its current partial Attack level,
+causing an amplitude discontinuity. The state store must preserve the prior
+dynamic stage for nonzero RELEASE and publish only the released flag and release
+step; a zero release step may still clear active state immediately. A focused
+state-store regression is required with the RTL fix.
+
 This optimization removes wave-memory traffic and DSP switching activity while
 voices are in Delay. The shared DSP pipeline remains required for audible
 voices, so this is an activity and throughput improvement rather than removal

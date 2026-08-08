@@ -34,6 +34,10 @@ static uint32_t read_be32(const uint8_t *bytes) {
            ((uint32_t)bytes[2] << 8) | bytes[3];
 }
 
+static uint16_t read_be16(const uint8_t *bytes) {
+    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+}
+
 static void write_be32(uint8_t *bytes, uint32_t value) {
     bytes[0] = (uint8_t)(value >> 24);
     bytes[1] = (uint8_t)(value >> 16);
@@ -182,28 +186,79 @@ int fpga_spi_write_register(fpga_spi_write_fn write,
     return -1;
 }
 
-int fpga_spi_read_voice_status(fpga_spi_exchange_fn exchange, void *context,
-                               fpga_spi_voice_status *status) {
-    enum { RESPONSE_OFFSET = 12, BITMAP_OFFSET = 20, CRC_OFFSET = 84 };
-    uint8_t tx[FPGA_SPI_VOICE_STATUS_FRAME_BYTES] = {UINT8_C(0x5c)};
-    uint8_t rx[FPGA_SPI_VOICE_STATUS_FRAME_BYTES];
-    unsigned word;
+int fpga_spi_read_completions(fpga_spi_exchange_fn exchange, void *context,
+                              uint16_t sequence,
+                              fpga_spi_completion_batch *batch) {
+    enum { RESPONSE_OFFSET = 13, ITEMS_OFFSET = 25, CRC_OFFSET = 89 };
+    uint8_t tx[FPGA_SPI_COMPLETION_FRAME_BYTES] = {UINT8_C(0x5d)};
+    uint8_t rx[FPGA_SPI_COMPLETION_FRAME_BYTES];
+    uint16_t request_crc = UINT16_C(0xffff);
+    unsigned item;
 
-    if (exchange == NULL || status == NULL) return -1;
+    if (exchange == NULL || batch == NULL) return -1;
+    tx[1] = (uint8_t)(sequence >> 8);
+    tx[2] = (uint8_t)sequence;
+    request_crc = crc16_byte(request_crc, tx[0]);
+    request_crc = crc16_byte(request_crc, tx[1]);
+    request_crc = crc16_byte(request_crc, tx[2]);
+    tx[3] = (uint8_t)(request_crc >> 8);
+    tx[4] = (uint8_t)request_crc;
     if (exchange(context, tx, rx, sizeof(tx)) != 0) return -1;
     if (read_be32(rx + CRC_OFFSET) !=
         crc32_bytes(rx + RESPONSE_OFFSET, CRC_OFFSET - RESPONSE_OFFSET)) {
         return -1;
     }
     if (rx[RESPONSE_OFFSET] != 0u || rx[RESPONSE_OFFSET + 1u] != 1u ||
-        rx[RESPONSE_OFFSET + 2u] != 0u ||
-        rx[RESPONSE_OFFSET + 3u] != 0u) {
+        (rx[RESPONSE_OFFSET + 2u] & UINT8_C(0xfe)) != 0u ||
+        rx[RESPONSE_OFFSET + 3u] > FPGA_SPI_COMPLETION_ITEMS) {
         return -1;
     }
-    status->session_epoch = read_be32(rx + 16u);
-    for (word = 0u; word < FPGA_SPI_VOICE_STATUS_WORDS; ++word) {
-        status->active_bitmap[word] =
-            read_be32(rx + BITMAP_OFFSET + word * 4u);
+    batch->overflow = rx[RESPONSE_OFFSET + 2u] & 1u;
+    batch->count = rx[RESPONSE_OFFSET + 3u];
+    batch->session_epoch = read_be32(rx + 17u);
+    batch->write_sequence = read_be16(rx + 21u);
+    batch->start_sequence = read_be16(rx + 23u);
+    {
+        const uint16_t available =
+            (uint16_t)(batch->write_sequence - sequence);
+        const uint8_t expected_count =
+            available > FPGA_SPI_COMPLETION_ITEMS ?
+                FPGA_SPI_COMPLETION_ITEMS : (uint8_t)available;
+        if (batch->start_sequence != sequence ||
+            batch->count != expected_count) {
+            return -1;
+        }
+    }
+    for (item = 0u; item < FPGA_SPI_COMPLETION_ITEMS; ++item) {
+        const uint32_t packed = read_be32(rx + ITEMS_OFFSET + item * 4u);
+        if (item >= batch->count) {
+            if (packed != 0u) return -1;
+            continue;
+        }
+        if ((packed & UINT32_C(0x4f)) != 0u ||
+            ((packed >> 4) & UINT32_C(0x3)) > 2u) {
+            return -1;
+        }
+        batch->items[item].generation = (uint16_t)(packed >> 16);
+        batch->items[item].voice = (uint16_t)((packed >> 7) & UINT32_C(0x1ff));
+        batch->items[item].reason = (uint8_t)((packed >> 4) & UINT32_C(0x3));
     }
     return 0;
+}
+
+int fpga_spi_read_completions_retry(fpga_spi_exchange_fn exchange,
+                                    void *context, uint16_t sequence,
+                                    fpga_spi_completion_batch *batch,
+                                    unsigned attempt_limit,
+                                    unsigned *failed_attempts) {
+    unsigned attempt;
+    if (failed_attempts != NULL) *failed_attempts = 0u;
+    if (exchange == NULL || batch == NULL || attempt_limit == 0u) return -1;
+    for (attempt = 0u; attempt < attempt_limit; ++attempt) {
+        if (fpga_spi_read_completions(exchange, context, sequence, batch) == 0) {
+            return 0;
+        }
+        if (failed_attempts != NULL) ++*failed_attempts;
+    }
+    return -1;
 }

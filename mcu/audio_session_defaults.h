@@ -7,5 +7,7 @@
 
 void audio_session_defaults_build(
     uint32_t words[AUDIO_SESSION_DEFAULT_WORD_COUNT]);
+void audio_session_compressor_build(
+    uint32_t words[AUDIO_SESSION_DEFAULT_WORD_COUNT], int enabled);
 
 #endif
