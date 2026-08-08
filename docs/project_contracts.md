@@ -23,7 +23,7 @@ these sources.
 
 Generated register constants are never edited directly. Change
 `spec/register_map.json`, run `make generate-register-map`, and commit the
-generated SystemVerilog and C++ outputs with the source change. Generated DSP
+generated SystemVerilog, C++, and MCU C outputs with the source change. Generated DSP
 tables follow the same rule through `tools/gen_dsp_lut.py`.
 
 ## Command Quick Reference

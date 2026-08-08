@@ -83,6 +83,7 @@ target_sources(music_box_mcu PRIVATE
     fpga_spi_transport.c
     midi_policy.c
     transport_health_policy.c
+    synth_runtime_diagnostics.c
     synth_controller.c
     "${MSF2_IMAGE_OBJECT}"
 )
@@ -100,6 +101,7 @@ set_source_files_properties(
     fpga_spi_transport.c
     midi_policy.c
     transport_health_policy.c
+    synth_runtime_diagnostics.c
     synth_controller.c
     rp2040_usb_iso_fix.c
     usb_audio_rate_match.c

@@ -75,6 +75,7 @@ int app_synth_service(uint32_t millisecond_count);
 int app_synth_service_completions(uint32_t millisecond_count);
 int app_synth_monitor_transport(uint32_t millisecond_count);
 int app_synth_session_ready(void);
+uint32_t app_synth_session_reset_count(void);
 int app_synth_flush_commands(void);
 int app_synth_toggle_periodic_modulation(void);
 int app_synth_periodic_modulation_enabled(void);

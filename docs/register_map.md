@@ -3,7 +3,8 @@
 `spec/register_map.json` is the source of truth for the 16-bit-address,
 32-bit-data global register bus. Run `make generate-register-map` after changing
 it. Generated consumers are `rtl/pkg/synth_register_pkg.sv` and
-`sim/harness/generated/register_map.h`.
+`sim/harness/generated/register_map.h`, plus
+`mcu/generated/register_map.h` for firmware.
 
 Voice state is not register mapped. There is no per-voice address window and no
 shadow/runtime register compatibility path. Voice definition, start, runtime

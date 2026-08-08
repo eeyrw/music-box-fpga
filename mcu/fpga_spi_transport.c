@@ -3,6 +3,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+enum {
+    REGISTER_READ = 0,
+    REGISTER_WRITE = 1,
+    REGISTER_RESPONSE_OK = 0,
+    REGISTER_RESPONSE_BUSY = 2
+};
+
 static uint16_t crc16_byte(uint16_t crc, uint8_t byte) {
     uint8_t bit;
     crc ^= (uint16_t)byte << 8;
@@ -43,6 +50,46 @@ static void write_be32(uint8_t *bytes, uint32_t value) {
     bytes[1] = (uint8_t)(value >> 16);
     bytes[2] = (uint8_t)(value >> 8);
     bytes[3] = (uint8_t)value;
+}
+
+static int register_transaction(fpga_spi_write_fn write,
+                                fpga_spi_exchange_fn exchange, void *context,
+                                uint8_t operation, uint16_t address,
+                                uint32_t write_data, uint32_t *read_data,
+                                unsigned fetch_limit) {
+    uint8_t request[12] = {UINT8_C(0x5a), operation,
+                           (uint8_t)(address >> 8), (uint8_t)address};
+    uint8_t tx[16] = {UINT8_C(0x5b)};
+    uint8_t rx[16];
+    uint32_t crc;
+    unsigned attempt;
+
+    if (write == NULL || exchange == NULL || fetch_limit == 0u ||
+        (operation == REGISTER_READ && read_data == NULL) ||
+        operation > REGISTER_WRITE) {
+        return -1;
+    }
+    if (operation == REGISTER_WRITE) write_be32(request + 4u, write_data);
+    crc = crc32_bytes(request, 8u);
+    write_be32(request + 8u, crc);
+    if (write(context, request, sizeof(request)) != 0) return -1;
+
+    for (attempt = 0u; attempt < fetch_limit; ++attempt) {
+        if (exchange(context, tx, rx, sizeof(tx)) != 0) return -1;
+        if (read_be32(rx + 12u) != crc32_bytes(rx + 4u, 8u)) continue;
+        if (rx[4] == REGISTER_RESPONSE_BUSY) continue;
+        if (rx[4] != REGISTER_RESPONSE_OK || rx[5] != operation ||
+            rx[6] != (uint8_t)(address >> 8) || rx[7] != (uint8_t)address) {
+            return -1;
+        }
+        if (operation == REGISTER_READ) {
+            *read_data = read_be32(rx + 8u);
+        } else if (read_be32(rx + 8u) != 0u) {
+            return -1;
+        }
+        return 0;
+    }
+    return -1;
 }
 
 int fpga_spi_send_commands(fpga_spi_write_fn write, void *context,
@@ -125,65 +172,16 @@ int fpga_spi_read_register(fpga_spi_write_fn write,
                            fpga_spi_exchange_fn exchange, void *context,
                            uint16_t address, uint32_t *data,
                            unsigned fetch_limit) {
-    uint8_t request[12] = {UINT8_C(0x5a), 0u, (uint8_t)(address >> 8),
-                           (uint8_t)address, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
-    uint8_t tx[16] = {UINT8_C(0x5b)};
-    uint8_t rx[16];
-    uint32_t crc;
-    unsigned attempt;
-
-    if (write == NULL || exchange == NULL || data == NULL || fetch_limit == 0u) {
-        return -1;
-    }
-    crc = crc32_bytes(request, 8u);
-    request[8] = (uint8_t)(crc >> 24);
-    request[9] = (uint8_t)(crc >> 16);
-    request[10] = (uint8_t)(crc >> 8);
-    request[11] = (uint8_t)crc;
-    if (write(context, request, sizeof(request)) != 0) return -1;
-
-    for (attempt = 0u; attempt < fetch_limit; ++attempt) {
-        if (exchange(context, tx, rx, sizeof(tx)) != 0) return -1;
-        if (read_be32(rx + 12u) != crc32_bytes(rx + 4u, 8u)) continue;
-        if (rx[4] == 2u) continue;
-        if (rx[4] != 0u || rx[5] != 0u || rx[6] != (uint8_t)(address >> 8) ||
-            rx[7] != (uint8_t)address) {
-            return -1;
-        }
-        *data = read_be32(rx + 8u);
-        return 0;
-    }
-    return -1;
+    return register_transaction(write, exchange, context, REGISTER_READ,
+                                address, 0u, data, fetch_limit);
 }
 
 int fpga_spi_write_register(fpga_spi_write_fn write,
                             fpga_spi_exchange_fn exchange, void *context,
                             uint16_t address, uint32_t data,
                             unsigned fetch_limit) {
-    uint8_t request[12] = {UINT8_C(0x5a), UINT8_C(0x01),
-                           (uint8_t)(address >> 8), (uint8_t)address};
-    uint8_t tx[16] = {UINT8_C(0x5b)};
-    uint8_t rx[16];
-    uint32_t crc;
-    unsigned attempt;
-
-    if (write == NULL || exchange == NULL || fetch_limit == 0u) return -1;
-    write_be32(request + 4u, data);
-    crc = crc32_bytes(request, 8u);
-    write_be32(request + 8u, crc);
-    if (write(context, request, sizeof(request)) != 0) return -1;
-
-    for (attempt = 0u; attempt < fetch_limit; ++attempt) {
-        if (exchange(context, tx, rx, sizeof(tx)) != 0) return -1;
-        if (read_be32(rx + 12u) != crc32_bytes(rx + 4u, 8u)) continue;
-        if (rx[4] == 2u) continue;
-        if (rx[4] != 0u || rx[5] != 1u || rx[6] != (uint8_t)(address >> 8) ||
-            rx[7] != (uint8_t)address || read_be32(rx + 8u) != 0u) {
-            return -1;
-        }
-        return 0;
-    }
-    return -1;
+    return register_transaction(write, exchange, context, REGISTER_WRITE,
+                                address, data, NULL, fetch_limit);
 }
 
 int fpga_spi_read_completions(fpga_spi_exchange_fn exchange, void *context,

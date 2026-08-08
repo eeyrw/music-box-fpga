@@ -31,7 +31,8 @@ make generate-register-map
 Never hand-edit the generated consumers:
 
 - `rtl/pkg/synth_register_pkg.sv`;
-- `sim/harness/generated/register_map.h`.
+- `sim/harness/generated/register_map.h`;
+- `mcu/generated/register_map.h`.
 
 If `VERSION` changes, update every profile or host contract that intentionally
 requires an exact version. In this repository that includes

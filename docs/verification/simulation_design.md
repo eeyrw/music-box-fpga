@@ -16,8 +16,9 @@ make test
 
 `spec/register_map.json` is the register source of truth. The register generator
 produces `rtl/pkg/synth_register_pkg.sv` and
-`sim/harness/generated/register_map.h`. Use the matching exact generation target
-for register or DSP changes, and `make check-generated` to check both outputs.
+`sim/harness/generated/register_map.h`, plus the firmware consumer
+`mcu/generated/register_map.h`. Use the matching exact generation target for
+register or DSP changes, and `make check-generated` to check all outputs.
 
 `make test` is split into:
 

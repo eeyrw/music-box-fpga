@@ -544,6 +544,37 @@ Startup proceeds in this order:
 The timer interrupt only increments one wrapping global millisecond counter.
 No MSF2, SPI, UART, USB, or I2S work runs in that ISR.
 
+### Global Audio Session Defaults
+
+An acknowledged render-session reset first restores the FPGA command plane to
+its RTL reset state. The MCU then sends exactly one five-word
+`COMPRESSOR_CONFIG` command before it marks the session ready. It does not send
+`MASTER_VOLUME`, `CHORUS_CONFIG`, or `REVERB_CONFIG` during normal startup, so
+those settings retain the FPGA reset values shown below.
+
+| Setting | Effective default | Owner and startup action |
+| --- | --- | --- |
+| Compressor | Enabled; threshold `20 cB` (`-2 dBFS`); 4:1 ratio; immediate attack; 240,000-frame (`5000 ms` at 48 kHz) full-range release | MCU sends `COMPRESSOR_CONFIG` after every acknowledged session reset. |
+| Compressor look-ahead | 48 frames (`1 ms` at 48 kHz) | Fixed FPGA implementation parameter; not part of the MCU command. |
+| Master volume | `0x7fff` Q1.15, approximately unity (`0 dB`) | FPGA reset default; MCU sends no `MASTER_VOLUME` command. |
+| Chorus | Disabled; feedback, delays, LFO, sends, return gain, and stereo offset all zero | FPGA reset default; MCU sends no `CHORUS_CONFIG` command. |
+| Reverb | Disabled; pre-delay, sends, return gain, damping, chorus route, and all eight feedback gains zero | FPGA reset default; MCU sends no `REVERB_CONFIG` command. |
+
+The exact compressor transaction words are:
+
+```text
+20000004 00018001 01400000 00000000 00001112
+```
+
+`0x00018001` packs enable bit 0 and ratio-slope `0xc000` Q0.16;
+`0x01400000` is 20 cB Q12.20; zero attack step means immediate gain
+application; and release step `0x00001112` is
+`ceil((1000 cB << 20) / 240000)`. UART `k` changes only the compressor enable
+bit while preserving its other four fields. That selection survives later
+render-session resets in the same boot because the MCU reapplies it, and a new
+MCU boot restores enabled. Session reset clears chorus, reverb, compressor
+history, and the FPGA audio pipeline before these defaults take effect.
+
 Core 0 owns the real-time capture boundary: PIO/DMA I2S service, I2S clock
 monitoring, TinyUSB, UAC2 callbacks, and USB-MIDI endpoint reads. It copies at
 most eight complete four-byte USB-MIDI event packets per loop into a 256-entry
@@ -600,6 +631,10 @@ stopped voices remain in this list until the FPGA reports the matching
 generation's completion. The free stack remains the constant-time source of
 naturally unused voice IDs. At capacity, voice stealing immediately publishes an atomic
 replacement START with a new generation instead of waiting for STOP/release.
+The control service loop reads the session-reset counter through an O(1)
+accessor. It does not request the full runtime diagnostic snapshot: counting
+active-voice modulation dependencies is an O(active voices) operation performed
+only when the operator explicitly requests UART status.
 
 Core 1 compares the wrapping millisecond counter directly with the previous
 completed control publication time. At the default five-millisecond interval,
@@ -1182,6 +1217,7 @@ rather than assuming card 2.
 | `mcu/fpga_spi_transport.c` | CRC-protected `0xa5` command framing, `0xa6` FLUSH, and acknowledged `0xa7` session reset. |
 | `mcu/transport_health_policy.c` | Classifies command counters and reachable/loading/ready/incompatible FPGA session observations. |
 | `mcu/audio_session_defaults.c` | MCU-owned global audio defaults reapplied after each render-session reset. |
+| `mcu/synth_runtime_diagnostics.c` | Pure snapshot of MSF2 runtime counters and active-voice modulation dependencies for UART diagnostics. |
 | `mcu/synth_controller.c` | Production 512-voice integration, startup/recovery identity checks, 5 ms publication, command batching, and low-rate FPGA session monitoring. |
 | `mcu/rp2040_spi_dma_transport.c` | RP2040 SPI pin setup, synchronous mailbox transfers, paired command DMA, queue backpressure, and transport diagnostics. |
 | `mcu/spi_dma_queue.c` | Bounded copied-frame FIFO owned by the RP2040 SPI DMA transport. |

@@ -129,8 +129,9 @@ The behavioral `ordered_line_ddr3_bridge_model` exists only in simulation.
 
 ## Register And Package Layers
 
-`synth_register_pkg.sv` and `sim/harness/generated/register_map.h` are generated
-from `spec/register_map.json`. The common register fabric preserves platform,
+`synth_register_pkg.sv`, `sim/harness/generated/register_map.h`, and
+`mcu/generated/register_map.h` are generated from `spec/register_map.json`.
+The common register fabric preserves platform,
 DDR, common status, compressor, and effect diagnostic ownership while forwarding
 generic command/status addresses to `voice_major_command_plane`.
 

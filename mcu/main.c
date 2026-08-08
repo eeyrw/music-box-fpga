@@ -1,4 +1,5 @@
 #include "debug_console.h"
+#include "generated/register_map.h"
 #include "i2s_capture.h"
 #include "midi_ingress_queue.h"
 #include "midi_sysex_reset.h"
@@ -485,30 +486,46 @@ static void debug_uart_dump_fpga(void) {
             ? 1u : 0u,
         atomic_load_explicit(&i2s_buffered_frames_snapshot,
                              memory_order_acquire));
-    debug_uart_read_register("SYSTEM_STATUS", UINT16_C(0x9010));
-    debug_uart_read_register("PLATFORM_ERRORS", UINT16_C(0x9044));
-    debug_uart_read_register("PLATFORM_BYTES_LOADED", UINT16_C(0x9048));
-    debug_uart_read_register("PLATFORM_CURRENT_LBA", UINT16_C(0x9058));
-    debug_uart_read_register("PLATFORM_DDR_STATUS", UINT16_C(0x905c));
-    debug_uart_read_register("COMMON_EVENT_FLAGS", UINT16_C(0x9014));
-    debug_uart_read_register("PIPELINE_LATENCY", UINT16_C(0x901c));
-    debug_uart_read_register("UNDERRUN_COUNT", UINT16_C(0x9024));
-    debug_uart_read_register("SAMPLE_DROP_COUNT", UINT16_C(0x9028));
-    debug_uart_read_register("DEADLINE_MISS_COUNT", UINT16_C(0x902c));
-    debug_uart_read_register("CURRENT_SAMPLE", UINT16_C(0x9030));
-    debug_uart_read_register("CMD_FIFO_STATUS", UINT16_C(0x9034));
-    debug_uart_read_register("MEM_RESPONSE_COUNT", UINT16_C(0x9038));
-    debug_uart_read_register("AUDIO_FIFO_DIAG", UINT16_C(0x9088));
-    debug_uart_read_register("AUDIO_LEAD", UINT16_C(0x908c));
-    debug_uart_read_register("COMPRESSOR_STATUS", UINT16_C(0x910c));
-    debug_uart_read_register("COMPRESSOR_PEAK", UINT16_C(0x9118));
-    debug_uart_read_register("COMPRESSOR_MAX_PEAK", UINT16_C(0x9120));
-    debug_uart_read_register("COMPRESSOR_INPUTS", UINT16_C(0x9124));
-    debug_uart_read_register("COMPRESSOR_OUTPUTS", UINT16_C(0x9128));
-    debug_uart_read_register("WINDOW_REQUESTS", UINT16_C(0x9160));
-    debug_uart_read_register("WINDOW_HITS", UINT16_C(0x9164));
-    debug_uart_read_register("WINDOW_REFILLS", UINT16_C(0x9168));
-    debug_uart_read_register("WINDOW_FALLBACKS", UINT16_C(0x916c));
+    debug_uart_read_register("SYSTEM_STATUS", SYNTH_REG_SYSTEM_STATUS);
+    debug_uart_read_register("PLATFORM_ERRORS", SYNTH_REG_PLATFORM_ERRORS);
+    debug_uart_read_register("PLATFORM_BYTES_LOADED",
+                             SYNTH_REG_PLATFORM_BYTES_LOADED);
+    debug_uart_read_register("PLATFORM_CURRENT_LBA",
+                             SYNTH_REG_PLATFORM_CURRENT_LBA);
+    debug_uart_read_register("PLATFORM_DDR_STATUS",
+                             SYNTH_REG_PLATFORM_DDR_STATUS);
+    debug_uart_read_register("COMMON_EVENT_FLAGS",
+                             SYNTH_REG_COMMON_EVENT_FLAGS);
+    debug_uart_read_register("PIPELINE_LATENCY",
+                             SYNTH_REG_PIPELINE_LATENCY_STATUS);
+    debug_uart_read_register("UNDERRUN_COUNT", SYNTH_REG_UNDERRUN_COUNT);
+    debug_uart_read_register("SAMPLE_DROP_COUNT", SYNTH_REG_SAMPLE_DROP_COUNT);
+    debug_uart_read_register("DEADLINE_MISS_COUNT",
+                             SYNTH_REG_RENDER_DEADLINE_MISS_COUNT);
+    debug_uart_read_register("CURRENT_SAMPLE", SYNTH_REG_CURRENT_SAMPLE);
+    debug_uart_read_register("CMD_FIFO_STATUS", SYNTH_REG_CMD_FIFO_STATUS);
+    debug_uart_read_register("MEM_RESPONSE_COUNT",
+                             SYNTH_REG_MEM_RESPONSE_COUNT);
+    debug_uart_read_register("AUDIO_FIFO_DIAG",
+                             SYNTH_REG_AUDIO_FIFO_DIAGNOSTICS);
+    debug_uart_read_register("AUDIO_LEAD", SYNTH_REG_AUDIO_LEAD);
+    debug_uart_read_register("COMPRESSOR_STATUS", SYNTH_REG_COMPRESSOR_STATUS);
+    debug_uart_read_register("COMPRESSOR_PEAK",
+                             SYNTH_REG_COMPRESSOR_DETECTOR_PEAK);
+    debug_uart_read_register("COMPRESSOR_MAX_PEAK",
+                             SYNTH_REG_COMPRESSOR_MAX_DETECTOR_PEAK);
+    debug_uart_read_register("COMPRESSOR_INPUTS",
+                             SYNTH_REG_COMPRESSOR_INPUT_FRAME_COUNT);
+    debug_uart_read_register("COMPRESSOR_OUTPUTS",
+                             SYNTH_REG_COMPRESSOR_OUTPUT_FRAME_COUNT);
+    debug_uart_read_register("WINDOW_REQUESTS",
+                             SYNTH_REG_SAMPLE_WINDOW_REQUEST_COUNT);
+    debug_uart_read_register("WINDOW_HITS",
+                             SYNTH_REG_SAMPLE_WINDOW_HIT_COUNT);
+    debug_uart_read_register("WINDOW_REFILLS",
+                             SYNTH_REG_SAMPLE_WINDOW_REFILL_COUNT);
+    debug_uart_read_register("WINDOW_FALLBACKS",
+                             SYNTH_REG_SAMPLE_WINDOW_FALLBACK_READ_COUNT);
 }
 
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
@@ -579,27 +596,33 @@ static void debug_uart_handle_character(void *context, int character) {
     switch (character) {
             case '?': debug_uart_print_help(); break;
             case 's': debug_uart_print_status(); break;
-            case 'v': debug_uart_read_register("VERSION", UINT16_C(0x9000)); break;
+            case 'v':
+                debug_uart_read_register("VERSION", SYNTH_REG_VERSION);
+                break;
             case 'p':
-                debug_uart_read_register("PLATFORM_STATUS", UINT16_C(0x9040));
+                debug_uart_read_register("PLATFORM_STATUS",
+                                         SYNTH_REG_PLATFORM_STATUS);
                 break;
             case 'z':
-                debug_uart_read_register("PLATFORM_SF2_SIZE", UINT16_C(0x9050));
+                debug_uart_read_register("PLATFORM_SF2_SIZE",
+                                         SYNTH_REG_PLATFORM_SF2_SIZE);
                 break;
             case 'c':
-                debug_uart_read_register("CMD_FIFO_STATUS", UINT16_C(0x9034));
+                debug_uart_read_register("CMD_FIFO_STATUS",
+                                         SYNTH_REG_CMD_FIFO_STATUS);
                 break;
             case 'd': debug_uart_dump_fpga(); break;
             case 'e':
-                debug_uart_read_register("COMMAND_ERROR_COUNT", UINT16_C(0x9090));
+                debug_uart_read_register("COMMAND_ERROR_COUNT",
+                                         SYNTH_REG_COMMAND_ERROR_COUNT);
                 break;
             case 'g':
                 debug_uart_read_register("STALE_GENERATION_COUNT",
-                                         UINT16_C(0x9094));
+                                         SYNTH_REG_STALE_GENERATION_COUNT);
                 break;
             case 'h':
                 debug_uart_read_register("RENDER_SESSION_EPOCH",
-                                         UINT16_C(0x9098));
+                                         SYNTH_REG_RENDER_SESSION_EPOCH);
                 break;
             case 'm': debug_uart_print_midi_status(); break;
             case 'u': debug_uart_print_usb_audio(); break;
@@ -987,7 +1010,7 @@ static void app_control_core_main(void) {
     uint32_t command_flush_millisecond = atomic_load_explicit(
         &app_millisecond_count, memory_order_relaxed);
     uint32_t observed_session_resets =
-        app_synth_get_diagnostics()->session_reset_count;
+        app_synth_session_reset_count();
     rp2040_spi_dma_init();
     multicore_fifo_push_blocking(APP_CONTROL_CORE_READY);
     while (true) {
@@ -996,6 +1019,7 @@ static void app_control_core_main(void) {
         const uint32_t loop_start_us = diagnostic_time_us();
         uint32_t stage_start_us;
         uint32_t elapsed_us;
+        uint32_t session_resets;
         int result;
 
         atomic_store_explicit(&app_control_core_heartbeat_ms,
@@ -1004,10 +1028,9 @@ static void app_control_core_main(void) {
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_SYNTH, 0);
             stage_start_us = diagnostic_time_us();
             result = app_synth_monitor_transport(millisecond_count);
-            if (app_synth_get_diagnostics()->session_reset_count !=
-                observed_session_resets) {
-                observed_session_resets =
-                    app_synth_get_diagnostics()->session_reset_count;
+            session_resets = app_synth_session_reset_count();
+            if (session_resets != observed_session_resets) {
+                observed_session_resets = session_resets;
                 i2s_capture_request_resync();
             }
             elapsed_us = diagnostic_time_us() - stage_start_us;

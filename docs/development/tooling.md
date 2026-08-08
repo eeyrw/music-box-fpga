@@ -8,7 +8,7 @@ one exists.
 ## Toolchain Map
 
 ```text
-spec/register_map.json ----> gen_register_map.py ----> SV/C++ register constants
+spec/register_map.json ----> gen_register_map.py ----> SV/C++/MCU C register constants
 spec/mcu_asset_profiles.json -> offline MCU asset compiler profile selection
 tools/gen_dsp_lut.py ------> generated DSP tables ----> RTL + C++ + MCU C
 
@@ -36,6 +36,7 @@ interfaces:
 
 - `rtl/pkg/synth_register_pkg.sv`;
 - `sim/harness/generated/register_map.h`;
+- `mcu/generated/register_map.h`;
 - `rtl/generated/synth_dsp_lut_pkg.sv`;
 - `sim/harness/generated/dsp_lut.h`;
 - `mcu/generated/msf2_lut.h`;
@@ -62,7 +63,7 @@ the results as if they were the same build.
 
 | Script | Input | Output | Normal command |
 | --- | --- | --- | --- |
-| `tools/gen_register_map.py` | `spec/register_map.json` | SV and C++ register constants | `make generate-register-map` |
+| `tools/gen_register_map.py` | `spec/register_map.json` | SV, C++, and MCU C register constants | `make generate-register-map` |
 | `tools/gen_dsp_lut.py` | Generator formulas in the script | RTL/C++ envelope and dynamics tables plus pure-C MSF2 `exp2`, quarter-sine, and SoundFont source-curve tables | `make generate-dsp-lut` |
 | `tools/check_mcu_asset_profiles.py` | `spec/mcu_asset_profiles.json` and the generated-interface source contract | `sim/harness/generated/mcu_asset_profile.h` plus profile/interface consistency | `make generate-mcu-asset-profile`; check with `make check-mcu-asset-profiles` |
 | `tools/check_docs.py` | Repository Markdown | Link, path-reference, and documentation-index validation | `make check-docs` |
@@ -190,10 +191,24 @@ MHz may use `VIVADO_HW_FREQUENCY=30000000 make vivado-program`. Persistent
 configuration flash requires an explicit confirmation:
 
 ```bash
+# Convert the current .bit into a 16 MiB SPI x4 configuration image.
 make vivado-cfgmem-image
+
+# Destructive hardware operation: erase, program, verify, and boot from Flash.
 CONFIRM_FLASH_PROGRAM=YES make vivado-flash-program
+
+# Read all 16 MiB through the indirect SPI access core, then boot from Flash.
 make vivado-flash-readback
 ```
+
+`vivado-cfgmem-image` creates both
+`flash/smart_artix_top_spi_x4.mcs` and its address-layout manifest
+`flash/smart_artix_top_spi_x4.prm`, then prints the MCS SHA-256. The programming
+target loads Vivado's temporary indirect-SPI access core, erases the addressed
+W25Q128JV sectors, programs and verifies the MCS, boots the FPGA from Flash, and
+requires valid DONE, DONE_PIN, EOS, CRC, and IDCODE status before succeeding.
+The readback target writes an exact 16 MiB raw image, prints its SHA-256, boots
+the FPGA from Flash again, and applies the same configuration-status checks.
 
 `vivado-summary` must report nonnegative WNS/WHS, zero failing endpoints, zero
 route errors, and zero DRC errors. `vivado-analyze` may still request review for
@@ -211,9 +226,12 @@ Default output locations are:
 | implementation reports and summary | `build/fpga/smart_artix/vivado/reports/post_route_*` |
 | volatile programming image | `build/fpga/smart_artix/vivado/bitstream/smart_artix_top.bit` |
 | persistent SPI x4 image | `build/fpga/smart_artix/vivado/flash/smart_artix_top_spi_x4.mcs` |
+| persistent image address manifest | `build/fpga/smart_artix/vivado/flash/smart_artix_top_spi_x4.prm` |
 | volatile configuration readback | `build/fpga/smart_artix/vivado/readback/smart_artix_top_readback.bin` |
 | full configuration-flash readback | `build/fpga/smart_artix/vivado/flash/w25q128jv_full_readback.bin` |
-| flow logs and journals | `build/fpga/smart_artix/vivado/logs/` |
+| cfgmem generation log/journal | `build/fpga/smart_artix/vivado/logs/cfgmem_image.log`, `cfgmem_image.jou` |
+| Flash programming log/journal | `build/fpga/smart_artix/vivado/logs/flash_program.log`, `flash_program.jou` |
+| Flash readback log/journal | `build/fpga/smart_artix/vivado/logs/flash_readback.log`, `flash_readback.jou` |
 
 All of these are generated artifacts and must not be committed.
 

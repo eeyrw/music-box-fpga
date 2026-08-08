@@ -202,6 +202,51 @@ def render_cpp(spec):
     return "\n".join(lines)
 
 
+def render_c(spec):
+    spec = normalize_spec(spec)
+    addr_width = parse_int(spec["bus"]["address_width"])
+    data_width = parse_int(spec["bus"]["data_width"])
+    version_value = parse_int(spec["version"]["value"])
+
+    lines = [
+        "// Generated from spec/register_map.json by tools/gen_register_map.py.",
+        "// Do not edit by hand.",
+        "#pragma once",
+        "",
+        "#include <stdint.h>",
+        "",
+        f"#define SYNTH_REG_BUS_ADDR_WIDTH {addr_width}",
+        f"#define SYNTH_REG_BUS_DATA_WIDTH {data_width}",
+        f"#define SYNTH_REG_VERSION_VALUE UINT32_C({cpp_hex(version_value, 32)})",
+        "",
+    ]
+
+    for reg in spec["global_registers"]:
+        name = reg["name"]
+        address = parse_int(reg["address"])
+        lines.append(
+            f"#define SYNTH_REG_{name} UINT16_C({cpp_hex(address, 16)})")
+
+    lines.append("")
+    for group, fields in spec["fields"].items():
+        for name, value in fields.items():
+            parsed = parse_int(value)
+            macro = f"SYNTH_REG_{group}_{name}"
+            if name.endswith("_BIT") or name.endswith("_LSB") or name.endswith("_WIDTH"):
+                lines.append(f"#define {macro} {parsed}")
+            else:
+                lines.append(
+                    f"#define {macro} UINT32_C({cpp_hex(parsed, 32)})")
+
+    lines.append("")
+    for name, value in spec["numeric_constants"].items():
+        lines.append(
+            f"#define SYNTH_REG_{name} UINT32_C({cpp_hex(parse_int(value), 32)})")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_if_changed(path, text):
     if path.exists() and path.read_text(encoding="utf-8") == text:
         return
@@ -218,16 +263,21 @@ def main():
     parser.add_argument("--spec", default="spec/register_map.json")
     parser.add_argument("--sv-out", default="rtl/pkg/synth_register_pkg.sv")
     parser.add_argument("--cpp-out", default="sim/harness/generated/register_map.h")
+    parser.add_argument("--c-out", default="mcu/generated/register_map.h")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
     spec = load_spec(Path(args.spec))
     sv_path = Path(args.sv_out)
     cpp_path = Path(args.cpp_out)
+    c_path = Path(args.c_out)
     sv_text = render_sv(spec)
     cpp_text = render_cpp(spec)
+    c_text = render_c(spec)
     if args.check:
-        stale = [str(path) for path, text in ((sv_path, sv_text), (cpp_path, cpp_text))
+        stale = [str(path) for path, text in ((sv_path, sv_text),
+                                              (cpp_path, cpp_text),
+                                              (c_path, c_text))
                  if not check_matches(path, text)]
         if stale:
             print("stale generated register map: " + ", ".join(stale), file=sys.stderr)
@@ -235,6 +285,7 @@ def main():
         return 0
     write_if_changed(sv_path, sv_text)
     write_if_changed(cpp_path, cpp_text)
+    write_if_changed(c_path, c_text)
     return 0
 
 

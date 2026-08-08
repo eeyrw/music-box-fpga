@@ -319,6 +319,31 @@ int main(void) {
         fputs("SPI register mailbox accepted corrupt response CRC\n", stderr);
         return 1;
     }
+    mailbox.exchanges = 0u;
+    mailbox.malformed_fetch = 0;
+    if (fpga_spi_read_register(mailbox_write, mailbox_exchange, &mailbox,
+                               mailbox.address, &register_data, 2u) == 0) {
+        fputs("SPI register mailbox accepted wrong response operation\n",
+              stderr);
+        return 1;
+    }
+    if (fpga_spi_read_register(NULL, mailbox_exchange, &mailbox,
+                               mailbox.address, &register_data, 2u) == 0 ||
+        fpga_spi_read_register(mailbox_write, NULL, &mailbox,
+                               mailbox.address, &register_data, 2u) == 0 ||
+        fpga_spi_read_register(mailbox_write, mailbox_exchange, &mailbox,
+                               mailbox.address, NULL, 2u) == 0 ||
+        fpga_spi_read_register(mailbox_write, mailbox_exchange, &mailbox,
+                               mailbox.address, &register_data, 0u) == 0 ||
+        fpga_spi_write_register(NULL, mailbox_exchange, &mailbox,
+                                mailbox.address, 0u, 2u) == 0 ||
+        fpga_spi_write_register(mailbox_write, NULL, &mailbox,
+                                mailbox.address, 0u, 2u) == 0 ||
+        fpga_spi_write_register(mailbox_write, mailbox_exchange, &mailbox,
+                                mailbox.address, 0u, 0u) == 0) {
+        fputs("SPI register mailbox accepted invalid arguments\n", stderr);
+        return 1;
+    }
     puts("PASS: FPGA SPI command, completion, reset, and mailbox transport");
     return 0;
 }
