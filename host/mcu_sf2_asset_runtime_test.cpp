@@ -216,6 +216,12 @@ int main(int argc, char** argv) {
   runtime.advance_samples(UINT32_MAX);
   require(msf2_runtime_advance_samples(&c_runtime, UINT32_MAX) == MSF2_OK,
           "pure-C release reclamation failed");
+  for (uint16_t voice = 0; voice < render::kNumVoices; ++voice) {
+    if (first_generations[voice] == 0) continue;
+    runtime.complete_voice(voice);
+    require(msf2_runtime_complete_voice(&c_runtime, voice) == MSF2_OK,
+            "pure-C FPGA completion reconciliation failed");
+  }
 
   sink.commands.clear();
   c_sink.commands.clear();
@@ -246,8 +252,8 @@ int main(int argc, char** argv) {
   one_voice.note_on(0, cell.program, cell.bank, cell.key, cell.velocity);
   bool saw_stop = false;
   for (const auto& command : steal_sink.commands) saw_stop |= opcode(command) == 0x15;
-  require(saw_stop && one_voice.stats().stolen_voices != 0,
-          "fixed allocator did not use the bounded steal path");
+  require(!saw_stop && one_voice.stats().stolen_voices != 0,
+          "fixed allocator did not atomically replace a stolen voice");
 
   msf2_runtime c_one_voice{};
   std::array<msf2_channel_state, MSF2_CHANNEL_COUNT> c_one_channels{};
@@ -456,10 +462,17 @@ int main(int argc, char** argv) {
 
   msf2_runtime_capture_control_snapshot(
       &c_active_runtime, control_snapshot.data(), dirty_revisions.data());
-  require(msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
-              msf2_runtime_note_on(&c_active_runtime, 0, cell.program,
-                                   cell.bank, cell.key, cell.velocity,
-                                   &c_layers) == MSF2_OK,
+  require(msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK,
+          "voice reuse STOP setup failed");
+  for (uint16_t voice = 0; voice < c_active_runtime.voice_capacity; ++voice) {
+    if (c_active_voices[voice].stage != MSF2_VOICE_FREE) {
+      require(msf2_runtime_complete_voice(&c_active_runtime, voice) == MSF2_OK,
+              "voice reuse FPGA completion setup failed");
+    }
+  }
+  require(msf2_runtime_note_on(&c_active_runtime, 0, cell.program,
+                               cell.bank, cell.key, cell.velocity,
+                               &c_layers) == MSF2_OK,
           "voice reuse setup failed");
   for (uint16_t position = 0; position < c_active_runtime.active_count;
        ++position) {
@@ -477,10 +490,17 @@ int main(int argc, char** argv) {
   require(c_active_runtime.stats.control_voice_evaluations ==
                   evaluations_before_stale_slice &&
               c_active_runtime.control_tick_index == 25 &&
-              msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK &&
-              c_active_runtime.active_count == 0 &&
-              c_active_runtime.free_count == c_active_runtime.voice_capacity,
+              msf2_runtime_all_sound_off(&c_active_runtime, 0) == MSF2_OK,
           "stale control snapshot modified a reused voice generation");
+  for (uint16_t voice = 0; voice < c_active_runtime.voice_capacity; ++voice) {
+    if (c_active_voices[voice].stage != MSF2_VOICE_FREE) {
+      require(msf2_runtime_complete_voice(&c_active_runtime, voice) == MSF2_OK,
+              "final FPGA completion reconciliation failed");
+    }
+  }
+  require(c_active_runtime.active_count == 0 &&
+              c_active_runtime.free_count == c_active_runtime.voice_capacity,
+          "final FPGA completion did not free all voices");
 
   const auto before_unmapped = runtime.stats().unmapped_notes;
   (void)runtime.note_on(0, 127, 16383, cell.key, cell.velocity);

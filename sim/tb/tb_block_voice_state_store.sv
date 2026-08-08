@@ -36,6 +36,7 @@ module tb_block_voice_state_store;
   voice_dynamic_state_t dynamic_write_data;
   logic stale_params_write_pulse;
   logic stale_dynamic_write_pulse;
+  logic [NUM_VOICES-1:0] voice_active_bitmap;
 
   always #5 clk <= ~clk;
 
@@ -123,6 +124,25 @@ module tb_block_voice_state_store;
     end
   endtask
 
+  task automatic send_control(
+      input block_voice_event_kind_t kind,
+      input logic [31:0] release_step);
+    begin
+      @(negedge clk);
+      control_event = '0;
+      control_event.kind = kind;
+      control_event.host_voice_id = 16'd7;
+      control_event.generation = 16'h0052;
+      control_event.env_params.release_step_cb_q12_20 = release_step;
+      control_event_valid = 1'b1;
+      do @(posedge clk); while (!control_event_ready);
+      @(negedge clk);
+      control_event_valid = 1'b0;
+      do @(negedge clk); while (!control_event_done_pulse);
+      @(negedge clk);
+    end
+  endtask
+
   initial begin
     block_voice_state_snapshot_t initial_state;
     block_voice_state_snapshot_t observed;
@@ -164,6 +184,8 @@ module tb_block_voice_state_store;
     initial_state.dynamic.phase = 32'h0000_0400;
     initial_state.dynamic.env_state.stage = ENV_DELAY;
     install_voice_state(VOICE_ID_WIDTH'(7), initial_state);
+    if (!voice_active_bitmap[7])
+      $fatal(1, "installed voice was absent from active bitmap");
 
     changed_event = initial_state.event_params;
     changed_event.gain_l = 16'sh6000;
@@ -195,6 +217,8 @@ module tb_block_voice_state_store;
     changed_dynamic.generation = 16'h0052;
     changed_dynamic.active = 1'b0;
     write_dynamic(changed_dynamic, 1'b0);
+    if (voice_active_bitmap[7])
+      $fatal(1, "renderer completion did not clear active bitmap");
     read_state(observed);
     if (observed.dynamic.active)
       $fatal(1, "renderer completion did not remove inactive voice");
@@ -212,6 +236,8 @@ module tb_block_voice_state_store;
     @(posedge clk);
     @(negedge clk);
     rst = 1'b0;
+    if (|voice_active_bitmap)
+      $fatal(1, "reset did not clear active bitmap");
     render_busy = 1'b1;
     read_state(observed);
     if (observed.dynamic.active)
@@ -227,6 +253,14 @@ module tb_block_voice_state_store;
     if (!observed.dynamic.active ||
         observed.dynamic.generation != initial_state.dynamic.generation)
       $fatal(1, "post-reset install did not reactivate voice slot");
+
+    render_busy = 1'b0;
+    send_control(BLOCK_VOICE_RELEASE, 32'd7);
+    if (!voice_active_bitmap[7])
+      $fatal(1, "nonzero RELEASE cleared active bitmap early");
+    send_control(BLOCK_VOICE_STOP, 32'd0);
+    if (voice_active_bitmap[7])
+      $fatal(1, "STOP did not clear active bitmap");
 
     $display("PASS: block voice state banks and generation arbitration");
     $finish;

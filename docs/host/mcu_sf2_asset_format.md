@@ -404,15 +404,17 @@ bounded interval to complete.
 For voices with time-varying dependencies, control service advances the
 modulation envelope and mod/vibrato LFO state, updates the required gain/pitch
 families, evaluates a required filter family on its cadence, suppresses
-unchanged commands, and reclaims released voices after their sample lifetime.
+unchanged commands. Elapsed MCU time never reclaims a released voice. The FPGA
+reports current slot activity through the version-17 active bitmap, and the MCU
+returns a locally owned slot to the free list only after observing its bit low.
 Static voices skip modulation evaluation until a channel event dirties a family.
 `msf2_runtime_release_all` emits generation-matched RELEASE commands for all
 voices owned by the current runtime, irrespective of pedal holds. It cannot
 release FPGA voices whose generations were lost before runtime initialization.
-The allocator takes free slots in constant time. At capacity it first prefers a
-released voice, then the oldest voice in the selected lifecycle stage, emits
-`VOICE_STOP`, increments the 16-bit generation, and publishes the replacement
-`VOICE_START_MONO`.
+The allocator takes free slots in constant time. At capacity it immediately
+steals a released voice if available, otherwise the oldest voice in its current
+lifecycle stage. The replacement START atomically overwrites the FPGA slot with
+a new generation; it does not wait for a status-poll round trip.
 
 ## Lookup Strategy
 

@@ -20,7 +20,7 @@
 #endif
 #define APP_MAX_COMMAND_PAYLOAD_WORDS 16u
 #define APP_MAX_COMMAND_WORDS (1u + APP_MAX_COMMAND_PAYLOAD_WORDS)
-#define APP_FPGA_INTERFACE_VERSION UINT32_C(0x00100000)
+#define APP_FPGA_INTERFACE_VERSION UINT32_C(0x00110000)
 #define APP_FPGA_PLATFORM_STATUS_ADDRESS UINT16_C(0x9040)
 #define APP_FPGA_SF2_SIZE_ADDRESS UINT16_C(0x9050)
 #define APP_FPGA_COMMAND_ERROR_ADDRESS UINT16_C(0x9090)
@@ -31,6 +31,7 @@
 #define APP_CONTROL_UPDATE_PERIOD_MS 5u
 #endif
 #define APP_CONTROL_VOICE_SLICE 16u
+#define APP_VOICE_STATUS_POLL_PERIOD_MS 1u
 
 _Static_assert(APP_VOICE_COUNT > 0u,
                "firmware must allocate at least one FPGA voice");
@@ -88,6 +89,7 @@ static msf2_channel_state app_channels[MSF2_CHANNEL_COUNT];
 static msf2_voice_state app_voices[APP_VOICE_COUNT];
 static uint16_t app_free_stack[APP_VOICE_COUNT];
 static midi_policy app_midi;
+static uint8_t app_periodic_modulation_enabled = 1u;
 static app_synth_diagnostics app_diagnostics;
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
 static app_synth_command_snapshot app_last_start;
@@ -98,6 +100,9 @@ static command_batch app_command_batch;
 static uint32_t app_transport_monitor_millisecond;
 static uint32_t app_transport_diagnostics_millisecond;
 static uint8_t app_transport_monitor_consecutive_failures;
+static uint32_t app_voice_status_poll_millisecond;
+static uint32_t app_current_millisecond;
+static uint32_t app_voice_start_guard_until[APP_VOICE_COUNT];
 static struct {
     uint32_t start_millisecond;
     uint32_t target_millisecond;
@@ -113,12 +118,20 @@ static int app_command_sink(void *context, const uint32_t *words,
 
 static msf2_result app_reset_local_session(void) {
     msf2_result result;
+    uint16_t voice;
     command_batch_init(&app_command_batch);
     result = msf2_runtime_init(&app_runtime, &app_view, app_channels,
                                app_voices, app_free_stack, APP_VOICE_COUNT,
                                app_command_sink, NULL);
+    if (result == MSF2_OK) {
+        msf2_runtime_set_periodic_modulation_enabled(
+            &app_runtime, app_periodic_modulation_enabled);
+    }
     if (result == MSF2_OK) result = midi_policy_init(&app_midi, &app_runtime);
     app_control_job.active = 0u;
+    for (voice = 0u; voice < APP_VOICE_COUNT; ++voice) {
+        app_voice_start_guard_until[voice] = 0u;
+    }
     app_diagnostics.control_voice_evaluations = 0u;
     app_diagnostics.controller_voice_updates = 0u;
     app_diagnostics.control_completed_jobs = 0u;
@@ -190,6 +203,13 @@ static int app_command_sink(void *context, const uint32_t *words,
     payload_words = (uint8_t)(words[0] & UINT32_C(0xff));
     if (payload_words > APP_MAX_COMMAND_PAYLOAD_WORDS ||
         word_count != (uint8_t)(payload_words + 1u)) return -1;
+    if ((uint8_t)(words[0] >> 24) == UINT8_C(0x10)) {
+        const uint16_t voice = (uint16_t)((words[0] >> 14) & UINT32_C(0x3ff));
+        if (voice < APP_VOICE_COUNT) {
+            app_voice_start_guard_until[voice] =
+                app_current_millisecond + APP_VOICE_STATUS_POLL_PERIOD_MS;
+        }
+    }
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
     if (word_count <= APP_SYNTH_DEBUG_MAX_COMMAND_WORDS &&
         (uint8_t)(words[0] >> 24) == UINT8_C(0x10)) {
@@ -299,6 +319,8 @@ int app_synth_init(void) {
     app_transport_monitor_millisecond = 0u;
     app_transport_diagnostics_millisecond = 0u;
     app_transport_monitor_consecutive_failures = 0u;
+    app_voice_status_poll_millisecond = 0u;
+    app_current_millisecond = 0u;
     app_diagnostics.fpga_session_ready = result == MSF2_OK ? 1u : 0u;
     app_diagnostics.init_result = result == MSF2_OK ? 0 : -(int)result;
     return app_diagnostics.init_result;
@@ -395,6 +417,18 @@ int app_synth_render_session_reset(void) {
     return app_perform_render_session_reset();
 }
 
+int app_synth_toggle_periodic_modulation(void) {
+    app_periodic_modulation_enabled =
+        app_periodic_modulation_enabled == 0u ? 1u : 0u;
+    msf2_runtime_set_periodic_modulation_enabled(
+        &app_runtime, app_periodic_modulation_enabled);
+    return app_periodic_modulation_enabled;
+}
+
+int app_synth_periodic_modulation_enabled(void) {
+    return app_periodic_modulation_enabled != 0u;
+}
+
 /* Call regularly from the single-owner control core. Logical time is derived
  * directly from the wrapping millisecond counter. Only active voices are
  * visited by the runtime. */
@@ -463,6 +497,48 @@ int app_synth_service(uint32_t millisecond_count) {
     app_diagnostics.maximum_active_voices =
         app_runtime.stats.maximum_active_voices;
     app_control_job.active = 0u;
+    return 0;
+}
+
+int app_synth_service_voice_status(uint32_t millisecond_count) {
+    fpga_spi_voice_status status;
+    uint16_t voice;
+    app_current_millisecond = millisecond_count;
+    if (app_diagnostics.fpga_session_ready == 0u) return 0;
+    if (millisecond_count - app_voice_status_poll_millisecond <
+        APP_VOICE_STATUS_POLL_PERIOD_MS) {
+        return 0;
+    }
+    if (app_command_batch.word_count != 0u) return 0;
+    if (platform_spi_wait_idle(UINT32_C(100000)) != 0) {
+        ++app_diagnostics.voice_status_failures;
+        return app_mark_session_offline();
+    }
+    app_voice_status_poll_millisecond = millisecond_count;
+    ++app_diagnostics.voice_status_polls;
+    if (fpga_spi_read_voice_status(app_spi_exchange, NULL, &status) != 0 ||
+        status.session_epoch != app_diagnostics.session_epoch) {
+        ++app_diagnostics.voice_status_failures;
+        return app_mark_session_offline();
+    }
+    for (voice = 0u; voice < APP_VOICE_COUNT; ++voice) {
+        const uint32_t active =
+            (status.active_bitmap[voice / 32u] >> (voice % 32u)) & 1u;
+        if (active == 0u &&
+            app_runtime.voices[voice].stage != MSF2_VOICE_FREE &&
+            (int32_t)(millisecond_count -
+                      app_voice_start_guard_until[voice]) >= 0) {
+            const msf2_result result =
+                msf2_runtime_complete_voice(&app_runtime, voice);
+            if (result == MSF2_OK) {
+                ++app_diagnostics.voice_status_reclaims;
+            } else {
+                ++app_diagnostics.voice_status_state_errors;
+            }
+        }
+    }
+    app_diagnostics.active_voices = app_runtime.stats.active_voices;
+    app_diagnostics.stolen_voices = app_runtime.stats.stolen_voices;
     return 0;
 }
 

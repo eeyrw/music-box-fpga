@@ -460,10 +460,15 @@ record 的原子可见性不可放松。
 写完整 dynamic；这样不会产生 phase/env 和 filter 两个 writer 的端口冲突，也保持当前
 原子 dynamic writeback。
 
-当前单独的 `active_q[511:0]` 和 `generation_tag[511:0]` 是 dynamic state 的重复影子。
-新 sequencer 固定扫描 `voice_id=0..511` 并读取 dynamic.active，因此删除 active bitmap、
-group priority select 和 generation shadow。control generation 比较走多拍 dynamic read，
-不要求组合查询 512x16 LUTRAM。
+原实现单独的 `active_q[511:0]` 和 `generation_tag[511:0]` 是 dynamic state 的重复影子。
+新 sequencer 固定扫描 `voice_id=0..511` 并读取 dynamic.active，因此删除 group priority
+select 和 512x16 generation shadow。control generation 比较走多拍 dynamic read，不要求
+组合查询 512x16 LUTRAM。这里删除的是重复的 generation shadow，不是命令协议和 dynamic
+RAM 中用于拒绝 stale command/writeback 的 16-bit generation。
+
+接口版本 17 后，state store 又把 512 个 `voice_valid_q` 位直接导出为 SPI `0x5c` active
+bitmap。它同时服务 renderer 扫描和 MCU 生命周期同步，不复制 generation，也不恢复旧的
+group priority select。该 bitmap 是当前状态采样，不是 completion FIFO。
 
 ### 7.3 Block consistency
 

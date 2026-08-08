@@ -96,6 +96,7 @@ module voice_major_system #(
   ordered_line_rsp_t line_rsp;
   logic [31:0] command_error_count;
   logic [31:0] stale_generation_count;
+  logic [NUM_VOICES-1:0] voice_active_bitmap;
   logic diagnostics_clear_pulse;
   logic render_latency_valid;
   sample_window_diagnostics_t sample_window_diagnostics;
@@ -168,7 +169,9 @@ module voice_major_system #(
     .cmd_flush_req(spi_cmd_flush_req),
     .cmd_flush_ack(spi_cmd_flush_ack),
     .session_reset_req(spi_session_reset_req),
-    .session_reset_ack(spi_session_reset_ack)
+    .session_reset_ack(spi_session_reset_ack),
+    .session_epoch,
+    .voice_active_bitmap
   );
 
   render_session_reset_controller session_reset_controller (
@@ -267,6 +270,7 @@ module voice_major_system #(
     .block_release_valid,
     .block_release_ready,
     .block_release_buffer_id,
+    .voice_active_bitmap,
     .sample_window_diagnostics
   );
 

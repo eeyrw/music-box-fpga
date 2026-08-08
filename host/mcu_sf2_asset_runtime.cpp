@@ -108,13 +108,13 @@ void McuSf2AssetRuntime::stop_voice(uint16_t voice) {
   if (voices_[voice].stage == VoiceStage::kFree) return;
   emit_short(kStopOpcode, voice, voices_[voice].generation);
   ++stats_.stopped_voices;
-  reclaim_voice(voice);
+  voices_[voice].stage = VoiceStage::kReleased;
 }
 
 void McuSf2AssetRuntime::release_voice(uint16_t voice) {
   VoiceState& state = voices_[voice];
   if (state.stage == VoiceStage::kFree || state.stage == VoiceStage::kReleased) return;
-  if (state.release_samples == 0) {
+  if (state.release_step == 0) {
     stop_voice(voice);
     return;
   }
@@ -140,7 +140,7 @@ uint16_t McuSf2AssetRuntime::allocate_voice() {
       found = true;
     }
   }
-  stop_voice(victim);
+  reclaim_voice(victim);
   --free_count_;
   ++stats_.stolen_voices;
   return free_stack_[free_count_];
@@ -396,7 +396,6 @@ uint16_t McuSf2AssetRuntime::note_on(uint8_t channel, uint16_t program,
     state.preset_index = uint32_t(preset_index);
     state.candidate = matched[layer];
     state.runtime_config = render::mcu_sf2_runtime_config(region);
-    state.release_samples = region.volume_envelope.release_samples;
     state.release_step = render::envelope_release_step(region);
     state.note_instance = note_instance;
     state.allocation_stamp = ++allocation_stamp_;
@@ -531,16 +530,20 @@ void McuSf2AssetRuntime::key_pressure(uint8_t channel, uint8_t note,
 }
 
 void McuSf2AssetRuntime::advance_samples(uint32_t samples) {
+  (void)samples;
   for (uint16_t voice = 0; voice < voice_capacity_; ++voice) {
     VoiceState& state = voices_[voice];
-    if (state.stage == VoiceStage::kFree) continue;
+    if (state.stage == VoiceStage::kFree || state.stage == VoiceStage::kReleased)
+      continue;
     advance_modulation(voice);
-    if (state.stage == VoiceStage::kReleased) {
-      if (samples >= state.release_samples) reclaim_voice(voice);
-      else state.release_samples -= samples;
-    }
   }
   ++control_tick_index_;
+}
+
+void McuSf2AssetRuntime::complete_voice(uint16_t voice) {
+  if (voice >= voice_capacity_ || voices_[voice].stage == VoiceStage::kFree)
+    throw std::runtime_error("invalid FPGA voice completion");
+  reclaim_voice(voice);
 }
 
 void McuSf2AssetRuntime::all_sound_off(uint8_t channel) {

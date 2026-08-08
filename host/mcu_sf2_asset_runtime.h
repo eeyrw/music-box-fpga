@@ -36,6 +36,7 @@ class McuSf2AssetRuntime {
   void channel_pressure(uint8_t channel, uint8_t value);
   void key_pressure(uint8_t channel, uint8_t note, uint8_t value);
   void advance_samples(uint32_t samples);
+  void complete_voice(uint16_t voice);
   void all_sound_off(uint8_t channel);
 
   McuSf2AssetRuntimeStats stats() const { return stats_; }
@@ -59,7 +60,6 @@ class McuSf2AssetRuntime {
     uint32_t preset_index = 0;
     uint32_t candidate = 0;
     render::McuSf2RuntimeConfig runtime_config{};
-    uint32_t release_samples = 0;
     uint32_t release_step = 0;
     uint32_t phase_increment = 1;
     uint32_t base_phase_increment = 1;

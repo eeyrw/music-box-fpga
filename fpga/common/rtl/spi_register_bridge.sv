@@ -24,10 +24,13 @@ module spi_register_bridge #(
   output logic        cmd_flush_req,
   input  logic        cmd_flush_ack,
   output logic        session_reset_req,
-  input  logic        session_reset_ack
+  input  logic        session_reset_ack,
+  input  logic [31:0] session_epoch,
+  input  logic [511:0] voice_active_bitmap
 );
   localparam logic [7:0] MAILBOX_REQUEST_OPCODE = 8'h5a;
   localparam logic [7:0] MAILBOX_FETCH_OPCODE = 8'h5b;
+  localparam logic [7:0] COMPLETION_REQUEST_OPCODE = 8'h5c;
   localparam logic [7:0] COMMAND_STREAM_OPCODE = 8'ha5;
   localparam logic [7:0] COMMAND_FLUSH_OPCODE = 8'ha6;
   localparam logic [7:0] SESSION_RESET_OPCODE = 8'ha7;
@@ -37,9 +40,12 @@ module spi_register_bridge #(
   localparam logic [7:0] RESPONSE_BUS_ERROR = 8'h01;
   localparam logic [7:0] RESPONSE_BUSY = 8'h02;
   localparam logic [7:0] RESPONSE_EMPTY = 8'h03;
+  localparam int COMPLETION_RESPONSE_WORDS = 19;
+  localparam int COMPLETION_RESPONSE_BITS = COMPLETION_RESPONSE_WORDS * 32;
+  localparam int COMPLETION_PAYLOAD_BITS = COMPLETION_RESPONSE_BITS - 32;
   localparam int COMMAND_INDEX_WIDTH = $clog2(MAX_COMMAND_WORDS);
 
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     STATE_IDLE,
     STATE_COMMAND,
     STATE_MAILBOX_REQUEST,
@@ -53,6 +59,10 @@ module spi_register_bridge #(
     STATE_FLUSH_WAIT,
     STATE_SESSION_RESET_HEADER,
     STATE_SESSION_RESET_WAIT,
+    STATE_COMPLETION_REQUEST,
+    STATE_COMPLETION_TURNAROUND,
+    STATE_COMPLETION_DATA,
+    STATE_COMPLETION_WAIT,
     STATE_REJECT
   } state_t;
 
@@ -62,6 +72,7 @@ module spi_register_bridge #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [1:0] mosi_sync;
   logic [6:0] command_shift;
   logic [6:0] bit_count;
+  logic [9:0] completion_data_bit_count;
   logic [30:0] data_shift;
   logic [86:0] mailbox_request_shift;
   logic read_sample_seen;
@@ -86,7 +97,7 @@ module spi_register_bridge #(
   logic [15:0] fetch_address;
   logic [31:0] fetch_data;
   logic [63:0] fetch_payload;
-  logic [6:0] spi_tx_bit_count;
+  logic [9:0] spi_tx_bit_count;
   logic [30:0] spi_tx_header_shift;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [63:0] fetch_payload_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic [63:0] fetch_payload_sync;
@@ -95,6 +106,21 @@ module spi_register_bridge #(
   logic [95:0] fetch_frame_snapshot;
   logic [94:0] spi_tx_shift;
   logic spi_tx_fetch_valid;
+  logic spi_tx_completion_valid;
+  logic completion_snapshot_toggle_meta;
+  logic completion_snapshot_toggle_sync;
+  logic completion_snapshot_toggle_start;
+  logic [COMPLETION_PAYLOAD_BITS-2:0] completion_tx_shift;
+  logic [6:0] completion_tx_byte_shift;
+  logic [30:0] completion_tx_crc_shift;
+  logic [31:0] completion_tx_crc_q;
+
+  logic [511:0] completion_snapshot_q;
+  logic [7:0] completion_response_status_q;
+  logic [31:0] completion_epoch_q;
+  logic completion_snapshot_toggle_q;
+  logic [511:0] completion_snapshot_wire_order;
+  logic [COMPLETION_PAYLOAD_BITS-1:0] completion_response_payload;
 
   (* ram_style = "block" *) logic [31:0]
       command_staging [0:MAX_COMMAND_WORDS-1];
@@ -145,6 +171,17 @@ module spi_register_bridge #(
   assign cs_start = cs_sync[1] && !cs_sync[0];
   assign cs_end = !cs_sync[1] && cs_sync[0];
 
+  for (genvar word_index = 0; word_index < 16; word_index++) begin : gen_bitmap_order
+    assign completion_snapshot_wire_order[511-word_index*32 -: 32] =
+        completion_snapshot_q[word_index*32 +: 32];
+  end
+
+  assign completion_response_payload = {
+    completion_response_status_q, 8'h01, 8'h00, 8'h00,
+    completion_epoch_q,
+    completion_snapshot_wire_order
+  };
+
   always_comb begin
     staging_write_enable = (state == STATE_STREAM_DATA) && sclk_rise &&
         (bit_count == 7'd31) && !stream_reject &&
@@ -187,32 +224,45 @@ module spi_register_bridge #(
       spi_tx_crc_work <= '0;
       fetch_frame_snapshot <= '0;
       spi_tx_fetch_valid <= 1'b0;
+      spi_tx_completion_valid <= 1'b0;
+      completion_snapshot_toggle_meta <= 1'b0;
+      completion_snapshot_toggle_sync <= 1'b0;
+      completion_snapshot_toggle_start <= 1'b0;
     end else begin
       fetch_payload_meta <= fetch_payload;
       fetch_payload_sync <= fetch_payload_meta;
+      completion_snapshot_toggle_meta <= completion_snapshot_toggle_q;
+      completion_snapshot_toggle_sync <= completion_snapshot_toggle_meta;
 
-      if (spi_tx_bit_count < 7'd32) begin
+      if (spi_tx_bit_count < 10'd96) begin
         spi_tx_header_shift <= {spi_tx_header_shift[29:0], spi_mosi};
-        spi_tx_bit_count <= spi_tx_bit_count + 7'd1;
-        if (spi_tx_bit_count == 7'd7) begin
+        spi_tx_bit_count <= spi_tx_bit_count + 10'd1;
+        if (spi_tx_bit_count == 10'd7) begin
           fetch_payload_snapshot <= fetch_payload_sync;
           spi_tx_crc_work <= crc32_byte(
               32'hffff_ffff, fetch_payload_sync[63:56]);
-        end else if (spi_tx_bit_count >= 7'd8 &&
-                     spi_tx_bit_count <= 7'd14) begin
+        end else if (spi_tx_bit_count >= 10'd8 &&
+                     spi_tx_bit_count <= 10'd14) begin
           spi_tx_crc_work <= crc32_byte(
               spi_tx_crc_work,
               fetch_payload_snapshot[(14 - spi_tx_bit_count)*8 +: 8]);
-        end else if (spi_tx_bit_count == 7'd15) begin
+        end else if (spi_tx_bit_count == 10'd15) begin
           fetch_frame_snapshot <= {
             fetch_payload_snapshot, spi_tx_crc_work ^ 32'hffff_ffff
           };
         end
-        if (spi_tx_bit_count == 7'd31)
+        if (spi_tx_bit_count == 10'd31)
           spi_tx_fetch_valid <=
               {spi_tx_header_shift[30:0], spi_mosi} == 32'h5b00_0000;
-      end else if (spi_tx_bit_count < 7'd127) begin
-        spi_tx_bit_count <= spi_tx_bit_count + 7'd1;
+        if (spi_tx_bit_count == 10'd7) begin
+          spi_tx_completion_valid <=
+              {spi_tx_header_shift[6:0], spi_mosi} ==
+              COMPLETION_REQUEST_OPCODE;
+          completion_snapshot_toggle_start <=
+              completion_snapshot_toggle_sync;
+        end
+      end else if (spi_tx_bit_count < 10'd704) begin
+        spi_tx_bit_count <= spi_tx_bit_count + 10'd1;
       end
     end
   end
@@ -221,12 +271,62 @@ module spi_register_bridge #(
     if (spi_cs_n) begin
       spi_miso <= 1'b0;
       spi_tx_shift <= '0;
-    end else if (spi_tx_fetch_valid && spi_tx_bit_count == 7'd32) begin
+      completion_tx_shift <= '0;
+      completion_tx_byte_shift <= '0;
+      completion_tx_crc_shift <= '0;
+      completion_tx_crc_q <= '0;
+    end else if (spi_tx_fetch_valid && spi_tx_bit_count == 10'd32) begin
       spi_miso <= fetch_frame_snapshot[95];
       spi_tx_shift <= fetch_frame_snapshot[94:0];
-    end else if (spi_tx_fetch_valid && spi_tx_bit_count > 7'd32) begin
+    end else if (spi_tx_fetch_valid && spi_tx_bit_count > 10'd32 &&
+                 spi_tx_bit_count <= 10'd127) begin
       spi_miso <= spi_tx_shift[94];
       spi_tx_shift <= {spi_tx_shift[93:0], 1'b0};
+    end else if (spi_tx_completion_valid &&
+                 (spi_tx_bit_count == 10'd96)) begin
+      spi_miso <= (completion_snapshot_toggle_sync !=
+                   completion_snapshot_toggle_start) ?
+          completion_response_payload[COMPLETION_PAYLOAD_BITS-1] : 1'b0;
+      completion_tx_shift <= (completion_snapshot_toggle_sync !=
+                              completion_snapshot_toggle_start) ?
+          completion_response_payload[COMPLETION_PAYLOAD_BITS-2:0] : '0;
+      completion_tx_byte_shift <= {
+        6'd0, completion_response_payload[COMPLETION_PAYLOAD_BITS-1]
+      };
+      completion_tx_crc_q <= 32'hffff_ffff;
+    end else if (spi_tx_completion_valid &&
+                 (spi_tx_bit_count > 10'd96) &&
+                 (spi_tx_bit_count <= 10'd671)) begin
+      spi_miso <= completion_tx_shift[COMPLETION_PAYLOAD_BITS-2];
+      completion_tx_shift <= {
+        completion_tx_shift[COMPLETION_PAYLOAD_BITS-3:0], 1'b0
+      };
+      completion_tx_byte_shift <= {
+        completion_tx_byte_shift[5:0],
+        completion_tx_shift[COMPLETION_PAYLOAD_BITS-2]
+      };
+      if (spi_tx_bit_count[2:0] == 3'd7) begin
+        if (spi_tx_bit_count == 10'd671)
+          completion_tx_crc_q <= crc32_byte(
+              completion_tx_crc_q,
+              {completion_tx_byte_shift,
+               completion_tx_shift[COMPLETION_PAYLOAD_BITS-2]}) ^
+              32'hffff_ffff;
+        else
+          completion_tx_crc_q <= crc32_byte(
+              completion_tx_crc_q,
+              {completion_tx_byte_shift,
+               completion_tx_shift[COMPLETION_PAYLOAD_BITS-2]});
+      end
+    end else if (spi_tx_completion_valid &&
+                 (spi_tx_bit_count == 10'd672)) begin
+      spi_miso <= completion_tx_crc_q[31];
+      completion_tx_crc_shift <= completion_tx_crc_q[30:0];
+    end else if (spi_tx_completion_valid &&
+                 (spi_tx_bit_count > 10'd672) &&
+                 (spi_tx_bit_count <= 10'd703)) begin
+      spi_miso <= completion_tx_crc_shift[30];
+      completion_tx_crc_shift <= {completion_tx_crc_shift[29:0], 1'b0};
     end else begin
       spi_miso <= 1'b0;
     end
@@ -271,6 +371,7 @@ module spi_register_bridge #(
       state <= STATE_IDLE;
       command_shift <= '0;
       bit_count <= '0;
+      completion_data_bit_count <= '0;
       data_shift <= '0;
       mailbox_request_shift <= '0;
       read_sample_seen <= 1'b0;
@@ -302,11 +403,20 @@ module spi_register_bridge #(
       commit_index <= '0;
       commit_words <= '0;
       commit_start_pending <= 1'b0;
+      completion_snapshot_q <= '0;
+      completion_response_status_q <= RESPONSE_EMPTY;
+      completion_epoch_q <= '0;
+      completion_snapshot_toggle_q <= 1'b0;
     end else begin
       if (cmd_flush_req && cmd_flush_ack)
         cmd_flush_req <= 1'b0;
       if (session_reset_req && session_reset_ack)
         session_reset_req <= 1'b0;
+
+      if (session_reset_req && session_reset_ack) begin
+        completion_snapshot_q <= '0;
+        completion_snapshot_toggle_q <= 1'b0;
+      end
 
       if (bus_valid && bus_ready) begin
         bus_valid <= 1'b0;
@@ -395,6 +505,7 @@ module spi_register_bridge #(
             spi_error <= 1'b1;
           end
         end else if ((state != STATE_FETCH_WAIT) &&
+                     (state != STATE_COMPLETION_WAIT) &&
                      !((state == STATE_COMMAND) && (bit_count == 0))) begin
           if (!bus_valid && ((state == STATE_MAILBOX_REQUEST) ||
                              (state == STATE_MAILBOX_REQUEST_WAIT)))
@@ -403,9 +514,11 @@ module spi_register_bridge #(
         end
         state <= STATE_IDLE;
         bit_count <= '0;
+        completion_data_bit_count <= '0;
       end else if (!cs_active) begin
         state <= STATE_IDLE;
         bit_count <= '0;
+        completion_data_bit_count <= '0;
       end else if (cs_start) begin
         state <= (cmd_flush_req || session_reset_req) ?
                  STATE_REJECT : STATE_COMMAND;
@@ -440,6 +553,9 @@ module spi_register_bridge #(
                         32'hffff_ffff, MAILBOX_REQUEST_OPCODE);
                   end
                   MAILBOX_FETCH_OPCODE: state <= STATE_FETCH_HEADER;
+                  COMPLETION_REQUEST_OPCODE: begin
+                    state <= STATE_COMPLETION_REQUEST;
+                  end
                   COMMAND_STREAM_OPCODE: begin
                     state <= STATE_STREAM_HEADER;
                     commit_index <= '0;
@@ -488,6 +604,59 @@ module spi_register_bridge #(
           end
 
           STATE_MAILBOX_REQUEST_WAIT: begin
+            if (sclk_rise) begin
+              state <= STATE_REJECT;
+              spi_error <= 1'b1;
+            end
+          end
+
+          STATE_COMPLETION_REQUEST: begin
+            if (sclk_rise) begin
+              data_shift <= {data_shift[29:0], mosi_sync[1]};
+              if (bit_count == 7'd23) begin
+                completion_snapshot_q <= voice_active_bitmap;
+                completion_epoch_q <= session_epoch;
+                completion_snapshot_toggle_q <=
+                    ~completion_snapshot_toggle_q;
+                if ({data_shift[22:0], mosi_sync[1]} == 24'd0) begin
+                  completion_response_status_q <= RESPONSE_OK;
+                end else begin
+                  completion_response_status_q <= RESPONSE_BUS_ERROR;
+                  spi_error <= 1'b1;
+                end
+
+                bit_count <= '0;
+                state <= STATE_COMPLETION_TURNAROUND;
+              end else begin
+                bit_count <= bit_count + 7'd1;
+              end
+            end
+          end
+
+          STATE_COMPLETION_TURNAROUND: begin
+            if (sclk_rise) begin
+              if (bit_count == 7'd63) begin
+                bit_count <= '0;
+                completion_data_bit_count <= '0;
+                state <= STATE_COMPLETION_DATA;
+              end else begin
+                bit_count <= bit_count + 7'd1;
+              end
+            end
+          end
+
+          STATE_COMPLETION_DATA: begin
+            if (sclk_rise) begin
+              if (completion_data_bit_count == 10'd607) begin
+                completion_data_bit_count <= '0;
+                state <= STATE_COMPLETION_WAIT;
+              end else begin
+                completion_data_bit_count <= completion_data_bit_count + 1'b1;
+              end
+            end
+          end
+
+          STATE_COMPLETION_WAIT: begin
             if (sclk_rise) begin
               state <= STATE_REJECT;
               spi_error <= 1'b1;

@@ -17,6 +17,7 @@ these sources.
 | RP2040 USB MIDI, UAC2 capture, I2S, and board wiring | [`mcu/rp2040_firmware.md`](mcu/rp2040_firmware.md) | `mcu/` |
 | SPI command transaction envelope | [`design/transport/spi_command_stream.md`](design/transport/spi_command_stream.md) | `fpga/common/rtl/spi_register_bridge.sv` |
 | SPI register mailbox | [`design/transport/spi_register_mailbox.md`](design/transport/spi_register_mailbox.md) | `fpga/common/rtl/spi_register_bridge.sv`, `tools/ch347_transport.py` |
+| SPI voice active bitmap | [`design/transport/spi_voice_status.md`](design/transport/spi_voice_status.md) | `fpga/common/rtl/spi_register_bridge.sv`, `mcu/fpga_spi_transport.c` |
 | Current renderer ownership and flow | [`design/renderer/overview.md`](design/renderer/overview.md) | `rtl/top/voice_major_render_core.sv`, `rtl/voice/` |
 | Board asset image and loading | [`board/asset_loading.md`](board/asset_loading.md) | `fpga/smart_artix/rtl/` |
 

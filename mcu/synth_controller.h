@@ -36,6 +36,11 @@ typedef struct {
     uint32_t transport_monitor_failures;
     uint32_t fpga_disconnect_count;
     uint32_t fpga_recovery_count;
+    uint32_t voice_status_polls;
+    uint32_t voice_status_reclaims;
+    uint32_t voice_status_failures;
+    uint32_t voice_status_state_errors;
+    uint32_t stolen_voices;
     uint8_t fpga_session_ready;
 } app_synth_diagnostics;
 
@@ -59,9 +64,12 @@ int app_fpga_debug_read_ddr_line(uint32_t byte_address, uint32_t data[4]);
 int app_fpga_debug_flush(void);
 int app_synth_render_session_reset(void);
 int app_synth_service(uint32_t millisecond_count);
+int app_synth_service_voice_status(uint32_t millisecond_count);
 int app_synth_monitor_transport(uint32_t millisecond_count);
 int app_synth_session_ready(void);
 int app_synth_flush_commands(void);
+int app_synth_toggle_periodic_modulation(void);
+int app_synth_periodic_modulation_enabled(void);
 int app_midi_note_on(uint8_t channel, uint8_t key, uint8_t velocity);
 int app_midi_note_off(uint8_t channel, uint8_t key);
 int app_midi_control_change(uint8_t channel, uint8_t controller, uint8_t value);

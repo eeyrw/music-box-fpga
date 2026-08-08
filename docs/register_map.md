@@ -14,7 +14,7 @@ updates, release, and stop use the transactional command stream documented in
 
 | Address | Name | Access | Meaning |
 | ---: | --- | --- | --- |
-| `0x9000` | `VERSION` | RO | Interface version, currently `0x00100000`. This register remains readable while the renderer core is held in reset. Version 16 adds out-of-band render-session reset and epoch acknowledgement. |
+| `0x9000` | `VERSION` | RO | Interface version, currently `0x00110000`. This register remains readable while the renderer core is held in reset. Version 17 adds the FPGA-authoritative voice-active bitmap transaction. |
 | `0x9010` | `SYSTEM_STATUS` | platform | Common system status. |
 | `0x9014` | `COMMON_EVENT_FLAGS` | platform | Sticky underrun, drop, deadline, and memory-response flags. |
 | `0x901c` | `PIPELINE_LATENCY_STATUS` | platform | Last render and memory-response latencies. |
@@ -151,6 +151,11 @@ Version 16 adds the dedicated SPI `0xa7` render-session reset and the read-only
 increments only after the render core, voice validity, scheduler, effect and
 compressor history, output FIFO, and I2S state have received the session reset.
 It is not cleared by `DIAGNOSTIC_CONTROL.CLEAR`.
+
+Version 17 adds the fixed-length SPI `0x5c` voice-active-status transaction
+documented in
+[`design/transport/spi_voice_status.md`](design/transport/spi_voice_status.md).
+The register addresses and field meanings are otherwise unchanged.
 
 ### Compressor Diagnostics
 

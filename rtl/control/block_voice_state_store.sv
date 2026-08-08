@@ -39,7 +39,8 @@ module block_voice_state_store (
   input  synth_pkg::voice_dynamic_state_t           dynamic_write_data,
 
   output logic                                      stale_params_write_pulse,
-  output logic                                      stale_dynamic_write_pulse
+  output logic                                      stale_dynamic_write_pulse,
+  output logic [synth_pkg::NUM_VOICES-1:0]          voice_active_bitmap
 );
   import synth_pkg::*;
 
@@ -145,6 +146,7 @@ module block_voice_state_store (
   assign dynamic_write_ready = render_busy &&
                                (check_state_q == CHECK_IDLE);
   assign state_read_rsp = read_rsp_q;
+  assign voice_active_bitmap = voice_valid_q;
 
   assign install_fire = install_valid && install_ready;
   assign params_write_fire = params_write_valid && params_write_ready;

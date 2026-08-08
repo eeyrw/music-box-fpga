@@ -14,8 +14,8 @@
           {
             "name": "VERSION",
             "addressOffset": "0x0000",
-            "resetValue": "0x00100000",
-            "description": "Read-only register and command interface version; current value 0x00100000 identifies version 16."
+            "resetValue": "0x00110000",
+            "description": "Read-only register and command interface version; current value 0x00110000 identifies version 17."
           },
           {
             "name": "SYSTEM_STATUS",

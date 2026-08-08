@@ -2,15 +2,18 @@
 
 This document defines Smart Artix SPI opcode `0xa5` command traffic, opcode
 `0xa6` command recovery, and opcode `0xa7` session reset for interface version
-16. It retains the version-10
+17. It retains the version-10
 command encoding behind the version-12 aligned length/CRC16 transaction header.
 Register timing and
 transport correctness are documented separately in
-[`spi_register_mailbox.md`](spi_register_mailbox.md) and
+[`spi_register_mailbox.md`](spi_register_mailbox.md),
+[`spi_voice_status.md`](spi_voice_status.md), and
 [`../../backlog/spi_transport.md`](../../backlog/spi_transport.md).
 
 The status and workload assumptions were refreshed against the production RTL
-and CH347 host implementation on 2026-08-03.
+and CH347 host implementation on 2026-08-03. The RP2040 production path and
+voice-status polling were additionally exercised on connected hardware on
+2026-08-08.
 
 ## Current Configuration
 
@@ -216,8 +219,11 @@ not qualify SPI pins, physical SCLK, or the board-equivalent DDR path.
 - The 60 MHz CH347 step is structurally unsupported by the remaining 100 MHz
   oversampling request receiver; the available adapter steps do not locate a
   finer threshold between 30 MHz and the receiver's limit below 50 MHz.
-- Opcode `0xa5` command traffic still requires a separate 30 MHz hardware stress
-  run before 30 MHz is claimed for command streaming.
+- The RP2040 completed the real `debussy_bergamasque_03.mid` workload at 30 MHz
+  with a 143-voice peak, 378,397 total SPI exchanges, and zero SPI, command,
+  stale-generation, or DMA enqueue errors. This qualifies that workload, but a
+  maximum-density 512-voice synthetic command stress run is still required
+  before claiming the worst-case table rows at 30 MHz.
 
 ## Hardware Qualification
 

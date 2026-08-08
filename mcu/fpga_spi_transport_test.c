@@ -22,6 +22,11 @@ typedef struct mailbox_capture {
     int hold_epoch;
 } mailbox_capture;
 
+typedef struct voice_status_capture {
+    uint8_t request[FPGA_SPI_VOICE_STATUS_FRAME_BYTES];
+    int corrupt_crc;
+} voice_status_capture;
+
 static int capture_write(void *context, const uint8_t *bytes, size_t byte_count) {
     capture *output = context;
     if (byte_count > sizeof(output->bytes)) return -1;
@@ -99,6 +104,36 @@ static int mailbox_exchange(void *context, const uint8_t *tx, uint8_t *rx,
     return 0;
 }
 
+static int voice_status_exchange(void *context, const uint8_t *tx, uint8_t *rx,
+                                 size_t byte_count) {
+    voice_status_capture *capture = context;
+    uint32_t crc;
+    unsigned word;
+    if (byte_count != FPGA_SPI_VOICE_STATUS_FRAME_BYTES) return -1;
+    memcpy(capture->request, tx, byte_count);
+    memset(rx, 0, byte_count);
+    rx[12] = 0u;
+    rx[13] = 1u;
+    rx[16] = 0x12u;
+    rx[17] = 0x34u;
+    rx[18] = 0x56u;
+    rx[19] = 0x78u;
+    for (word = 0u; word < FPGA_SPI_VOICE_STATUS_WORDS; ++word) {
+        const uint32_t value = UINT32_C(0x01010101) * word;
+        rx[20u + word * 4u] = (uint8_t)(value >> 24);
+        rx[21u + word * 4u] = (uint8_t)(value >> 16);
+        rx[22u + word * 4u] = (uint8_t)(value >> 8);
+        rx[23u + word * 4u] = (uint8_t)value;
+    }
+    crc = reference_crc32(rx + 12u, 72u);
+    rx[84] = (uint8_t)(crc >> 24);
+    rx[85] = (uint8_t)(crc >> 16);
+    rx[86] = (uint8_t)(crc >> 8);
+    rx[87] = (uint8_t)crc;
+    if (capture->corrupt_crc != 0) ++rx[87];
+    return 0;
+}
+
 int main(void) {
     static const uint32_t words[2] = {UINT32_C(0x10000001),
                                       UINT32_C(0x12345678)};
@@ -114,6 +149,8 @@ int main(void) {
     uint16_t crc;
     uint32_t register_data;
     uint32_t session_epoch;
+    voice_status_capture status_capture = {{0}, 0};
+    fpga_spi_voice_status voice_status;
 
     if (fpga_spi_send_commands(capture_write, &output, words, 2u) != 0 ||
         output.writes != 1u || output.size != 12u || output.bytes[0] != 0xa5u ||
@@ -180,6 +217,23 @@ int main(void) {
         fputs("SPI register mailbox read failed\n", stderr);
         return 1;
     }
+    if (fpga_spi_read_voice_status(voice_status_exchange, &status_capture,
+                                   &voice_status) != 0 ||
+        status_capture.request[0] != 0x5cu ||
+        memcmp(status_capture.request + 1u,
+               (uint8_t[FPGA_SPI_VOICE_STATUS_FRAME_BYTES - 1u]){0},
+               FPGA_SPI_VOICE_STATUS_FRAME_BYTES - 1u) != 0 ||
+        voice_status.session_epoch != UINT32_C(0x12345678) ||
+        voice_status.active_bitmap[15] != UINT32_C(0x0f0f0f0f)) {
+        fputs("SPI voice status bitmap read failed\n", stderr);
+        return 1;
+    }
+    status_capture.corrupt_crc = 1;
+    if (fpga_spi_read_voice_status(voice_status_exchange, &status_capture,
+                                   &voice_status) == 0) {
+        fputs("SPI voice status accepted corrupt response CRC\n", stderr);
+        return 1;
+    }
     mailbox.exchanges = 0u;
     mailbox.malformed_fetch = 0;
     mailbox.response_operation = 1u;
@@ -207,6 +261,6 @@ int main(void) {
         fputs("SPI register mailbox accepted corrupt response CRC\n", stderr);
         return 1;
     }
-    puts("PASS: FPGA SPI command, FLUSH, session reset, and register mailbox transport");
+    puts("PASS: FPGA SPI command, voice status, reset, and mailbox transport");
     return 0;
 }

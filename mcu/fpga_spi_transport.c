@@ -181,3 +181,29 @@ int fpga_spi_write_register(fpga_spi_write_fn write,
     }
     return -1;
 }
+
+int fpga_spi_read_voice_status(fpga_spi_exchange_fn exchange, void *context,
+                               fpga_spi_voice_status *status) {
+    enum { RESPONSE_OFFSET = 12, BITMAP_OFFSET = 20, CRC_OFFSET = 84 };
+    uint8_t tx[FPGA_SPI_VOICE_STATUS_FRAME_BYTES] = {UINT8_C(0x5c)};
+    uint8_t rx[FPGA_SPI_VOICE_STATUS_FRAME_BYTES];
+    unsigned word;
+
+    if (exchange == NULL || status == NULL) return -1;
+    if (exchange(context, tx, rx, sizeof(tx)) != 0) return -1;
+    if (read_be32(rx + CRC_OFFSET) !=
+        crc32_bytes(rx + RESPONSE_OFFSET, CRC_OFFSET - RESPONSE_OFFSET)) {
+        return -1;
+    }
+    if (rx[RESPONSE_OFFSET] != 0u || rx[RESPONSE_OFFSET + 1u] != 1u ||
+        rx[RESPONSE_OFFSET + 2u] != 0u ||
+        rx[RESPONSE_OFFSET + 3u] != 0u) {
+        return -1;
+    }
+    status->session_epoch = read_be32(rx + 16u);
+    for (word = 0u; word < FPGA_SPI_VOICE_STATUS_WORDS; ++word) {
+        status->active_bitmap[word] =
+            read_be32(rx + BITMAP_OFFSET + word * 4u);
+    }
+    return 0;
+}

@@ -40,6 +40,7 @@ module voice_major_render_core (
   output logic                                      block_release_ready,
   input  logic [synth_pkg::BLOCK_BUFFER_ID_WIDTH-1:0]
                                                     block_release_buffer_id,
+  output logic [synth_pkg::NUM_VOICES-1:0]          voice_active_bitmap,
   output synth_pkg::sample_window_diagnostics_t     sample_window_diagnostics
 );
   import synth_pkg::*;
@@ -131,7 +132,8 @@ module voice_major_render_core (
     .dynamic_write_voice,
     .dynamic_write_data,
     .stale_params_write_pulse(stale_params_write),
-    .stale_dynamic_write_pulse(stale_dynamic_write)
+    .stale_dynamic_write_pulse(stale_dynamic_write),
+    .voice_active_bitmap
   );
 
   voice_major_block_controller controller (

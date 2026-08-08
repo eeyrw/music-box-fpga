@@ -250,9 +250,10 @@ static void debug_uart_print_status(void) {
         diagnostics->control_maximum_job_duration_ms,
         atomic_load_explicit(&app_control_fault, memory_order_acquire));
     debug_uart_queue_printf(
-        "VOICES active=%u maximum=%u evaluations=%" PRIu32
-        " updates=%" PRIu32 "\r\n",
+        "VOICES active=%u maximum=%u stolen=%" PRIu32
+        " evaluations=%" PRIu32 " updates=%" PRIu32 "\r\n",
         diagnostics->active_voices, diagnostics->maximum_active_voices,
+        diagnostics->stolen_voices,
         diagnostics->control_voice_evaluations,
         diagnostics->controller_voice_updates);
     debug_uart_queue_printf(
@@ -261,11 +262,20 @@ static void debug_uart_print_status(void) {
         diagnostics->periodic_pitch_voices,
         diagnostics->periodic_filter_voices);
     debug_uart_queue_printf(
+        "SF2 periodic modulation enabled=%d\r\n",
+        app_synth_periodic_modulation_enabled());
+    debug_uart_queue_printf(
         "FPGA COMMAND errors=%" PRIu32 " stale=%" PRIu32
         " monitor_failures=%" PRIu32 "\r\n",
         diagnostics->command_error_count,
         diagnostics->stale_generation_count,
         diagnostics->transport_monitor_failures);
+    debug_uart_queue_printf(
+        "FPGA VOICE STATUS polls=%" PRIu32 " reclaims=%" PRIu32
+        " failures=%" PRIu32 " state_errors=%" PRIu32 "\r\n",
+        diagnostics->voice_status_polls, diagnostics->voice_status_reclaims,
+        diagnostics->voice_status_failures,
+        diagnostics->voice_status_state_errors);
     debug_uart_queue_printf(
         "MIDI offline_discards=%" PRIu32 "\r\n",
         atomic_load_explicit(&usb_midi_offline_discard_count,
@@ -288,6 +298,7 @@ static void debug_uart_print_help(void) {
     debug_uart_queue_text(
         "  e COMMAND_ERROR_COUNT, g STALE_GENERATION_COUNT, h SESSION_EPOCH\r\n");
     debug_uart_queue_text("  m MIDI, u USB audio\r\n");
+    debug_uart_queue_text("  x toggle periodic SF2 modulation\r\n");
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
     debug_uart_queue_text(
         "  t timing, T reset timing, w START, r START DDR, R DDR[0]\r\n");
@@ -575,6 +586,11 @@ static void debug_uart_handle_character(void *context, int character) {
                 break;
             case 'm': debug_uart_print_midi_status(); break;
             case 'u': debug_uart_print_usb_audio(); break;
+            case 'x':
+                debug_uart_queue_printf(
+                    "SF2 periodic modulation enabled=%d\r\n",
+                    app_synth_toggle_periodic_modulation());
+                break;
 #if APP_ENABLE_DETAILED_DIAGNOSTICS
             case 't': debug_uart_print_timing(); break;
             case 'T':
@@ -966,6 +982,10 @@ static void app_control_core_main(void) {
             if (result != 0) {
                 atomic_store_explicit(&app_control_fault, result,
                                       memory_order_release);
+            }
+
+            if (result == 0 && app_synth_session_ready()) {
+                result = app_synth_service_voice_status(millisecond_count);
             }
 
             set_watchdog_breadcrumb(APP_WATCHDOG_STAGE_MIDI, 0);

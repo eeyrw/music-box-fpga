@@ -26,7 +26,6 @@ static void activate_voice(msf2_runtime *runtime, uint16_t voice,
     state->note = note;
     state->generation = (uint16_t)(voice + 1u);
     state->note_instance = note_instance;
-    state->release_samples = 100u;
     state->release_step = 7u;
     state->candidate = 0u;
     state->active_position = runtime->active_count;
@@ -38,6 +37,15 @@ static void activate_voice(msf2_runtime *runtime, uint16_t voice,
 static int saw_opcode(const command_log *log, uint8_t opcode) {
     unsigned index;
     for (index = 0u; index < log->count; ++index) {
+        if (log->opcode[index] == opcode) return 1;
+    }
+    return 0;
+}
+
+static int saw_opcode_since(const command_log *log, unsigned first,
+                            uint8_t opcode) {
+    unsigned index;
+    for (index = first; index < log->count; ++index) {
         if (log->opcode[index] == opcode) return 1;
     }
     return 0;
@@ -65,6 +73,44 @@ int main(void) {
     }
 
     activate_voice(&runtime, 0u, 0u, 60u, 1u);
+    voices[0].base_phase_increment = 256u;
+    voices[0].phase_increment = 256u;
+    voices[0].config.vib_lfo_to_pitch = 1200;
+    voices[0].vib_lfo_phase = 16384u;
+    voices[0].periodic_groups = MSF2_CONTROL_GROUP_PITCH;
+    {
+        unsigned before = log.count;
+        if (!msf2_runtime_periodic_modulation_enabled(&runtime) ||
+            msf2_runtime_advance_control(&runtime, 1u) != MSF2_OK ||
+            log.count != before + 1u || log.opcode[before] != 0x18u) {
+            fputs("enabled periodic modulation did not publish pitch\n", stderr);
+            return 1;
+        }
+        msf2_runtime_set_periodic_modulation_enabled(&runtime, 0);
+        before = log.count;
+        if (msf2_runtime_periodic_modulation_enabled(&runtime) ||
+            msf2_runtime_advance_control(&runtime, 1u) != MSF2_OK ||
+            !saw_opcode_since(&log, before, 0x18u) ||
+            voices[0].phase_increment != voices[0].base_phase_increment) {
+            fputs("disabling periodic modulation did not restore static pitch\n",
+                  stderr);
+            return 1;
+        }
+        before = log.count;
+        if (msf2_runtime_advance_control(&runtime, 1u) != MSF2_OK ||
+            log.count != before) {
+            fputs("disabled periodic modulation still published updates\n", stderr);
+            return 1;
+        }
+        msf2_runtime_set_periodic_modulation_enabled(&runtime, 1);
+        before = log.count;
+        if (!msf2_runtime_periodic_modulation_enabled(&runtime) ||
+            msf2_runtime_advance_control(&runtime, 1u) != MSF2_OK ||
+            !saw_opcode_since(&log, before, 0x18u)) {
+            fputs("re-enabled periodic modulation did not resume pitch\n", stderr);
+            return 1;
+        }
+    }
     {
         const unsigned before = log.count;
         if (msf2_runtime_control_change(&runtime, 0u, 7u, 91u) != MSF2_OK ||
@@ -106,6 +152,13 @@ int main(void) {
     if (midi_policy_control_change(&policy, 1u, 123u, 0u) != MSF2_OK ||
         voices[2].stage != MSF2_VOICE_RELEASED) {
         fputs("All Notes Off behavior failed\n", stderr);
+        return 1;
+    }
+    if (msf2_runtime_advance_samples(&runtime, 48000u) != MSF2_OK ||
+        voices[0].stage != MSF2_VOICE_RELEASED ||
+        voices[1].stage != MSF2_VOICE_RELEASED ||
+        voices[2].stage != MSF2_VOICE_RELEASED || runtime.free_count != 1u) {
+        fputs("MCU elapsed time reclaimed FPGA-owned voices\n", stderr);
         return 1;
     }
 
@@ -150,14 +203,23 @@ int main(void) {
         return 1;
     }
 
-    voices[3].release_samples = 0u;
     activate_voice(&runtime, 3u, 3u, 63u, 4u);
-    voices[3].release_samples = 0u;
     if (midi_policy_system_reset(&policy) != MSF2_OK ||
-        voices[3].stage != MSF2_VOICE_FREE || !saw_opcode(&log, 0x15u) ||
+        voices[3].stage != MSF2_VOICE_RELEASED || !saw_opcode(&log, 0x15u) ||
         policy.channels[2].bank != 0u || policy.channels[2].program != 0u ||
         policy.channels[9].bank != 128u) {
         fputs("MIDI System Reset behavior failed\n", stderr);
+        return 1;
+    }
+    for (uint16_t voice = 0u; voice < 4u; ++voice) {
+        if (msf2_runtime_complete_voice(&runtime, voice) != MSF2_OK) {
+            fputs("FPGA completion did not reclaim voice\n", stderr);
+            return 1;
+        }
+    }
+    if (runtime.free_count != 4u || runtime.active_count != 0u ||
+        msf2_runtime_complete_voice(&runtime, 0u) != MSF2_ERR_STATE) {
+        fputs("FPGA completion lifecycle accounting failed\n", stderr);
         return 1;
     }
 
@@ -168,6 +230,13 @@ int main(void) {
             voices[3].stage != MSF2_VOICE_RELEASED ||
             log.count != before + 1u || log.opcode[before] != 0x14u) {
             fputs("MCU-owned release-all behavior failed\n", stderr);
+            return 1;
+        }
+        if (msf2_runtime_advance_control(&runtime, 100u) != MSF2_OK ||
+            voices[3].stage != MSF2_VOICE_RELEASED ||
+            msf2_runtime_complete_voice(&runtime, 3u) != MSF2_OK ||
+            voices[3].stage != MSF2_VOICE_FREE) {
+            fputs("release retirement was not FPGA-authoritative\n", stderr);
             return 1;
         }
     }

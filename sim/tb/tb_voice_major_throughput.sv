@@ -63,6 +63,7 @@ module tb_voice_major_throughput;
   logic block_release_valid;
   logic block_release_ready;
   logic [BLOCK_BUFFER_ID_WIDTH-1:0] block_release_buffer_id;
+  logic [NUM_VOICES-1:0] voice_active_bitmap;
   sample_window_diagnostics_t sample_window_diagnostics;
 /* verilator lint_on UNUSEDSIGNAL */
   integer cycle_count;

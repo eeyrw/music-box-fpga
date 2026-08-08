@@ -184,6 +184,7 @@ module voice_major_render_harness (
     .block_release_valid,
     .block_release_ready,
     .block_release_buffer_id(block_release_buffer),
+    .voice_active_bitmap(),
     .sample_window_diagnostics
   );
 

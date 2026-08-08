@@ -27,7 +27,8 @@ typedef enum msf2_result {
     MSF2_ERR_DIRECTORY,
     MSF2_ERR_RECORD,
     MSF2_ERR_CAPACITY,
-    MSF2_ERR_SINK
+    MSF2_ERR_SINK,
+    MSF2_ERR_STATE
 } msf2_result;
 
 typedef struct msf2_section_view {
@@ -196,8 +197,7 @@ typedef struct msf2_voice_state {
     uint16_t modulation_note_static_counts[3];
     uint8_t modulation_programs[3];
     int64_t modulation_static_sums_q16[10];
-    /* Remaining FPGA volume-envelope release lifetime and packed release step. */
-    uint32_t release_samples;
+    /* Packed FPGA volume-envelope release step. */
     uint32_t release_step;
     /* Last emitted and unmodulated Q24.8 phase increments. */
     uint32_t phase_increment;
@@ -275,6 +275,7 @@ typedef struct msf2_runtime {
     uint32_t allocation_stamp;
     uint32_t control_tick_index;
     uint32_t pending_tick_samples;
+    uint8_t periodic_modulation_enabled;
     msf2_preset_cache_entry preset_cache[16];
     msf2_command_sink command_sink;
     void *command_context;
@@ -351,6 +352,12 @@ msf2_result msf2_runtime_control_tick(msf2_runtime *runtime);
  * publishing only each voice's newest parameter state. */
 msf2_result msf2_runtime_advance_control(msf2_runtime *runtime,
                                          uint32_t elapsed_ticks);
+/* Reclaims a slot only after the FPGA reports that its voice is inactive. */
+msf2_result msf2_runtime_complete_voice(msf2_runtime *runtime,
+                                        uint16_t voice);
+void msf2_runtime_set_periodic_modulation_enabled(msf2_runtime *runtime,
+                                                   int enabled);
+int msf2_runtime_periodic_modulation_enabled(const msf2_runtime *runtime);
 void msf2_runtime_capture_control_snapshot(
     const msf2_runtime *runtime, msf2_control_voice_snapshot *voices,
     uint32_t channel_dirty_revisions[MSF2_CHANNEL_COUNT]);

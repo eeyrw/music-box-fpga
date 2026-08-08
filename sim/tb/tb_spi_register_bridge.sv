@@ -25,6 +25,8 @@ module tb_spi_register_bridge;
   logic cmd_flush_ack;
   logic session_reset_req;
   logic session_reset_ack;
+  logic [31:0] session_epoch;
+  logic [511:0] voice_active_bitmap;
   logic [31:0] registers [0:63];
   logic bus_allow;
   int bus_access_count = 0;
@@ -101,7 +103,9 @@ module tb_spi_register_bridge;
     .cmd_flush_req(cmd_flush_req_no_crc),
     .cmd_flush_ack(cmd_flush_ack_no_crc),
     .session_reset_req(session_reset_req_no_crc),
-    .session_reset_ack(session_reset_ack_no_crc)
+    .session_reset_ack(session_reset_ack_no_crc),
+    .session_epoch,
+    .voice_active_bitmap
   );
 
   assign cmd_flush_ack = cmd_flush_req;
@@ -303,6 +307,26 @@ module tb_spi_register_bridge;
     end
   endtask
 
+  task automatic spi_completion_read(
+    output logic [607:0] response
+  );
+    logic [31:0] word;
+    begin
+      response = '0;
+      begin_transaction(8'h5c);
+      spi_send_byte(8'h00);
+      spi_send_byte(8'h00);
+      spi_send_byte(8'h00);
+      for (int byte_index = 0; byte_index < 8; byte_index++)
+        spi_send_byte(8'h00);
+      for (int word_index = 0; word_index < 19; word_index++) begin
+        spi_read_word_bits(word);
+        response[607-word_index*32 -: 32] = word;
+      end
+      end_transaction();
+    end
+  endtask
+
   task automatic spi_command_stream3(
     input logic [31:0] word0,
     input logic [31:0] word1,
@@ -376,7 +400,9 @@ module tb_spi_register_bridge;
 
   initial begin
     logic [95:0] mailbox_response;
+    logic [607:0] completion_response;
     logic [31:0] response_crc;
+    logic [31:0] completion_crc;
     int accesses_before;
     for (int index = 0; index < 64; index++)
       registers[index] = '0;
@@ -386,11 +412,48 @@ module tb_spi_register_bridge;
     spi_mosi = 1'b0;
     bus_allow = 1'b1;
     cmd_ready = 1'b1;
+    session_epoch = 32'h1234_5678;
+    voice_active_bitmap = '0;
     last_spi_fall = 0;
     max_miso_delay = 0;
     repeat (5) @(negedge clk);
     rst = 1'b0;
     repeat (5) @(negedge clk);
+
+    voice_active_bitmap[5] = 1'b1;
+    voice_active_bitmap[33] = 1'b1;
+    voice_active_bitmap[511] = 1'b1;
+    spi_completion_read(completion_response);
+    completion_crc = 32'hffff_ffff;
+    for (int word_index = 0; word_index < 18; word_index++) begin
+      logic [31:0] crc_word;
+      crc_word = completion_response[607-word_index*32 -: 32];
+      completion_crc = crc32_byte(completion_crc, crc_word[31:24]);
+      completion_crc = crc32_byte(completion_crc, crc_word[23:16]);
+      completion_crc = crc32_byte(completion_crc, crc_word[15:8]);
+      completion_crc = crc32_byte(completion_crc, crc_word[7:0]);
+    end
+    completion_crc = completion_crc ^ 32'hffff_ffff;
+    if (completion_response[607:576] != 32'h0001_0000 ||
+        completion_response[575:544] != session_epoch ||
+        !completion_response[517] ||
+        !completion_response[481] ||
+        !completion_response[63] ||
+        completion_response[31:0] != completion_crc) begin
+      $error("initial voice status snapshot mismatch");
+      errors++;
+    end
+
+    voice_active_bitmap = '0;
+    voice_active_bitmap[44] = 1'b1;
+    spi_completion_read(completion_response);
+    if (completion_response[607:576] != 32'h0001_0000 ||
+        !completion_response[492] || |completion_response[543:493] ||
+        |completion_response[491:32]) begin
+      $error("voice status did not reflect the current bitmap: %0128x",
+             completion_response[543:32]);
+      errors++;
+    end
 
     spi_mailbox_request(8'h01, 16'h0010, 32'h1234_5678, 1'b0);
     repeat (4) @(negedge clk);
